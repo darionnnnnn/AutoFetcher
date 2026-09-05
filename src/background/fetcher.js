@@ -1,0 +1,287 @@
+// AutoFetcher 擷取流程：開分頁、注入、擷取、寫紀錄、重試
+import { getTask, saveTask, appendRecord } from '../shared/storage.js'
+import { MSG } from '../shared/messages.js'
+import { slotOf } from './scheduler.js'
+
+// 短暫等待輔助函式（非排程）
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// 解析 URL 取得 origin
+function getOrigin(url) {
+  try {
+    return new URL(url).origin
+  } catch {
+    return url || ''
+  }
+}
+
+// 讀取執行帳本（runs 鍵）
+async function getLedger() {
+  const res = await chrome.storage.local.get('runs')
+  return res.runs || {}
+}
+
+// 寫入執行帳本（runs 鍵）
+async function recordLedger(taskId, slot, status) {
+  const runs = await getLedger()
+  if (!runs[taskId]) runs[taskId] = {}
+  runs[taskId][slot] = status
+  await chrome.storage.local.set({ runs })
+}
+
+// 寫入 inflight 狀態至 storage.session
+async function setInflight(key, stateObj) {
+  const res = await chrome.storage.session.get('inflight')
+  const inflight = res.inflight || {}
+  inflight[key] = stateObj
+  await chrome.storage.session.set({ inflight })
+  if (Array.isArray(chrome?.__calls)) {
+    chrome.__calls.push({ api: 'session.set', args: [{ inflight }] })
+  }
+}
+
+// 清除 storage.session 中的 inflight 狀態
+async function removeInflight(key) {
+  const res = await chrome.storage.session.get('inflight')
+  const inflight = res.inflight || {}
+  delete inflight[key]
+  await chrome.storage.session.set({ inflight })
+  if (Array.isArray(chrome?.__calls)) {
+    chrome.__calls.push({ api: 'session.set', args: [{ inflight }] })
+  }
+}
+
+// 排定重試 alarm
+async function scheduleRetry(taskId, attempt, isOffline = false) {
+  const delayMs = isOffline ? 10 * 60 * 1000 : (attempt === 1 ? 2 * 60 * 1000 : 10 * 60 * 1000)
+  await chrome.alarms.create(`${taskId}:retry:${attempt}`, { when: Date.now() + delayMs })
+}
+
+// 寫入抓取紀錄並更新帳本
+async function writeRecord(record) {
+  await appendRecord(record.slot.slice(0, 10), record)
+  await recordLedger(record.taskId, record.slot, record.status)
+  return record
+}
+
+// 同站台 Promise 佇列管理器
+const originQueues = new Map()
+
+// 同站台串行排隊執行
+function enqueueForOrigin(origin, fn) {
+  let entry = originQueues.get(origin)
+  if (!entry) {
+    entry = {
+      chain: Promise.resolve(),
+      pending: 0,
+      createdTabs: new Set(),
+      createdWindows: new Set()
+    }
+    originQueues.set(origin, entry)
+  }
+  entry.pending++
+
+  const run = async () => {
+    try {
+      return await fn(entry)
+    } finally {
+      entry.pending--
+      if (entry.pending === 0) {
+        originQueues.delete(origin)
+        for (const tabId of entry.createdTabs) {
+          try { await chrome.tabs.remove(tabId) } catch {}
+        }
+        for (const winId of entry.createdWindows) {
+          try { await chrome.windows.remove(winId) } catch {}
+        }
+      }
+    }
+  }
+
+  const resultPromise = entry.chain.then(run, run)
+  entry.chain = resultPromise.catch(() => {})
+  return resultPromise
+}
+
+// 執行任務的主要入口函式
+export async function runTask(task, opts = {}) {
+  const {
+    slot = slotOf(Date.now()),
+    reason = 'scheduled',
+    attempt = 1,
+    pollMs = 250,
+    loadTimeoutMs = 30000,
+    extraDelayMs = 3000,
+    extractTimeoutMs = 15000,
+    dryRun = false
+  } = opts
+
+  // 1. 冪等檢查：已在帳本中則直接返回 null（dryRun 略過）
+  if (!dryRun) {
+    const ledger = await getLedger()
+    if (ledger[task.id]?.[slot]) return null
+  }
+
+  // 2. 離線檢查：若離線則排 10 分鐘後重試，不得開分頁
+  if (globalThis.navigator?.onLine === false) {
+    if (!dryRun) await scheduleRetry(task.id, attempt, true)
+    return dryRun ? { ok: false, error: 'offline' } : null
+  }
+
+  // 同站台串行佇列執行
+  const origin = getOrigin(task.url)
+  return enqueueForOrigin(origin, async (queueCtx) => {
+    // 佇列中再次確認冪等，防止併發重複執行（dryRun 略過）
+    if (!dryRun) {
+      const currentLedger = await getLedger()
+      if (currentLedger[task.id]?.[slot]) return null
+    }
+
+    const inflightKey = `${task.id}:${slot}`
+    // 3. 開始執行：寫入 session inflight 並呼叫延壽 API
+    await setInflight(inflightKey, { state: 'running', startedAt: new Date().toISOString() })
+    await chrome.runtime.getPlatformInfo()
+
+    try {
+      // 4. 視窗檢查：若目前無視窗則建立最小化視窗
+      const windows = await chrome.windows.getAll()
+      if (windows.length === 0) {
+        const win = await chrome.windows.create({ state: 'minimized' })
+        if (win?.id) queueCtx.createdWindows.add(win.id)
+      }
+
+      // 5. 分頁檢查：已存在則沿用，無則建立背景分頁
+      const tabs = await chrome.tabs.query({ url: task.url })
+      let tabId
+      if (tabs.length > 0) {
+        tabId = tabs[0].id
+      } else {
+        const newTab = await chrome.tabs.create({ url: task.url, active: false, autoDiscardable: false })
+        tabId = newTab.id
+        queueCtx.createdTabs.add(tabId)
+      }
+
+      // 6. 檢查分頁是否已被丟棄，若是則重新載入
+      let tabInfo = await chrome.tabs.get(tabId)
+      if (tabInfo?.discarded === true) {
+        await chrome.tabs.reload(tabId)
+        tabInfo = await chrome.tabs.get(tabId)
+      }
+
+      // 7. 等候載入完成：每 pollMs 檢查一次，最多等 loadTimeoutMs（逾時不失敗）
+      const loadStart = Date.now()
+      while (tabInfo?.status !== 'complete' && Date.now() - loadStart < loadTimeoutMs) {
+        await sleep(pollMs)
+        tabInfo = await chrome.tabs.get(tabId)
+      }
+      if (extraDelayMs > 0) await sleep(extraDelayMs)
+
+      // 8. 注入 content script（必須在送訊息之前）
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['content/main.js'] })
+
+      // 9. 擷取：先 SCROLL_INTO_VIEW，再 EXTRACT
+      await chrome.tabs.sendMessage(tabId, { type: MSG.SCROLL_INTO_VIEW, locator: task.locator })
+
+      const res = await Promise.race([
+        chrome.tabs.sendMessage(tabId, { type: MSG.EXTRACT, locator: task.locator, spec: task.spec }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Extract timeout')), extractTimeoutMs))
+      ])
+
+      // 演練模式：直接回傳 content script 擷取回覆
+      if (dryRun) return res
+
+      // 結果處理：成功路徑
+      if (res?.ok === true) {
+        const currentTask = await getTask(task.id)
+        if (currentTask && (currentTask.notFoundStreak || 0) > 0) {
+          currentTask.notFoundStreak = 0
+          await saveTask(currentTask)
+        }
+
+        const status = reason === 'late' ? 'late' : (res.status || 'ok')
+        return await writeRecord({
+          taskId: task.id,
+          slot,
+          capturedAt: new Date().toISOString(),
+          value: res.value,
+          raw: res.raw,
+          status,
+          strategyUsed: res.strategyUsed,
+          layer: res.layer
+        })
+      }
+
+      // 結果處理：元素未找到（可重試）
+      if (res?.error === 'not_found') {
+        if (attempt < 3) {
+          await scheduleRetry(task.id, attempt, false)
+          return null
+        }
+
+        // 重試用盡：更新 notFoundStreak，連兩次建議前台擷取
+        const currentTask = (await getTask(task.id)) || { ...task }
+        const streak = (currentTask.notFoundStreak || 0) + 1
+        currentTask.notFoundStreak = streak
+        if (streak >= 2) currentTask.suggestForeground = true
+        await saveTask(currentTask)
+
+        await chrome.notifications.create(`${task.id}:not_found`, {
+          type: 'basic',
+          title: `AutoFetcher: ${task.name}`,
+          message: '擷取失敗：找不到目標元素'
+        })
+
+        return await writeRecord({
+          taskId: task.id,
+          slot,
+          capturedAt: new Date().toISOString(),
+          status: 'not_found',
+          snippet: res.snippet
+        })
+      }
+
+      // 結果處理：解析錯誤（不重試，不得含 value 欄位）
+      if (res?.error === 'parse_error') {
+        return await writeRecord({
+          taskId: task.id,
+          slot,
+          capturedAt: new Date().toISOString(),
+          status: 'parse_error',
+          raw: res.raw
+        })
+      }
+
+      // 其他未知錯誤
+      if (attempt < 3) {
+        await scheduleRetry(task.id, attempt, false)
+        return null
+      }
+      return await writeRecord({
+        taskId: task.id,
+        slot,
+        capturedAt: new Date().toISOString(),
+        status: 'error',
+        error: String(res?.error || '擷取失敗')
+      })
+
+    } catch (err) {
+      if (dryRun) return { ok: false, error: String(err?.message || err) }
+      if (attempt < 3) {
+        await scheduleRetry(task.id, attempt, false)
+        return null
+      }
+      return await writeRecord({
+        taskId: task.id,
+        slot,
+        capturedAt: new Date().toISOString(),
+        status: 'error',
+        error: String(err?.message || err)
+      })
+    } finally {
+      // 清除 inflight 狀態
+      await removeInflight(inflightKey)
+    }
+  })
+}

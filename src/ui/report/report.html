@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AutoFetcher 報表歷史</title>
+  <style>
+    :root {
+      --bg: #f8fafc; --surface: #ffffff; --text: #0f172a; --text-muted: #64748b;
+      --border: #e2e8f0; --primary: #2563eb; --danger: #dc2626; --danger-bg: #fef2f2;
+      --hover: #f1f5f9; --radius: 6px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f172a; --surface: #1e293b; --text: #f8fafc; --text-muted: #94a3b8;
+        --border: #334155; --primary: #3b82f6; --danger: #ef4444; --danger-bg: #450a0a;
+        --hover: #334155;
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; padding: 1rem; }
+    .tab-nav { display: flex; gap: 0.5rem; border-bottom: 1px solid var(--border); margin-bottom: 1rem; padding-bottom: 0.5rem; }
+    .tab-btn { background: transparent; border: none; padding: 0.5rem 1rem; font-size: 0.95rem; font-weight: 500; color: var(--text-muted); cursor: pointer; border-radius: var(--radius); }
+    .tab-btn:hover { background: var(--hover); color: var(--text); }
+    .history-layout { display: grid; grid-template-columns: 280px 1fr; gap: 1.25rem; align-items: start; }
+    @media (max-width: 768px) { .history-layout { grid-template-columns: 1fr; } }
+    #range-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
+    #range-bar button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.75rem; border-radius: var(--radius); font-size: 0.85rem; cursor: pointer; }
+    #range-bar button:hover { background: var(--hover); border-color: var(--primary); }
+    #calendar { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.75rem; }
+    #calendar table { width: 100%; border-collapse: collapse; text-align: center; font-size: 0.85rem; }
+    #calendar th { padding: 0.4rem; color: var(--text-muted); font-weight: 500; }
+    #calendar td { padding: 0.5rem 0.25rem; border-radius: var(--radius); cursor: pointer; position: relative; }
+    #calendar td:hover { background: var(--hover); }
+    #calendar td.out-of-month { color: var(--text-muted); opacity: 0.4; }
+    #calendar td.has-records::after { content: ""; position: absolute; bottom: 3px; left: 50%; transform: translateX(-50%); width: 4px; height: 4px; border-radius: 50%; background: var(--primary); }
+    #calendar td.has-fail { color: var(--danger); font-weight: bold; }
+    #calendar td.has-fail::after { background: var(--danger); }
+    #column-config { display: flex; flex-wrap: wrap; gap: 0.75rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.6rem 0.75rem; margin-bottom: 1rem; font-size: 0.85rem; color: var(--text-muted); }
+    #column-config label { display: flex; align-items: center; gap: 0.35rem; cursor: pointer; user-select: none; }
+    #summary { margin-bottom: 1rem; overflow-x: auto; }
+    #summary table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.85rem; }
+    #summary th, #summary td { padding: 0.5rem 0.75rem; text-align: right; border-bottom: 1px solid var(--border); }
+    #summary th:first-child, #summary td:first-child { text-align: left; }
+    #summary th { background: var(--hover); color: var(--text-muted); font-weight: 600; }
+    .table-container { overflow-x: auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+    #record-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; text-align: left; }
+    #record-table thead th { background: var(--hover); padding: 0.6rem 0.75rem; font-weight: 600; color: var(--text-muted); border-bottom: 1px solid var(--border); cursor: pointer; user-select: none; }
+    #record-table thead th:hover { color: var(--primary); }
+    #record-table tbody tr { border-bottom: 1px solid var(--border); cursor: pointer; }
+    #record-table tbody tr:hover { background: var(--hover); }
+    #record-table tbody td { padding: 0.6rem 0.75rem; }
+    #record-table tbody tr.failed { background: var(--danger-bg); color: var(--danger); }
+    #record-table tbody tr.detail { background: var(--hover); cursor: default; }
+    #record-table tbody tr.detail td { padding: 0.75rem 1rem; }
+    .detail-box { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.85rem; font-family: monospace; }
+    .detail-item { display: flex; gap: 0.5rem; }
+    #empty-state { text-align: center; padding: 2.5rem 1rem; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+    .placeholder-panel { padding: 2rem; text-align: center; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+  </style>
+  <script type="module" src="./report.js"></script>
+</head>
+<body>
+  <nav class="tab-nav">
+    <button id="tab-dashboard" class="tab-btn" type="button">儀表板</button>
+    <button id="tab-history" class="tab-btn" type="button">歷史紀錄</button>
+    <button id="tab-tasks" class="tab-btn" type="button">任務管理</button>
+    <button id="tab-settings" class="tab-btn" type="button">設定</button>
+  </nav>
+
+  <main>
+    <section id="panel-dashboard" class="placeholder-panel" hidden>儀表板將於下一輪加入</section>
+
+    <section id="panel-history">
+      <div id="range-bar">
+        <button type="button" data-range="today">今天</button>
+        <button type="button" data-range="yesterday">昨天</button>
+        <button type="button" data-range="last7">近 7 天</button>
+        <button type="button" data-range="last30">近 30 天</button>
+        <button type="button" data-range="thisMonth">本月</button>
+        <button type="button" data-range="lastMonth">上月</button>
+      </div>
+
+      <div id="filters"></div>
+
+      <div class="history-layout">
+        <aside>
+          <div id="calendar"></div>
+        </aside>
+
+        <section class="main-content">
+          <div id="column-config"></div>
+          <div id="summary"></div>
+          <div id="empty-state" hidden>目前尚無紀錄</div>
+          <div class="table-container">
+            <table id="record-table">
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="panel-tasks" class="placeholder-panel" hidden>任務管理將於下一輪加入</section>
+
+    <section id="panel-settings" class="placeholder-panel" hidden>設定將於下一輪加入</section>
+  </main>
+</body>
+</html>

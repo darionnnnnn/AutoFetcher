@@ -1,0 +1,14 @@
+{
+  "name": "autofetcher",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "smoke": "node tests/smoke/load.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.1",
+    "puppeteer-core": "^23.11.1"
+  }
+}
