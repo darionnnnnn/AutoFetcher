@@ -104,6 +104,34 @@ try {
   if (manifestVersion !== 3) errors.push(`manifest_version 應為 3,實際 ${manifestVersion}`)
   const badge = await ext.evaluate(() => chrome.action.getBadgeText({}))
   console.log(`${browserName}:圖示 badge = ${JSON.stringify(badge)}`)
+  // 4. 報表頁真的看得到資料(使用者的核心需求:打開就直接看)
+  const today = new Date()
+  const pad = n => String(n).padStart(2, '0')
+  const dateStr = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
+  await ext.evaluate(async (d) => {
+    await chrome.storage.local.set({
+      ['rec:' + d]: [
+        { taskId: 'smoke-1', slot: d + 'T09:00', capturedAt: d + 'T09:00:05+08:00', value: 1234, raw: '1,234', status: 'ok' },
+        { taskId: 'smoke-1', slot: d + 'T15:00', capturedAt: d + 'T15:00:05+08:00', raw: '--', status: 'parse_error' }
+      ]
+    })
+  }, dateStr)
+  await ext.goto(`chrome-extension://${extId}/ui/report/report.html#view=history&from=${dateStr}&to=${dateStr}`,
+    { waitUntil: 'domcontentloaded' })
+  await new Promise(r => setTimeout(r, 1200))
+  const view = await ext.evaluate(() => ({
+    rows: document.querySelectorAll('#record-table tbody tr:not(.detail)').length,
+    text: document.body.innerText,
+    emptyHidden: document.getElementById('empty-state')?.hidden
+  }))
+  if (view.rows !== 2) errors.push(`報表應顯示 2 筆紀錄,實際 ${view.rows} 列`)
+  if (!view.text.includes('1,234')) errors.push('報表沒有顯示抓到的值 1,234')
+  if (/(^|[^\d])0([^\d]|$)/.test(view.text.split('\n').find(l => l.includes('--')) || '')) {
+    errors.push('抓不到的紀錄被顯示成 0')
+  }
+  if (view.emptyHidden !== true) errors.push('有資料時空狀態沒有隱藏')
+  if (view.rows === 2) console.log(`${browserName}:報表顯示 2 筆紀錄,含 1,234 與失敗列`)
+
   await ext.evaluate(() => chrome.storage.local.clear())
   await ext.close()
 } catch (e) {
