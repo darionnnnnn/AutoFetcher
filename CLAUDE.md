@@ -32,7 +32,8 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - 測試:尚無基線。規劃案定案後在 R1 建立(Node 單元測試 + Puppeteer 載入擴充功能的煙霧測試)。
 - 分支:`dev` 開發、`master` 由使用者併;每輪一個 `r<N>` 分支。
 - 實作委派:先地端 LLM,較複雜給 agy;Claude 只規劃、驗收、寫文件(見 ~/.claude/skills 之委派 skill)。
-- 設定/資料的事實來源是 `chrome.storage.local`;JSON 檔是**匯出品**,不是主資料庫(理由見 SPEC §5)。
+- 設定/資料的事實來源是 `chrome.storage.local`;檔案一律**使用者手動匯出**,不自動下載(SPEC §5)。
+- 訊息型別集中 `shared/messages.js`;三個執行環境的分工見 SPEC §0。
 
 ## 不要做
 
