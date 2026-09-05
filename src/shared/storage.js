@@ -362,3 +362,37 @@ export async function getStorageStats() {
   }
 }
 
+// 取得健康狀態表
+export async function getHealthMap() {
+  const res = await chrome.storage.local.get('health')
+  return (res.health && typeof res.health === 'object') ? res.health : {}
+}
+
+// 取得補抓清單
+export async function getMissedList() {
+  const res = await chrome.storage.local.get('missed')
+  return Array.isArray(res.missed) ? res.missed : []
+}
+
+// 取得診斷紀錄清單
+export async function getDiagList() {
+  const res = await chrome.storage.local.get('diag')
+  return Array.isArray(res.diag) ? res.diag : []
+}
+
+// 查詢單一任務在所有日期的紀錄總數（使用 listDates + 逐日 getRecordsByDate）
+export async function countRecordsForTask(taskId) {
+  if (!taskId) return 0
+  const dates = await listDates()
+  let count = 0
+  for (const d of dates) {
+    const records = await getRecordsByDate(d)
+    for (const r of records) {
+      if (r && r.taskId === taskId) {
+        count++
+      }
+    }
+  }
+  return count
+}
+

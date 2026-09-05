@@ -126,24 +126,30 @@ function collectPatch() {
   const typeSelect = document.getElementById('drawer-type')
   const type = typeSelect ? typeSelect.value : 'number'
 
-  const sourcesContainer = document.getElementById('drawer-sources')
-  const checkedBoxes = sourcesContainer ? sourcesContainer.querySelectorAll('input[type="checkbox"]:checked') : []
-  const aggSelect = document.getElementById('drawer-aggregation')
-  const aggVal = (aggSelect && aggSelect.value) ? aggSelect.value : 'raw'
-
-  const source = []
-  for (const box of checkedBoxes) {
-    const tid = box.value
-    const existing = currentCard?.source?.find(s => s.taskId === tid)
-    source.push({
-      taskId: tid,
-      aggregation: existing?.aggregation || aggVal
-    })
-  }
-
   const options = { ...(currentCard?.options || {}) }
 
-  // 期間
+  // 來源任務與聚合（fieldSources）
+  const fieldSources = document.getElementById('drawer-field-sources')
+  let source = currentCard?.source ? [...currentCard.source] : []
+  if (fieldSources && !fieldSources.hidden) {
+    const sourcesContainer = document.getElementById('drawer-sources')
+    const checkedBoxes = sourcesContainer ? sourcesContainer.querySelectorAll('input[type="checkbox"]:checked') : []
+    const aggSelect = document.getElementById('drawer-aggregation')
+    const aggVal = (aggSelect && aggSelect.value) ? aggSelect.value : 'raw'
+
+    source = []
+    for (const box of checkedBoxes) {
+      const tid = box.value
+      const existing = currentCard?.source?.find(s => s.taskId === tid)
+      source.push({
+        taskId: tid,
+        aggregation: existing?.aggregation || aggVal
+      })
+    }
+    options.aggregation = aggVal
+  }
+
+  // 期間（全域設定）
   const periodSelect = document.getElementById('drawer-period')
   if (periodSelect) {
     const periodVal = periodSelect.value
@@ -154,105 +160,53 @@ function collectPatch() {
     }
   }
 
-  // 聚合
-  options.aggregation = aggVal
-
-  // 小數位數
-  const decimalsInput = document.getElementById('drawer-decimals')
-  if (decimalsInput && decimalsInput.value !== '' && !Number.isNaN(Number(decimalsInput.value))) {
-    options.decimals = Number(decimalsInput.value)
-  } else {
-    delete options.decimals
-  }
-
-  // 單位
-  const unitInput = document.getElementById('drawer-unit')
-  if (unitInput && unitInput.value !== '') {
-    options.unit = unitInput.value
-  } else {
-    delete options.unit
-  }
-
-  // 閾值
-  const thValInput = document.getElementById('drawer-threshold-value')
-  if (thValInput && thValInput.value !== '' && !Number.isNaN(Number(thValInput.value))) {
-    const opSelect = document.getElementById('drawer-threshold-op')
-    const colorInput = document.getElementById('drawer-threshold-color')
-    options.thresholds = [{
-      op: (opSelect && opSelect.value) ? opSelect.value : 'gte',
-      value: Number(thValInput.value),
-      color: (colorInput && colorInput.value) ? colorInput.value : 'var(--warn)'
-    }]
-  } else {
-    options.thresholds = []
-  }
-
-  // 迷你走勢圖
-  const sparklineBox = document.getElementById('drawer-sparkline')
-  if (sparklineBox) {
-    options.sparkline = sparklineBox.checked
-  }
-
-  // Y 軸範圍
-  const yminInput = document.getElementById('drawer-ymin')
-  if (yminInput && yminInput.value !== '' && !Number.isNaN(Number(yminInput.value))) {
-    options.yMin = Number(yminInput.value)
-  } else {
-    delete options.yMin
-  }
-  const ymaxInput = document.getElementById('drawer-ymax')
-  if (ymaxInput && ymaxInput.value !== '' && !Number.isNaN(Number(ymaxInput.value))) {
-    options.yMax = Number(ymaxInput.value)
-  } else {
-    delete options.yMax
-  }
-
-  // 正規化
-  const normSelect = document.getElementById('drawer-normalize')
-  if (normSelect && normSelect.value && normSelect.value !== 'none') {
-    options.normalize = normSelect.value
-  } else {
-    delete options.normalize
-  }
-
-  // 文字內容
-  const contentInput = document.getElementById('drawer-content')
-  if (contentInput && contentInput.value !== '') {
-    options.content = contentInput.value
-  } else {
-    delete options.content
-  }
-
-  // 儀表 min, max, warn
-  const gminInput = document.getElementById('drawer-gauge-min')
-  if (gminInput && gminInput.value !== '' && !Number.isNaN(Number(gminInput.value))) {
-    options.min = Number(gminInput.value)
-  } else {
-    delete options.min
-  }
-  const gmaxInput = document.getElementById('drawer-gauge-max')
-  if (gmaxInput && gmaxInput.value !== '' && !Number.isNaN(Number(gmaxInput.value))) {
-    options.max = Number(gmaxInput.value)
-  } else {
-    delete options.max
-  }
-  const gwarnInput = document.getElementById('drawer-gauge-warn')
-  if (gwarnInput && gwarnInput.value !== '' && !Number.isNaN(Number(gwarnInput.value))) {
-    options.warn = Number(gwarnInput.value)
-  } else {
-    delete options.warn
-  }
-
-  // 比較基準（number 型別）
-  const compareSelect = document.getElementById('drawer-compare')
-  if (type === 'number') {
+  // 數值卡片分組（fieldNumber）
+  const fieldNumber = document.getElementById('drawer-field-number')
+  if (fieldNumber && !fieldNumber.hidden) {
+    // 比較基準
+    const compareSelect = document.getElementById('drawer-compare')
     options.compare = (compareSelect && compareSelect.value) ? compareSelect.value : 'prev'
-  } else {
-    delete options.compare
+
+    // 小數位數
+    const decimalsInput = document.getElementById('drawer-decimals')
+    if (decimalsInput && decimalsInput.value !== '' && !Number.isNaN(Number(decimalsInput.value))) {
+      options.decimals = Number(decimalsInput.value)
+    } else {
+      delete options.decimals
+    }
+
+    // 單位
+    const unitInput = document.getElementById('drawer-unit')
+    if (unitInput && unitInput.value !== '') {
+      options.unit = unitInput.value
+    } else {
+      delete options.unit
+    }
+
+    // 閾值
+    const thValInput = document.getElementById('drawer-threshold-value')
+    if (thValInput && thValInput.value !== '' && !Number.isNaN(Number(thValInput.value))) {
+      const opSelect = document.getElementById('drawer-threshold-op')
+      const colorInput = document.getElementById('drawer-threshold-color')
+      options.thresholds = [{
+        op: (opSelect && opSelect.value) ? opSelect.value : 'gte',
+        value: Number(thValInput.value),
+        color: (colorInput && colorInput.value) ? colorInput.value : 'var(--warn)'
+      }]
+    } else {
+      options.thresholds = []
+    }
+
+    // 迷你走勢圖
+    const sparklineBox = document.getElementById('drawer-sparkline')
+    if (sparklineBox) {
+      options.sparkline = sparklineBox.checked
+    }
   }
 
-  // 表格模式與筆數上限（table 型別）
-  if (type === 'table') {
+  // 表格卡片分組（fieldTable）
+  const fieldTable = document.getElementById('drawer-field-table')
+  if (fieldTable && !fieldTable.hidden) {
     const tableModeSelect = document.getElementById('drawer-table-mode')
     options.mode = (tableModeSelect && tableModeSelect.value) ? tableModeSelect.value : 'recent'
 
@@ -262,18 +216,72 @@ function collectPatch() {
     } else {
       delete options.limit
     }
-  } else {
-    delete options.mode
-    delete options.limit
   }
 
-  // 狀態任務篩選（status 型別）
-  if (type === 'status') {
+  // 狀態卡片分組（fieldStatus）
+  const fieldStatus = document.getElementById('drawer-field-status')
+  if (fieldStatus && !fieldStatus.hidden) {
     const statusContainer = document.getElementById('drawer-status-tasks')
     const checkedBoxes = statusContainer ? statusContainer.querySelectorAll('input[type="checkbox"]:checked') : []
     options.taskIds = Array.from(checkedBoxes).map(b => b.value)
-  } else {
-    delete options.taskIds
+  }
+
+  // Y 軸與正規化分組（fieldYaxis）
+  const fieldYaxis = document.getElementById('drawer-field-yaxis')
+  if (fieldYaxis && !fieldYaxis.hidden) {
+    const yminInput = document.getElementById('drawer-ymin')
+    if (yminInput && yminInput.value !== '' && !Number.isNaN(Number(yminInput.value))) {
+      options.yMin = Number(yminInput.value)
+    } else {
+      delete options.yMin
+    }
+    const ymaxInput = document.getElementById('drawer-ymax')
+    if (ymaxInput && ymaxInput.value !== '' && !Number.isNaN(Number(ymaxInput.value))) {
+      options.yMax = Number(ymaxInput.value)
+    } else {
+      delete options.yMax
+    }
+
+    const normSelect = document.getElementById('drawer-normalize')
+    if (normSelect && normSelect.value && normSelect.value !== 'none') {
+      options.normalize = normSelect.value
+    } else {
+      delete options.normalize
+    }
+  }
+
+  // 文字內容分組（fieldContent）
+  const fieldContent = document.getElementById('drawer-field-content')
+  if (fieldContent && !fieldContent.hidden) {
+    const contentInput = document.getElementById('drawer-content')
+    if (contentInput && contentInput.value !== '') {
+      options.content = contentInput.value
+    } else {
+      delete options.content
+    }
+  }
+
+  // 儀表分組（fieldGauge）
+  const fieldGauge = document.getElementById('drawer-field-gauge')
+  if (fieldGauge && !fieldGauge.hidden) {
+    const gminInput = document.getElementById('drawer-gauge-min')
+    if (gminInput && gminInput.value !== '' && !Number.isNaN(Number(gminInput.value))) {
+      options.min = Number(gminInput.value)
+    } else {
+      delete options.min
+    }
+    const gmaxInput = document.getElementById('drawer-gauge-max')
+    if (gmaxInput && gmaxInput.value !== '' && !Number.isNaN(Number(gmaxInput.value))) {
+      options.max = Number(gmaxInput.value)
+    } else {
+      delete options.max
+    }
+    const gwarnInput = document.getElementById('drawer-gauge-warn')
+    if (gwarnInput && gwarnInput.value !== '' && !Number.isNaN(Number(gwarnInput.value))) {
+      options.warn = Number(gwarnInput.value)
+    } else {
+      delete options.warn
+    }
   }
 
   return { title, type, source, options }

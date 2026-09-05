@@ -2,6 +2,7 @@
 
 import { buildSeries, resolvePeriod, latest, pivot } from './series.js';
 import { lineChart, barChart, gauge, sparkline } from './charts.js';
+import { isSuccess } from '../../shared/record-status.js';
 
 const SUPPORTED_TYPES = new Set(['number', 'line', 'bar', 'table', 'gauge', 'text', 'status']);
 
@@ -101,7 +102,7 @@ function renderNumberCard(card, ctx, { cardEl, bodyEl }) {
   const { current, prev, prevDay } = taskId ? latest(ctx.records, taskId, ctx.today) : { current: null, prev: null, prevDay: null };
   const health = taskId ? ctx.health?.[taskId] : null;
 
-  const isFailed = (current && current.status !== 'ok') || (health && health.status && health.status !== 'ok');
+  const isFailed = (current && !isSuccess(current)) || (health && health.status && !isSuccess(health));
   const hasValidValue = !isFailed && current != null && typeof current.value === 'number' && Number.isFinite(current.value);
 
   const displayEl = document.createElement('div');

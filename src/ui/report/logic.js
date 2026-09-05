@@ -1,4 +1,5 @@
 // AutoFetcher 報表查詢邏輯：日期範圍、篩選、摘要、月曆、排序、網址狀態 (SPEC §8.3)
+import { isSuccess } from '../../shared/record-status.js'
 
 // 將 Date 物件轉為 YYYY-MM-DD 本地時間字串
 function toDateString(date) {
@@ -49,7 +50,7 @@ export function filterRecords(records, filter = {}) {
     if (hasTaskIds && !taskIds.includes(r.taskId)) return false
     if (hasStatuses && !statuses.includes(r.status)) return false
     if (alertsOnly) {
-      if (r.status === 'ok' || r.status === 'fallback' || r.status === 'late') return false
+      if (isSuccess(r)) return false
     }
     if (alertOnly && r.alert !== true) return false
     if (vMin !== undefined && vMin !== null) {

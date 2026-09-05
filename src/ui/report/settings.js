@@ -4,7 +4,8 @@ import {
   saveSettings,
   getTasks,
   getStorageStats,
-  importRecords
+  importRecords,
+  getDiagList
 } from '../../shared/storage.js'
 import { buildExport, download } from '../../shared/export.js'
 import { exportSettings, importSettings } from '../../shared/settings-io.js'
@@ -64,13 +65,10 @@ async function renderWatchdog() {
 
   let lastTime = null
   try {
-    const all = await chrome.storage.local.get(null)
-    lastTime = all.lastWatchdogAt || all.watchdogLastRun || all.lastWatchdog
-    if (!lastTime && Array.isArray(all.diag)) {
-      const wdEntries = all.diag.filter((e) => e && e.kind === 'watchdog')
-      if (wdEntries.length > 0) {
-        lastTime = wdEntries[wdEntries.length - 1].at
-      }
+    const diagList = await getDiagList()
+    const wdEntries = diagList.filter((e) => e && e.kind === 'watchdog')
+    if (wdEntries.length > 0) {
+      lastTime = wdEntries[wdEntries.length - 1].at
     }
   } catch {}
 

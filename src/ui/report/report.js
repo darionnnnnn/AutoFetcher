@@ -5,7 +5,8 @@ import {
 } from './logic.js'
 import {
   getRecordsInRange, getRecordsByDate, deleteRecord,
-  getSettings, saveSettings, getTasks
+  getSettings, saveSettings, getTasks,
+  getHealthMap, getMissedList
 } from '../../shared/storage.js'
 import { getLayout } from '../../shared/layout-store.js'
 import { buildSeries, pivot } from './series.js'
@@ -14,6 +15,7 @@ import { buildTsv } from './cards.js'
 import { renderTasks } from './tasks.js'
 import { renderSettings } from './settings.js'
 import { renderDashboard } from './dashboard.js'
+import { isSuccess } from '../../shared/record-status.js'
 
 const DEFAULT_COLUMNS = [
   { key: 'slot', label: '時間', visible: true },
@@ -123,10 +125,63 @@ export function initFromHash(hash) {
 
   if (typeof document !== 'undefined') {
     renderRangeBar()
+    setupTableMode()
     const fromInput = document.getElementById('range-from')
     const toInput = document.getElementById('range-to')
     if (fromInput) fromInput.value = state.from || ''
     if (toInput) toInput.value = state.to || ''
+  }
+}
+
+let currentTableMode = 'list'
+let activeFilterContainer = null
+let activeFilterHandler = null
+
+async function renderCurrentHistoryTable(filtered, tasks) {
+  const sel = document.getElementById('table-mode')
+  const mode = sel?.value || currentTableMode || 'list'
+  if (mode === 'pivot') {
+    renderPivot(filtered, tasks)
+  } else {
+    const isLarge = isOver90Days(state.from, state.to)
+    renderTable(filtered, currentColumns, isLarge ? { paginate: true, page: state.page || 1, pageSize: 500 } : {})
+  }
+}
+
+export function setupTableMode() {
+  if (typeof document === 'undefined') return
+  const sel = document.getElementById('table-mode')
+  if (!sel) return
+  sel.value = currentTableMode || 'list'
+  sel.onchange = async () => {
+    const mode = sel.value || 'list'
+    currentTableMode = mode
+    try {
+      const settings = await getSettings()
+      const oldHistory = (settings && typeof settings.history === 'object') ? settings.history : {}
+      await saveSettings({
+        history: { ...oldHistory, tableMode: mode }
+      })
+    } catch {}
+
+    let tasks = []
+    try { tasks = await getTasks() } catch {}
+    let records = allLoadedRecords
+    if (state.from && state.to && (!records || records.length === 0)) {
+      const raw = await getRecordsInRange(state.from, state.to)
+      records = joinTaskNames(raw, tasks)
+      allLoadedRecords = records
+    }
+    const filtered = filterRecords(allLoadedRecords, {
+      taskIds: state.taskIds,
+      statuses: state.statuses,
+      alertsOnly: state.alertsOnly,
+      valueMin: state.valueMin,
+      valueMax: state.valueMax,
+      keyword: state.keyword
+    })
+    await renderCurrentHistoryTable(filtered, tasks)
+    renderSummary(summarize(filtered))
   }
 }
 
@@ -137,10 +192,34 @@ function isOver90Days(from, to) {
   return days > 90
 }
 
+async function onFilterChange() {
+  const container = document.getElementById('filters')
+  if (!container) return
+  const tasksContainer = container.querySelector('#filter-tasks')
+  const statusesContainer = container.querySelector('#filter-statuses')
+  const alertsCb = container.querySelector('#filter-alerts-only')
+  const valMinInput = container.querySelector('#filter-value-min')
+  const valMaxInput = container.querySelector('#filter-value-max')
+  const kwInput = container.querySelector('#filter-keyword')
+
+  state.taskIds = tasksContainer ? [...tasksContainer.querySelectorAll('input:checked')].map(cb => cb.value) : []
+  state.statuses = statusesContainer ? [...statusesContainer.querySelectorAll('input:checked')].map(cb => cb.value) : []
+  state.alertsOnly = alertsCb ? alertsCb.checked : false
+  state.valueMin = (valMinInput && valMinInput.value !== '') ? Number(valMinInput.value) : null
+  state.valueMax = (valMaxInput && valMaxInput.value !== '') ? Number(valMaxInput.value) : null
+  state.keyword = kwInput ? kwInput.value.trim() : ''
+
+  if (typeof window !== 'undefined') {
+    window.location.hash = buildHash(state)
+  }
+
+  await applyCurrentFilters()
+}
+
 async function applyCurrentFilters() {
+  let tasks = []
+  try { tasks = await getTasks() } catch {}
   if (state.from && state.to) {
-    let tasks = []
-    try { tasks = await getTasks() } catch {}
     const raw = await getRecordsInRange(state.from, state.to)
     allLoadedRecords = joinTaskNames(raw, tasks)
   }
@@ -152,8 +231,7 @@ async function applyCurrentFilters() {
     valueMax: state.valueMax,
     keyword: state.keyword
   })
-  const isLarge = isOver90Days(state.from, state.to)
-  renderTable(filtered, currentColumns, isLarge ? { paginate: true, page: state.page || 1, pageSize: 500 } : {})
+  await renderCurrentHistoryTable(filtered, tasks)
   renderSummary(summarize(filtered))
 }
 
@@ -161,6 +239,13 @@ export async function renderFilters() {
   const container = document.getElementById('filters')
   if (!container) return
   container.textContent = ''
+
+  if (activeFilterContainer && activeFilterHandler) {
+    activeFilterContainer.removeEventListener('change', activeFilterHandler)
+  }
+  activeFilterContainer = container
+  activeFilterHandler = onFilterChange
+  container.addEventListener('change', activeFilterHandler)
 
   let tasks = []
   try { tasks = await getTasks() } catch {}
@@ -242,30 +327,12 @@ export async function renderFilters() {
   }
   kwLabel.appendChild(kwInput)
 
-  // 任一控制項 change 時更新 state 與 hash
-  const onFilterChange = async () => {
-    state.taskIds = [...tasksContainer.querySelectorAll('input:checked')].map(cb => cb.value)
-    state.statuses = [...statusesContainer.querySelectorAll('input:checked')].map(cb => cb.value)
-    state.alertsOnly = alertsCb.checked
-    state.valueMin = valMinInput.value !== '' ? Number(valMinInput.value) : null
-    state.valueMax = valMaxInput.value !== '' ? Number(valMaxInput.value) : null
-    state.keyword = kwInput.value.trim()
-
-    if (typeof window !== 'undefined') {
-      window.location.hash = buildHash(state)
-    }
-
-    await applyCurrentFilters()
-  }
-
   container.appendChild(tasksContainer)
   container.appendChild(statusesContainer)
   container.appendChild(alertsLabel)
   container.appendChild(valMinLabel)
   container.appendChild(valMaxLabel)
   container.appendChild(kwLabel)
-
-  container.addEventListener('change', onFilterChange)
 }
 
 export async function loadAndRenderTasks() {
@@ -273,13 +340,10 @@ export async function loadAndRenderTasks() {
     const tasks = await getTasks()
     let health = {}
     let missed = []
-    if (globalThis.chrome?.storage?.local?.get) {
-      const storageData = await chrome.storage.local.get(['health', 'missed'])
-      health = (storageData && storageData.health && typeof storageData.health === 'object')
-        ? storageData.health
-        : {}
-      missed = Array.isArray(storageData?.missed) ? storageData.missed : []
-    }
+    try {
+      health = await getHealthMap()
+      missed = await getMissedList()
+    } catch {}
 
     const nextRuns = {}
     if (globalThis.chrome?.alarms?.getAll) {
@@ -429,7 +493,7 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
   if (emptyState) emptyState.hidden = true
 
   for (const record of displayRecords) {
-    const isFailed = !['ok', 'fallback', 'late'].includes(record.status)
+    const isFailed = !isSuccess(record)
     const cells = visibleCols.map(col => formatValue(record[col.key]))
     const tr = createTableRow(cells, false, { className: isFailed ? 'failed' : '' })
 
@@ -482,46 +546,42 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
           const cancelBtn = confirmBox.querySelector('[data-action="cancel"]')
           const okBtn = confirmBox.querySelector('[data-action="confirm"]')
 
-          const onCancel = () => {
-            confirmBox.hidden = true
-            cancelBtn?.removeEventListener('click', onCancel)
-            okBtn?.removeEventListener('click', onConfirm)
-          }
-
-          const onConfirm = async () => {
-            confirmBox.hidden = true
-            cancelBtn?.removeEventListener('click', onCancel)
-            okBtn?.removeEventListener('click', onConfirm)
-
-            const recDate = record.date || (record.slot ? record.slot.slice(0, 10) : '')
-            await deleteRecord(recDate, record.taskId, record.capturedAt)
-
-            if (state.from && state.to) {
-              let tasks = []
-              try { tasks = await getTasks() } catch {}
-              const raw = await getRecordsInRange(state.from, state.to)
-              allLoadedRecords = joinTaskNames(raw, tasks)
-              const filtered = filterRecords(allLoadedRecords, {
-                taskIds: state.taskIds,
-                statuses: state.statuses,
-                alertsOnly: state.alertsOnly,
-                valueMin: state.valueMin,
-                valueMax: state.valueMax,
-                keyword: state.keyword
-              })
-              const isLarge = isOver90Days(state.from, state.to)
-              renderTable(filtered, lastColumns, isLarge ? { paginate: true, page: state.page || 1, pageSize: 500 } : opts)
-              renderSummary(summarize(filtered))
-            } else {
-              const idx = lastRecords.findIndex(r => r.taskId === record.taskId && r.capturedAt === record.capturedAt)
-              if (idx !== -1) lastRecords.splice(idx, 1)
-              renderTable(lastRecords, lastColumns, opts)
-              renderSummary(summarize(lastRecords))
+          if (cancelBtn) {
+            cancelBtn.onclick = () => {
+              confirmBox.hidden = true
             }
           }
 
-          cancelBtn?.addEventListener('click', onCancel)
-          okBtn?.addEventListener('click', onConfirm)
+          if (okBtn) {
+            okBtn.onclick = async () => {
+              confirmBox.hidden = true
+
+              const recDate = record.date || (record.slot ? record.slot.slice(0, 10) : '')
+              await deleteRecord(recDate, record.taskId, record.capturedAt)
+
+              if (state.from && state.to) {
+                let tasks = []
+                try { tasks = await getTasks() } catch {}
+                const raw = await getRecordsInRange(state.from, state.to)
+                allLoadedRecords = joinTaskNames(raw, tasks)
+                const filtered = filterRecords(allLoadedRecords, {
+                  taskIds: state.taskIds,
+                  statuses: state.statuses,
+                  alertsOnly: state.alertsOnly,
+                  valueMin: state.valueMin,
+                  valueMax: state.valueMax,
+                  keyword: state.keyword
+                })
+                await renderCurrentHistoryTable(filtered, tasks)
+                renderSummary(summarize(filtered))
+              } else {
+                const idx = lastRecords.findIndex(r => r.taskId === record.taskId && r.capturedAt === record.capturedAt)
+                if (idx !== -1) lastRecords.splice(idx, 1)
+                renderTable(lastRecords, lastColumns, opts)
+                renderSummary(summarize(lastRecords))
+              }
+            }
+          }
         }
       })
       deleteActionRow.appendChild(delBtn)
@@ -947,9 +1007,13 @@ async function loadAndRenderPage() {
       cols = settings.history.columns
       currentColumns = cols
     }
+    if (settings?.history?.tableMode) {
+      currentTableMode = settings.history.tableMode
+    }
   } catch {
     applyTheme('system')
   }
+  setupTableMode()
 
   renderColumnConfig(cols)
 
@@ -970,8 +1034,7 @@ async function loadAndRenderPage() {
     keyword: state.keyword
   })
 
-  const isLarge = isOver90Days(state.from, state.to)
-  renderTable(filtered, cols, isLarge ? { paginate: true, page: state.page || 1, pageSize: 500 } : {})
+  await renderCurrentHistoryTable(filtered, tasks)
   renderSummary(summarize(filtered))
 
   const baseDate = state.from ? new Date(state.from) : new Date()
@@ -984,7 +1047,7 @@ async function loadAndRenderPage() {
     if (!r.date) continue
     if (!statsByDate[r.date]) statsByDate[r.date] = { count: 0, hasFail: false }
     statsByDate[r.date].count++
-    if (!['ok', 'fallback', 'late'].includes(r.status)) statsByDate[r.date].hasFail = true
+    if (!isSuccess(r)) statsByDate[r.date].hasFail = true
   }
   renderCalendar(year, month, statsByDate)
 
@@ -1018,4 +1081,8 @@ if (globalThis.chrome?.runtime?.id) {
       }
     }
   }
+}
+
+if (typeof document !== 'undefined') {
+  setupTableMode()
 }

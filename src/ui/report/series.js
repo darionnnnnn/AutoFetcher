@@ -1,13 +1,4 @@
-// AutoFetcher 時間序列資料轉換模組（純函式）
-
-const SUCCESS_STATUSES = new Set(['ok', 'fallback', 'late']);
-
-/**
- * 判斷紀錄是否為成功狀態
- */
-function isSuccess(record) {
-  return record != null && SUCCESS_STATUSES.has(record.status);
-}
+import { isSuccess } from '../../shared/record-status.js';
 
 /**
  * 將 YYYY-MM-DD 加上指定天數（以 UTC 計算，避免本機時區影響）

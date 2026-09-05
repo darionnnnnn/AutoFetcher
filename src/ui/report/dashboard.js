@@ -3,7 +3,7 @@ import {
   deleteDashboard, duplicateDashboard, reorderDashboards,
   setLastDashboard
 } from '../../shared/layout-store.js'
-import { getRecordsInRange, getTasks } from '../../shared/storage.js'
+import { getRecordsInRange, getTasks, getHealthMap, getMissedList } from '../../shared/storage.js'
 import { renderCard } from './cards.js'
 import { resolvePeriod } from './series.js'
 import { placeCard, resizeCard, compact, autoArrange } from './layout.js'
@@ -463,11 +463,10 @@ async function buildDashboardContext(dash) {
 
   let health = {}
   let missed = []
-  if (globalThis.chrome?.storage?.local?.get) {
-    const data = await chrome.storage.local.get(['health', 'missed'])
-    health = (data?.health && typeof data.health === 'object') ? data.health : {}
-    missed = Array.isArray(data?.missed) ? data.missed : []
-  }
+  try {
+    health = await getHealthMap()
+    missed = await getMissedList()
+  } catch {}
 
   const nextRuns = {}
   if (globalThis.chrome?.alarms?.getAll) {

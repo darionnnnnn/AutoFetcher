@@ -1,5 +1,4 @@
-// 任務管理模組：清單渲染、篩選、排序、複製、刪除保護與錯過清單橫幅
-import { getTask, saveTask, deleteTask, getTasks } from '../../shared/storage.js'
+import { getTask, saveTask, deleteTask, getTasks, countRecordsForTask, listDates } from '../../shared/storage.js'
 import { MSG } from '../../shared/messages.js'
 import { buildExport, download } from '../../shared/export.js'
 
@@ -63,20 +62,7 @@ async function openDeleteDialog(taskId) {
   const dlg = document.getElementById('task-delete-dialog')
   if (!dlg) return
 
-  const all = await chrome.storage.local.get(null)
-  let count = 0
-  const dates = []
-
-  for (const [key, val] of Object.entries(all)) {
-    if (typeof key === 'string' && key.startsWith('rec:') && Array.isArray(val)) {
-      const matched = val.filter((r) => r && r.taskId === taskId)
-      if (matched.length > 0) {
-        count += matched.length
-        dates.push(key.slice(4))
-      }
-    }
-  }
-  dates.sort()
+  const count = await countRecordsForTask(taskId)
 
   const taskObj = currentTasks.find((t) => t.id === taskId)
   const taskName = taskObj?.name || taskId
@@ -121,6 +107,8 @@ async function openDeleteDialog(taskId) {
       const m = String(d.getMonth() + 1).padStart(2, '0')
       const day = String(d.getDate()).padStart(2, '0')
       const today = `${y}-${m}-${day}`
+      // 匯出範圍從最舊的紀錄日起算（重構後 dates 不再由外層提供，改在此取得）
+      const dates = await listDates()
       const from = dates[0] || today
       const to = today
 

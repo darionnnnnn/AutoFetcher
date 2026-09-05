@@ -1,8 +1,9 @@
 // AutoFetcher 匯出模組：JSON、CSV 與 HTML 報表產生及手動下載 (SPEC §5, K1)
 
-import { getTasks, getRecordsByDate, getRecordsInRange } from './storage.js'
+import { getTasks, getRecordsByDate, getRecordsInRange, getHealthMap, getMissedList } from './storage.js'
 import { getLayout } from './layout-store.js'
 import { renderCard } from '../ui/report/cards.js'
+import { isSuccess } from './record-status.js'
 
 // 跳脫 HTML 特殊字元
 function escapeHtml(str) {
@@ -102,13 +103,10 @@ export async function buildHtmlReport({ from, to, dashId }) {
 
   let health = {}
   let missed = []
-  if (globalThis.chrome?.storage?.local?.get) {
-    try {
-      const data = await chrome.storage.local.get(['health', 'missed'])
-      health = (data?.health && typeof data.health === 'object') ? data.health : {}
-      missed = Array.isArray(data?.missed) ? data.missed : []
-    } catch {}
-  }
+  try {
+    health = await getHealthMap()
+    missed = await getMissedList()
+  } catch {}
 
   const ctx = {
     records,
@@ -156,7 +154,7 @@ export async function buildHtmlReport({ from, to, dashId }) {
         ? String(r.value)
         : (r.raw !== undefined && r.raw !== null ? String(r.raw) : '—')
       const status = r.status || '—'
-      const trClass = r.status && r.status !== 'ok' ? ' class="status-failed"' : ''
+      const trClass = r.status && !isSuccess(r) ? ' class="status-failed"' : ''
       return `<tr${trClass}><td>${escapeHtml(time)}</td><td>${escapeHtml(taskName)}</td><td>${escapeHtml(val)}</td><td>${escapeHtml(status)}</td></tr>`
     }).join('\n          ')
 
