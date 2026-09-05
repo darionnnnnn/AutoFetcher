@@ -162,6 +162,22 @@ export async function getRecordsByDate(date) {
   return Array.isArray(res[key]) ? res[key] : []
 }
 
+// 刪除指定日期的單一紀錄（依 taskId 與 capturedAt 相符者移除）
+// 移除後若該日已無紀錄則移除整個日期鍵；找不到相符紀錄時不改動任何資料
+export async function deleteRecord(date, taskId, capturedAt) {
+  const key = dateToKey(date)
+  const res = await chrome.storage.local.get(key)
+  const list = Array.isArray(res[key]) ? res[key] : []
+  const index = list.findIndex(r => r.taskId === taskId && r.capturedAt === capturedAt)
+  if (index === -1) return
+  list.splice(index, 1)
+  if (list.length === 0) {
+    await chrome.storage.local.remove(key)
+  } else {
+    await chrome.storage.local.set({ [key]: list })
+  }
+}
+
 // 列出所有具備紀錄的日期，由舊到新排序
 export async function listDates() {
   const all = await chrome.storage.local.get(null)

@@ -1,12 +1,16 @@
-// AutoFetcher 報表歷史檢視 (SPEC §8.3, F2)
-
 import {
   quickRange, filterRecords, summarize, buildCalendar,
   sortRecords, parseHash, buildHash,
-  shiftRange, normalizeRange
+  shiftRange, normalizeRange, paginate, compareDays
 } from './logic.js'
-import { getRecordsInRange, getSettings, saveSettings, getTasks } from '../../shared/storage.js'
+import {
+  getRecordsInRange, getRecordsByDate, deleteRecord,
+  getSettings, saveSettings, getTasks
+} from '../../shared/storage.js'
 import { getLayout } from '../../shared/layout-store.js'
+import { buildSeries, pivot } from './series.js'
+import { lineChart } from './charts.js'
+import { buildTsv } from './cards.js'
 import { renderTasks } from './tasks.js'
 import { renderSettings } from './settings.js'
 import { renderDashboard } from './dashboard.js'
@@ -27,12 +31,24 @@ const state = {
   taskIds: [],
   statuses: [],
   sortField: null,
-  sortDir: 'asc'
+  sortDir: 'asc',
+  valueMin: null,
+  valueMax: null,
+  keyword: '',
+  alertsOnly: false,
+  page: 1,
+  compareTo: ''
 }
 
 let currentColumns = [...DEFAULT_COLUMNS]
 let lastRecords = []
 let lastColumns = currentColumns
+let allLoadedRecords = []
+let currentCalYear = 2026
+let currentCalMonth = 9
+let isCalDragging = false
+let calDragStart = null
+let calDragCurrent = null
 
 // 格式化單一值：數值使用 toLocaleString，字串維持原樣，null/undefined 顯示破折號
 function formatValue(val) {
@@ -92,12 +108,19 @@ export function initFromHash(hash) {
     state.view = 'dashboard'
   }
   state.dash = parsed.dash || null
-  if (parsed.taskIds) state.taskIds = parsed.taskIds
-  if (parsed.statuses) state.statuses = parsed.statuses
+  state.taskIds = parsed.taskIds || []
+  state.statuses = parsed.statuses || []
 
   const today = quickRange('today', Date.now())
   state.from = parsed.from || (today ? today.from : '')
   state.to = parsed.to || (today ? today.to : '')
+  state.valueMin = parsed.valueMin !== undefined ? parsed.valueMin : null
+  state.valueMax = parsed.valueMax !== undefined ? parsed.valueMax : null
+  state.keyword = parsed.keyword || ''
+  state.alertsOnly = parsed.alertsOnly === true
+  state.page = parsed.page || 1
+  state.compareTo = parsed.compareTo || ''
+
   if (typeof document !== 'undefined') {
     renderRangeBar()
     const fromInput = document.getElementById('range-from')
@@ -105,6 +128,144 @@ export function initFromHash(hash) {
     if (fromInput) fromInput.value = state.from || ''
     if (toInput) toInput.value = state.to || ''
   }
+}
+
+function isOver90Days(from, to) {
+  if (!from || !to) return false
+  const ms = new Date(to).getTime() - new Date(from).getTime()
+  const days = Math.round(ms / 86400000) + 1
+  return days > 90
+}
+
+async function applyCurrentFilters() {
+  if (state.from && state.to) {
+    let tasks = []
+    try { tasks = await getTasks() } catch {}
+    const raw = await getRecordsInRange(state.from, state.to)
+    allLoadedRecords = joinTaskNames(raw, tasks)
+  }
+  const filtered = filterRecords(allLoadedRecords, {
+    taskIds: state.taskIds,
+    statuses: state.statuses,
+    alertsOnly: state.alertsOnly,
+    valueMin: state.valueMin,
+    valueMax: state.valueMax,
+    keyword: state.keyword
+  })
+  const isLarge = isOver90Days(state.from, state.to)
+  renderTable(filtered, currentColumns, isLarge ? { paginate: true, page: state.page || 1, pageSize: 500 } : {})
+  renderSummary(summarize(filtered))
+}
+
+export async function renderFilters() {
+  const container = document.getElementById('filters')
+  if (!container) return
+  container.textContent = ''
+
+  let tasks = []
+  try { tasks = await getTasks() } catch {}
+
+  // 1. 任務多選容器 #filter-tasks
+  const tasksContainer = document.createElement('div')
+  tasksContainer.id = 'filter-tasks'
+  for (const t of tasks) {
+    const label = document.createElement('label')
+    const cb = document.createElement('input')
+    cb.type = 'checkbox'
+    cb.value = t.id
+    cb.checked = Array.isArray(state.taskIds) && state.taskIds.includes(t.id)
+    label.appendChild(cb)
+    label.appendChild(document.createTextNode(` ${t.name || t.id}`))
+    tasksContainer.appendChild(label)
+  }
+
+  // 2. 狀態多選容器 #filter-statuses
+  const statusesContainer = document.createElement('div')
+  statusesContainer.id = 'filter-statuses'
+  const allStatuses = [
+    { key: 'ok', label: '成功 (ok)' },
+    { key: 'fallback', label: '備援 (fallback)' },
+    { key: 'late', label: '逾時 (late)' },
+    { key: 'not_found', label: '未找到 (not_found)' },
+    { key: 'error', label: '錯誤 (error)' }
+  ]
+  for (const item of allStatuses) {
+    const label = document.createElement('label')
+    const cb = document.createElement('input')
+    cb.type = 'checkbox'
+    cb.value = item.key
+    cb.checked = Array.isArray(state.statuses) && state.statuses.includes(item.key)
+    label.appendChild(cb)
+    label.appendChild(document.createTextNode(` ${item.label}`))
+    statusesContainer.appendChild(label)
+  }
+
+  // 3. 只看告警 #filter-alerts-only
+  const alertsLabel = document.createElement('label')
+  const alertsCb = document.createElement('input')
+  alertsCb.type = 'checkbox'
+  alertsCb.id = 'filter-alerts-only'
+  alertsCb.checked = !!state.alertsOnly
+  alertsLabel.appendChild(alertsCb)
+  alertsLabel.appendChild(document.createTextNode(' 只看告警'))
+
+  // 4. 值範圍 #filter-value-min, #filter-value-max
+  const valMinLabel = document.createElement('label')
+  valMinLabel.textContent = '數值下限：'
+  const valMinInput = document.createElement('input')
+  valMinInput.type = 'number'
+  valMinInput.id = 'filter-value-min'
+  if (state.valueMin !== null && state.valueMin !== undefined) {
+    valMinInput.value = String(state.valueMin)
+  }
+  valMinLabel.appendChild(valMinInput)
+
+  const valMaxLabel = document.createElement('label')
+  valMaxLabel.textContent = '數值上限：'
+  const valMaxInput = document.createElement('input')
+  valMaxInput.type = 'number'
+  valMaxInput.id = 'filter-value-max'
+  if (state.valueMax !== null && state.valueMax !== undefined) {
+    valMaxInput.value = String(state.valueMax)
+  }
+  valMaxLabel.appendChild(valMaxInput)
+
+  // 5. 關鍵字 #filter-keyword
+  const kwLabel = document.createElement('label')
+  kwLabel.textContent = '關鍵字：'
+  const kwInput = document.createElement('input')
+  kwInput.type = 'text'
+  kwInput.id = 'filter-keyword'
+  kwInput.placeholder = '搜尋數值或原文...'
+  if (state.keyword) {
+    kwInput.value = state.keyword
+  }
+  kwLabel.appendChild(kwInput)
+
+  // 任一控制項 change 時更新 state 與 hash
+  const onFilterChange = async () => {
+    state.taskIds = [...tasksContainer.querySelectorAll('input:checked')].map(cb => cb.value)
+    state.statuses = [...statusesContainer.querySelectorAll('input:checked')].map(cb => cb.value)
+    state.alertsOnly = alertsCb.checked
+    state.valueMin = valMinInput.value !== '' ? Number(valMinInput.value) : null
+    state.valueMax = valMaxInput.value !== '' ? Number(valMaxInput.value) : null
+    state.keyword = kwInput.value.trim()
+
+    if (typeof window !== 'undefined') {
+      window.location.hash = buildHash(state)
+    }
+
+    await applyCurrentFilters()
+  }
+
+  container.appendChild(tasksContainer)
+  container.appendChild(statusesContainer)
+  container.appendChild(alertsLabel)
+  container.appendChild(valMinLabel)
+  container.appendChild(valMaxLabel)
+  container.appendChild(kwLabel)
+
+  container.addEventListener('change', onFilterChange)
 }
 
 export async function loadAndRenderTasks() {
@@ -168,7 +329,7 @@ export function showTab(name) {
   }
 }
 
-export function renderTable(records = [], columns = currentColumns) {
+export function renderTable(records = [], columns = currentColumns, opts = {}) {
   lastRecords = Array.isArray(records) ? [...records] : []
   lastColumns = Array.isArray(columns) ? [...columns] : currentColumns
 
@@ -193,10 +354,73 @@ export function renderTable(records = [], columns = currentColumns) {
       state.sortDir = (state.sortField === col.key && state.sortDir === 'asc') ? 'desc' : 'asc'
       state.sortField = col.key
       const sorted = sortRecords(lastRecords, state.sortField, state.sortDir)
-      renderTable(sorted, lastColumns)
+      renderTable(sorted, lastColumns, opts)
     })
   })
   thead.appendChild(trHead)
+
+  // 處理複製 TSV 按鈕
+  const copyBtn = document.querySelector('[data-action="copy-records-tsv"]')
+  if (copyBtn) {
+    const nav = typeof navigator !== 'undefined' ? navigator : (typeof window !== 'undefined' ? window.navigator : null)
+    if (!nav || !nav.clipboard || typeof nav.clipboard.writeText !== 'function') {
+      copyBtn.hidden = true
+    } else {
+      copyBtn.hidden = false
+      copyBtn.onclick = () => {
+        const tsvHeaders = visibleCols.map(c => c.label || c.key)
+        const tsvRows = lastRecords.map(r => visibleCols.map(c => r[c.key]))
+        const tsv = buildTsv([tsvHeaders, ...tsvRows])
+        nav.clipboard.writeText(tsv).catch(() => {})
+      }
+    }
+  }
+
+  // 處理分頁
+  let displayRecords = lastRecords
+  const pager = document.getElementById('record-pager')
+  if (opts && opts.paginate) {
+    const page = opts.page || state.page || 1
+    const pageSize = opts.pageSize || 500
+    const paged = paginate(lastRecords, page, pageSize)
+    displayRecords = paged.items
+    if (pager) {
+      pager.hidden = false
+      pager.textContent = ''
+
+      const prevBtn = document.createElement('button')
+      prevBtn.type = 'button'
+      prevBtn.dataset.action = 'prev-page'
+      prevBtn.textContent = '上一頁'
+      prevBtn.disabled = paged.page <= 1
+      prevBtn.onclick = () => {
+        state.page = paged.page - 1
+        if (typeof window !== 'undefined') window.location.hash = buildHash(state)
+        renderTable(lastRecords, lastColumns, { paginate: true, page: state.page, pageSize })
+      }
+
+      const textSpan = document.createElement('span')
+      textSpan.className = 'pager-text'
+      textSpan.textContent = `第 ${paged.page} / ${paged.totalPages} 頁`
+
+      const nextBtn = document.createElement('button')
+      nextBtn.type = 'button'
+      nextBtn.dataset.action = 'next-page'
+      nextBtn.textContent = '下一頁'
+      nextBtn.disabled = paged.page >= paged.totalPages
+      nextBtn.onclick = () => {
+        state.page = paged.page + 1
+        if (typeof window !== 'undefined') window.location.hash = buildHash(state)
+        renderTable(lastRecords, lastColumns, { paginate: true, page: state.page, pageSize })
+      }
+
+      pager.appendChild(prevBtn)
+      pager.appendChild(textSpan)
+      pager.appendChild(nextBtn)
+    }
+  } else {
+    if (pager) pager.hidden = true
+  }
 
   if (lastRecords.length === 0) {
     if (emptyState) emptyState.hidden = false
@@ -204,7 +428,7 @@ export function renderTable(records = [], columns = currentColumns) {
   }
   if (emptyState) emptyState.hidden = true
 
-  for (const record of lastRecords) {
+  for (const record of displayRecords) {
     const isFailed = !['ok', 'fallback', 'late'].includes(record.status)
     const cells = visibleCols.map(col => formatValue(record[col.key]))
     const tr = createTableRow(cells, false, { className: isFailed ? 'failed' : '' })
@@ -242,6 +466,67 @@ export function renderTable(records = [], columns = currentColumns) {
         itemRow.appendChild(span)
         box.appendChild(itemRow)
       }
+
+      // 單筆刪除按鈕
+      const deleteActionRow = document.createElement('div')
+      deleteActionRow.className = 'detail-actions'
+      const delBtn = document.createElement('button')
+      delBtn.type = 'button'
+      delBtn.dataset.action = 'delete-record'
+      delBtn.textContent = '刪除此紀錄'
+      delBtn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        const confirmBox = document.getElementById('record-delete-confirm')
+        if (confirmBox) {
+          confirmBox.hidden = false
+          const cancelBtn = confirmBox.querySelector('[data-action="cancel"]')
+          const okBtn = confirmBox.querySelector('[data-action="confirm"]')
+
+          const onCancel = () => {
+            confirmBox.hidden = true
+            cancelBtn?.removeEventListener('click', onCancel)
+            okBtn?.removeEventListener('click', onConfirm)
+          }
+
+          const onConfirm = async () => {
+            confirmBox.hidden = true
+            cancelBtn?.removeEventListener('click', onCancel)
+            okBtn?.removeEventListener('click', onConfirm)
+
+            const recDate = record.date || (record.slot ? record.slot.slice(0, 10) : '')
+            await deleteRecord(recDate, record.taskId, record.capturedAt)
+
+            if (state.from && state.to) {
+              let tasks = []
+              try { tasks = await getTasks() } catch {}
+              const raw = await getRecordsInRange(state.from, state.to)
+              allLoadedRecords = joinTaskNames(raw, tasks)
+              const filtered = filterRecords(allLoadedRecords, {
+                taskIds: state.taskIds,
+                statuses: state.statuses,
+                alertsOnly: state.alertsOnly,
+                valueMin: state.valueMin,
+                valueMax: state.valueMax,
+                keyword: state.keyword
+              })
+              const isLarge = isOver90Days(state.from, state.to)
+              renderTable(filtered, lastColumns, isLarge ? { paginate: true, page: state.page || 1, pageSize: 500 } : opts)
+              renderSummary(summarize(filtered))
+            } else {
+              const idx = lastRecords.findIndex(r => r.taskId === record.taskId && r.capturedAt === record.capturedAt)
+              if (idx !== -1) lastRecords.splice(idx, 1)
+              renderTable(lastRecords, lastColumns, opts)
+              renderSummary(summarize(lastRecords))
+            }
+          }
+
+          cancelBtn?.addEventListener('click', onCancel)
+          okBtn?.addEventListener('click', onConfirm)
+        }
+      })
+      deleteActionRow.appendChild(delBtn)
+      box.appendChild(deleteActionRow)
+
       td.appendChild(box)
       tr.after(detailTr)
     })
@@ -263,23 +548,101 @@ export function renderSummary(rows) {
 
   const tbody = document.createElement('tbody')
   for (const r of rows) {
-    const cells = [
-      r.taskName || r.taskId || '—',
+    const tr = document.createElement('tr')
+
+    // 任務名欄位：改成可點的元素，帶 data-task-id
+    const taskTd = document.createElement('td')
+    const taskLink = document.createElement('button')
+    taskLink.type = 'button'
+    taskLink.className = 'task-link'
+    taskLink.dataset.taskId = r.taskId
+    taskLink.textContent = r.taskName || r.taskId || '—'
+    taskLink.addEventListener('click', async () => {
+      try {
+        const records = await getRecordsInRange(state.from, state.to)
+        const seriesList = buildSeries(records, [{ taskId: r.taskId }], { from: state.from, to: state.to })
+        const chartBox = document.getElementById('summary-chart')
+        if (chartBox) {
+          chartBox.textContent = ''
+          const svg = lineChart(seriesList)
+          chartBox.appendChild(svg)
+          chartBox.hidden = false
+        }
+      } catch (err) {
+        console.error('繪製折線圖失敗:', err)
+      }
+    })
+    taskTd.appendChild(taskLink)
+    tr.appendChild(taskTd)
+
+    const otherValues = [
       formatValue(r.count), formatValue(r.failCount),
       formatValue(r.min), formatValue(r.max), formatValue(r.avg),
       formatValue(r.first), formatValue(r.last), formatValue(r.delta)
     ]
-    tbody.appendChild(createTableRow(cells, false))
+    for (const val of otherValues) {
+      const td = document.createElement('td')
+      td.textContent = String(val)
+      tr.appendChild(td)
+    }
+
+    tbody.appendChild(tr)
   }
   table.appendChild(tbody)
   container.appendChild(table)
 }
 
 export function renderCalendar(year, month, statsByDate = {}) {
+  currentCalYear = year
+  currentCalMonth = month
+
   const container = document.getElementById('calendar')
   if (!container) return
   container.textContent = ''
 
+  // 1. 月曆導覽列
+  const nav = document.createElement('div')
+  nav.className = 'calendar-nav'
+
+  const prevBtn = document.createElement('button')
+  prevBtn.type = 'button'
+  prevBtn.id = 'cal-prev-month'
+  prevBtn.textContent = '‹'
+  prevBtn.onclick = () => {
+    let y = currentCalYear
+    let m = currentCalMonth - 1
+    if (m < 1) { m = 12; y -= 1 }
+    renderCalendar(y, m, statsByDate)
+  }
+
+  const jumpInput = document.createElement('input')
+  jumpInput.type = 'month'
+  jumpInput.id = 'cal-jump'
+  jumpInput.value = `${year}-${String(month).padStart(2, '0')}`
+  jumpInput.onchange = () => {
+    if (jumpInput.value) {
+      const [y, m] = jumpInput.value.split('-').map(Number)
+      if (y && m) renderCalendar(y, m, statsByDate)
+    }
+  }
+
+  const nextBtn = document.createElement('button')
+  nextBtn.type = 'button'
+  nextBtn.id = 'cal-next-month'
+  nextBtn.textContent = '›'
+  nextBtn.onclick = () => {
+    let y = currentCalYear
+    let m = currentCalMonth + 1
+    if (m > 12) { m = 1; y += 1 }
+    renderCalendar(y, m, statsByDate)
+  }
+
+  nav.appendChild(prevBtn)
+  nav.appendChild(jumpInput)
+  nav.appendChild(nextBtn)
+  container.appendChild(nav)
+
+  // 2. 表格
   const weeks = buildCalendar(year, month, statsByDate)
   const table = document.createElement('table')
   const thead = document.createElement('thead')
@@ -303,6 +666,34 @@ export function renderCalendar(year, month, statsByDate = {}) {
         state.to = day.date
         if (typeof window !== 'undefined') window.location.hash = buildHash(state)
       })
+
+      td.addEventListener('pointerdown', () => {
+        isCalDragging = true
+        calDragStart = day.date
+        calDragCurrent = day.date
+      })
+
+      td.addEventListener('pointerover', () => {
+        if (isCalDragging) {
+          calDragCurrent = day.date
+        }
+      })
+
+      td.addEventListener('pointerup', () => {
+        if (isCalDragging) {
+          isCalDragging = false
+          const end = day.date || calDragCurrent
+          if (calDragStart && end) {
+            const norm = normalizeRange(calDragStart, end)
+            state.from = norm.from
+            state.to = norm.to
+            if (typeof window !== 'undefined') window.location.hash = buildHash(state)
+          }
+          calDragStart = null
+          calDragCurrent = null
+        }
+      })
+
       tr.appendChild(td)
     }
     tbody.appendChild(tr)
@@ -340,7 +731,141 @@ export function renderColumnConfig(columns) {
 
     label.appendChild(input)
     label.appendChild(document.createTextNode(` ${col.label || col.key}`))
+
+    // 支援 Pointer Events 拖曳排序
+    label.addEventListener('pointerdown', (e) => {
+      if (typeof label.setPointerCapture === 'function') {
+        try { label.setPointerCapture(e.pointerId) } catch {}
+      }
+      label.dataset.dragging = 'true'
+    })
+
+    label.addEventListener('pointermove', (e) => {
+      if (label.dataset.dragging !== 'true') return
+      const target = document.elementFromPoint?.(e.clientX, e.clientY)?.closest('#column-config label')
+      if (target && target !== label && target.parentNode === container) {
+        const rect = target.getBoundingClientRect()
+        const midX = rect.left + rect.width / 2
+        if (e.clientX < midX) {
+          container.insertBefore(label, target)
+        } else {
+          container.insertBefore(label, target.nextSibling)
+        }
+      }
+    })
+
+    const onPointerUp = async (e) => {
+      if (label.dataset.dragging !== 'true') return
+      label.dataset.dragging = 'false'
+      if (typeof label.releasePointerCapture === 'function') {
+        try { label.releasePointerCapture(e.pointerId) } catch {}
+      }
+      const newKeys = [...container.querySelectorAll('input')].map(inp => inp.value)
+      await applyColumnOrder(newKeys)
+    }
+
+    label.addEventListener('pointerup', onPointerUp)
+    label.addEventListener('pointercancel', onPointerUp)
+
     container.appendChild(label)
+  }
+}
+
+export async function applyColumnOrder(keys) {
+  if (!Array.isArray(keys)) return
+  const colMap = new Map(currentColumns.map(c => [c.key, c]))
+  const newCols = []
+  for (const k of keys) {
+    if (colMap.has(k)) {
+      newCols.push(colMap.get(k))
+      colMap.delete(k)
+    }
+  }
+  for (const c of colMap.values()) {
+    newCols.push(c)
+  }
+  currentColumns = newCols
+  try {
+    const settings = await getSettings()
+    const oldHistory = (settings && typeof settings.history === 'object') ? settings.history : {}
+    await saveSettings({
+      history: { ...oldHistory, columns: currentColumns }
+    })
+  } catch {}
+  renderColumnConfig(currentColumns)
+  renderTable(lastRecords, currentColumns)
+}
+
+export function renderPivot(records = [], tasks = []) {
+  const table = document.getElementById('record-table')
+  const emptyState = document.getElementById('empty-state')
+  if (!table) return
+
+  let thead = table.querySelector('thead')
+  if (!thead) { thead = document.createElement('thead'); table.appendChild(thead) }
+  thead.textContent = ''
+
+  let tbody = table.querySelector('tbody')
+  if (!tbody) { tbody = document.createElement('tbody'); table.appendChild(tbody) }
+  tbody.textContent = ''
+
+  const sortedTasks = [...tasks].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+  const taskIds = sortedTasks.map(t => t.id)
+  const taskNamesById = new Map(sortedTasks.map(t => [t.id, t.name || t.id]))
+
+  const { columns, rows } = pivot(records, taskIds, taskIds)
+
+  const headerCells = ['時間', ...columns.map(id => taskNamesById.get(id) || id)]
+  thead.appendChild(createTableRow(headerCells, true))
+
+  if (!rows || rows.length === 0) {
+    if (emptyState) emptyState.hidden = false
+    return
+  }
+  if (emptyState) emptyState.hidden = true
+
+  for (const row of rows) {
+    const cells = [row.t, ...columns.map(col => formatValue(row.values[col]))]
+    tbody.appendChild(createTableRow(cells, false))
+  }
+}
+
+export async function renderCompare(compareDate) {
+  const table = document.getElementById('compare-table')
+  if (!table) return
+  let thead = table.querySelector('thead')
+  if (!thead) { thead = document.createElement('thead'); table.appendChild(thead) }
+  thead.textContent = ''
+  let tbody = table.querySelector('tbody')
+  if (!tbody) { tbody = document.createElement('tbody'); table.appendChild(tbody) }
+  tbody.textContent = ''
+
+  if (!compareDate) return
+
+  let tasks = []
+  try { tasks = await getTasks() } catch {}
+  const taskIds = tasks.map(t => t.id)
+  const taskNamesById = new Map(tasks.map(t => [t.id, t.name || t.id]))
+
+  const recordsA = await getRecordsInRange(state.from, state.to)
+  const recordsB = await getRecordsByDate(compareDate)
+
+  const { rows } = compareDays(recordsA, recordsB, taskIds)
+
+  const headers = ['時間']
+  for (const id of taskIds) {
+    const name = taskNamesById.get(id) || id
+    headers.push(`${name} (基準)`, `${name} (比較)`, '差異')
+  }
+  thead.appendChild(createTableRow(headers, true))
+
+  for (const row of rows) {
+    const cells = [row.time]
+    for (const id of taskIds) {
+      const v = row.values[id] || { a: null, b: null, delta: null }
+      cells.push(formatValue(v.a), formatValue(v.b), formatValue(v.delta))
+    }
+    tbody.appendChild(createTableRow(cells, false))
   }
 }
 
@@ -430,12 +955,23 @@ async function loadAndRenderPage() {
 
   let tasks = []
   try { tasks = await getTasks() } catch {}
-  const records = joinTaskNames(await getRecordsInRange(state.from, state.to), tasks)
+  const rawRecords = await getRecordsInRange(state.from, state.to)
+  const records = joinTaskNames(rawRecords, tasks)
+  allLoadedRecords = records
+
+  await renderFilters()
+
   const filtered = filterRecords(records, {
     taskIds: state.taskIds,
-    statuses: state.statuses
+    statuses: state.statuses,
+    alertsOnly: state.alertsOnly,
+    valueMin: state.valueMin,
+    valueMax: state.valueMax,
+    keyword: state.keyword
   })
-  renderTable(filtered, cols)
+
+  const isLarge = isOver90Days(state.from, state.to)
+  renderTable(filtered, cols, isLarge ? { paginate: true, page: state.page || 1, pageSize: 500 } : {})
   renderSummary(summarize(filtered))
 
   const baseDate = state.from ? new Date(state.from) : new Date()
@@ -451,6 +987,19 @@ async function loadAndRenderPage() {
     if (!['ok', 'fallback', 'late'].includes(r.status)) statsByDate[r.date].hasFail = true
   }
   renderCalendar(year, month, statsByDate)
+
+  const compareInput = document.getElementById('compare-date')
+  if (compareInput) {
+    compareInput.value = state.compareTo || ''
+    compareInput.onchange = async () => {
+      state.compareTo = compareInput.value
+      if (typeof window !== 'undefined') window.location.hash = buildHash(state)
+      await renderCompare(state.compareTo)
+    }
+  }
+  if (state.compareTo) {
+    await renderCompare(state.compareTo)
+  }
 }
 
 if (globalThis.chrome?.runtime?.id) {
