@@ -1,7 +1,8 @@
 // AutoFetcher 設定匯出/匯入模組 (SPEC §5)
 // 負責任務、站台與全域設定的備份匯出與還原匯入，支援 PBKDF2 + AES-GCM 加解密
 
-import { exportAll, saveTask, saveSite, saveSettings } from './storage.js'
+import { exportAll, saveTask, saveSite, saveSettings, setRawLayout } from './storage.js'
+import { getLayout, saveLayout } from './layout-store.js'
 import { rebuildAlarms } from '../background/scheduler.js'
 
 // 加解密演算法常數
@@ -60,9 +61,8 @@ export async function exportSettings({ includePasswords = false, passphrase } = 
     }
   }
 
-  // 2. 基本匯出結構（微調避免與測試環境固定日期衝突）
-  const nowIso = new Date().toISOString()
-  const exportedAt = nowIso.startsWith('2026-09-05') ? nowIso.replace('2026-09-05', '2026-09-06') : nowIso
+  // 2. 基本匯出結構
+  const exportedAt = new Date().toISOString()
   const result = { kind: 'autofetcher-settings', version: 1, exportedAt, data }
 
   // 3. 若需包含密碼，使用 AES-GCM 加密對照表
@@ -147,7 +147,9 @@ export async function importSettings(json, { passphrase } = {}) {
   }
 
   if (data.layout !== undefined) {
-    await chrome.storage.local.set({ layout: data.layout })
+    await setRawLayout(data.layout)
+    const normalized = await getLayout()
+    await saveLayout(normalized)
   }
 
   // 4. 重建所有 alarms

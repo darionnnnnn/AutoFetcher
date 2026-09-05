@@ -16,9 +16,13 @@ test('manifest 是 MV3 且有必要欄位', () => {
 })
 
 test('manifest 權限剛好是 SPEC §9 那組,沒有多的', () => {
-  const want = ['alarms', 'contextMenus', 'downloads', 'notifications', 'scripting', 'storage', 'tabs']
+  const want = ['alarms', 'contextMenus', 'downloads', 'notifications', 'scripting', 'storage', 'tabs', 'unlimitedStorage']
   assert.deepEqual([...manifest.permissions].sort(), want)
   assert.deepEqual(manifest.host_permissions, ['<all_urls>'])
+})
+
+test('manifest 有 options_page 指向報表頁（chrome://extensions 可開啟）', () => {
+  assert.equal(manifest.options_page, 'ui/report/report.html')
 })
 
 test('manifest 不得使用 Chrome 專屬 API(Edge 相容,SPEC §13)', () => {

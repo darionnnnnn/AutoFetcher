@@ -1,5 +1,6 @@
-import { saveTask } from '../../shared/storage.js'
+import { saveTask, getTask } from '../../shared/storage.js'
 import { MSG } from '../../shared/messages.js'
+import { getLayout, addCard } from '../../shared/layout-store.js'
 
 let currentCtx = null
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
@@ -156,6 +157,77 @@ export function render(ctx) {
   }
 }
 
+// 卡片型別對應的預設尺寸
+const CARD_SIZES = {
+  number: { w: 3, h: 2 },
+  gauge: { w: 3, h: 2 },
+  line: { w: 6, h: 3 },
+  bar: { w: 6, h: 3 },
+  table: { w: 12, h: 3 }
+}
+
+/**
+ * 依目前模式套用預設勾選
+ */
+function applyDefaultCardTypes() {
+  const modeVal = document.getElementById('mode')?.value || 'number'
+  const cardTypes = document.getElementById('card-types')
+  if (!cardTypes) return
+  const checkboxes = cardTypes.querySelectorAll('input[type="checkbox"]')
+  for (const cb of checkboxes) {
+    if (modeVal === 'text') {
+      cb.checked = (cb.value === 'table')
+    } else {
+      cb.checked = (cb.value === 'number' || cb.value === 'line')
+    }
+  }
+}
+
+/**
+ * 渲染加入儀表板區塊
+ */
+export async function renderDashboardSection(task) {
+  const section = document.getElementById('add-to-dashboard')
+  if (task) {
+    if (section) section.hidden = true
+    return
+  }
+  if (section) {
+    section.hidden = false
+  }
+
+  const select = document.getElementById('dashboard-select')
+  if (select) {
+    select.replaceChildren()
+    const layout = await getLayout()
+    const dashboards = layout?.dashboards || []
+    for (const d of dashboards) {
+      const opt = document.createElement('option')
+      opt.value = d.id
+      opt.textContent = d.name
+      select.appendChild(opt)
+    }
+    const noneOpt = document.createElement('option')
+    noneOpt.value = 'none'
+    noneOpt.textContent = '不加入'
+    select.appendChild(noneOpt)
+
+    if (dashboards.length > 0) {
+      select.value = dashboards[0].id
+    } else {
+      select.value = 'none'
+    }
+  }
+
+  applyDefaultCardTypes()
+
+  const modeEl = document.getElementById('mode')
+  if (modeEl && !modeEl._dashSectionBound) {
+    modeEl.addEventListener('change', applyDefaultCardTypes)
+    modeEl._dashSectionBound = true
+  }
+}
+
 export async function handleSave() {
   const errorsEl = document.getElementById('errors')
   if (errorsEl) errorsEl.textContent = ''
@@ -174,6 +246,39 @@ export async function handleSave() {
   if (globalThis.chrome?.runtime?.sendMessage) {
     await chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS })
   }
+
+  // 只有新建任務才處理加入儀表板卡片
+  if (!currentCtx?.task) {
+    const dashSelect = document.getElementById('dashboard-select')
+    const selectedDashId = dashSelect?.value
+    if (dashSelect && selectedDashId !== 'none') {
+      const checkedBoxes = Array.from(document.querySelectorAll('#card-types input[type="checkbox"]:checked'))
+      if (checkedBoxes.length > 0) {
+        const layout = await getLayout()
+        const dashboards = layout?.dashboards || []
+        let targetDash = dashboards.find(d => d.id === selectedDashId)
+        if (!targetDash && dashboards.length > 0) {
+          targetDash = dashboards[0]
+        }
+        if (targetDash) {
+          for (const box of checkedBoxes) {
+            const type = box.value
+            const size = CARD_SIZES[type] ?? { w: 6, h: 3 }
+            await addCard(targetDash.id, {
+              type,
+              source: [{ taskId: task.id, aggregation: 'raw' }],
+              options: type === 'table' ? { mode: 'recent' } : {},
+              x: 0,
+              y: 0,
+              w: size.w,
+              h: size.h
+            })
+          }
+        }
+      }
+    }
+  }
+
   if (typeof window !== 'undefined' && window.close) {
     window.close()
   }
@@ -211,8 +316,39 @@ export async function handleTestNow() {
   }
 }
 
+export async function initFromQuery(search) {
+  const params = new URLSearchParams(search || '')
+  const taskId = params.get('taskId')
+  if (!taskId) return
+  const task = await getTask(taskId)
+  if (!task) return
+  render({ task, locator: task.locator, url: task.url })
+  const testNow = document.getElementById('test-now')
+  if (testNow) {
+    testNow.hidden = true
+  }
+}
+
 if (typeof document !== 'undefined' && document.getElementById('save') && globalThis.chrome?.runtime?.id) {
   document.getElementById('save')?.addEventListener('click', () => handleSave())
   document.getElementById('cancel')?.addEventListener('click', () => window.close())
   document.getElementById('test-now')?.addEventListener('click', () => handleTestNow())
+
+  const search = typeof window !== 'undefined' ? window.location?.search : ''
+  const params = new URLSearchParams(search || '')
+  if (params.has('taskId')) {
+    initFromQuery(search).then(() => {
+      renderDashboardSection(currentCtx?.task)
+    })
+  } else if (params.has('ctx')) {
+    try {
+      const parsed = JSON.parse(decodeURIComponent(params.get('ctx')))
+      render(parsed)
+      renderDashboardSection(parsed?.task)
+    } catch {
+      renderDashboardSection(null)
+    }
+  } else {
+    renderDashboardSection(null)
+  }
 }

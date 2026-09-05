@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <title>新增或編輯任務</title>
+  <link rel="stylesheet" href="../theme.css">
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; padding: 12px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; color: #333; background: #f5f5f7; width: 360px; }
@@ -13,8 +14,8 @@
     input[readonly] { background: #eee; }
     fieldset { border: 1px solid #ddd; border-radius: 4px; padding: 8px; margin: 0; display: flex; flex-direction: column; gap: 8px; }
     legend { font-size: 12px; font-weight: 600; padding: 0 4px; }
-    #weekdays { display: flex; gap: 6px; flex-wrap: wrap; }
-    #weekdays label { display: inline-flex; flex-direction: row; align-items: center; cursor: pointer; }
+    #weekdays, #card-types { display: flex; gap: 6px; flex-wrap: wrap; }
+    #weekdays label, #card-types label { display: inline-flex; flex-direction: row; align-items: center; cursor: pointer; }
     #preview { padding: 6px 8px; background: #fff; border: 1px solid #ddd; border-radius: 4px; min-height: 20px; word-break: break-all; font-family: monospace; font-size: 12px; }
     #errors { color: #d32f2f; font-size: 12px; white-space: pre-line; }
     footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
@@ -70,6 +71,21 @@
     <label>即時預覽</label>
     <div id="preview"></div>
     <div id="errors"></div>
+    <fieldset id="add-to-dashboard">
+      <legend>加入儀表板</legend>
+      <label>目標儀表板
+        <select id="dashboard-select">
+          <option value="none">不加入</option>
+        </select>
+      </label>
+      <label>卡片型別</label>
+      <div id="card-types">
+        <label><input type="checkbox" value="number">數字</label>
+        <label><input type="checkbox" value="line">折線</label>
+        <label><input type="checkbox" value="bar">長條</label>
+        <label><input type="checkbox" value="table">表格</label>
+      </div>
+    </fieldset>
     <footer>
       <button type="button" id="test-now">立即測試</button>
       <button type="button" id="cancel">取消</button>

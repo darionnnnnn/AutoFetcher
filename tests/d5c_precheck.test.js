@@ -3,6 +3,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { installChromeMock, resetChromeMock } from './chrome-mock.js'
 
+// 紀錄日期取自 slot（當地時區），測試不可用 UTC 日期，否則跨 UTC 午夜會誤判
+const localToday = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)
+
 const FAST = { pollMs: 1, loadTimeoutMs: 200, extraDelayMs: 0, extractTimeoutMs: 200 }
 
 async function fresh() {
@@ -120,7 +123,7 @@ test('預檢成功:健康狀態設為 ok,不通知,不留紀錄', async () => {
   await pc.runPrecheck(task(), FAST)
   assert.equal((await he.getHealth()).t1.status, 'ok')
   assert.equal(c.__calls.filter(x => x.api === 'notifications.create').length, 0)
-  assert.equal((await st.getRecordsByDate(new Date().toISOString().slice(0, 10))).length, 0)
+  assert.equal((await st.getRecordsByDate(localToday())).length, 0)
 })
 
 test('預檢找不到元素:標成 selector_lost 並通知,訊息含任務名', async () => {

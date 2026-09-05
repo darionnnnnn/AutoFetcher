@@ -1,4 +1,5 @@
 // AutoFetcher 儲存層：所有 chrome.storage 存取的唯一入口
+import { pruneCardsForTask } from './layout-store.js'
 
 const DEFAULT_SETTINGS = {
   retentionDays: 365,
@@ -46,12 +47,17 @@ export async function getSettings() {
   return res.settings && typeof res.settings === 'object' ? res.settings : { ...DEFAULT_SETTINGS }
 }
 
-// 儲存設定（與既有設定淺層合併）
+// 儲存設定（與既有設定淺層合併，使用佇列避免併發覆蓋）
+let saveQueue = Promise.resolve()
+
 export async function saveSettings(patch) {
-  const current = await getSettings()
-  const updated = { ...current, ...patch }
-  await chrome.storage.local.set({ settings: updated })
-  return updated
+  saveQueue = saveQueue.then(async () => {
+    const current = await getSettings()
+    const updated = { ...current, ...patch }
+    await chrome.storage.local.set({ settings: updated })
+    return updated
+  })
+  return saveQueue
 }
 
 // 取得所有任務清單，依 order 由小到大排序
@@ -117,6 +123,8 @@ export async function deleteTask(id) {
   if (toRemove.length > 0) {
     await chrome.storage.local.remove(toRemove)
   }
+
+  await pruneCardsForTask(id)
 }
 
 // 取得所有站台設定
@@ -152,6 +160,22 @@ export async function getRecordsByDate(date) {
   const key = dateToKey(date)
   const res = await chrome.storage.local.get(key)
   return Array.isArray(res[key]) ? res[key] : []
+}
+
+// 刪除指定日期的單一紀錄（依 taskId 與 capturedAt 相符者移除）
+// 移除後若該日已無紀錄則移除整個日期鍵；找不到相符紀錄時不改動任何資料
+export async function deleteRecord(date, taskId, capturedAt) {
+  const key = dateToKey(date)
+  const res = await chrome.storage.local.get(key)
+  const list = Array.isArray(res[key]) ? res[key] : []
+  const index = list.findIndex(r => r.taskId === taskId && r.capturedAt === capturedAt)
+  if (index === -1) return
+  list.splice(index, 1)
+  if (list.length === 0) {
+    await chrome.storage.local.remove(key)
+  } else {
+    await chrome.storage.local.set({ [key]: list })
+  }
 }
 
 // 列出所有具備紀錄的日期，由舊到新排序
@@ -201,20 +225,174 @@ export async function trimOldRecords(today) {
   }
 }
 
+// 取得原始版面資料（無資料回傳 null）
+export async function getRawLayout() {
+  const res = await chrome.storage.local.get('layout')
+  return res.layout ?? null
+}
+
+// 寫入原始版面資料至 storage.local.layout
+export async function setRawLayout(layout) {
+  await chrome.storage.local.set({ layout })
+}
+
 // 匯出設定與架構資料（不含任何抓取紀錄）
 export async function exportAll() {
-  const [schemaVersion, tasks, sites, settings, res] = await Promise.all([
+  const [schemaVersion, tasks, sites, settings, rawLayout] = await Promise.all([
     getSchemaVersion(),
     getTasks(),
     getSites(),
     getSettings(),
-    chrome.storage.local.get('layout')
+    getRawLayout()
   ])
   return {
     schemaVersion,
     tasks,
     sites,
     settings,
-    layout: res.layout ?? { ...DEFAULT_LAYOUT }
+    layout: rawLayout ?? { ...DEFAULT_LAYOUT }
   }
 }
+
+// 匯入歷史紀錄資料，逐日併入 rec:<date>，以 taskId + capturedAt 去重
+export async function importRecords(input) {
+  let days = null
+  if (Array.isArray(input)) {
+    days = input
+  } else if (input && typeof input === 'object' && Array.isArray(input.days)) {
+    days = input.days
+  } else if (input && typeof input === 'object' && typeof input.date === 'string' && input.tasks && typeof input.tasks === 'object') {
+    days = [input]
+  } else {
+    throw new Error('匯入資料格式錯誤：必須為日檔陣列或包含 days 之物件')
+  }
+
+  for (const day of days) {
+    if (!day || typeof day !== 'object' || typeof day.date !== 'string' || !day.date || !day.tasks || typeof day.tasks !== 'object') {
+      throw new Error('日檔格式錯誤：缺少 date 或 tasks')
+    }
+  }
+
+  const dateMap = new Map()
+  for (const day of days) {
+    if (!dateMap.has(day.date)) {
+      dateMap.set(day.date, [])
+    }
+    dateMap.get(day.date).push(day)
+  }
+
+  const keys = Array.from(dateMap.keys()).map(dateToKey)
+  const existingData = keys.length > 0 ? await chrome.storage.local.get(keys) : {}
+
+  let added = 0
+  let skipped = 0
+  const toSet = {}
+
+  for (const [date, dayList] of dateMap.entries()) {
+    const key = dateToKey(date)
+    const existingList = Array.isArray(existingData[key]) ? [...existingData[key]] : []
+    const seen = new Set(existingList.map(r => `${r.taskId}::${r.capturedAt}`))
+    const updatedList = [...existingList]
+
+    for (const day of dayList) {
+      if (!day.tasks || typeof day.tasks !== 'object') continue
+      for (const taskData of Object.values(day.tasks)) {
+        if (!taskData || !Array.isArray(taskData.records)) continue
+        for (const rec of taskData.records) {
+          const id = `${rec.taskId}::${rec.capturedAt}`
+          if (seen.has(id)) {
+            skipped++
+          } else {
+            seen.add(id)
+            updatedList.push(rec)
+            added++
+          }
+        }
+      }
+    }
+
+    toSet[key] = updatedList
+  }
+
+  if (Object.keys(toSet).length > 0) {
+    await chrome.storage.local.set(toSet)
+  }
+
+  return { added, skipped }
+}
+
+// 取得儲存用量與統計資訊
+export async function getStorageStats() {
+  const all = await chrome.storage.local.get(null)
+  const settings = (all.settings && typeof all.settings === 'object') ? all.settings : {}
+
+  let recordCount = 0
+  const dates = []
+  for (const [key, val] of Object.entries(all)) {
+    if (isRecordKey(key) && Array.isArray(val)) {
+      recordCount += val.length
+      if (val.length > 0) {
+        dates.push(keyToDate(key))
+      }
+    }
+  }
+  dates.sort()
+  const oldestDate = dates.length > 0 ? dates[0] : null
+
+  let bytes = 0
+  if (typeof chrome.storage?.local?.getBytesInUse === 'function') {
+    try {
+      bytes = await chrome.storage.local.getBytesInUse(null)
+    } catch {
+      bytes = JSON.stringify(all).length
+    }
+  } else {
+    bytes = JSON.stringify(all).length
+  }
+  if (typeof bytes !== 'number') {
+    bytes = Number(bytes) || 0
+  }
+
+  return {
+    bytes,
+    recordCount,
+    oldestDate,
+    lastSettingsExportAt: settings.lastSettingsExportAt ?? null,
+    lastRecordsExportAt: settings.lastRecordsExportAt ?? null
+  }
+}
+
+// 取得健康狀態表
+export async function getHealthMap() {
+  const res = await chrome.storage.local.get('health')
+  return (res.health && typeof res.health === 'object') ? res.health : {}
+}
+
+// 取得補抓清單
+export async function getMissedList() {
+  const res = await chrome.storage.local.get('missed')
+  return Array.isArray(res.missed) ? res.missed : []
+}
+
+// 取得診斷紀錄清單
+export async function getDiagList() {
+  const res = await chrome.storage.local.get('diag')
+  return Array.isArray(res.diag) ? res.diag : []
+}
+
+// 查詢單一任務在所有日期的紀錄總數（使用 listDates + 逐日 getRecordsByDate）
+export async function countRecordsForTask(taskId) {
+  if (!taskId) return 0
+  const dates = await listDates()
+  let count = 0
+  for (const d of dates) {
+    const records = await getRecordsByDate(d)
+    for (const r of records) {
+      if (r && r.taskId === taskId) {
+        count++
+      }
+    }
+  }
+  return count
+}
+

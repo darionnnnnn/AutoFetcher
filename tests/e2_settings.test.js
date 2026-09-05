@@ -51,7 +51,9 @@ test('匯出不含任何紀錄', async () => {
   await st.appendRecord('2026-09-05', { taskId: 't1', slot: '2026-09-05T09:00', value: 1, capturedAt: 'x', status: 'ok' })
   const json = await se.exportSettings({ includePasswords: false })
   assert.ok(!json.includes('capturedAt'))
-  assert.ok(!json.includes('2026-09-05'))
+  const obj = JSON.parse(json)
+  assert.ok(!Object.keys(obj.data).some(k => k.startsWith('rec:')))
+  assert.equal(JSON.stringify(obj.data).includes('"value":1'), false)
 })
 
 test('匯出格式帶識別欄位與版本', async () => {

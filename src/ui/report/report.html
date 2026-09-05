@@ -4,19 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AutoFetcher 報表歷史</title>
+  <link rel="stylesheet" href="../theme.css">
   <style>
-    :root {
-      --bg: #f8fafc; --surface: #ffffff; --text: #0f172a; --text-muted: #64748b;
-      --border: #e2e8f0; --primary: #2563eb; --danger: #dc2626; --danger-bg: #fef2f2;
-      --hover: #f1f5f9; --radius: 6px;
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --bg: #0f172a; --surface: #1e293b; --text: #f8fafc; --text-muted: #94a3b8;
-        --border: #334155; --primary: #3b82f6; --danger: #ef4444; --danger-bg: #450a0a;
-        --hover: #334155;
-      }
-    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; padding: 1rem; }
     .tab-nav { display: flex; gap: 0.5rem; border-bottom: 1px solid var(--border); margin-bottom: 1rem; padding-bottom: 0.5rem; }
@@ -24,8 +13,9 @@
     .tab-btn:hover { background: var(--hover); color: var(--text); }
     .history-layout { display: grid; grid-template-columns: 280px 1fr; gap: 1.25rem; align-items: start; }
     @media (max-width: 768px) { .history-layout { grid-template-columns: 1fr; } }
-    #range-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
-    #range-bar button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.75rem; border-radius: var(--radius); font-size: 0.85rem; cursor: pointer; }
+    #range-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; align-items: center; }
+    #range-bar button, #range-bar input[type="date"] { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.75rem; border-radius: var(--radius); font-size: 0.85rem; }
+    #range-bar button { cursor: pointer; }
     #range-bar button:hover { background: var(--hover); border-color: var(--primary); }
     #calendar { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.75rem; }
     #calendar table { width: 100%; border-collapse: collapse; text-align: center; font-size: 0.85rem; }
@@ -57,6 +47,125 @@
     .detail-item { display: flex; gap: 0.5rem; }
     #empty-state { text-align: center; padding: 2.5rem 1rem; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
     .placeholder-panel { padding: 2rem; text-align: center; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+    #missed-banner { background: var(--danger-bg); border: 1px solid var(--danger); border-radius: var(--radius); padding: 0.75rem 1rem; margin-bottom: 1rem; display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.9rem; }
+    .missed-header { font-weight: 600; color: var(--danger); }
+    .missed-items { display: flex; flex-direction: column; gap: 0.25rem; }
+    .missed-item { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+    .missed-actions { display: flex; gap: 0.5rem; margin-top: 0.25rem; }
+    .task-toolbar { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; }
+    #task-search { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.4rem 0.75rem; border-radius: var(--radius); font-size: 0.9rem; flex: 1; max-width: 320px; }
+    .task-toolbar label { display: flex; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--text-muted); cursor: pointer; }
+    #task-list { display: flex; flex-direction: column; gap: 0.5rem; }
+    .task-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.6rem 0.75rem; font-size: 0.85rem; }
+    .task-name { font-weight: 600; }
+    .task-url { color: var(--text-muted); font-size: 0.8rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .task-mode, .task-schedule, .task-next, .task-status, .task-streak { color: var(--text-muted); }
+    .task-actions { margin-left: auto; display: flex; gap: 0.35rem; }
+    .task-actions button, .missed-actions button, .dialog-actions button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.25rem 0.5rem; border-radius: var(--radius); font-size: 0.8rem; cursor: pointer; }
+    .task-actions button:hover, .missed-actions button:hover, .dialog-actions button:hover { background: var(--hover); }
+    #task-delete-dialog { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; margin-top: 1rem; }
+    .dialog-actions { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+    .settings-container { display: flex; flex-direction: column; gap: 1.25rem; max-width: 800px; }
+    .settings-section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; display: flex; flex-direction: column; gap: 0.75rem; }
+    .settings-section h2 { font-size: 1.05rem; font-weight: 600; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+    .settings-section h3 { font-size: 0.9rem; font-weight: 600; color: var(--text-muted); margin-top: 0.5rem; }
+    .settings-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; font-size: 0.85rem; }
+    .settings-row input[type="date"], .settings-row input[type="number"], .settings-row input[type="password"], .settings-row select, .settings-row input[type="file"] { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.6rem; border-radius: var(--radius); font-size: 0.85rem; }
+    .settings-row button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.75rem; border-radius: var(--radius); font-size: 0.85rem; cursor: pointer; }
+    .settings-row button:hover { background: var(--hover); border-color: var(--primary); }
+    #health-next-runs, #health-diag { display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.85rem; }
+    #health-diag div { padding: 0.25rem 0.5rem; background: var(--hover); border-radius: var(--radius); font-family: monospace; font-size: 0.8rem; }
+    #storage-stats { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.85rem; }
+    #privacy-note { font-size: 0.85rem; color: var(--text-muted); line-height: 1.6; }
+    #privacy-note ul { padding-left: 1.25rem; margin-top: 0.35rem; }
+    #settings-import-result, #records-import-result { font-size: 0.85rem; color: var(--primary); font-weight: 500; }
+    #sites-placeholder { color: var(--text-muted); font-size: 0.85rem; }
+    .dashboard-toolbar { display: flex; gap: 0.5rem; margin-bottom: 1rem; align-items: center; }
+    .dashboard-toolbar button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.75rem; border-radius: var(--radius); font-size: 0.85rem; cursor: pointer; }
+    .dashboard-toolbar button:hover { background: var(--hover); border-color: var(--primary); }
+    .dashboard-toolbar select { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.6rem; border-radius: var(--radius); font-size: 0.85rem; }
+    .dashboard-tabs-bar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; border-bottom: 1px solid var(--border); padding-bottom: 0.25rem; }
+    #dashboard-tabs { display: flex; align-items: center; gap: 0.35rem; overflow-x: auto; flex: 1; }
+    .dash-tab { display: flex; align-items: center; gap: 0.25rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.25rem 0.5rem; font-size: 0.85rem; cursor: pointer; user-select: none; }
+    .dash-tab.active { border-color: var(--primary); font-weight: 600; }
+    .dash-tab input { background: transparent; border: none; color: var(--text); font-size: inherit; font-family: inherit; font-weight: inherit; width: 80px; }
+    .dash-tab input:focus { outline: 1px solid var(--primary); background: var(--hover); }
+    .dash-tab-actions { display: flex; gap: 0.2rem; }
+    .dash-tab button { background: transparent; border: none; cursor: pointer; color: var(--text-muted); font-size: 0.8rem; padding: 0 0.2rem; }
+    .dash-tab button:hover { color: var(--text); }
+    #dashboard-add { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.25rem 0.6rem; border-radius: var(--radius); font-size: 0.85rem; cursor: pointer; }
+    #dashboard-add:hover { background: var(--hover); border-color: var(--primary); }
+    #dashboard-delete-confirm { background: var(--danger-bg); border: 1px solid var(--danger); border-radius: var(--radius); padding: 0.75rem; margin-bottom: 1rem; display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.85rem; }
+    #dashboard-delete-confirm[hidden] { display: none; }
+    #dashboard-empty { margin-bottom: 1rem; display: flex; flex-direction: column; align-items: center; gap: 0.75rem; }
+    #dashboard-empty[hidden] { display: none; }
+    .empty-actions { display: flex; gap: 0.5rem; }
+    .empty-actions button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.75rem; border-radius: var(--radius); font-size: 0.85rem; cursor: pointer; }
+    .empty-actions button:hover { background: var(--hover); border-color: var(--primary); }
+    #layout-version-note { background: var(--warn); color: var(--surface); padding: 0.5rem 0.75rem; border-radius: var(--radius); margin-bottom: 1rem; font-size: 0.85rem; }
+    #dashboard-grid { display: grid; grid-template-columns: repeat(12, 1fr); grid-auto-rows: 80px; gap: 8px; position: relative; }
+    #dashboard-grid > [data-card-id] { grid-column: calc(var(--card-x) + 1) / span var(--card-w); grid-row: calc(var(--card-y) + 1) / span var(--card-h); position: relative; }
+    #dashboard-grid.editing > [data-card-id] { cursor: move; }
+    #dashboard-grid.single-column { grid-template-columns: 1fr; }
+    #dashboard-grid.single-column > [data-card-id] { grid-column: auto; grid-row: auto; }
+    .ghost { grid-column: calc(var(--card-x) + 1) / span var(--card-w); grid-row: calc(var(--card-y) + 1) / span var(--card-h); background: var(--hover); border: 2px dashed var(--primary); border-radius: var(--radius); opacity: 0.6; pointer-events: none; }
+    #dashboard-grid.single-column > .ghost { grid-column: auto; grid-row: auto; }
+    .resize-handle { position: absolute; right: 2px; bottom: 2px; width: 14px; height: 14px; cursor: se-resize; }
+    .report-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.75rem; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+    .report-card .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+    .report-card .card-title { font-weight: 600; font-size: 0.9rem; }
+    .report-card .card-meta { display: flex; align-items: center; gap: 0.5rem; }
+    .report-card .card-period { font-size: 0.75rem; color: var(--text-muted); }
+    .report-card .card-actions button { background: transparent; border: none; cursor: pointer; color: var(--text-muted); font-size: 0.85rem; }
+    .report-card .card-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    #card-drawer { position: fixed; top: 0; right: 0; width: 380px; max-width: 90vw; height: 100vh; background: var(--surface); border-left: 1px solid var(--border); padding: 1rem; overflow-y: auto; z-index: 1000; display: flex; flex-direction: column; gap: 1rem; box-shadow: -2px 0 8px rgba(0, 0, 0, 0.1); }
+    #card-drawer[hidden] { display: none; }
+    .drawer-header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+    .drawer-header-actions { display: flex; gap: 0.5rem; }
+    .drawer-header-actions button, #drawer-delete-confirm button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.25rem 0.5rem; border-radius: var(--radius); font-size: 0.8rem; cursor: pointer; }
+    .drawer-header-actions button:hover, #drawer-delete-confirm button:hover { background: var(--hover); }
+    #drawer-delete { color: var(--danger); border-color: var(--danger); }
+    #drawer-delete:hover { background: var(--danger-bg); }
+    #drawer-delete-confirm { background: var(--danger-bg); border: 1px solid var(--danger); border-radius: var(--radius); padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.85rem; }
+    #drawer-delete-confirm[hidden] { display: none; }
+    .drawer-form { display: flex; flex-direction: column; gap: 0.75rem; }
+    .drawer-section { display: flex; flex-direction: column; gap: 0.75rem; padding-top: 0.5rem; border-top: 1px dashed var(--border); }
+    .drawer-section[hidden] { display: none; }
+    .drawer-row { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; }
+    .drawer-row label { font-weight: 500; color: var(--text-muted); }
+    .drawer-row input[type="text"], .drawer-row input[type="number"], .drawer-row select, .drawer-row textarea { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.6rem; border-radius: var(--radius); font-size: 0.85rem; font-family: inherit; }
+    .drawer-inline { display: flex; gap: 0.5rem; align-items: center; }
+    .drawer-inline select, .drawer-inline input { flex: 1; }
+    #drawer-sources, #drawer-status-tasks { display: flex; flex-direction: column; gap: 0.35rem; max-height: 150px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); padding: 0.5rem; }
+    #drawer-sources label, #drawer-status-tasks label { display: flex; align-items: center; gap: 0.35rem; font-weight: normal; color: var(--text); cursor: pointer; }
+    .calendar-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; gap: 0.25rem; }
+    .calendar-nav button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.2rem 0.5rem; border-radius: var(--radius); cursor: pointer; }
+    .calendar-nav button:hover { background: var(--hover); }
+    .calendar-nav input[type="month"] { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.2rem 0.4rem; border-radius: var(--radius); font-size: 0.8rem; }
+    #summary-chart { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; margin-bottom: 1rem; }
+    #summary-chart[hidden] { display: none; }
+    #summary-chart svg { width: 100%; height: auto; display: block; }
+    .table-toolbar { display: flex; justify-content: flex-end; gap: 0.5rem; margin-bottom: 0.5rem; }
+    .table-toolbar button, .table-container button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.25rem 0.6rem; border-radius: var(--radius); font-size: 0.8rem; cursor: pointer; }
+    .table-toolbar button:hover, .table-container button:hover { background: var(--hover); }
+    #record-delete-confirm { background: var(--danger-bg); border: 1px solid var(--danger); border-radius: var(--radius); padding: 0.75rem 1rem; margin-bottom: 1rem; }
+    #record-delete-confirm[hidden] { display: none; }
+    #record-pager { display: flex; justify-content: center; align-items: center; gap: 0.75rem; padding: 0.75rem; font-size: 0.85rem; color: var(--text-muted); }
+    #record-pager[hidden] { display: none; }
+    #record-pager button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.25rem 0.6rem; border-radius: var(--radius); font-size: 0.85rem; cursor: pointer; }
+    #record-pager button:hover { background: var(--hover); }
+    #record-pager button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .compare-section { margin-top: 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.75rem; font-size: 0.85rem; }
+    .compare-section h3 { font-size: 0.9rem; margin-bottom: 0.5rem; color: var(--text); }
+    #compare-date { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.6rem; border-radius: var(--radius); font-size: 0.85rem; width: 100%; margin-bottom: 0.5rem; }
+    #compare-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    #compare-table th, #compare-table td { padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); text-align: right; }
+    #compare-table th:first-child, #compare-table td:first-child { text-align: left; }
+    .task-link { background: transparent; border: none; color: var(--primary); text-decoration: underline; cursor: pointer; font-size: inherit; font-family: inherit; padding: 0; }
+    .task-link:hover { opacity: 0.8; }
+    #filters { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.6rem 0.75rem; margin-bottom: 1rem; font-size: 0.85rem; }
+    #filters input[type="number"], #filters input[type="text"] { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.25rem 0.5rem; border-radius: var(--radius); font-size: 0.85rem; }
+    #filter-tasks, #filter-statuses { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
   </style>
   <script type="module" src="./report.js"></script>
 </head>
@@ -68,29 +177,272 @@
     <button id="tab-settings" class="tab-btn" type="button">設定</button>
   </nav>
 
-  <main>
-    <section id="panel-dashboard" class="placeholder-panel" hidden>儀表板將於下一輪加入</section>
+  <div id="range-bar">
+    <button type="button" id="range-prev-week">«</button>
+    <button type="button" id="range-prev-day">‹</button>
+    <input type="date" id="range-from">
+    <input type="date" id="range-to">
+    <button type="button" id="range-next-day">›</button>
+    <button type="button" id="range-next-week">»</button>
+    <button type="button" data-range="today">今天</button>
+    <button type="button" data-range="yesterday">昨天</button>
+    <button type="button" data-range="last7">近 7 天</button>
+    <button type="button" data-range="last30">近 30 天</button>
+    <button type="button" data-range="thisMonth">本月</button>
+    <button type="button" data-range="lastMonth">上月</button>
+  </div>
 
-    <section id="panel-history">
-      <div id="range-bar">
-        <button type="button" data-range="today">今天</button>
-        <button type="button" data-range="yesterday">昨天</button>
-        <button type="button" data-range="last7">近 7 天</button>
-        <button type="button" data-range="last30">近 30 天</button>
-        <button type="button" data-range="thisMonth">本月</button>
-        <button type="button" data-range="lastMonth">上月</button>
+  <main>
+    <section id="panel-dashboard" hidden>
+      <div class="dashboard-tabs-bar">
+        <div id="dashboard-tabs"></div>
+        <button type="button" id="dashboard-add" title="新增儀表板">+</button>
       </div>
 
+      <div class="dashboard-toolbar">
+        <button type="button" id="edit-layout">編輯版面</button>
+        <button type="button" id="auto-arrange">自動排列</button>
+        <select id="apply-template">
+          <option value="">套用範本...</option>
+          <option value="overview">總覽</option>
+          <option value="deepDive">單一指標深入</option>
+          <option value="compare">多任務比較</option>
+        </select>
+      </div>
+
+      <div id="dashboard-delete-confirm" hidden>
+        <p>確定要刪除此儀表板嗎？</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel">取消</button>
+          <button type="button" data-action="confirm">確定</button>
+        </div>
+      </div>
+
+      <div id="template-confirm" hidden>
+        <p>確定要套用範本嗎？這將會取代目前儀表板的所有卡片。</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel">取消</button>
+          <button type="button" data-action="confirm">確定</button>
+        </div>
+      </div>
+
+      <div id="dashboard-empty" class="placeholder-panel" hidden>
+        <p>目前儀表板尚無卡片。</p>
+        <p>提示：只有在 Chrome 瀏覽器開啟時才會依排程執行抓取，錯過的排程將列在任務管理頁。</p>
+        <div class="empty-actions">
+          <button type="button" data-action="apply-template">套用範本</button>
+          <button type="button" data-action="go-tasks">前往任務管理</button>
+        </div>
+      </div>
+
+      <div id="layout-version-note" hidden>版面設定來自較新版本，部分功能可能無法在此版本正常運作。</div>
+      <div id="dashboard-grid"></div>
+
+      <div id="card-drawer" hidden>
+        <div class="drawer-header">
+          <h3>卡片設定</h3>
+          <div class="drawer-header-actions">
+            <button type="button" id="drawer-revert">還原</button>
+            <button type="button" id="drawer-delete">刪除卡片</button>
+            <button type="button" id="drawer-close">關閉</button>
+          </div>
+        </div>
+
+        <div id="drawer-delete-confirm" hidden>
+          <p>確定要刪除這張卡片嗎？</p>
+          <div class="dialog-actions">
+            <button type="button" data-action="cancel">取消</button>
+            <button type="button" data-action="confirm">確定</button>
+          </div>
+        </div>
+
+        <div class="drawer-form">
+          <div class="drawer-row">
+            <label for="drawer-title">標題</label>
+            <input type="text" id="drawer-title" placeholder="卡片標題">
+          </div>
+
+          <div class="drawer-row">
+            <label for="drawer-type">型別</label>
+            <select id="drawer-type">
+              <option value="number">數值</option>
+              <option value="line">折線圖</option>
+              <option value="bar">長條圖</option>
+              <option value="table">表格</option>
+              <option value="gauge">儀表圖</option>
+              <option value="text">文字</option>
+              <option value="status">狀態清單</option>
+            </select>
+          </div>
+
+          <div class="drawer-row">
+            <label for="drawer-period">時間範圍</label>
+            <select id="drawer-period">
+              <option value="range">全局區間</option>
+              <option value="1">近 1 天</option>
+              <option value="7">近 7 天</option>
+              <option value="30">近 30 天</option>
+              <option value="90">近 90 天</option>
+            </select>
+          </div>
+
+          <div id="drawer-field-sources" class="drawer-section">
+            <div class="drawer-row">
+              <label>來源任務</label>
+              <div id="drawer-sources"></div>
+            </div>
+            <div class="drawer-row">
+              <label for="drawer-aggregation">資料聚合</label>
+              <select id="drawer-aggregation">
+                <option value="raw">原始資料</option>
+                <option value="dailyLast">每日最新</option>
+                <option value="dailyMax">每日最大</option>
+                <option value="dailyMin">每日最小</option>
+                <option value="dailyAvg">每日平均</option>
+                <option value="dailySum">每日加總</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="drawer-field-number" class="drawer-section" hidden>
+            <div class="drawer-row">
+              <label for="drawer-compare">比較基準</label>
+              <select id="drawer-compare">
+                <option value="prev">與前一筆比較</option>
+                <option value="prevDay">與前一日比較</option>
+              </select>
+            </div>
+            <div class="drawer-row">
+              <label for="drawer-decimals">小數位數</label>
+              <input type="number" id="drawer-decimals" min="0" max="10" placeholder="未設定">
+            </div>
+            <div class="drawer-row">
+              <label for="drawer-unit">單位</label>
+              <input type="text" id="drawer-unit" placeholder="例：度、元">
+            </div>
+            <div class="drawer-row">
+              <label>閾值警告</label>
+              <div class="drawer-inline">
+                <select id="drawer-threshold-op">
+                  <option value="gte">≥</option>
+                  <option value="lte">≤</option>
+                </select>
+                <input type="number" id="drawer-threshold-value" placeholder="數值">
+                <input type="text" id="drawer-threshold-color" value="var(--warn)" placeholder="顏色變數">
+              </div>
+            </div>
+            <div class="drawer-row">
+              <label>
+                <input type="checkbox" id="drawer-sparkline">
+                顯示迷你走勢圖
+              </label>
+            </div>
+          </div>
+
+          <div id="drawer-field-table" class="drawer-section" hidden>
+            <div class="drawer-row">
+              <label for="drawer-table-mode">表格模式</label>
+              <select id="drawer-table-mode">
+                <option value="recent">最近 N 筆</option>
+                <option value="pivot">樞紐表</option>
+              </select>
+            </div>
+            <div class="drawer-row">
+              <label for="drawer-limit">筆數上限</label>
+              <input type="number" id="drawer-limit" min="1" placeholder="10">
+            </div>
+          </div>
+
+          <div id="drawer-field-status" class="drawer-section" hidden>
+            <div class="drawer-row">
+              <label>顯示任務</label>
+              <div id="drawer-status-tasks"></div>
+            </div>
+          </div>
+
+          <div id="drawer-field-yaxis" class="drawer-section" hidden>
+            <div class="drawer-row">
+              <label for="drawer-ymin">Y 軸最小值</label>
+              <input type="number" id="drawer-ymin" placeholder="自動">
+            </div>
+            <div class="drawer-row">
+              <label for="drawer-ymax">Y 軸最大值</label>
+              <input type="number" id="drawer-ymax" placeholder="自動">
+            </div>
+            <div class="drawer-row">
+              <label for="drawer-normalize">資料正規化</label>
+              <select id="drawer-normalize">
+                <option value="none">無</option>
+                <option value="percentFromFirst">以首筆為基準百分比</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="drawer-field-content" class="drawer-section" hidden>
+            <div class="drawer-row">
+              <label for="drawer-content">內容</label>
+              <textarea id="drawer-content" rows="6" placeholder="支援 Markdown 粗體與清單"></textarea>
+            </div>
+          </div>
+
+          <div id="drawer-field-gauge" class="drawer-section" hidden>
+            <div class="drawer-row">
+              <label for="drawer-gauge-min">量表最小值</label>
+              <input type="number" id="drawer-gauge-min" placeholder="0">
+            </div>
+            <div class="drawer-row">
+              <label for="drawer-gauge-max">量表最大值</label>
+              <input type="number" id="drawer-gauge-max" placeholder="100">
+            </div>
+            <div class="drawer-row">
+              <label for="drawer-gauge-warn">警戒值</label>
+              <input type="number" id="drawer-gauge-warn" placeholder="未設定">
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="panel-history">
       <div id="filters"></div>
 
       <div class="history-layout">
         <aside>
-          <div id="calendar"></div>
+          <div id="calendar">
+            <div class="calendar-nav">
+              <button type="button" id="cal-prev-month">‹</button>
+              <input type="month" id="cal-jump">
+              <button type="button" id="cal-next-month">›</button>
+            </div>
+          </div>
+          <div class="compare-section">
+            <h3>與另一天比較</h3>
+            <input type="date" id="compare-date">
+            <table id="compare-table">
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
         </aside>
 
         <section class="main-content">
           <div id="column-config"></div>
           <div id="summary"></div>
+          <div id="summary-chart" hidden></div>
+          <div class="table-toolbar">
+            <select id="table-mode">
+              <option value="list">紀錄列表</option>
+              <option value="pivot">樞紐表</option>
+            </select>
+            <button type="button" data-action="copy-records-tsv">複製 TSV</button>
+          </div>
+          <div id="record-delete-confirm" hidden>
+            <p>確定要刪除此筆紀錄嗎？</p>
+            <div class="dialog-actions">
+              <button type="button" data-action="cancel">取消</button>
+              <button type="button" data-action="confirm">確定</button>
+            </div>
+          </div>
           <div id="empty-state" hidden>目前尚無紀錄</div>
           <div class="table-container">
             <table id="record-table">
@@ -98,13 +450,151 @@
               <tbody></tbody>
             </table>
           </div>
+          <div id="record-pager" hidden>
+            <button type="button" data-action="prev-page">上一頁</button>
+            <span class="pager-text"></span>
+            <button type="button" data-action="next-page">下一頁</button>
+          </div>
         </section>
       </div>
     </section>
 
-    <section id="panel-tasks" class="placeholder-panel" hidden>任務管理將於下一輪加入</section>
+    <section id="panel-tasks" hidden>
+      <div id="missed-banner" hidden></div>
 
-    <section id="panel-settings" class="placeholder-panel" hidden>設定將於下一輪加入</section>
+      <div class="task-toolbar">
+        <input type="search" id="task-search" placeholder="搜尋任務名稱或網址...">
+        <label>
+          <input type="checkbox" id="task-failed-only">
+          只看失敗
+        </label>
+      </div>
+
+      <div id="task-note"></div>
+
+      <div id="task-list"></div>
+
+      <div id="task-delete-dialog" hidden>
+        <p class="dialog-message"></p>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel">取消</button>
+          <button type="button" data-action="confirm">確定刪除</button>
+          <button type="button" data-action="export-then-delete">先匯出再刪除</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="panel-settings" hidden>
+      <div class="settings-container">
+        <div class="settings-section">
+          <h2>紀錄匯出</h2>
+          <div class="settings-row">
+            <label for="export-from">開始日期：</label>
+            <input type="date" id="export-from">
+            <label for="export-to">結束日期：</label>
+            <input type="date" id="export-to">
+            <label for="export-format">格式：</label>
+            <select id="export-format">
+              <option value="json" selected>JSON</option>
+              <option value="csv">CSV</option>
+              <option value="html" disabled>HTML 報表（下一段完成後啟用）</option>
+            </select>
+            <button type="button" id="export-run">匯出紀錄</button>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h2>設定匯出 / 匯入</h2>
+          <div class="settings-row">
+            <label>
+              <input type="checkbox" id="settings-include-passwords">
+              包含站台密碼
+            </label>
+            <input type="password" id="settings-passphrase" placeholder="匯出/匯入密語">
+            <button type="button" id="settings-export">匯出設定</button>
+          </div>
+          <div class="settings-row">
+            <label for="settings-import-file">匯入設定檔：</label>
+            <input type="file" id="settings-import-file" accept=".json">
+          </div>
+          <div id="settings-import-result"></div>
+        </div>
+
+        <div class="settings-section">
+          <h2>歷史紀錄匯入</h2>
+          <div class="settings-row">
+            <label for="records-import-file">選擇匯入日檔或備份包：</label>
+            <input type="file" id="records-import-file" multiple accept=".json">
+          </div>
+          <div id="records-import-result"></div>
+        </div>
+
+        <div class="settings-section">
+          <h2>偏好設定</h2>
+          <div class="settings-row">
+            <label for="pref-retention">紀錄保留天數：</label>
+            <input type="number" id="pref-retention" min="1">
+          </div>
+          <div class="settings-row">
+            <label>
+              <input type="checkbox" id="pref-notifications">
+              啟用桌面通知
+            </label>
+          </div>
+          <div class="settings-row">
+            <label for="pref-extra-delay">頁面載入額外等待秒數：</label>
+            <input type="number" id="pref-extra-delay" min="0">
+          </div>
+          <div class="settings-row">
+            <label for="pref-theme">外觀主題：</label>
+            <select id="pref-theme">
+              <option value="system">跟隨系統</option>
+              <option value="light">明亮</option>
+              <option value="dark">深色</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h2>排程健康</h2>
+          <div class="settings-row">
+            <button type="button" id="health-selfcheck">立即自檢</button>
+            <span>看門狗上次巡檢：</span>
+            <span id="health-watchdog">—</span>
+          </div>
+          <h3>任務下次觸發時間</h3>
+          <div id="health-next-runs"></div>
+          <h3>最近診斷紀錄</h3>
+          <div id="health-diag"></div>
+        </div>
+
+        <div class="settings-section">
+          <h2>儲存用量</h2>
+          <div id="storage-stats"></div>
+        </div>
+
+        <div class="settings-section">
+          <h2>隱私與權限說明</h2>
+          <div id="privacy-note">
+            <p>AutoFetcher 絕不連接任何外部伺服器，所有抓取與設定資料僅保存在使用者本機。</p>
+            <p>擴充功能權限用途說明：</p>
+            <ul>
+              <li>alarms：用於定時排程抓取與看門狗定期自我巡檢。</li>
+              <li>downloads：用於手動匯出抓取紀錄（JSON/CSV）與備份設定檔案。</li>
+              <li>notifications：用於發出抓取失敗、錯過排程與重要狀態通知。</li>
+              <li>storage：用於在使用者本機儲存任務設定、全域偏好與歷次抓取紀錄。</li>
+              <li>tabs：用於在背景或前景開啟目標網頁、報表檢視頁面與元素拾取器。</li>
+              <li>scripting：用於在目標網頁執行擷取指令碼以讀取文字或數值內容。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h2>站台登入管理</h2>
+          <div id="sites-placeholder">站台登入管理與自動登入功能留待下一輪加入。</div>
+        </div>
+      </div>
+    </section>
   </main>
 </body>
 </html>

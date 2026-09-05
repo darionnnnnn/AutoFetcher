@@ -18,9 +18,11 @@
     "notifications",
     "scripting",
     "storage",
-    "tabs"
+    "tabs",
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "<all_urls>"
-  ]
+  ],
+  "options_page": "ui/report/report.html"
 }
