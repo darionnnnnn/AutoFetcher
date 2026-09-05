@@ -138,6 +138,17 @@ test('sortRecords:依欄位升冪降冪', async () => {
   assert.deepEqual(sortRecords(rs, 'slot', 'asc').map(r => r.value), [10, 30])
 })
 
+test('sortRecords:字串欄位要真的照字典序排,三筆以上才看得出來', async () => {
+  const rs = [rec({ taskName: 'c' }), rec({ taskName: 'a' }), rec({ taskName: 'b' })]
+  assert.deepEqual(sortRecords(rs, 'taskName', 'asc').map(r => r.taskName), ['a', 'b', 'c'])
+  assert.deepEqual(sortRecords(rs, 'taskName', 'desc').map(r => r.taskName), ['c', 'b', 'a'])
+})
+
+test('sortRecords:一個字串是另一個的前綴時也要排對', async () => {
+  const rs = [rec({ taskName: 'abc' }), rec({ taskName: 'ab' }), rec({ taskName: 'abcd' })]
+  assert.deepEqual(sortRecords(rs, 'taskName', 'asc').map(r => r.taskName), ['ab', 'abc', 'abcd'])
+})
+
 test('sortRecords:沒有值的排在最後,不論升降冪', async () => {
   const rs = [rec({ value: undefined }), rec({ value: 10 })]
   assert.equal(sortRecords(rs, 'value', 'asc')[0].value, 10)
