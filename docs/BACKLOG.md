@@ -8,7 +8,6 @@
 | 逐站 `optional_host_permissions` 取代 `<all_urls>` | 要上架 Chrome Web Store 時(審核會要求) |
 | 自動落地 JSON(File System Access 選資料夾,需偶爾重授權) | 使用者需要不用手動就有檔案時 |
 | Native Messaging host 寫任意路徑、完全無人值守 | 上一項仍不夠時(多一個安裝步驟) |
-| 工具列 popup 顯示任務狀態與下次執行 | AF-2 之後看使用頻率 |
 | 深色模式以外的主題色 | 使用者提出 |
 | 秒級抓取 | 目前最小 1 分鐘;alarms 下限 30 秒,再快要常駐分頁 |
 | 多瀏覽器(Firefox)支援 | 有需求時;選擇器與 alarms API 皆可移植,contextMenus 差異最大 |
