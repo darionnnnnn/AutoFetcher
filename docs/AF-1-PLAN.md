@@ -1,6 +1,6 @@
 # AF-1 規劃:骨架 + 單值抓取 + 排程 + JSON 日檔 + 基本 Report
 
-> 狀態:兩批待決皆已定案(2026-09-05),階段已拆;下一步是逐階段寫委派規格檔並執行。目前不實作。
+> 狀態:兩批待決皆已定案(2026-09-05),階段已拆(15 階段);下一步是逐階段寫委派規格檔並執行。目前不實作。
 
 ## 已定案(2026-09-05)
 
@@ -83,18 +83,20 @@
 
 | 階段 | 目標 | 契約 | 驗收 |
 |---|---|---|---|
-| D1 | alarms 管理 | `src/background/scheduler.js`:`rebuildAlarms()` 依所有啟用任務重建(名稱 `<taskId>:<i>`);daily 算下一次 `when`(含星期跳過);interval 含時段/星期時由 handler 判定「此刻該不該抓」;任務暫停即清其 alarms | 單元測試:daily 三時間+週一至五 → alarm 數與 when 正確;interval 時段外觸發不擷取;暫停後 `alarms.getAll` 無該 task |
-| D2 | 擷取流程 | `src/background/fetcher.js`:`runTask(task, {reason})`:找同 URL 既有分頁否則 `tabs.create({active:false})` → 等 `complete` + 任務 `extraDelay`(預設 3s)→ 注入 content → `SCROLL_INTO_VIEW` → `EXTRACT` → `appendRecord` → 自開的分頁關閉;逾時 30 秒;`not_found`/逾時 2 分鐘後重試一次;同站台串行佇列;連續 2 次 not_found 在 task 標 `suggestForeground` | 以 chrome-mock 的單元測試:成功、not_found 重試後成功、重試仍失敗寫失敗紀錄並呼叫 notifications、同站台兩任務只開一個分頁;煙霧:1 分鐘後 daily 任務實抓 fixture 頁並得到正確值 |
-| D3 | 錯過清單 | 啟動(`runtime.onStartup`)時比對每任務「上次成功時間」與應觸發時刻,產生 `missed[]` 存 storage;發 notification 附「補抓全部 / 略過」;補抓走 `runTask(..., {reason:"late"})`;超過 7 天自動略過 | 單元測試:關機 2 天、daily 兩時間 → missed 4 筆;按「補抓全部」→ runTask 呼叫 4 次且紀錄 `status:"late"`;略過 → missed 清空 |
+| D1 | alarms 管理 | `src/background/scheduler.js`:`rebuildAlarms()` 依所有啟用任務重建(名稱 `<taskId>:<i>`);daily 每次觸發後重算下一次 `when`(**不用 periodInMinutes**,含星期跳過);interval 含時段/星期時由 handler 判定;任務暫停即清其 alarms;`onInstalled`/`onStartup` 皆重建;`slot` 計算函式為純函式 | 單元測試:daily 三時間+週一至五 → alarm 數與 when 正確;interval 時段外觸發不擷取;暫停後 `alarms.getAll` 無該 task |
+| D2 | 擷取流程 | `src/background/fetcher.js`:`runTask(task, {slot, reason})`:先查執行帳本,同 slot 已跑過直接略過;無視窗則建最小化視窗;找同 URL 既有分頁否則 `tabs.create({active:false, autoDiscardable:false})`;discarded 則 reload;等 `complete`(上限 30s)+ `extraDelay`(預設 3s)→ 注入 → `SCROLL_INTO_VIEW` → `EXTRACT`(逾時 15s)→ `appendRecord` → 帳本寫 done → 自開分頁/視窗關閉;期間每 20s 延壽呼叫;run 狀態機寫 `storage.session`;離線排 10 分鐘;`not_found`/逾時重試 2 分鐘、10 分鐘共兩次;全域佇列最多 2 站台並行、同站台串行;連續 2 次 not_found 標 `suggestForeground` | 以 chrome-mock 的單元測試:成功、not_found 重試後成功、重試仍失敗寫失敗紀錄並呼叫 notifications、同站台兩任務只開一個分頁;煙霧:1 分鐘後 daily 任務實抓 fixture 頁並得到正確值 |
+| D3 | 錯過清單與 late 判定 | 啟動(`runtime.onStartup`)時比對每任務「上次成功時間」與應觸發時刻,產生 `missed[]` 存 storage;發 notification 附「補抓全部 / 略過」;補抓走 `runTask(..., {reason:"late"})`;超過 7 天自動略過 | 單元測試:關機 2 天、daily 兩時間 → missed 4 筆;按「補抓全部」→ runTask 呼叫 4 次且紀錄 `status:"late"`;略過 → missed 清空 |
+
+| D4 | 看門狗與診斷 | `__watchdog` alarm 每 15 分鐘:補建缺失 alarms、以帳本找漏槽進錯過清單、清理卡住 >3 分鐘的 run、時區變更則重建;`shared/diag.js` 環形 500 筆;「立即自檢」建 1 分鐘測試 alarm 並回報 | 單元測試:刪掉一個 alarm 後看門狗補回;帳本缺兩槽 → missed 2 筆;卡住 run 被標 interrupted 並重排;時區 mock 改變 → rebuild 被呼叫;diag 寫 600 筆後長度 500 |
 
 ### F Report(每日檢視)
 
 | 階段 | 目標 | 契約 | 驗收 |
 |---|---|---|---|
 | F1 | 歷史查詢 | `ui/report/`:頂部日期範圍列(快捷 + 月曆 + 左右翻)、左側月曆打點、右側紀錄列表(排序/隱藏/拖曳欄序)、篩選(任務/狀態)、範圍摘要列、單筆展開、URL hash 保存狀態;無外部依賴。樞紐表與「與另一天比較」留 AF-2 | Puppeteer:預填 3 天假紀錄 → 月曆 3 個打點、點某日列數正確、選 7 天範圍摘要筆數正確、重新整理後仍在同一天 |
-| F2 | 任務頁 + 設定頁 | 任務頁(§8.4:清單拖曳排序、啟用開關、立即抓取、編輯、複製、刪除 confirm);設定頁(§8.5:日期範圍 + JSON/CSV 匯出按鈕、設定匯出/匯入、保留天數);錯過清單橫幅(逐筆勾選補抓/略過)。獨立 HTML 報表留 AF-2 | Puppeteer:每個按鈕觸發對應 mock 呼叫一次;刪除未 confirm 時 storage 不變 |
+| F2 | 任務頁 + 設定頁 | 任務頁(§8.4:清單拖曳排序、啟用開關、立即抓取、編輯、複製、刪除 confirm);設定頁(§8.5:日期範圍 + JSON/CSV 匯出按鈕、設定匯出/匯入、保留天數;「排程健康」區:每任務下次觸發實值、看門狗時間、最近 20 筆診斷、立即自檢);錯過清單橫幅(逐筆勾選補抓/略過)。獨立 HTML 報表留 AF-2 | Puppeteer:每個按鈕觸發對應 mock 呼叫一次;刪除未 confirm 時 storage 不變 |
 
-執行順序:A1 → A2 → B1 → B2 → B3 → E1 → E2 → C1 → C2 → D1 → D2 → D3 → F1 → F2。
+執行順序:A1 → A2 → B1 → B2 → B3 → E1 → E2 → C1 → C2 → D1 → D2 → D3 → D4 → F1 → F2。
 委派模型(暫定):A/B/E 地端 LLM;C/D/F agy。B3、D2 若地端兩輪未過直接改派 agy。
 
 ## AF-2 作業草案(儀表板,定案後另開 AF-2-PLAN)

@@ -39,5 +39,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 
 - 不要把帳號密碼存明文於 `storage.sync`(會同步到所有裝置;SPEC §6 規定只放 `storage.local` 並標示風險)。
 - 不要用 `setTimeout`/`setInterval` 做排程(MV3 service worker 會被殺;一律 `chrome.alarms`)。
+- 不要用 `periodInMinutes: 1440` 做每日排程(日光節約會漂移;每次觸發後重算 `when`,SPEC §4)。
+- 不要在帳本之外直接呼叫 `runTask`(同一排程槽會重複抓;冪等靠 `runs[taskId][slot]`,SPEC §4.1)。
 - 不要假設抓取時目標分頁已開啟(排程到點由 background 自己開分頁,SPEC §4)。
 - 不要用絕對 XPath 當唯一選擇器(頁面小改就失效;SPEC §3 要求多重選擇器 + 文字錨定)。

@@ -74,7 +74,28 @@
   - `daily`:`HH:mm` 清單 + 星期勾選(預設每天);alarm `periodInMinutes: 1440`。
   - `interval`:每 N 分鐘(N ≥ 1,暫定),可限定時段(如 09:00~18:00)與星期;alarm `periodInMinutes: N`。
   - alarm 名稱 `<taskId>:<index>`;任務修改/停用時整批重建。
-- 時區:一律用瀏覽器本地時間;紀錄同時存 ISO 字串(含 offset)。
+  - `daily` **不用** `periodInMinutes: 1440`:每次觸發後重新計算下一次的 `when`(用本地時間算),否則日光節約或時區變更會漂移。
+- 時區:一律用瀏覽器本地時間;紀錄同時存 ISO 字串(含 offset)與「排程槽」`slot`(`YYYY-MM-DDTHH:mm` 本地)。
+
+### §4.1 排程穩定性(MV3 的坑與對策)
+
+| 風險 | 現象 | 對策 |
+|---|---|---|
+| service worker 被殺 | 閒置 30 秒或執行 5 分鐘就被回收,抓到一半消失 | 抓取期間每 20 秒呼叫一個輕量 API(`runtime.getPlatformInfo`)延壽;流程狀態機(`queued → loading → extracting → done`)寫 `storage.session`,worker 重啟時把卡在中途超過 3 分鐘的 run 標 `interrupted` 並重新排入 |
+| alarms 在擴充功能更新 / 重新載入後消失 | 更新後所有任務靜默停擺 | `runtime.onInstalled`、`runtime.onStartup` 一律 `rebuildAlarms()`;另有看門狗(下) |
+| alarm 觸發不準或重複 | 可能晚 0~60 秒、極少數重複觸發;補抓與正常觸發撞在同一槽 | **執行帳本** `runs[taskId][slot] = status`:同一 `slot` 只執行一次,重複觸發直接略過(冪等) |
+| 電腦睡眠 | alarm 在喚醒時才響,可能已晚數小時 | 觸發時算 `late = now - slot`;≤ 任務的 `lateTolerance`(預設 30 分鐘)照抓並標 `late`;超過則進錯過清單交使用者決定(§4 補抓) |
+| 看門狗 | 上述任一環節漏掉,沒有人發現 | 固定 alarm `__watchdog` 每 15 分鐘:①確認每個啟用任務的 alarms 存在,缺就重建;②以帳本比對「上次檢查以來應有的槽」,缺的補進錯過清單;③清理超過 3 分鐘的中途 run;④記錄一筆心跳 |
+| 沒有任何視窗 | macOS 上 Chrome 可在無視窗狀態執行,`tabs.create` 失敗 | 抓取前 `windows.getAll()` 為空時 `windows.create({state:"minimized"})`,用完關閉 |
+| 背景分頁被 Chrome 丟棄(discard)/ 省電模式 | 分頁存在但內容被卸載,注入失敗 | `tabs.get` 檢查 `discarded`,是則 `tabs.reload` 再等 `complete`;自開的分頁設 `autoDiscardable:false` |
+| 頁面永遠不到 `complete` | 有些頁長連線不結束 | 載入等待上限 30 秒,到時仍嘗試注入擷取;擷取本身逾時 15 秒 |
+| 離線 / 網路錯誤 | 抓到錯誤頁 | `navigator.onLine` 為 false 直接排 10 分鐘後重試;HTTP 錯誤頁(`tabs` 的 `status`/標題含 `ERR_`)視同 `not_found` 走重試(2 分鐘、10 分鐘,共兩次) |
+| 同時多任務 | 同站台互相干擾、開太多分頁 | 全域佇列,同時最多 2 個站台並行(暫定),同站台嚴格串行 |
+| 時鐘/時區變更 | 排程槽算錯 | 看門狗每次比較 `Intl.DateTimeFormat().resolvedOptions().timeZone`,變了就 `rebuildAlarms()` |
+
+- **診斷紀錄**:環形緩衝 500 筆(`storage.local.diag`),記 alarm 觸發、run 狀態轉移、看門狗結果、錯誤;Report 設定頁「排程健康」區顯示:
+  每任務下次觸發時間(來自 `alarms.getAll` 實值,不是算出來的)、最近看門狗時間、最近 20 筆診斷、「立即自檢」按鈕(建一個 1 分鐘後的測試 alarm 並回報是否準時觸發)。
+- 通知策略:單次失敗不通知(重試中);重試用盡、看門狗發現漏槽、連續 3 次失敗才通知,避免噪音。
 - 到點流程:background 開背景分頁(`active:false`)載入目標 URL → 等 `complete` + 額外等待(預設 3 秒,任務可調)
   → 若偵測到登入頁(§6)則先登入 → 注入 content script 擷取 → 寫入紀錄 → 關閉分頁。
 - 若使用者已開著同 URL 的分頁,優先直接在該分頁擷取,不另開。
