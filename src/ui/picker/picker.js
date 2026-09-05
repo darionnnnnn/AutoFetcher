@@ -1,1 +1,218 @@
-// picker
+import { saveTask } from '../../shared/storage.js'
+import { MSG } from '../../shared/messages.js'
+
+let currentCtx = null
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
+
+function getFormData() {
+  const name = document.getElementById('name')?.value ?? ''
+  const urlEl = document.getElementById('url')
+  const url = (urlEl?.value ?? urlEl?.textContent ?? currentCtx?.url ?? '').trim()
+  const mode = document.getElementById('mode')?.value || 'number'
+  const strategy = document.getElementById('strategy')?.value || 'auto'
+  const regex = document.getElementById('regex')?.value ?? ''
+  const scheduleType = document.getElementById('schedule-type')?.value || 'daily'
+
+  const timesRaw = document.getElementById('times')?.value ?? ''
+  const times = timesRaw.trim() ? timesRaw.split(',').map(s => s.trim()) : []
+
+  const weekdays = Array.from(
+    document.querySelectorAll('#weekdays input[type="checkbox"]:checked')
+  ).map(cb => Number(cb.value)).sort((a, b) => a - b)
+
+  const emRaw = document.getElementById('every-minutes')?.value
+  const everyMinutes = (emRaw !== undefined && emRaw !== null && emRaw !== '') ? Number(emRaw) : NaN
+
+  const windowFrom = document.getElementById('window-from')?.value ?? ''
+  const windowTo = document.getElementById('window-to')?.value ?? ''
+
+  return { name, url, mode, strategy, regex, scheduleType, times, weekdays, everyMinutes, windowFrom, windowTo }
+}
+
+export function validateForm(values) {
+  const errors = {}
+
+  if (!values.name || typeof values.name !== 'string' || values.name.trim() === '') {
+    errors.name = '名稱不可空白'
+  }
+
+  if (values.scheduleType === 'daily') {
+    if (!Array.isArray(values.times) || values.times.length === 0 || !values.times.every(t => typeof t === 'string' && TIME_RE.test(t))) {
+      errors.times = '時間格式必須為 HH:mm 且至少設定一筆'
+    }
+    if (!Array.isArray(values.weekdays) || values.weekdays.length === 0) {
+      errors.weekdays = '至少選擇一個星期'
+    }
+  } else if (values.scheduleType === 'interval') {
+    const em = values.everyMinutes
+    if (typeof em !== 'number' || !Number.isInteger(em) || em < 1) {
+      errors.everyMinutes = '間隔分鐘必須為 1 以上的整數'
+    }
+  }
+
+  if (values.strategy === 'regex') {
+    if (!values.regex || typeof values.regex !== 'string' || values.regex.trim() === '') {
+      errors.regex = '正規表達式為必填'
+    } else {
+      try {
+        new RegExp(values.regex)
+      } catch {
+        errors.regex = '正規表達式語法不正確'
+      }
+    }
+  }
+
+  const hasFrom = typeof values.windowFrom === 'string' && values.windowFrom.trim() !== ''
+  const hasTo = typeof values.windowTo === 'string' && values.windowTo.trim() !== ''
+  if ((hasFrom && !hasTo) || (!hasFrom && hasTo)) {
+    errors.window = '時段起訖必須同時填寫或同時空白'
+  } else if (hasFrom && hasTo) {
+    if (!TIME_RE.test(values.windowFrom.trim()) || !TIME_RE.test(values.windowTo.trim())) {
+      errors.window = '時段格式錯誤'
+    }
+  }
+
+  return Object.keys(errors).length > 0 ? { ok: false, errors } : { ok: true }
+}
+
+export function buildTask(values, locator, existing) {
+  const id = existing?.id || crypto.randomUUID()
+  const spec = { strategy: values.strategy }
+  if (values.mode === 'text') spec.mode = 'text'
+  for (const k of ['regex', 'attr', 'childSel', 'labelText']) {
+    if (values[k]) spec[k] = values[k]
+  }
+
+  let schedule
+  if (values.scheduleType === 'daily') {
+    schedule = { type: 'daily', times: values.times || [], weekdays: values.weekdays || [] }
+  } else {
+    schedule = { type: 'interval', everyMinutes: values.everyMinutes, weekdays: values.weekdays || [] }
+    const hasFrom = typeof values.windowFrom === 'string' && values.windowFrom.trim() !== ''
+    const hasTo = typeof values.windowTo === 'string' && values.windowTo.trim() !== ''
+    if (hasFrom && hasTo) {
+      schedule.window = { from: values.windowFrom.trim(), to: values.windowTo.trim() }
+    }
+  }
+
+  const task = {
+    id,
+    name: values.name.trim(),
+    url: values.url,
+    mode: values.mode,
+    enabled: true,
+    locator,
+    spec,
+    schedule
+  }
+  if (existing?.order !== undefined) task.order = existing.order
+  return task
+}
+
+export function render(ctx) {
+  currentCtx = ctx || {}
+  const previewEl = document.getElementById('preview')
+  if (previewEl) {
+    if (ctx?.preview !== undefined && ctx?.previewValue !== undefined && ctx.preview !== ctx.previewValue) {
+      previewEl.textContent = `${ctx.preview} (${ctx.previewValue})`
+    } else if (ctx?.preview !== undefined) {
+      previewEl.textContent = String(ctx.preview)
+    } else if (ctx?.previewValue !== undefined) {
+      previewEl.textContent = String(ctx.previewValue)
+    } else {
+      previewEl.textContent = ''
+    }
+  }
+
+  const urlEl = document.getElementById('url')
+  if (urlEl) {
+    if ('value' in urlEl) urlEl.value = ctx?.url || ''
+    urlEl.textContent = ctx?.url || ''
+  }
+
+  if (ctx?.task) {
+    const t = ctx.task
+    if (t.name !== undefined) document.getElementById('name').value = t.name
+    if (t.url !== undefined && urlEl) {
+      if ('value' in urlEl) urlEl.value = t.url
+      urlEl.textContent = t.url
+    }
+    if (t.mode !== undefined) document.getElementById('mode').value = t.mode
+    if (t.spec?.strategy) document.getElementById('strategy').value = t.spec.strategy
+    if (t.spec?.regex !== undefined) document.getElementById('regex').value = t.spec.regex
+    if (t.schedule?.type) document.getElementById('schedule-type').value = t.schedule.type
+    if (t.schedule?.times) document.getElementById('times').value = t.schedule.times.join(', ')
+    if (t.schedule?.everyMinutes !== undefined) document.getElementById('every-minutes').value = t.schedule.everyMinutes
+    if (t.schedule?.weekdays) {
+      const wds = new Set(t.schedule.weekdays)
+      document.querySelectorAll('#weekdays input[type="checkbox"]').forEach(cb => {
+        cb.checked = wds.has(Number(cb.value))
+      })
+    }
+    if (t.schedule?.window) {
+      if (t.schedule.window.from) document.getElementById('window-from').value = t.schedule.window.from
+      if (t.schedule.window.to) document.getElementById('window-to').value = t.schedule.window.to
+    }
+  }
+}
+
+export async function handleSave() {
+  const errorsEl = document.getElementById('errors')
+  if (errorsEl) errorsEl.textContent = ''
+
+  const values = getFormData()
+  if (!values.url && currentCtx?.url) values.url = currentCtx.url
+
+  const validation = validateForm(values)
+  if (!validation.ok) {
+    if (errorsEl) errorsEl.textContent = Object.values(validation.errors).join('\n')
+    return
+  }
+
+  const task = buildTask(values, currentCtx?.locator, currentCtx?.task)
+  await saveTask(task)
+  if (globalThis.chrome?.runtime?.sendMessage) {
+    await chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS })
+  }
+  if (typeof window !== 'undefined' && window.close) {
+    window.close()
+  }
+}
+
+export async function handleTestNow() {
+  const previewEl = document.getElementById('preview')
+  const errorsEl = document.getElementById('errors')
+  if (errorsEl) errorsEl.textContent = ''
+
+  const values = getFormData()
+  const spec = { strategy: values.strategy }
+  if (values.mode === 'text') spec.mode = 'text'
+  for (const k of ['regex', 'attr', 'childSel', 'labelText']) {
+    if (values[k]) spec[k] = values[k]
+  }
+
+  try {
+    const res = await chrome.tabs.sendMessage(currentCtx?.tabId, {
+      type: MSG.EXTRACT,
+      locator: currentCtx?.locator,
+      spec
+    })
+    if (res && res.ok) {
+      if (previewEl) previewEl.textContent = res.value !== undefined ? String(res.value) : (res.raw ?? '')
+    } else {
+      const err = res?.error || '找不到目標元素'
+      if (previewEl) previewEl.textContent = err
+      if (errorsEl) errorsEl.textContent = err
+    }
+  } catch (e) {
+    const err = e?.message || '找不到目標元素'
+    if (previewEl) previewEl.textContent = err
+    if (errorsEl) errorsEl.textContent = err
+  }
+}
+
+if (typeof document !== 'undefined' && document.getElementById('save') && globalThis.chrome?.runtime?.id) {
+  document.getElementById('save')?.addEventListener('click', () => handleSave())
+  document.getElementById('cancel')?.addEventListener('click', () => window.close())
+  document.getElementById('test-now')?.addEventListener('click', () => handleTestNow())
+}
