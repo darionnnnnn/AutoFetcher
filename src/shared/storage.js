@@ -1,4 +1,5 @@
 // AutoFetcher 儲存層：所有 chrome.storage 存取的唯一入口
+import { pruneCardsForTask } from './layout-store.js'
 
 const DEFAULT_SETTINGS = {
   retentionDays: 365,
@@ -122,6 +123,8 @@ export async function deleteTask(id) {
   if (toRemove.length > 0) {
     await chrome.storage.local.remove(toRemove)
   }
+
+  await pruneCardsForTask(id)
 }
 
 // 取得所有站台設定
@@ -206,21 +209,32 @@ export async function trimOldRecords(today) {
   }
 }
 
+// 取得原始版面資料（無資料回傳 null）
+export async function getRawLayout() {
+  const res = await chrome.storage.local.get('layout')
+  return res.layout ?? null
+}
+
+// 寫入原始版面資料至 storage.local.layout
+export async function setRawLayout(layout) {
+  await chrome.storage.local.set({ layout })
+}
+
 // 匯出設定與架構資料（不含任何抓取紀錄）
 export async function exportAll() {
-  const [schemaVersion, tasks, sites, settings, res] = await Promise.all([
+  const [schemaVersion, tasks, sites, settings, rawLayout] = await Promise.all([
     getSchemaVersion(),
     getTasks(),
     getSites(),
     getSettings(),
-    chrome.storage.local.get('layout')
+    getRawLayout()
   ])
   return {
     schemaVersion,
     tasks,
     sites,
     settings,
-    layout: res.layout ?? { ...DEFAULT_LAYOUT }
+    layout: rawLayout ?? { ...DEFAULT_LAYOUT }
   }
 }
 
