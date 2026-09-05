@@ -19,6 +19,24 @@ Chrome 擴充功能:在網頁上右鍵選取文字/數值/區塊,設定多個抓
 1. Chrome:`chrome://extensions`;Edge:`edge://extensions` → 開啟「開發人員模式」→「載入未封裝項目」→ 選 `src/`。
 2. 到目標網頁,右鍵即可看到 AutoFetcher 選單。
 
+## 開發
+
+```bash
+npm install
+npm test          # 293 個單元測試
+./run_smoke.sh    # 真實瀏覽器端到端(需 Chrome for Testing)
+```
+
+一般 Chrome 152 起已封鎖命令列載入擴充功能,煙霧測試改用 Chrome for Testing:
+
+```bash
+npx @puppeteer/browsers install chrome@stable --path "$PWD/.browsers"
+```
+
 ## 狀態
 
-規劃階段,尚無程式碼。
+AF-1 完成:右鍵建立任務、四層選擇器、五種數值擷取策略、每日與間隔排程、
+背景抓取與重試、錯過清單、看門狗、抓取前預檢、工具列燈號、報表歷史查詢、
+JSON/CSV 手動匯出、設定匯出匯入。
+
+下一輪(AF-2):報表儀表板自訂版面。之後(AF-3):表格區塊聚合、自動登入、告警。
