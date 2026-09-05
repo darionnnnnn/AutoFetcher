@@ -9,6 +9,7 @@ import { resolvePeriod } from './series.js'
 import { placeCard, resizeCard, compact, autoArrange } from './layout.js'
 import { openDrawer } from './drawer.js'
 import { applyTemplate } from './templates.js'
+import { MSG } from '../../shared/messages.js'
 
 // 編輯模式狀態與復原歷史
 let editing = false
@@ -17,6 +18,7 @@ const undoStack = []
 const redoStack = []
 let activeOp = null
 let dashIdPendingDelete = null
+let templateKindPending = null
 let tabDrag = null
 
 /**
@@ -63,10 +65,12 @@ export function isEditing() {
 /**
  * 把目前版面推進歷史堆疊（上限 50 步）
  */
-export async function pushHistory() {
-  const layout = await getLayout()
-  const snapshot = structuredClone(layout.dashboards)
-  undoStack.push(snapshot)
+export async function pushHistory(snapshot) {
+  if (!snapshot) {
+    const layout = await getLayout()
+    snapshot = layout.dashboards
+  }
+  undoStack.push(structuredClone(snapshot))
   if (undoStack.length > 50) {
     undoStack.shift()
   }
@@ -186,8 +190,6 @@ function onPointerDown(e, card) {
     targetH: card.h,
     ghost: null
   }
-
-  pushHistory()
 }
 
 /**
@@ -272,6 +274,7 @@ async function onPointerUp(e) {
   if (!dash) return
 
   let changed = false
+  const snapshot = structuredClone(layout.dashboards)
 
   if (op.type === 'drag') {
     if (op.targetX !== op.card.x || op.targetY !== op.card.y) {
@@ -287,10 +290,9 @@ async function onPointerUp(e) {
   }
 
   if (changed) {
+    await pushHistory(snapshot)
     await saveLayout(layout)
     await renderDashboard(dash.id)
-  } else {
-    undoStack.pop()
   }
 }
 
@@ -362,12 +364,46 @@ function setupEvents(grid) {
     })
   }
 
+  const templateConfirm = document.getElementById('template-confirm')
+  if (templateConfirm && !templateConfirm._dashboardTemplateAttached) {
+    templateConfirm._dashboardTemplateAttached = true
+    const cancelBtn = templateConfirm.querySelector('[data-action="cancel"]')
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', () => {
+        templateConfirm.hidden = true
+        templateKindPending = null
+        const select = document.getElementById('apply-template')
+        if (select) select.value = ''
+      })
+    }
+    const confirmBtn = templateConfirm.querySelector('[data-action="confirm"]')
+    if (confirmBtn) {
+      confirmBtn.addEventListener('click', async () => {
+        templateConfirm.hidden = true
+        if (templateKindPending && currentDashId) {
+          const kind = templateKindPending
+          templateKindPending = null
+          await applyTemplate(currentDashId, kind)
+          const select = document.getElementById('apply-template')
+          if (select) select.value = ''
+          await renderDashboard(currentDashId)
+        }
+      })
+    }
+  }
+
   const applySelect = document.getElementById('apply-template')
   if (applySelect && !applySelect._dashboardApplyAttached) {
     applySelect._dashboardApplyAttached = true
     applySelect.addEventListener('change', async (e) => {
       const kind = e.target.value
-      if (kind && currentDashId) {
+      if (!kind || !currentDashId) return
+
+      const templateConfirm = document.getElementById('template-confirm')
+      if (templateConfirm) {
+        templateKindPending = kind
+        templateConfirm.hidden = false
+      } else {
         await applyTemplate(currentDashId, kind)
         e.target.value = ''
         await renderDashboard(currentDashId)
@@ -469,28 +505,24 @@ async function buildDashboardContext(dash) {
   } catch {}
 
   const nextRuns = {}
-  if (globalThis.chrome?.alarms?.getAll) {
-    try {
-      const alarms = await chrome.alarms.getAll()
-      for (const a of alarms) {
-        if (a.name?.startsWith('task:')) {
-          const parts = a.name.slice(5).split(':')
-          const taskId = parts.slice(0, -1).join(':') || parts[0]
-          if (taskId && a.scheduledTime) {
-            if (!nextRuns[taskId] || a.scheduledTime < nextRuns[taskId]) {
-              const d = new Date(a.scheduledTime)
-              const y = d.getFullYear()
-              const m = String(d.getMonth() + 1).padStart(2, '0')
-              const day = String(d.getDate()).padStart(2, '0')
-              const h = String(d.getHours()).padStart(2, '0')
-              const min = String(d.getMinutes()).padStart(2, '0')
-              nextRuns[taskId] = `${y}-${m}-${day} ${h}:${min}`
-            }
-          }
+  try {
+    const res = await chrome.runtime.sendMessage({ type: MSG.GET_NEXT_RUNS })
+    if (res?.nextRuns) {
+      for (const [taskId, time] of Object.entries(res.nextRuns)) {
+        if (typeof time === 'number') {
+          const d = new Date(time)
+          const y = d.getFullYear()
+          const m = String(d.getMonth() + 1).padStart(2, '0')
+          const day = String(d.getDate()).padStart(2, '0')
+          const h = String(d.getHours()).padStart(2, '0')
+          const min = String(d.getMinutes()).padStart(2, '0')
+          nextRuns[taskId] = `${y}-${m}-${day} ${h}:${min}`
+        } else if (time) {
+          nextRuns[taskId] = String(time)
         }
       }
-    } catch {}
-  }
+    }
+  } catch {}
 
   return {
     records,
@@ -545,13 +577,7 @@ export async function renderDashboard(dashId) {
     dash = layout.dashboards.find(d => d.id === dashId)
   }
   if (!dash) {
-    if (dashId && layout.dashboards.length === 1) {
-      layout.dashboards[0].id = dashId
-      dash = layout.dashboards[0]
-      await saveLayout(layout)
-    } else {
-      dash = layout.dashboards[0]
-    }
+    dash = layout.dashboards[0]
   }
   if (!dash) return
 

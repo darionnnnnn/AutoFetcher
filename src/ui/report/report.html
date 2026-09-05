@@ -218,6 +218,14 @@
         </div>
       </div>
 
+      <div id="template-confirm" hidden>
+        <p>確定要套用範本嗎？這將會取代目前儀表板的所有卡片。</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel">取消</button>
+          <button type="button" data-action="confirm">確定</button>
+        </div>
+      </div>
+
       <div id="dashboard-empty" class="placeholder-panel" hidden>
         <p>目前儀表板尚無卡片。</p>
         <p>提示：只有在 Chrome 瀏覽器開啟時才會依排程執行抓取，錯過的排程將列在任務管理頁。</p>
@@ -461,6 +469,8 @@
           只看失敗
         </label>
       </div>
+
+      <div id="task-note"></div>
 
       <div id="task-list"></div>
 

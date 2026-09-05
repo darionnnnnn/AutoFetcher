@@ -92,9 +92,45 @@ function formatCsv(days, taskMap) {
   return lines.join('\n') + '\n'
 }
 
+// 取得 theme.css 的亮色 :root 區塊，若失敗則退回最小 CSS 變數樣板
+async function loadThemeCss() {
+  try {
+    const url = await chrome.runtime.getURL('ui/theme.css')
+    const css = await (await fetch(url)).text()
+    const match = css.match(/:root\s*\{[^}]*\}/)
+    if (match) {
+      return match[0]
+    }
+  } catch {}
+
+  return `:root {
+      --bg: var(--bg, canvas);
+      --surface: var(--surface, canvas);
+      --text: var(--text, canvastext);
+      --text-muted: var(--text-muted, gray);
+      --border: var(--border, currentColor);
+      --primary: var(--primary, currentColor);
+      --danger: var(--danger, currentColor);
+      --danger-bg: var(--danger-bg, canvas);
+      --hover: var(--hover, canvas);
+      --radius: 6px;
+      --ok: var(--ok, currentColor);
+      --warn: var(--warn, currentColor);
+      --chart-1: var(--chart-1, currentColor);
+      --chart-2: var(--chart-2, currentColor);
+      --chart-3: var(--chart-3, currentColor);
+      --chart-4: var(--chart-4, currentColor);
+      --chart-5: var(--chart-5, currentColor);
+      --chart-6: var(--chart-6, currentColor);
+      --chart-7: var(--chart-7, currentColor);
+      --chart-8: var(--chart-8, currentColor);
+    }`
+}
+
 // 產生指定日期範圍之靜態 HTML 報表快照（純靜態、離線可開啟、無外部連結）
 export async function buildHtmlReport({ from, to, dashId }) {
   const filename = `AutoFetcher/report-${from}_${to}.html`
+  const themeCss = await loadThemeCss()
 
   const tasks = await getTasks()
   const taskMap = new Map(tasks.map(t => [t.id, t.name]))
@@ -182,28 +218,7 @@ export async function buildHtmlReport({ from, to, dashId }) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AutoFetcher 報表 (${escapeHtml(rangeTitle)})</title>
   <style>
-    :root {
-      --bg: #f8fafc;
-      --surface: #ffffff;
-      --text: #0f172a;
-      --text-muted: #64748b;
-      --border: #e2e8f0;
-      --primary: #2563eb;
-      --danger: #dc2626;
-      --danger-bg: #fef2f2;
-      --hover: #f1f5f9;
-      --radius: 6px;
-      --ok: #16a34a;
-      --warn: #d97706;
-      --chart-1: #2563eb;
-      --chart-2: #16a34a;
-      --chart-3: #ea580c;
-      --chart-4: #9333ea;
-      --chart-5: #0891b2;
-      --chart-6: #db2777;
-      --chart-7: #ca8a04;
-      --chart-8: #4f46e5;
-    }
+    ${themeCss}
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -369,7 +384,7 @@ export async function buildHtmlReport({ from, to, dashId }) {
     @media print {
       body {
         padding: 0;
-        background: #ffffff;
+        background: var(--surface);
       }
       .report-card {
         break-inside: avoid;

@@ -17,13 +17,10 @@ const DEFAULT_CARD_WIDTHS = {
 }
 
 // 預設儀表板的穩定 id（未存入 storage 前維持同一個 id）
-let defaultDashboardId = null
+const DEFAULT_DASHBOARD_ID = '00000000-0000-4000-8000-000000000001'
 
 function getDefaultDashboardId() {
-  if (!defaultDashboardId) {
-    defaultDashboardId = crypto.randomUUID()
-  }
-  return defaultDashboardId
+  return DEFAULT_DASHBOARD_ID
 }
 
 /**
@@ -278,18 +275,33 @@ export async function removeCard(dashId, cardId) {
 }
 
 /**
- * 任務刪除連動：移除包含該任務的卡片來源，若來源因此歸零且原先有來源則刪除該卡片
+ * 任務刪除連動：移除包含該任務的卡片來源或篩選，若來源或篩選因此歸零且原先有指定則刪除該卡片
  */
 export async function pruneCardsForTask(taskId) {
   const layout = await getLayout()
   for (const dash of layout.dashboards) {
     dash.cards = dash.cards.filter(card => {
+      // 處理 source
       const hadSource = Array.isArray(card.source) && card.source.length > 0
-      if (!hadSource) {
-        return true
+      if (hadSource) {
+        card.source = card.source.filter(s => s.taskId !== taskId)
+        if (card.source.length === 0) {
+          return false
+        }
       }
-      card.source = card.source.filter(s => s.taskId !== taskId)
-      return card.source.length > 0
+
+      // 處理 status 卡片的 options.taskIds
+      if (card.options && Array.isArray(card.options.taskIds)) {
+        const hadTaskIds = card.options.taskIds.length > 0
+        if (hadTaskIds) {
+          card.options.taskIds = card.options.taskIds.filter(id => id !== taskId)
+          if (card.options.taskIds.length === 0) {
+            return false
+          }
+        }
+      }
+
+      return true
     })
   }
   await saveLayout(layout)

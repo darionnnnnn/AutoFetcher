@@ -16,6 +16,7 @@ import { renderTasks } from './tasks.js'
 import { renderSettings } from './settings.js'
 import { renderDashboard } from './dashboard.js'
 import { isSuccess } from '../../shared/record-status.js'
+import { MSG } from '../../shared/messages.js'
 
 const DEFAULT_COLUMNS = [
   { key: 'slot', label: '時間', visible: true },
@@ -346,26 +347,24 @@ export async function loadAndRenderTasks() {
     } catch {}
 
     const nextRuns = {}
-    if (globalThis.chrome?.alarms?.getAll) {
-      const alarms = await chrome.alarms.getAll()
-      for (const a of alarms) {
-        if (a.name?.startsWith('task:')) {
-          const parts = a.name.slice(5).split(':')
-          const taskId = parts.slice(0, -1).join(':') || parts[0]
-          if (taskId && a.scheduledTime) {
-            if (!nextRuns[taskId] || a.scheduledTime < nextRuns[taskId]) {
-              const d = new Date(a.scheduledTime)
-              const y = d.getFullYear()
-              const m = String(d.getMonth() + 1).padStart(2, '0')
-              const day = String(d.getDate()).padStart(2, '0')
-              const h = String(d.getHours()).padStart(2, '0')
-              const min = String(d.getMinutes()).padStart(2, '0')
-              nextRuns[taskId] = `${y}-${m}-${day} ${h}:${min}`
-            }
+    try {
+      const res = await chrome.runtime.sendMessage({ type: MSG.GET_NEXT_RUNS })
+      if (res?.nextRuns) {
+        for (const [taskId, time] of Object.entries(res.nextRuns)) {
+          if (typeof time === 'number') {
+            const d = new Date(time)
+            const y = d.getFullYear()
+            const m = String(d.getMonth() + 1).padStart(2, '0')
+            const day = String(d.getDate()).padStart(2, '0')
+            const h = String(d.getHours()).padStart(2, '0')
+            const min = String(d.getMinutes()).padStart(2, '0')
+            nextRuns[taskId] = `${y}-${m}-${day} ${h}:${min}`
+          } else if (time) {
+            nextRuns[taskId] = String(time)
           }
         }
       }
-    }
+    } catch {}
 
     renderTasks(tasks, health, missed, { nextRuns })
   } catch (err) {

@@ -95,30 +95,6 @@ async function renderNextRuns() {
     }
   } catch {}
 
-  if (!nextRuns && globalThis.chrome?.alarms?.getAll) {
-    try {
-      const alarms = await chrome.alarms.getAll()
-      nextRuns = {}
-      for (const a of alarms) {
-        let taskId = null
-        if (a.name) {
-          if (a.name.startsWith('task:')) {
-            const rest = a.name.slice(5)
-            const lastColon = rest.lastIndexOf(':')
-            if (lastColon !== -1) taskId = rest.slice(0, lastColon)
-          } else {
-            const lastColon = a.name.lastIndexOf(':')
-            if (lastColon !== -1) taskId = a.name.slice(0, lastColon)
-          }
-        }
-        if (taskId && typeof a.scheduledTime === 'number') {
-          if (nextRuns[taskId] === undefined || a.scheduledTime < nextRuns[taskId]) {
-            nextRuns[taskId] = a.scheduledTime
-          }
-        }
-      }
-    } catch {}
-  }
   if (!nextRuns) nextRuns = {}
 
   let tasks = []

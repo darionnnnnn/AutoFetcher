@@ -236,7 +236,24 @@ function createTaskRow(t) {
   repickBtn.dataset.action = 'repick'
   repickBtn.textContent = '重選'
   repickBtn.addEventListener('click', async () => {
-    await chrome.runtime.sendMessage({ type: MSG.REPICK, taskId: t.id })
+    let tab = null
+    try {
+      tab = await chrome.tabs.create({ url: t.url })
+    } catch {}
+
+    let res = null
+    if (tab && tab.id) {
+      try {
+        res = await chrome.tabs.sendMessage(tab.id, { type: MSG.REPICK, taskId: t.id })
+      } catch {}
+    }
+
+    if (!res || !res.ok) {
+      const note = document.getElementById('task-note')
+      if (note) {
+        note.textContent = '無法直接啟動選取模式，請在開啟的頁面上使用右鍵選單重新選取元素。'
+      }
+    }
   })
   actionsEl.appendChild(repickBtn)
 
