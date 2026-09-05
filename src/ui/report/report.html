@@ -80,6 +80,25 @@
     #privacy-note ul { padding-left: 1.25rem; margin-top: 0.35rem; }
     #settings-import-result, #records-import-result { font-size: 0.85rem; color: var(--primary); font-weight: 500; }
     #sites-placeholder { color: var(--text-muted); font-size: 0.85rem; }
+    .dashboard-toolbar { display: flex; gap: 0.5rem; margin-bottom: 1rem; align-items: center; }
+    .dashboard-toolbar button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.75rem; border-radius: var(--radius); font-size: 0.85rem; cursor: pointer; }
+    .dashboard-toolbar button:hover { background: var(--hover); border-color: var(--primary); }
+    #layout-version-note { background: var(--warn); color: var(--surface); padding: 0.5rem 0.75rem; border-radius: var(--radius); margin-bottom: 1rem; font-size: 0.85rem; }
+    #dashboard-grid { display: grid; grid-template-columns: repeat(12, 1fr); grid-auto-rows: 80px; gap: 8px; position: relative; }
+    #dashboard-grid > [data-card-id] { grid-column: calc(var(--card-x) + 1) / span var(--card-w); grid-row: calc(var(--card-y) + 1) / span var(--card-h); position: relative; }
+    #dashboard-grid.editing > [data-card-id] { cursor: move; }
+    #dashboard-grid.single-column { grid-template-columns: 1fr; }
+    #dashboard-grid.single-column > [data-card-id] { grid-column: auto; grid-row: auto; }
+    .ghost { grid-column: calc(var(--card-x) + 1) / span var(--card-w); grid-row: calc(var(--card-y) + 1) / span var(--card-h); background: var(--hover); border: 2px dashed var(--primary); border-radius: var(--radius); opacity: 0.6; pointer-events: none; }
+    #dashboard-grid.single-column > .ghost { grid-column: auto; grid-row: auto; }
+    .resize-handle { position: absolute; right: 2px; bottom: 2px; width: 14px; height: 14px; cursor: se-resize; }
+    .report-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.75rem; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+    .report-card .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+    .report-card .card-title { font-weight: 600; font-size: 0.9rem; }
+    .report-card .card-meta { display: flex; align-items: center; gap: 0.5rem; }
+    .report-card .card-period { font-size: 0.75rem; color: var(--text-muted); }
+    .report-card .card-actions button { background: transparent; border: none; cursor: pointer; color: var(--text-muted); font-size: 0.85rem; }
+    .report-card .card-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   </style>
   <script type="module" src="./report.js"></script>
 </head>
@@ -107,7 +126,13 @@
   </div>
 
   <main>
-    <section id="panel-dashboard" class="placeholder-panel" hidden>儀表板將於下一輪加入</section>
+    <section id="panel-dashboard" hidden>
+      <div class="dashboard-toolbar">
+        <button type="button" id="edit-layout">編輯版面</button>
+      </div>
+      <div id="layout-version-note" hidden>版面設定來自較新版本，部分功能可能無法在此版本正常運作。</div>
+      <div id="dashboard-grid"></div>
+    </section>
 
     <section id="panel-history">
       <div id="filters"></div>

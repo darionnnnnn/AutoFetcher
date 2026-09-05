@@ -6,8 +6,10 @@ import {
   shiftRange, normalizeRange
 } from './logic.js'
 import { getRecordsInRange, getSettings, saveSettings, getTasks } from '../../shared/storage.js'
+import { getLayout } from '../../shared/layout-store.js'
 import { renderTasks } from './tasks.js'
 import { renderSettings } from './settings.js'
+import { renderDashboard } from './dashboard.js'
 
 const DEFAULT_COLUMNS = [
   { key: 'slot', label: '時間', visible: true },
@@ -143,6 +145,11 @@ export function showTab(name) {
   for (const tab of ['dashboard', 'history', 'tasks', 'settings']) {
     const panel = document.getElementById(`panel-${tab}`)
     if (panel) panel.hidden = (tab !== name)
+  }
+  if (name === 'dashboard') {
+    getLayout().then(l => {
+      renderDashboard(l?.lastDashboardId || l?.dashboards?.[0]?.id)
+    }).catch(() => {})
   }
   if (name === 'tasks') {
     loadAndRenderTasks()

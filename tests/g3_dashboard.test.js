@@ -41,10 +41,14 @@ function stubGeometry(win, doc, { width = 600 } = {}) {
   return grid
 }
 
+// addCard 會自動找空位，測試要指定座標時新增後再改回來
 async function seed(ls, cards) {
   const l = await ls.getLayout()
   const did = l.dashboards[0].id
-  for (const c of cards) await ls.addCard(did, c)
+  for (const c of cards) {
+    const added = await ls.addCard(did, c)
+    await ls.updateCard(did, added.id, { x: c.x, y: c.y, w: c.w, h: c.h })
+  }
   return did
 }
 
