@@ -114,25 +114,30 @@ export async function runTask(task, opts = {}) {
     pollMs = 250,
     loadTimeoutMs = 30000,
     extraDelayMs = 3000,
-    extractTimeoutMs = 15000
+    extractTimeoutMs = 15000,
+    dryRun = false
   } = opts
 
-  // 1. 冪等檢查：已在帳本中則直接返回 null
-  const ledger = await getLedger()
-  if (ledger[task.id]?.[slot]) return null
+  // 1. 冪等檢查：已在帳本中則直接返回 null（dryRun 略過）
+  if (!dryRun) {
+    const ledger = await getLedger()
+    if (ledger[task.id]?.[slot]) return null
+  }
 
   // 2. 離線檢查：若離線則排 10 分鐘後重試，不得開分頁
   if (globalThis.navigator?.onLine === false) {
-    await scheduleRetry(task.id, attempt, true)
-    return null
+    if (!dryRun) await scheduleRetry(task.id, attempt, true)
+    return dryRun ? { ok: false, error: 'offline' } : null
   }
 
   // 同站台串行佇列執行
   const origin = getOrigin(task.url)
   return enqueueForOrigin(origin, async (queueCtx) => {
-    // 佇列中再次確認冪等，防止併發重複執行
-    const currentLedger = await getLedger()
-    if (currentLedger[task.id]?.[slot]) return null
+    // 佇列中再次確認冪等，防止併發重複執行（dryRun 略過）
+    if (!dryRun) {
+      const currentLedger = await getLedger()
+      if (currentLedger[task.id]?.[slot]) return null
+    }
 
     const inflightKey = `${task.id}:${slot}`
     // 3. 開始執行：寫入 session inflight 並呼叫延壽 API
@@ -183,6 +188,9 @@ export async function runTask(task, opts = {}) {
         chrome.tabs.sendMessage(tabId, { type: MSG.EXTRACT, locator: task.locator, spec: task.spec }),
         new Promise((_, reject) => setTimeout(() => reject(new Error('Extract timeout')), extractTimeoutMs))
       ])
+
+      // 演練模式：直接回傳 content script 擷取回覆
+      if (dryRun) return res
 
       // 結果處理：成功路徑
       if (res?.ok === true) {
@@ -259,6 +267,7 @@ export async function runTask(task, opts = {}) {
       })
 
     } catch (err) {
+      if (dryRun) return { ok: false, error: String(err?.message || err) }
       if (attempt < 3) {
         await scheduleRetry(task.id, attempt, false)
         return null
