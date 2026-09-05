@@ -16,12 +16,16 @@ let cachedTasks = []
 function updateFieldVisibility(type) {
   const fieldSources = document.getElementById('drawer-field-sources')
   const fieldNumber = document.getElementById('drawer-field-number')
+  const fieldTable = document.getElementById('drawer-field-table')
+  const fieldStatus = document.getElementById('drawer-field-status')
   const fieldYaxis = document.getElementById('drawer-field-yaxis')
   const fieldContent = document.getElementById('drawer-field-content')
   const fieldGauge = document.getElementById('drawer-field-gauge')
 
   if (fieldSources) fieldSources.hidden = (type === 'text')
   if (fieldNumber) fieldNumber.hidden = (type !== 'number')
+  if (fieldTable) fieldTable.hidden = (type !== 'table')
+  if (fieldStatus) fieldStatus.hidden = (type !== 'status')
   if (fieldYaxis) fieldYaxis.hidden = (type !== 'line' && type !== 'bar')
   if (fieldContent) fieldContent.hidden = (type !== 'text')
   if (fieldGauge) fieldGauge.hidden = (type !== 'gauge')
@@ -85,6 +89,29 @@ function renderSources(tasks, currentSources = [], type = 'number') {
       label.appendChild(document.createTextNode(` ${t.name || t.id}`))
     }
 
+    container.appendChild(label)
+  }
+}
+
+/**
+ * 產生狀態清單任務篩選 checkbox
+ */
+function renderStatusTasks(tasks, taskIds = []) {
+  const container = document.getElementById('drawer-status-tasks')
+  if (!container) return
+  container.textContent = ''
+
+  const selectedSet = new Set(Array.isArray(taskIds) ? taskIds : [])
+
+  for (const t of tasks) {
+    const label = document.createElement('label')
+    const input = document.createElement('input')
+    input.type = 'checkbox'
+    input.value = t.id
+    input.checked = selectedSet.has(t.id)
+
+    label.appendChild(input)
+    label.appendChild(document.createTextNode(` ${t.name || t.id}`))
     container.appendChild(label)
   }
 }
@@ -216,6 +243,39 @@ function collectPatch() {
     delete options.warn
   }
 
+  // 比較基準（number 型別）
+  const compareSelect = document.getElementById('drawer-compare')
+  if (type === 'number') {
+    options.compare = (compareSelect && compareSelect.value) ? compareSelect.value : 'prev'
+  } else {
+    delete options.compare
+  }
+
+  // 表格模式與筆數上限（table 型別）
+  if (type === 'table') {
+    const tableModeSelect = document.getElementById('drawer-table-mode')
+    options.mode = (tableModeSelect && tableModeSelect.value) ? tableModeSelect.value : 'recent'
+
+    const limitInput = document.getElementById('drawer-limit')
+    if (limitInput && limitInput.value !== '' && Number.isFinite(Number(limitInput.value))) {
+      options.limit = Number(limitInput.value)
+    } else {
+      delete options.limit
+    }
+  } else {
+    delete options.mode
+    delete options.limit
+  }
+
+  // 狀態任務篩選（status 型別）
+  if (type === 'status') {
+    const statusContainer = document.getElementById('drawer-status-tasks')
+    const checkedBoxes = statusContainer ? statusContainer.querySelectorAll('input[type="checkbox"]:checked') : []
+    options.taskIds = Array.from(checkedBoxes).map(b => b.value)
+  } else {
+    delete options.taskIds
+  }
+
   return { title, type, source, options }
 }
 
@@ -280,7 +340,24 @@ function populateFields(card) {
   const gwarnInput = document.getElementById('drawer-gauge-warn')
   if (gwarnInput) gwarnInput.value = card.options?.warn != null ? String(card.options.warn) : ''
 
+  // 比較基準
+  const compareSelect = document.getElementById('drawer-compare')
+  if (compareSelect) {
+    compareSelect.value = card.options?.compare || 'prev'
+  }
+
+  // 表格模式與筆數上限
+  const tableModeSelect = document.getElementById('drawer-table-mode')
+  if (tableModeSelect) {
+    tableModeSelect.value = card.options?.mode || 'recent'
+  }
+  const limitInput = document.getElementById('drawer-limit')
+  if (limitInput) {
+    limitInput.value = card.options?.limit != null ? String(card.options.limit) : ''
+  }
+
   renderSources(cachedTasks, card.source, card.type)
+  renderStatusTasks(cachedTasks, card.options?.taskIds)
   updateFieldVisibility(card.type)
 }
 

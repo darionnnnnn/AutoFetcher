@@ -136,8 +136,8 @@
     .drawer-row input[type="text"], .drawer-row input[type="number"], .drawer-row select, .drawer-row textarea { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.6rem; border-radius: var(--radius); font-size: 0.85rem; font-family: inherit; }
     .drawer-inline { display: flex; gap: 0.5rem; align-items: center; }
     .drawer-inline select, .drawer-inline input { flex: 1; }
-    #drawer-sources { display: flex; flex-direction: column; gap: 0.35rem; max-height: 150px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); padding: 0.5rem; }
-    #drawer-sources label { display: flex; align-items: center; gap: 0.35rem; font-weight: normal; color: var(--text); cursor: pointer; }
+    #drawer-sources, #drawer-status-tasks { display: flex; flex-direction: column; gap: 0.35rem; max-height: 150px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); padding: 0.5rem; }
+    #drawer-sources label, #drawer-status-tasks label { display: flex; align-items: center; gap: 0.35rem; font-weight: normal; color: var(--text); cursor: pointer; }
     .calendar-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; gap: 0.25rem; }
     .calendar-nav button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.2rem 0.5rem; border-radius: var(--radius); cursor: pointer; }
     .calendar-nav button:hover { background: var(--hover); }
@@ -298,6 +298,13 @@
 
           <div id="drawer-field-number" class="drawer-section" hidden>
             <div class="drawer-row">
+              <label for="drawer-compare">比較基準</label>
+              <select id="drawer-compare">
+                <option value="prev">與前一筆比較</option>
+                <option value="prevDay">與前一日比較</option>
+              </select>
+            </div>
+            <div class="drawer-row">
               <label for="drawer-decimals">小數位數</label>
               <input type="number" id="drawer-decimals" min="0" max="10" placeholder="未設定">
             </div>
@@ -321,6 +328,27 @@
                 <input type="checkbox" id="drawer-sparkline">
                 顯示迷你走勢圖
               </label>
+            </div>
+          </div>
+
+          <div id="drawer-field-table" class="drawer-section" hidden>
+            <div class="drawer-row">
+              <label for="drawer-table-mode">表格模式</label>
+              <select id="drawer-table-mode">
+                <option value="recent">最近 N 筆</option>
+                <option value="pivot">樞紐表</option>
+              </select>
+            </div>
+            <div class="drawer-row">
+              <label for="drawer-limit">筆數上限</label>
+              <input type="number" id="drawer-limit" min="1" placeholder="10">
+            </div>
+          </div>
+
+          <div id="drawer-field-status" class="drawer-section" hidden>
+            <div class="drawer-row">
+              <label>顯示任務</label>
+              <div id="drawer-status-tasks"></div>
             </div>
           </div>
 
