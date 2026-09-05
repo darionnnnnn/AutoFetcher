@@ -4,7 +4,7 @@ import {
   quickRange, filterRecords, summarize, buildCalendar,
   sortRecords, parseHash, buildHash
 } from './logic.js'
-import { getRecordsInRange, getSettings, saveSettings } from '../../shared/storage.js'
+import { getRecordsInRange, getSettings, saveSettings, getTasks } from '../../shared/storage.js'
 
 const DEFAULT_COLUMNS = [
   { key: 'slot', label: '時間', visible: true },
@@ -53,6 +53,13 @@ function createTableRow(cells, isHeader = false, options = {}) {
     tr.appendChild(el)
   }
   return tr
+}
+
+// 紀錄本身只存 taskId；顯示用的任務名在載入時由任務清單併入（已刪任務退回顯示 taskId）
+export function joinTaskNames(records = [], tasks = []) {
+  const byId = new Map()
+  for (const t of tasks) if (t && t.id) byId.set(t.id, t.name)
+  return records.map(r => ({ ...r, taskName: r.taskName ?? byId.get(r.taskId) ?? r.taskId }))
 }
 
 export function getState() {
@@ -288,7 +295,9 @@ async function loadAndRenderPage() {
 
   renderColumnConfig(cols)
 
-  const records = await getRecordsInRange(state.from, state.to)
+  let tasks = []
+  try { tasks = await getTasks() } catch {}
+  const records = joinTaskNames(await getRecordsInRange(state.from, state.to), tasks)
   const filtered = filterRecords(records, {
     taskIds: state.taskIds,
     statuses: state.statuses

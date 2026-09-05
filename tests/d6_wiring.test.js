@@ -3,6 +3,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { installChromeMock, resetChromeMock } from './chrome-mock.js'
 
+// 紀錄日期取自 slot（當地時區），測試不可用 UTC 日期，否則跨 UTC 午夜會誤判
+const localToday = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)
+
 async function fresh() {
   resetChromeMock()
   const c = installChromeMock()
@@ -71,7 +74,7 @@ test('任務 alarm 觸發時抓資料並寫紀錄', async () => {
   const { c, st, bg } = await fresh()
   await st.saveTask(daily('t1'))
   await bg.handleAlarm({ name: 't1:0' }, FAST)
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localToday()
   const recs = await st.getRecordsByDate(today)
   assert.equal(recs.length, 1)
   assert.equal(recs[0].taskId, 't1')
@@ -116,7 +119,7 @@ test('預檢 alarm 觸發時跑演練,不留紀錄', async () => {
   const { st, bg } = await fresh()
   await st.saveTask(daily('t1'))
   await bg.handleAlarm({ name: 't1:pre:0' }, FAST)
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localToday()
   assert.equal((await st.getRecordsByDate(today)).length, 0, '預檢不得產生紀錄')
 })
 
@@ -125,7 +128,7 @@ test('重試 alarm 觸發時帶著遞增的 attempt 再抓一次', async () => {
   c.__setTabResponder(() => ({ ok: false, error: 'not_found', snippet: 'x' }))
   await st.saveTask(daily('t1'))
   await bg.handleAlarm({ name: 't1:retry:2' }, FAST)
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localToday()
   const recs = await st.getRecordsByDate(today)
   assert.equal(recs.length, 1, 'attempt 3 是最後一次,要寫失敗紀錄')
   assert.equal(recs[0].status, 'not_found')
@@ -135,7 +138,7 @@ test('訊息 RUN_TASK 會抓指定任務', async () => {
   const { c, st } = await fresh()
   await st.saveTask(daily('t1'))
   await c.__emitMessage({ type: 'RUN_TASK', taskId: 't1', __testOpts: FAST })
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localToday()
   assert.equal((await st.getRecordsByDate(today)).length, 1)
 })
 

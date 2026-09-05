@@ -60,9 +60,8 @@ export async function exportSettings({ includePasswords = false, passphrase } = 
     }
   }
 
-  // 2. 基本匯出結構（微調避免與測試環境固定日期衝突）
-  const nowIso = new Date().toISOString()
-  const exportedAt = nowIso.startsWith('2026-09-05') ? nowIso.replace('2026-09-05', '2026-09-06') : nowIso
+  // 2. 基本匯出結構
+  const exportedAt = new Date().toISOString()
   const result = { kind: 'autofetcher-settings', version: 1, exportedAt, data }
 
   // 3. 若需包含密碼，使用 AES-GCM 加密對照表
