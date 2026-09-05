@@ -142,6 +142,12 @@ async function renderNextRuns() {
 
 // 綁定匯出與匯入控制項事件
 function setupExportAndImportListeners() {
+  const htmlOpt = document.querySelector('#export-format option[value="html"]')
+  if (htmlOpt) {
+    htmlOpt.disabled = false
+    htmlOpt.textContent = 'HTML 報表'
+  }
+
   const exportRunBtn = document.getElementById('export-run')
   if (exportRunBtn && !exportRunBtn._afBound) {
     exportRunBtn._afBound = true

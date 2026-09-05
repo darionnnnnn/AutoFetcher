@@ -109,12 +109,28 @@ test('匯出按鈕依所選格式呼叫下載一次', async () => {
   assert.ok(String(dl[0].args[0].filename).endsWith('.csv'))
 })
 
-test('HTML 報表格式本段先停用', async () => {
+test('HTML 報表格式可選（K1 完成後啟用）', async () => {
   const { se, doc } = await fresh()
   await se.renderSettings()
   const opt = doc.querySelector('#export-format option[value="html"]')
   assert.ok(opt, '要有 html 選項')
-  assert.ok(opt.disabled, 'K1 完成前 html 選項要停用')
+  assert.equal(opt.disabled, false, 'K1 完成後 html 選項要可選')
+})
+
+test('選 HTML 格式匯出會下載 .html 並記下時間戳', async () => {
+  const { se, st, c, doc } = await fresh()
+  await st.saveTask(task('t1'))
+  await st.appendRecord('2026-09-05', { taskId: 't1', capturedAt: 'a', value: 1, status: 'ok' })
+  await se.renderSettings()
+  doc.getElementById('export-from').value = '2026-09-05'
+  doc.getElementById('export-to').value = '2026-09-05'
+  doc.getElementById('export-format').value = 'html'
+  doc.getElementById('export-run').click()
+  await new Promise(r => setTimeout(r, 60))
+  const dl = c.__calls.filter(x => x.api === 'downloads.download')
+  assert.equal(dl.length, 1)
+  assert.ok(String(dl[0].args[0].filename).endsWith('.html'))
+  assert.ok((await st.getSettings()).lastRecordsExportAt)
 })
 
 test('匯出成功後把時間戳寫進設定', async () => {
