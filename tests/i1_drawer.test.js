@@ -303,3 +303,72 @@ test('drawer.js 不使用 innerHTML 也不寫死色碼', () => {
   assert.equal((src.match(/innerHTML/g) || []).length, 0)
   assert.equal((src.match(/#[0-9a-fA-F]{3,6}\b/g) || []).length, 0)
 })
+
+// ---- 補：三個原本設定不到的選項 ----
+
+test('可設定 number 卡片的比較基準（前一筆／前一日）', async () => {
+  const { ls, db, dw, doc, win } = await fresh()
+  const { did, cardId } = await seedOne(ls)
+  await db.renderDashboard(did)
+  await dw.openDrawer(did, cardId)
+  const sel = doc.getElementById('drawer-compare')
+  assert.ok(sel, '要有比較基準選單')
+  sel.value = 'prevDay'
+  fire(win, sel, 'change')
+  await new Promise(r => setTimeout(r, 30))
+  assert.equal((await ls.getLayout()).dashboards[0].cards[0].options.compare, 'prevDay')
+})
+
+test('可設定表格卡片的筆數上限', async () => {
+  const { ls, db, dw, doc, win } = await fresh()
+  const { did, cardId } = await seedOne(ls, { type: 'table' })
+  await db.renderDashboard(did)
+  await dw.openDrawer(did, cardId)
+  const el = doc.getElementById('drawer-limit')
+  assert.ok(el, '要有筆數欄位')
+  el.value = '25'
+  fire(win, el, 'change')
+  await new Promise(r => setTimeout(r, 30))
+  assert.equal((await ls.getLayout()).dashboards[0].cards[0].options.limit, 25)
+})
+
+test('可設定表格卡片的模式（最近 N 筆／樞紐）', async () => {
+  const { ls, db, dw, doc, win } = await fresh()
+  const { did, cardId } = await seedOne(ls, { type: 'table' })
+  await db.renderDashboard(did)
+  await dw.openDrawer(did, cardId)
+  const sel = doc.getElementById('drawer-table-mode')
+  assert.ok(sel, '要有表格模式選單')
+  sel.value = 'pivot'
+  fire(win, sel, 'change')
+  await new Promise(r => setTimeout(r, 30))
+  assert.equal((await ls.getLayout()).dashboards[0].cards[0].options.mode, 'pivot')
+})
+
+test('可設定 status 卡片要顯示哪些任務', async () => {
+  const { ls, db, dw, doc, win } = await fresh()
+  const { did, cardId } = await seedOne(ls, { type: 'status', source: [] })
+  await db.renderDashboard(did)
+  await dw.openDrawer(did, cardId)
+  const box = doc.querySelector('#drawer-status-tasks input[value="t2"]')
+  assert.ok(box, 'status 卡片要有任務篩選清單')
+  box.checked = true
+  fire(win, box, 'change')
+  await new Promise(r => setTimeout(r, 30))
+  assert.deepEqual((await ls.getLayout()).dashboards[0].cards[0].options.taskIds, ['t2'])
+})
+
+test('比較基準與筆數欄位只在對應型別出現', async () => {
+  const { ls, db, dw, doc, win } = await fresh()
+  const { did, cardId } = await seedOne(ls)
+  await db.renderDashboard(did)
+  await dw.openDrawer(did, cardId)
+  assert.equal(doc.getElementById('drawer-field-number').hidden, false, 'number 型別要顯示比較基準')
+  assert.ok(doc.getElementById('drawer-field-table').hidden, 'number 型別不該顯示表格欄位')
+  const sel = doc.getElementById('drawer-type')
+  sel.value = 'table'
+  fire(win, sel, 'change')
+  await new Promise(r => setTimeout(r, 30))
+  assert.equal(doc.getElementById('drawer-field-table').hidden, false)
+  assert.ok(doc.getElementById('drawer-field-number').hidden)
+})
