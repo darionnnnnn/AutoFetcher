@@ -148,6 +148,15 @@ test('訊息 REBUILD_ALARMS 會重建排程與預檢', async () => {
   assert.ok(names.some(n => n.includes(':pre:')), '預檢也要一起排')
 })
 
+test('訊息 REBUILD_ALARMS 之後燈號要跟著更新', async () => {
+  const { c, st } = await fresh()
+  await st.saveTask(daily('t1'))
+  const before = c.__calls.filter(x => x.api === 'action.setBadgeText').length
+  await c.__emitMessage({ type: 'REBUILD_ALARMS' })
+  assert.ok(c.__calls.filter(x => x.api === 'action.setBadgeText').length > before,
+    '新增或修改任務後燈號不更新的話,popup 會停在舊狀態')
+})
+
 test('訊息 MARK_READ 會把異常標成已讀', async () => {
   const { c, st } = await fresh()
   await st.saveTask(daily('t1'))
