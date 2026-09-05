@@ -99,6 +99,8 @@ function buildChromeMock() {
   let nextDownloadId = 1
   let nextWindowId = 1
   const windowsMap = new Map()
+  let defaultTabStatus = 'complete'
+  let tabResponder = () => undefined
 
   const mock = {
     __calls: calls,
@@ -144,6 +146,8 @@ function buildChromeMock() {
           id: nextTabId++,
           url: props.url || '',
           active: props.active !== undefined ? props.active : true,
+          status: defaultTabStatus,
+          discarded: false,
           ...props
         }
         tabsMap.set(tab.id, tab)
@@ -170,6 +174,15 @@ function buildChromeMock() {
       },
       async reload(tabId) {
         recordCall('tabs.reload', [tabId])
+        const tab = tabsMap.get(tabId)
+        if (tab) {
+          tab.discarded = false
+          tab.status = defaultTabStatus
+        }
+      },
+      async sendMessage(tabId, msg) {
+        recordCall('tabs.sendMessage', [tabId, msg])
+        return tabResponder(tabId, msg)
       },
       async update(tabId, updateProps = {}) {
         recordCall('tabs.update', [tabId, updateProps])
@@ -343,8 +356,25 @@ function buildChromeMock() {
       }
     },
 
+    __setTabResponder(fn) {
+      tabResponder = fn
+    },
+    __setTabState(tabId, patch) {
+      const tab = tabsMap.get(tabId)
+      if (tab) Object.assign(tab, patch)
+    },
+    __setDefaultTabStatus(status) {
+      defaultTabStatus = status
+    },
+    __setWindows(list) {
+      windowsMap.clear()
+      for (const w of list) windowsMap.set(w.id, w)
+    },
+
     _resetAll() {
       calls.length = 0
+      defaultTabStatus = 'complete'
+      tabResponder = () => undefined
       localStorage._reset()
       sessionStorage._reset()
       alarmsMap.clear()
@@ -359,6 +389,7 @@ function buildChromeMock() {
       contextMenusOnClicked._reset()
       windowsMap.clear()
       nextWindowId = 1
+      windowsMap.set(1, { id: 1, state: 'normal' })
     }
   }
 
