@@ -11,14 +11,24 @@ src/
 ├── manifest.json        ← MV3;permissions 只加有消費端的
 ├── background/          ← service worker:排程(chrome.alarms)、開分頁抓取、寫入儲存
 ├── content/             ← 注入頁面:記錄右鍵目標、產生選擇器、實際擷取、自動登入
-├── ui/picker/           ← 右鍵後跳出的設定視窗(命名、時間、抓取模式)
-├── ui/report/           ← AutoFetcher-Report 頁(report.html;儀表板版面可自訂,SPEC §8)
-└── shared/              ← 型別、儲存 schema、選擇器工具
+├── ui/theme.css         ← **顏色的唯一來源**(亮/暗雙軌 + --chart-1~8 圖表調色盤)
+├── ui/picker/           ← 右鍵後跳出的設定視窗(命名、時間、抓取模式、加入儀表板)
+├── ui/popup/            ← 工具列 popup(燈號摘要)
+├── ui/report/           ← AutoFetcher-Report 頁(report.html)
+│   ├── 純函式層(無 DOM、無 chrome.):
+│   │   layout.js 格線數學 / series.js 資料序列與聚合 / logic.js 範圍篩選與 hash
+│   │   templates.js 儀表板範本 / charts.js SVG 圖表(只碰 document 建元素)
+│   └── DOM 層:report.js 路由與歷史頁 / dashboard.js 儀表板與拖曳 / cards.js 卡片
+│       drawer.js 卡片設定抽屜 / tasks.js 任務頁 / settings.js 設定頁
+└── shared/              ← 型別、儲存 schema、選擇器工具、layout-store.js(版面唯一入口)
+                           record-status.js(成功狀態判定唯一來源)
 docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ```
 
+
 - **唯一排程入口**:background 的 alarm handler;content script 不得自己排程。
-- **唯一寫入入口**:`shared/storage`;JSON 匯出也從這裡走。
+- **唯一寫入入口**:`shared/storage`;JSON 匯出也從這裡走。UI 不得直接呼叫 `chrome.storage`。
+- **版面的唯一入口**:`shared/layout-store`(儀表板與卡片的增刪改),它自己只經 `shared/storage`。
 
 ## 文件地圖
 
@@ -29,14 +39,17 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 293 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 671 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅)。
-  這一輪靠突變抓到三處同義反覆的測試。
+  AF-2 靠突變抓到多處同義反覆的測試;併回前另做兩份獨立終檢(程式碼 + 文件),抓到 14 類真實缺陷。
 - 分支:`dev` 開發、`master` 由使用者併;每輪一個 `r<N>` 分支。
 - 實作委派:先地端 LLM,較複雜給 agy;Claude 只規劃、驗收、寫文件(見 ~/.claude/skills 之委派 skill)。
 - 設定/資料的事實來源是 `chrome.storage.local`;檔案一律**使用者手動匯出**,不自動下載(SPEC §5)。
 - 訊息型別集中 `shared/messages.js`;三個執行環境的分工見 SPEC §0。
+- **顏色一律走 `ui/theme.css` 變數**,任何模組內都不得出現色碼字面值(多序列用 `--chart-1`~`--chart-8`)。
+- **格線數學與資料聚合寫成純函式**(無 DOM、無 `chrome.`),DOM 接線另置,才測得動。
+- **「哪些 status 算成功」只有一份**:`shared/record-status.js`(`ok`/`fallback`/`late`)。
 
 ## 不要做
 
@@ -51,3 +64,10 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - 不要在 UI 模組載入時就讀 storage 或渲染(測試要能自己呼叫 render)。
 - 不要用 `innerHTML` 塞入紀錄內容或任務名稱(用 `textContent`)。
 - 不要用絕對 XPath 當唯一選擇器(頁面小改就失效;SPEC §3 要求多重選擇器 + 文字錨定)。
+- **不要用 HTML5 drag-and-drop**:拖曳一律 Pointer Events,且只讀 `clientX`/`clientY`/`pointerId`,
+  `setPointerCapture` 要先檢查存在(jsdom 25 沒有 `PointerEvent` 也沒有這個方法)。
+- **缺值不補 0、不內插**(SPEC §8.6);抓取失敗一律顯示 `—`,錯誤原因放 `title`。
+- 不要在匯出的獨立 HTML 報表放 `<script>` 或任何外部資源(靜態快照,離線可開)。
+- 不要在 UI 直接讀 `chrome.storage`(一律經 `shared/storage`),也不要自己解析 alarm 名稱
+  (下次執行時間問 background 的 `GET_NEXT_RUNS`,它已排除預檢與重試 alarm)。
+- 不要每次渲染就 `addEventListener` 到不會被替換的容器(監聽會累加;用 `onclick` 指派或先移除)。
