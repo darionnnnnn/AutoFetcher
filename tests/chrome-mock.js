@@ -95,6 +95,8 @@ function buildChromeMock() {
 
   const actionOnClicked = createEvent()
   const contextMenusOnClicked = createEvent()
+  const notificationsOnButtonClicked = createEvent()
+  const notificationsOnClicked = createEvent()
 
   let nextDownloadId = 1
   let nextWindowId = 1
@@ -218,7 +220,9 @@ function buildChromeMock() {
       async clear(...args) {
         recordCall('notifications.clear', args)
         return true
-      }
+      },
+      onButtonClicked: notificationsOnButtonClicked,
+      onClicked: notificationsOnClicked
     },
 
     contextMenus: {
@@ -356,6 +360,13 @@ function buildChromeMock() {
       }
     },
 
+    async __emitContextMenuClick(info, tab) {
+      for (const fn of contextMenusOnClicked._listeners) await fn(info, tab)
+    },
+    async __emitNotificationButton(notificationId, buttonIndex) {
+      for (const fn of notificationsOnButtonClicked._listeners) await fn(notificationId, buttonIndex)
+    },
+
     __setTabResponder(fn) {
       tabResponder = fn
     },
@@ -387,6 +398,8 @@ function buildChromeMock() {
       onInstalled._reset()
       nextDownloadId = 1
       contextMenusOnClicked._reset()
+      notificationsOnButtonClicked._reset()
+      notificationsOnClicked._reset()
       windowsMap.clear()
       nextWindowId = 1
       windowsMap.set(1, { id: 1, state: 'normal' })
