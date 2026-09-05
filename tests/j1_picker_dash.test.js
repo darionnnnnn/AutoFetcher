@@ -130,16 +130,20 @@ test('取消所有卡片型別勾選時不加入任何卡片', async () => {
   assert.equal((await ls.getLayout()).dashboards[0].cards.length, 0)
 })
 
-test('編輯既有任務存檔不會重複加入卡片', async () => {
+test('編輯既有任務存檔不會重複加入卡片（即使區塊已被填好）', async () => {
   const { st, ls, pk, doc } = await fresh()
   await st.saveTask(existing())
   const did = (await ls.getLayout()).dashboards[0].id
   await ls.addCard(did, { type: 'number', x: 0, y: 0, w: 3, h: 2, source: [{ taskId: 'old' }], options: {} })
-  await pk.renderDashboardSection(existing())
+  // 先以「新建」渲染，讓下拉與勾選都是有效值，再切換成編輯既有任務
+  await pk.renderDashboardSection(null)
+  doc.getElementById('dashboard-select').value = did
+  for (const i of doc.querySelectorAll('#card-types input')) i.checked = true
   await pk.initFromQuery('?taskId=old')
   await pk.handleSave()
   await new Promise(r => setTimeout(r, 40))
-  assert.equal((await ls.getLayout()).dashboards[0].cards.length, 1)
+  assert.equal((await ls.getLayout()).dashboards[0].cards.length, 1,
+    '編輯既有任務不可再加卡片')
 })
 
 test('卡片加在版面末端不與既有卡片重疊', async () => {
