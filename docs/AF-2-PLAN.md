@@ -1,6 +1,6 @@
 # AF-2 規劃:報表儀表板自訂版面
 
-> 狀態:規劃完成(2026-09-06),待執行。基線 `npm test` 293 綠 + `./run_smoke.sh` 通過。
+> 狀態:規劃完成(2026-09-06),**核對後待使用者定案待決事項 A~E**。基線 `npm test` 293 綠 + `./run_smoke.sh` 通過。
 
 ## 目標
 
@@ -19,6 +19,33 @@
 | 6 | 復原重做只記**版面**(卡片座標與設定),不記資料;離開編輯模式即清空,上限 50 步 | 使用者要的是「拖壞了可以退回」,不是完整版本史 |
 | 7 | 多序列顏色用固定 8 色調色盤循環,色盤放 `theme.css` 變數 | 與 AF-1 的「顏色不寫死在模組裡」一致 |
 | 8 | 卡片高度單位 **80px**、格線 **12 欄**、卡片間距 8px | 沿用 SPEC §8.2 的暫定值,實作後不改 |
+
+## 核對結果(2026-09-06,對照 dev 現況程式碼)
+
+| 項目 | 狀態 | 證據 | 對規劃的影響 |
+|---|---|---|---|
+| `layout` 儲存鍵與設定匯出匯入已接好 | ✅ | `storage.js` DEFAULT_LAYOUT、`exportAll`、`settings-io.js` 匯入時寫回 layout | G2 只需在其上加 dashboards/cards 操作與 `version` |
+| `theme.css` 存在 | ❌ | `src/ui/` 下沒有此檔;report/popup/picker 各自在 html 內寫 `:root` 變數 | 決定 7 與 SPEC §8.6 引用的檔案不存在,需新增階段 G0 抽出共用 `theme.css`(含 `--chart-1`~`--chart-8` 亮/暗兩組) |
+| 頂部日期範圍列全頁籤共用(SPEC §8.1) | ⚠️ | `report.html` 的 `#range-bar` 在 `#panel-history` 內;沒有自訂範圍與左右翻 | 儀表板卡片要跟範圍走,G3 前要先把範圍列搬到頁籤下方共用(小改,併入 G0) |
+| 任務頁、設定頁有內容 | ❌ | 兩個 panel 都是 `placeholder-panel`;`export.js`/`settings-io.js` **沒有任何 UI 消費端**(只被彼此引用) | 原規劃完全漏掉。J2 樞紐表欄序依「任務頁順序」、K1 匯出按鈕住在設定頁,都有硬前置 → 新增 F3 任務頁、F4 設定頁 |
+| jsdom 能測 Pointer Events | ❌ | jsdom 25.0.1:`PointerEvent`、`setPointerCapture` 皆 undefined | 決定 1 保留(真實瀏覽器用 Pointer Events),但 G3 接線只讀 `clientX/clientY/pointerId`,`setPointerCapture` 存在才呼叫;測試用 `MouseEvent`/自訂 `Event` 合成 |
+| 紀錄含 `taskName` | ❌ | fetcher `writeRecord` 只寫 taskId;`logic.js`/`report.js` 卻讀 `r.taskName`,現在「任務」欄顯示的是 id | 既有小 bug。報表載入時以 `getTasks()` 建 id→name 對照併入紀錄(Claude 幾行修);H1/H3 的 ctx 一律帶 `tasksById` |
+| `deleteTask` 會清卡片 | ❌ | `storage.js deleteTask` 只清 tasks 與 rec:*;layout 不動 | G2 的 prune 直接接在 `deleteTask` 內(唯一寫入口),不另設呼叫時機 |
+| Picker 存檔流程可加步驟 | ✅ | `picker.js handleSave` → `saveTask` → `REBUILD_ALARMS` → close | J1 在 saveTask 後、close 前插入「加入儀表板」;編輯既有任務(`currentCtx.task` 有值)不顯示 |
+| 煙霧測試可延伸 | ✅ | `tests/smoke/load.mjs` 已從 report 頁做斷言 | 每段驗收加對應斷言 |
+| `settings-io.js:65` 日期改寫 | ⚠️ | 為了讓 `e2_settings` 的 `!json.includes('2026-09-05')` 在當天通過,把 `exportedAt` 硬改成隔天 | agy 為過測試做的假修。Claude 改測試(斷言 `data` 沒有 rec 鍵)並刪掉這行,列入 G0 |
+
+## 待決事項(定案後才動工)
+
+| # | 問題 | 建議 | 理由 |
+|---|---|---|---|
+| A | 任務頁與設定頁要不要放進 AF-2? | **要**,新增 F3(任務頁)與 F4(設定頁),排在 G0 之後、G1 之前 | 沒有任務頁,J2 欄序沒有來源、使用者也無處編輯/刪任務;沒有設定頁,匯出與設定匯入根本沒入口;兩段都是純 UI 接線,已有邏輯層 |
+| B | 排程健康區(AF-1 F2 原案:下次觸發實值、看門狗時間、診斷、立即自檢)要一起做嗎? | **做在 F4**,但縮成「每任務下次觸發 + 最近 20 筆診斷 + 立即自檢」三項 | `diag.js`/`health.js` 已有資料,只差顯示 |
+| C | 深色模式偏好(跟隨系統 / 亮 / 暗,SPEC §8.5) | 本輪做,放 G0(`theme.css` 用 `[data-theme]` 切換) | 與抽出 theme.css 同一次改最便宜 |
+| D | 抓不到 `taskName` 的既有 bug | Claude 直接修(報表載入時 join),不另開階段 | 幾行 |
+| E | 卡片預設高度 80px、12 欄 | 維持決定 8 | — |
+
+若 A~C 都採建議,順序改為:**G0 → F3 → F4 → G1 → G2 → H1 → H2 → H3 → G3 → I1 → I2 → J1 → J2 → K1**(14 段)。
 
 ## 作業與階段
 
