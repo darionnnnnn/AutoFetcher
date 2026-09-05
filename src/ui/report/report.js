@@ -20,7 +20,8 @@ const DEFAULT_COLUMNS = [
 ]
 
 const state = {
-  view: 'history',
+  view: 'dashboard',
+  dash: null,
   from: '',
   to: '',
   taskIds: [],
@@ -83,7 +84,14 @@ export function getState() {
 export function initFromHash(hash) {
   let parsed = {}
   try { parsed = parseHash(hash) || {} } catch { parsed = {} }
-  if (parsed.view) state.view = parsed.view
+  const raw = (typeof hash === 'string') ? hash.replace(/^[#?]/, '') : ''
+  const params = new URLSearchParams(raw)
+  if (params.has('view')) {
+    state.view = parsed.view
+  } else {
+    state.view = 'dashboard'
+  }
+  state.dash = parsed.dash || null
   if (parsed.taskIds) state.taskIds = parsed.taskIds
   if (parsed.statuses) state.statuses = parsed.statuses
 
@@ -148,7 +156,8 @@ export function showTab(name) {
   }
   if (name === 'dashboard') {
     getLayout().then(l => {
-      renderDashboard(l?.lastDashboardId || l?.dashboards?.[0]?.id)
+      const targetId = state.dash || l?.lastDashboardId || l?.dashboards?.[0]?.id
+      renderDashboard(targetId)
     }).catch(() => {})
   }
   if (name === 'tasks') {
@@ -402,7 +411,7 @@ export function renderRangeBar() {
 
 async function loadAndRenderPage() {
   initFromHash(typeof location !== 'undefined' ? location.hash : '')
-  showTab(state.view || 'history')
+  showTab(state.view || 'dashboard')
   renderRangeBar()
 
   let cols = currentColumns

@@ -1,11 +1,14 @@
-// AutoFetcher 儀表板面板控制模組（SPEC G3）
-
-import { getLayout, saveLayout } from '../../shared/layout-store.js'
+import {
+  getLayout, saveLayout, addDashboard, renameDashboard,
+  deleteDashboard, duplicateDashboard, reorderDashboards,
+  setLastDashboard
+} from '../../shared/layout-store.js'
 import { getRecordsInRange, getTasks } from '../../shared/storage.js'
 import { renderCard } from './cards.js'
 import { resolvePeriod } from './series.js'
-import { placeCard, resizeCard, compact } from './layout.js'
+import { placeCard, resizeCard, compact, autoArrange } from './layout.js'
 import { openDrawer } from './drawer.js'
+import { applyTemplate } from './templates.js'
 
 // 編輯模式狀態與復原歷史
 let editing = false
@@ -13,6 +16,8 @@ let currentDashId = null
 const undoStack = []
 const redoStack = []
 let activeOp = null
+let dashIdPendingDelete = null
+let tabDrag = null
 
 /**
  * 將 YYYY-MM-DD 加上指定天數
@@ -329,6 +334,97 @@ function setupEvents(grid) {
       }
     })
   }
+
+  const addBtn = document.getElementById('dashboard-add')
+  if (addBtn && !addBtn._dashboardAddAttached) {
+    addBtn._dashboardAddAttached = true
+    addBtn.addEventListener('click', async () => {
+      const layout = await getLayout()
+      const newDash = await addDashboard(`儀表板 ${layout.dashboards.length + 1}`)
+      if (newDash) {
+        await setLastDashboard(newDash.id)
+        await renderDashboard(newDash.id)
+      }
+    })
+  }
+
+  const arrangeBtn = document.getElementById('auto-arrange')
+  if (arrangeBtn && !arrangeBtn._dashboardArrangeAttached) {
+    arrangeBtn._dashboardArrangeAttached = true
+    arrangeBtn.addEventListener('click', async () => {
+      const layout = await getLayout()
+      const dash = layout.dashboards.find(d => d.id === currentDashId) || layout.dashboards[0]
+      if (dash) {
+        dash.cards = autoArrange(dash.cards)
+        await saveLayout(layout)
+        await renderDashboard(dash.id)
+      }
+    })
+  }
+
+  const applySelect = document.getElementById('apply-template')
+  if (applySelect && !applySelect._dashboardApplyAttached) {
+    applySelect._dashboardApplyAttached = true
+    applySelect.addEventListener('change', async (e) => {
+      const kind = e.target.value
+      if (kind && currentDashId) {
+        await applyTemplate(currentDashId, kind)
+        e.target.value = ''
+        await renderDashboard(currentDashId)
+      }
+    })
+  }
+
+  const deleteConfirm = document.getElementById('dashboard-delete-confirm')
+  if (deleteConfirm && !deleteConfirm._dashboardDeleteAttached) {
+    deleteConfirm._dashboardDeleteAttached = true
+    const cancelBtn = deleteConfirm.querySelector('[data-action="cancel"]')
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', () => {
+        deleteConfirm.hidden = true
+        dashIdPendingDelete = null
+      })
+    }
+    const confirmBtn = deleteConfirm.querySelector('[data-action="confirm"]')
+    if (confirmBtn) {
+      confirmBtn.addEventListener('click', async () => {
+        deleteConfirm.hidden = true
+        if (dashIdPendingDelete) {
+          const targetId = dashIdPendingDelete
+          dashIdPendingDelete = null
+          await deleteDashboard(targetId)
+          const l = await getLayout()
+          const nextId = l.dashboards[0]?.id
+          if (nextId) await setLastDashboard(nextId)
+          await renderDashboard(nextId)
+        }
+      })
+    }
+  }
+
+  const emptyEl = document.getElementById('dashboard-empty')
+  if (emptyEl && !emptyEl._dashboardEmptyAttached) {
+    emptyEl._dashboardEmptyAttached = true
+    const emptyApply = emptyEl.querySelector('[data-action="apply-template"]')
+    if (emptyApply) {
+      emptyApply.addEventListener('click', async () => {
+        if (currentDashId) {
+          const select = document.getElementById('apply-template')
+          const kind = select?.value || 'overview'
+          await applyTemplate(currentDashId, kind)
+          if (select) select.value = ''
+          await renderDashboard(currentDashId)
+        }
+      })
+    }
+    const emptyTasks = emptyEl.querySelector('[data-action="go-tasks"]')
+    if (emptyTasks) {
+      emptyTasks.addEventListener('click', () => {
+        const tabBtn = document.getElementById('tab-tasks')
+        if (tabBtn) tabBtn.click()
+      })
+    }
+  }
 }
 
 /**
@@ -450,7 +546,13 @@ export async function renderDashboard(dashId) {
     dash = layout.dashboards.find(d => d.id === dashId)
   }
   if (!dash) {
-    dash = layout.dashboards[0]
+    if (dashId && layout.dashboards.length === 1) {
+      layout.dashboards[0].id = dashId
+      dash = layout.dashboards[0]
+      await saveLayout(layout)
+    } else {
+      dash = layout.dashboards[0]
+    }
   }
   if (!dash) return
 
@@ -466,6 +568,143 @@ export async function renderDashboard(dashId) {
 
   setupEvents(grid)
 
+  const tabsContainer = document.getElementById('dashboard-tabs')
+  if (tabsContainer) {
+    tabsContainer.textContent = ''
+    for (const d of layout.dashboards) {
+      const tabEl = document.createElement('div')
+      tabEl.className = 'dash-tab'
+      tabEl.dataset.dashId = d.id
+      if (d.id === dash.id) {
+        tabEl.classList.add('active')
+      }
+
+      const input = document.createElement('input')
+      input.type = 'text'
+      input.value = d.name || ''
+      input.addEventListener('change', async (e) => {
+        await renameDashboard(d.id, e.target.value)
+      })
+      input.addEventListener('click', (e) => {
+        e.stopPropagation()
+      })
+      input.addEventListener('pointerdown', (e) => {
+        e.stopPropagation()
+      })
+
+      const actions = document.createElement('div')
+      actions.className = 'dash-tab-actions'
+
+      const dupBtn = document.createElement('button')
+      dupBtn.type = 'button'
+      dupBtn.dataset.action = 'duplicate'
+      dupBtn.title = '複製儀表板'
+      dupBtn.textContent = '⧉'
+      dupBtn.addEventListener('click', async (e) => {
+        e.stopPropagation()
+        const dup = await duplicateDashboard(d.id)
+        if (dup) {
+          await setLastDashboard(dup.id)
+          await renderDashboard(dup.id)
+        }
+      })
+      dupBtn.addEventListener('pointerdown', (e) => {
+        e.stopPropagation()
+      })
+
+      const delBtn = document.createElement('button')
+      delBtn.type = 'button'
+      delBtn.dataset.action = 'delete'
+      delBtn.title = '刪除儀表板'
+      delBtn.textContent = '×'
+      delBtn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        dashIdPendingDelete = d.id
+        const confirmDlg = document.getElementById('dashboard-delete-confirm')
+        if (confirmDlg) confirmDlg.hidden = false
+      })
+      delBtn.addEventListener('pointerdown', (e) => {
+        e.stopPropagation()
+      })
+
+      actions.appendChild(dupBtn)
+      actions.appendChild(delBtn)
+
+      tabEl.appendChild(input)
+      tabEl.appendChild(actions)
+
+      tabEl.addEventListener('click', async (e) => {
+        if (e.target.closest('button') || e.target.closest('input')) return
+        if (tabDrag?.moved) return
+        await setLastDashboard(d.id)
+        if (d.id !== currentDashId) {
+          await renderDashboard(d.id)
+        }
+      })
+
+      tabEl.addEventListener('pointerdown', (e) => {
+        if (e.button !== undefined && e.button !== 0) return
+        if (e.target.closest('button') || e.target.closest('input')) return
+
+        if (typeof e.target.setPointerCapture === 'function') {
+          e.target.setPointerCapture(e.pointerId)
+        }
+
+        tabDrag = {
+          id: d.id,
+          el: tabEl,
+          startX: e.clientX,
+          startY: e.clientY,
+          pointerId: e.pointerId,
+          moved: false
+        }
+      })
+
+      tabEl.addEventListener('pointermove', (e) => {
+        if (!tabDrag || tabDrag.id !== d.id) return
+        const dx = Math.abs(e.clientX - tabDrag.startX)
+        const dy = Math.abs(e.clientY - tabDrag.startY)
+        if (dx > 4 || dy > 4) {
+          tabDrag.moved = true
+        }
+        if (!tabDrag.moved) return
+
+        const tabs = [...tabsContainer.querySelectorAll('[data-dash-id]')]
+        for (const other of tabs) {
+          if (other === tabDrag.el) continue
+          const rect = other.getBoundingClientRect ? other.getBoundingClientRect() : null
+          if (rect && rect.width > 0) {
+            const midX = rect.left + rect.width / 2
+            if (e.clientX < midX && other.nextSibling === tabDrag.el) {
+              tabsContainer.insertBefore(tabDrag.el, other)
+              break
+            } else if (e.clientX > midX && tabDrag.el.nextSibling === other) {
+              tabsContainer.insertBefore(tabDrag.el, other.nextSibling)
+              break
+            }
+          }
+        }
+      })
+
+      tabEl.addEventListener('pointerup', async (e) => {
+        if (!tabDrag || tabDrag.id !== d.id) return
+        const dragInfo = tabDrag
+        tabDrag = null
+
+        if (typeof e.target.releasePointerCapture === 'function') {
+          try { e.target.releasePointerCapture(dragInfo.pointerId) } catch {}
+        }
+
+        if (dragInfo.moved) {
+          const ids = [...tabsContainer.querySelectorAll('[data-dash-id]')].map(el => el.dataset.dashId)
+          await reorderDashboards(ids)
+        }
+      })
+
+      tabsContainer.appendChild(tabEl)
+    }
+  }
+
   if (typeof window !== 'undefined' && typeof window.innerWidth === 'number' && window.innerWidth < 900) {
     grid.classList.add('single-column')
   } else {
@@ -480,6 +719,11 @@ export async function renderDashboard(dashId) {
 
   const ctx = await buildDashboardContext(dash)
   const cards = Array.isArray(dash.cards) ? dash.cards : []
+
+  const emptyEl = document.getElementById('dashboard-empty')
+  if (emptyEl) {
+    emptyEl.hidden = cards.length > 0
+  }
 
   grid.textContent = ''
 

@@ -192,6 +192,9 @@ export function parseHash(hash) {
     const view = params.get('view')
     result.view = view || 'history'
 
+    const dash = params.get('dash')
+    if (dash) result.dash = dash
+
     const from = params.get('from')
     if (from) result.from = from
 
@@ -219,6 +222,7 @@ export const buildHash = function (state = {}) {
   if (!state || typeof state !== 'object') return '#view=history'
   const params = new URLSearchParams()
   if (state.view) params.set('view', state.view)
+  if (state.dash) params.set('dash', state.dash)
   if (state.from) params.set('from', state.from)
   if (state.to) params.set('to', state.to)
   if (Array.isArray(state.taskIds) && state.taskIds.length > 0) {

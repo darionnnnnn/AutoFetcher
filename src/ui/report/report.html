@@ -83,6 +83,25 @@
     .dashboard-toolbar { display: flex; gap: 0.5rem; margin-bottom: 1rem; align-items: center; }
     .dashboard-toolbar button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.75rem; border-radius: var(--radius); font-size: 0.85rem; cursor: pointer; }
     .dashboard-toolbar button:hover { background: var(--hover); border-color: var(--primary); }
+    .dashboard-toolbar select { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.6rem; border-radius: var(--radius); font-size: 0.85rem; }
+    .dashboard-tabs-bar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; border-bottom: 1px solid var(--border); padding-bottom: 0.25rem; }
+    #dashboard-tabs { display: flex; align-items: center; gap: 0.35rem; overflow-x: auto; flex: 1; }
+    .dash-tab { display: flex; align-items: center; gap: 0.25rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.25rem 0.5rem; font-size: 0.85rem; cursor: pointer; user-select: none; }
+    .dash-tab.active { border-color: var(--primary); font-weight: 600; }
+    .dash-tab input { background: transparent; border: none; color: var(--text); font-size: inherit; font-family: inherit; font-weight: inherit; width: 80px; }
+    .dash-tab input:focus { outline: 1px solid var(--primary); background: var(--hover); }
+    .dash-tab-actions { display: flex; gap: 0.2rem; }
+    .dash-tab button { background: transparent; border: none; cursor: pointer; color: var(--text-muted); font-size: 0.8rem; padding: 0 0.2rem; }
+    .dash-tab button:hover { color: var(--text); }
+    #dashboard-add { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.25rem 0.6rem; border-radius: var(--radius); font-size: 0.85rem; cursor: pointer; }
+    #dashboard-add:hover { background: var(--hover); border-color: var(--primary); }
+    #dashboard-delete-confirm { background: var(--danger-bg); border: 1px solid var(--danger); border-radius: var(--radius); padding: 0.75rem; margin-bottom: 1rem; display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.85rem; }
+    #dashboard-delete-confirm[hidden] { display: none; }
+    #dashboard-empty { margin-bottom: 1rem; display: flex; flex-direction: column; align-items: center; gap: 0.75rem; }
+    #dashboard-empty[hidden] { display: none; }
+    .empty-actions { display: flex; gap: 0.5rem; }
+    .empty-actions button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.75rem; border-radius: var(--radius); font-size: 0.85rem; cursor: pointer; }
+    .empty-actions button:hover { background: var(--hover); border-color: var(--primary); }
     #layout-version-note { background: var(--warn); color: var(--surface); padding: 0.5rem 0.75rem; border-radius: var(--radius); margin-bottom: 1rem; font-size: 0.85rem; }
     #dashboard-grid { display: grid; grid-template-columns: repeat(12, 1fr); grid-auto-rows: 80px; gap: 8px; position: relative; }
     #dashboard-grid > [data-card-id] { grid-column: calc(var(--card-x) + 1) / span var(--card-w); grid-row: calc(var(--card-y) + 1) / span var(--card-h); position: relative; }
@@ -147,9 +166,39 @@
 
   <main>
     <section id="panel-dashboard" hidden>
+      <div class="dashboard-tabs-bar">
+        <div id="dashboard-tabs"></div>
+        <button type="button" id="dashboard-add" title="新增儀表板">+</button>
+      </div>
+
       <div class="dashboard-toolbar">
         <button type="button" id="edit-layout">編輯版面</button>
+        <button type="button" id="auto-arrange">自動排列</button>
+        <select id="apply-template">
+          <option value="">套用範本...</option>
+          <option value="overview">總覽</option>
+          <option value="deepDive">單一指標深入</option>
+          <option value="compare">多任務比較</option>
+        </select>
       </div>
+
+      <div id="dashboard-delete-confirm" hidden>
+        <p>確定要刪除此儀表板嗎？</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel">取消</button>
+          <button type="button" data-action="confirm">確定</button>
+        </div>
+      </div>
+
+      <div id="dashboard-empty" class="placeholder-panel" hidden>
+        <p>目前儀表板尚無卡片。</p>
+        <p>提示：只有在 Chrome 瀏覽器開啟時才會依排程執行抓取，錯過的排程將列在任務管理頁。</p>
+        <div class="empty-actions">
+          <button type="button" data-action="apply-template">套用範本</button>
+          <button type="button" data-action="go-tasks">前往任務管理</button>
+        </div>
+      </div>
+
       <div id="layout-version-note" hidden>版面設定來自較新版本，部分功能可能無法在此版本正常運作。</div>
       <div id="dashboard-grid"></div>
 
