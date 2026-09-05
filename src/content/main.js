@@ -88,4 +88,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     handleScrollIntoView(msg, sendResponse)
     return true
   }
+
+  if (msg.type === MSG.REPICK) {
+    sendResponse({ ok: false, reason: 'unsupported' })
+    return true
+  }
 })

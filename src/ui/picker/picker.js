@@ -1,4 +1,4 @@
-import { saveTask } from '../../shared/storage.js'
+import { saveTask, getTask } from '../../shared/storage.js'
 import { MSG } from '../../shared/messages.js'
 
 let currentCtx = null
@@ -211,8 +211,32 @@ export async function handleTestNow() {
   }
 }
 
+export async function initFromQuery(search) {
+  const params = new URLSearchParams(search || '')
+  const taskId = params.get('taskId')
+  if (!taskId) return
+  const task = await getTask(taskId)
+  if (!task) return
+  render({ task, locator: task.locator, url: task.url })
+  const testNow = document.getElementById('test-now')
+  if (testNow) {
+    testNow.hidden = true
+  }
+}
+
 if (typeof document !== 'undefined' && document.getElementById('save') && globalThis.chrome?.runtime?.id) {
   document.getElementById('save')?.addEventListener('click', () => handleSave())
   document.getElementById('cancel')?.addEventListener('click', () => window.close())
   document.getElementById('test-now')?.addEventListener('click', () => handleTestNow())
+
+  const search = typeof window !== 'undefined' ? window.location?.search : ''
+  const params = new URLSearchParams(search || '')
+  if (params.has('taskId')) {
+    initFromQuery(search)
+  } else if (params.has('ctx')) {
+    try {
+      const parsed = JSON.parse(decodeURIComponent(params.get('ctx')))
+      render(parsed)
+    } catch {}
+  }
 }

@@ -139,6 +139,26 @@ export async function catchUpAll(runTaskFn) {
   await writeMissed([])
 }
 
+// 補抓單一項目：從清單找出符合的項目執行並移除
+export async function catchUpOne(taskId, slot, runTaskFn) {
+  const list = await readMissed()
+  const item = list.find((m) => m.taskId === taskId && m.slot === slot)
+  if (!item) return
+
+  const tasks = await getTasks()
+  const task = tasks.find((t) => t.id === taskId)
+  if (task) {
+    try {
+      await runTaskFn(task, { slot: item.slot, reason: 'late' })
+    } catch {
+      // 個別項目執行失敗時接住例外
+    }
+  }
+
+  const remaining = list.filter((m) => !(m.taskId === taskId && m.slot === slot))
+  await writeMissed(remaining)
+}
+
 // 全部略過：清空錯過清單
 export async function skipAll() {
   await writeMissed([])

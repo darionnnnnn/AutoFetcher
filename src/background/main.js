@@ -11,7 +11,7 @@ import {
   parseAlarmName
 } from './scheduler.js'
 import { runTask } from './fetcher.js'
-import { refreshMissed, catchUpAll, skipAll } from './missed.js'
+import { refreshMissed, catchUpAll, skipAll, catchUpOne, skipOne } from './missed.js'
 import { runWatchdog } from './watchdog.js'
 import { refreshBadge, markRead } from './health.js'
 import {
@@ -198,6 +198,31 @@ export async function handleMessage(msg, sender) {
       await schedulePrechecks()
       // 任務清單變了,燈號要跟著更新(否則 popup 上的燈號會停在舊狀態)
       await refreshBadge()
+      return { ok: true }
+    }
+
+    if (msg.type === MSG.CATCH_UP_ONE) {
+      await catchUpOne(msg.taskId, msg.slot, (task, opts) => runTask(task, opts))
+      await refreshBadge()
+      return { ok: true }
+    }
+
+    if (msg.type === MSG.SKIP_ONE) {
+      await skipOne(msg.taskId, msg.slot)
+      await refreshBadge()
+      return { ok: true }
+    }
+
+    if (msg.type === MSG.REPICK) {
+      const { task } = await getValidTask(msg.taskId)
+      if (task?.url) {
+        const tab = await chrome.tabs.create({ url: task.url })
+        if (tab?.id) {
+          try {
+            await chrome.tabs.sendMessage(tab.id, { type: MSG.REPICK, taskId: msg.taskId })
+          } catch {}
+        }
+      }
       return { ok: true }
     }
 

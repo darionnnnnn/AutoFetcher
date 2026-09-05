@@ -6,6 +6,7 @@ import {
   shiftRange, normalizeRange
 } from './logic.js'
 import { getRecordsInRange, getSettings, saveSettings, getTasks } from '../../shared/storage.js'
+import { renderTasks } from './tasks.js'
 
 const DEFAULT_COLUMNS = [
   { key: 'slot', label: '時間', visible: true },
@@ -95,11 +96,55 @@ export function initFromHash(hash) {
   }
 }
 
+export async function loadAndRenderTasks() {
+  try {
+    const tasks = await getTasks()
+    let health = {}
+    let missed = []
+    if (globalThis.chrome?.storage?.local?.get) {
+      const storageData = await chrome.storage.local.get(['health', 'missed'])
+      health = (storageData && storageData.health && typeof storageData.health === 'object')
+        ? storageData.health
+        : {}
+      missed = Array.isArray(storageData?.missed) ? storageData.missed : []
+    }
+
+    const nextRuns = {}
+    if (globalThis.chrome?.alarms?.getAll) {
+      const alarms = await chrome.alarms.getAll()
+      for (const a of alarms) {
+        if (a.name?.startsWith('task:')) {
+          const parts = a.name.slice(5).split(':')
+          const taskId = parts.slice(0, -1).join(':') || parts[0]
+          if (taskId && a.scheduledTime) {
+            if (!nextRuns[taskId] || a.scheduledTime < nextRuns[taskId]) {
+              const d = new Date(a.scheduledTime)
+              const y = d.getFullYear()
+              const m = String(d.getMonth() + 1).padStart(2, '0')
+              const day = String(d.getDate()).padStart(2, '0')
+              const h = String(d.getHours()).padStart(2, '0')
+              const min = String(d.getMinutes()).padStart(2, '0')
+              nextRuns[taskId] = `${y}-${m}-${day} ${h}:${min}`
+            }
+          }
+        }
+      }
+    }
+
+    renderTasks(tasks, health, missed, { nextRuns })
+  } catch (err) {
+    console.error('載入任務失敗:', err)
+  }
+}
+
 export function showTab(name) {
   state.view = name
   for (const tab of ['dashboard', 'history', 'tasks', 'settings']) {
     const panel = document.getElementById(`panel-${tab}`)
     if (panel) panel.hidden = (tab !== name)
+  }
+  if (name === 'tasks') {
+    loadAndRenderTasks()
   }
 }
 
