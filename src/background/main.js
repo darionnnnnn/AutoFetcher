@@ -12,7 +12,7 @@ import {
 } from './scheduler.js'
 import { runTask } from './fetcher.js'
 import { refreshMissed, catchUpAll, skipAll, catchUpOne, skipOne } from './missed.js'
-import { runWatchdog } from './watchdog.js'
+import { runWatchdog, selfCheck } from './watchdog.js'
 import { refreshBadge, markRead } from './health.js'
 import {
   schedulePrechecks,
@@ -42,9 +42,10 @@ async function getValidTask(taskId) {
 
 // 解析任務 alarm 名稱（相容正式排程與測試名稱）
 function parseTaskAlarm(name) {
+  if (typeof name !== 'string') return null
+  if (name.startsWith('precheck:') || name.includes(':retry:')) return null
   const parsed = parseAlarmName(name)
   if (parsed) return parsed
-  if (typeof name !== 'string') return null
   const lastColon = name.lastIndexOf(':')
   if (lastColon === -1) return null
   const taskId = name.slice(0, lastColon)
@@ -231,6 +232,26 @@ export async function handleMessage(msg, sender) {
         for (const id of msg.taskIds) await markRead(id)
       }
       await refreshBadge()
+      return { ok: true }
+    }
+
+    if (msg.type === MSG.GET_NEXT_RUNS) {
+      const alarms = await chrome.alarms.getAll()
+      const nextRuns = {}
+      for (const alarm of alarms) {
+        const parsed = parseTaskAlarm(alarm.name)
+        if (parsed?.taskId && typeof alarm.scheduledTime === 'number') {
+          const prev = nextRuns[parsed.taskId]
+          if (prev === undefined || alarm.scheduledTime < prev) {
+            nextRuns[parsed.taskId] = alarm.scheduledTime
+          }
+        }
+      }
+      return { nextRuns }
+    }
+
+    if (msg.type === MSG.SELF_CHECK) {
+      await selfCheck()
       return { ok: true }
     }
 

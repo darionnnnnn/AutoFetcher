@@ -65,6 +65,21 @@
     .task-actions button:hover, .missed-actions button:hover, .dialog-actions button:hover { background: var(--hover); }
     #task-delete-dialog { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; margin-top: 1rem; }
     .dialog-actions { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+    .settings-container { display: flex; flex-direction: column; gap: 1.25rem; max-width: 800px; }
+    .settings-section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; display: flex; flex-direction: column; gap: 0.75rem; }
+    .settings-section h2 { font-size: 1.05rem; font-weight: 600; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+    .settings-section h3 { font-size: 0.9rem; font-weight: 600; color: var(--text-muted); margin-top: 0.5rem; }
+    .settings-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; font-size: 0.85rem; }
+    .settings-row input[type="date"], .settings-row input[type="number"], .settings-row input[type="password"], .settings-row select, .settings-row input[type="file"] { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.6rem; border-radius: var(--radius); font-size: 0.85rem; }
+    .settings-row button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.75rem; border-radius: var(--radius); font-size: 0.85rem; cursor: pointer; }
+    .settings-row button:hover { background: var(--hover); border-color: var(--primary); }
+    #health-next-runs, #health-diag { display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.85rem; }
+    #health-diag div { padding: 0.25rem 0.5rem; background: var(--hover); border-radius: var(--radius); font-family: monospace; font-size: 0.8rem; }
+    #storage-stats { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.85rem; }
+    #privacy-note { font-size: 0.85rem; color: var(--text-muted); line-height: 1.6; }
+    #privacy-note ul { padding-left: 1.25rem; margin-top: 0.35rem; }
+    #settings-import-result, #records-import-result { font-size: 0.85rem; color: var(--primary); font-weight: 500; }
+    #sites-placeholder { color: var(--text-muted); font-size: 0.85rem; }
   </style>
   <script type="module" src="./report.js"></script>
 </head>
@@ -139,7 +154,117 @@
       </div>
     </section>
 
-    <section id="panel-settings" class="placeholder-panel" hidden>設定將於下一輪加入</section>
+    <section id="panel-settings" hidden>
+      <div class="settings-container">
+        <div class="settings-section">
+          <h2>紀錄匯出</h2>
+          <div class="settings-row">
+            <label for="export-from">開始日期：</label>
+            <input type="date" id="export-from">
+            <label for="export-to">結束日期：</label>
+            <input type="date" id="export-to">
+            <label for="export-format">格式：</label>
+            <select id="export-format">
+              <option value="json" selected>JSON</option>
+              <option value="csv">CSV</option>
+              <option value="html" disabled>HTML 報表（下一段完成後啟用）</option>
+            </select>
+            <button type="button" id="export-run">匯出紀錄</button>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h2>設定匯出 / 匯入</h2>
+          <div class="settings-row">
+            <label>
+              <input type="checkbox" id="settings-include-passwords">
+              包含站台密碼
+            </label>
+            <input type="password" id="settings-passphrase" placeholder="匯出/匯入密語">
+            <button type="button" id="settings-export">匯出設定</button>
+          </div>
+          <div class="settings-row">
+            <label for="settings-import-file">匯入設定檔：</label>
+            <input type="file" id="settings-import-file" accept=".json">
+          </div>
+          <div id="settings-import-result"></div>
+        </div>
+
+        <div class="settings-section">
+          <h2>歷史紀錄匯入</h2>
+          <div class="settings-row">
+            <label for="records-import-file">選擇匯入日檔或備份包：</label>
+            <input type="file" id="records-import-file" multiple accept=".json">
+          </div>
+          <div id="records-import-result"></div>
+        </div>
+
+        <div class="settings-section">
+          <h2>偏好設定</h2>
+          <div class="settings-row">
+            <label for="pref-retention">紀錄保留天數：</label>
+            <input type="number" id="pref-retention" min="1">
+          </div>
+          <div class="settings-row">
+            <label>
+              <input type="checkbox" id="pref-notifications">
+              啟用桌面通知
+            </label>
+          </div>
+          <div class="settings-row">
+            <label for="pref-extra-delay">頁面載入額外等待秒數：</label>
+            <input type="number" id="pref-extra-delay" min="0">
+          </div>
+          <div class="settings-row">
+            <label for="pref-theme">外觀主題：</label>
+            <select id="pref-theme">
+              <option value="system">跟隨系統</option>
+              <option value="light">明亮</option>
+              <option value="dark">深色</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h2>排程健康</h2>
+          <div class="settings-row">
+            <button type="button" id="health-selfcheck">立即自檢</button>
+            <span>看門狗上次巡檢：</span>
+            <span id="health-watchdog">—</span>
+          </div>
+          <h3>任務下次觸發時間</h3>
+          <div id="health-next-runs"></div>
+          <h3>最近診斷紀錄</h3>
+          <div id="health-diag"></div>
+        </div>
+
+        <div class="settings-section">
+          <h2>儲存用量</h2>
+          <div id="storage-stats"></div>
+        </div>
+
+        <div class="settings-section">
+          <h2>隱私與權限說明</h2>
+          <div id="privacy-note">
+            <p>AutoFetcher 絕不連接任何外部伺服器，所有抓取與設定資料僅保存在使用者本機。</p>
+            <p>擴充功能權限用途說明：</p>
+            <ul>
+              <li>alarms：用於定時排程抓取與看門狗定期自我巡檢。</li>
+              <li>downloads：用於手動匯出抓取紀錄（JSON/CSV）與備份設定檔案。</li>
+              <li>notifications：用於發出抓取失敗、錯過排程與重要狀態通知。</li>
+              <li>storage：用於在使用者本機儲存任務設定、全域偏好與歷次抓取紀錄。</li>
+              <li>tabs：用於在背景或前景開啟目標網頁、報表檢視頁面與元素拾取器。</li>
+              <li>scripting：用於在目標網頁執行擷取指令碼以讀取文字或數值內容。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h2>站台登入管理</h2>
+          <div id="sites-placeholder">站台登入管理與自動登入功能留待下一輪加入。</div>
+        </div>
+      </div>
+    </section>
   </main>
 </body>
 </html>

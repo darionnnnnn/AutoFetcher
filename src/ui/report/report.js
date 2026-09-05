@@ -7,6 +7,7 @@ import {
 } from './logic.js'
 import { getRecordsInRange, getSettings, saveSettings, getTasks } from '../../shared/storage.js'
 import { renderTasks } from './tasks.js'
+import { renderSettings } from './settings.js'
 
 const DEFAULT_COLUMNS = [
   { key: 'slot', label: '時間', visible: true },
@@ -145,6 +146,9 @@ export function showTab(name) {
   }
   if (name === 'tasks') {
     loadAndRenderTasks()
+  }
+  if (name === 'settings') {
+    renderSettings()
   }
 }
 
