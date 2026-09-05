@@ -12,7 +12,7 @@ src/
 ├── background/          ← service worker:排程(chrome.alarms)、開分頁抓取、寫入儲存
 ├── content/             ← 注入頁面:記錄右鍵目標、產生選擇器、實際擷取、自動登入
 ├── ui/picker/           ← 右鍵後跳出的設定視窗(命名、時間、抓取模式)
-├── ui/report/           ← AutoFetcher-Report 頁(chrome-extension://…/report.html)
+├── ui/report/           ← AutoFetcher-Report 頁(report.html;儀表板版面可自訂,SPEC §8)
 └── shared/              ← 型別、儲存 schema、選擇器工具
 docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ```

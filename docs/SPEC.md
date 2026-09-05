@@ -31,25 +31,42 @@
 
 ## §4 排程與擷取流程
 
-- 時間格式 `HH:mm`,每任務可多筆;以 `chrome.alarms.create(taskId+":"+HHmm, {when, periodInMinutes: 1440})` 建立。
+- 排程型別(每任務一種,可多筆):
+  - `daily`:`HH:mm` 清單 + 星期勾選(預設每天);alarm `periodInMinutes: 1440`。
+  - `interval`:每 N 分鐘(N ≥ 1,暫定),可限定時段(如 09:00~18:00)與星期;alarm `periodInMinutes: N`。
+  - alarm 名稱 `<taskId>:<index>`;任務修改/停用時整批重建。
+- 時區:一律用瀏覽器本地時間;紀錄同時存 ISO 字串(含 offset)。
 - 到點流程:background 開背景分頁(`active:false`)載入目標 URL → 等 `complete` + 額外等待(預設 3 秒,任務可調)
   → 若偵測到登入頁(§6)則先登入 → 注入 content script 擷取 → 寫入紀錄 → 關閉分頁。
 - 若使用者已開著同 URL 的分頁,優先直接在該分頁擷取,不另開。
-- 補抓:Chrome 未開時錯過的時間,啟動後只補**當日**錯過的,最多一次,紀錄標 `status: "late"`。
+- 補抓:Chrome 未開時錯過的排程,啟動時整理成「錯過清單」(任務、應抓時間),以 `notifications`
+  按鈕「立即補抓 / 略過」詢問使用者,Report 頁同時顯示橫幅可逐筆勾選;補抓的紀錄標 `status: "late"`。
+  未處理的錯過清單保留到使用者處理或超過 7 天(暫定)自動略過。
 - 重試:`not_found` 或逾時 → 2 分鐘後重試一次,仍失敗才寫失敗紀錄並發 `notifications`。
 - 同一時刻多任務同站台 → 串行,共用分頁。
+- 前景 vs 背景:`chrome.tabs.create({active:false})` 開的分頁 JS 照常執行,但 `document.visibilityState` 為 `hidden`,
+  IntersectionObserver 式的 lazy-load、依可見性才啟動的圖表/輪詢**可能不觸發**。
+  策略:預設背景;content script 擷取前先 `scrollIntoView` 目標;若同一任務連續 2 次 `not_found`,
+  Report 頁提示「改用前景抓取」,任務可勾選 `foreground: true`(抓取時會短暫切換到該分頁,約 3~5 秒)。
+- 抓取前可選的「前置動作」清單(暫定):等待某元素出現(逾時 20 秒)、點擊某元素(關閉彈窗、切分頁籤)、
+  額外等待 N 秒;動作由使用者在 Picker 內以右鍵點選元素設定。
 
 ## §5 儲存
 
 - 主資料:`chrome.storage.local`
   - `tasks: Task[]`、`sites: Record<origin, Site>`、`records: Record<YYYY-MM-DD, Record[]>`
   - 保留天數預設 365,超過自動刪最舊(設定可調)。
-- JSON 匯出:
-  - 擴充功能**無法**寫任意本機路徑。方案:Report 頁用 File System Access API `showDirectoryPicker()`
-    讓使用者選資料夾,handle 存 IndexedDB;每次寫入前 `queryPermission`,失效時 Report 頁提示重新授權。
-  - 檔名 `AutoFetcher/<YYYY>/<YYYY-MM-DD>.json`,每日一檔;每筆紀錄寫入後即時追加(讀→合併→整檔覆寫)。
-  - 授權失效期間紀錄仍在 storage.local,重新授權後一次回填缺的日檔。
-  - 備援:設定頁「立即匯出」走 `chrome.downloads` 到 `下載/AutoFetcher/`。
+- JSON 匯出(預設目錄):
+  - 擴充功能無法寫任意本機路徑;採 `chrome.downloads.download({filename:"AutoFetcher/<YYYY-MM>/<YYYY-MM-DD>.json",
+    conflictAction:"overwrite", saveAs:false})`,固定落在 Chrome 下載資料夾底下的 `AutoFetcher/`。
+  - 每筆紀錄寫入後重新產生當日整檔並覆寫(檔案小,不做增量)。Chrome 的下載氣泡每次會閃一下,設定頁說明如何關閉。
+  - 若使用者變更 Chrome 下載目錄,檔案跟著走;設定頁顯示目前實際路徑(`chrome.downloads.search` 取最近一筆)。
+  - 選資料夾(File System Access)與 Native Messaging 皆列 BACKLOG。
+- 設定匯出/匯入(換機):
+  - 匯出 `autofetcher-settings.json`:`tasks`、`sites`(密碼**預設不含**,勾選「含密碼」時以匯出時輸入的密語 AES-GCM 加密)、
+    Report 版面(§8)。不含 `records`(歷史另有日檔)。
+  - 匯入:同 `taskId` 覆蓋、新 id 新增;匯入後重建所有 alarms;若含加密密碼則要求輸入密語。
+  - 歷史匯入:Report 頁可選多個日檔 JSON 併回 `records`(同 taskId + capturedAt 去重)。
 - 日檔 schema:
   ```json
   { "date": "2026-09-05", "tasks": { "<taskId>": { "name": "...", "records": [ {...} ] } } }
@@ -65,7 +82,12 @@
 
 ## §7 區塊聚合(block 模式)
 
-- 區塊解析為二維陣列 `cells[row][col]`(table:tr/td;list:每 li 一列,以空白/tab 切欄)。
+- 對象是 HTML 表格的各種寫法,解析為二維陣列 `cells[row][col]`:
+  - `<table>`:含 thead/tbody、`rowspan`/`colspan`(展開成實際格子)、巢狀 table 取最內層。
+  - `role="grid"/"table"` + `role="row"/"cell"`(ARIA 表格,常見於 React/MUI/AG Grid)。
+  - CSS grid / flex 假表格:以「同構子節點」啟發式:容器下重複出現、子節點數相同的元素視為列,其子元素為欄。
+  - `<ul>/<ol>`:每 li 一列,以空白/tab 切欄。
+  - 虛擬捲動表格(只渲染可視列)只抓當下渲染的部分,並在紀錄註記 `partial: true`。
 - 使用者選:軸(`row` = X 軸,取某一列;`col` = Y 軸,取某一欄)、索引(含表頭預覽讓使用者點選)、
   聚合(`max` | `min` | `avg` | `sum` | `count`)。
 - 數值解析:去千分位、貨幣符號、百分號、全形數字;無法解析的格子略過並記 `skipped` 數。
@@ -74,11 +96,32 @@
 ## §8 Report 頁
 
 - 路徑 `report.html`,由右鍵選單或工具列圖示開啟。
-- 左側日期清單(有紀錄的日期),右側該日所有任務紀錄表(時間、值、狀態),失敗紀錄可展開看錯誤。
-- 單任務趨勢圖(近 30 天折線),純 SVG 自繪,不引外部圖表庫。
-- 動作:立即抓取(手動觸發)、匯出當日 JSON、重新授權資料夾、刪除任務。
+- 兩種檢視:
+  - **每日檢視**:左側日期清單(有紀錄的日期),右側該日紀錄表(時間、任務、值、狀態),失敗可展開看錯誤。
+    欄位可排序;任務欄順序沿用儀表板版面順序。
+  - **儀表板**(使用者自訂版面):每個任務(或任務 × 聚合)是一個「卡片」,使用者決定卡片型別、位置與大小:
+    - 型別:`number`(最新值 + 與前一筆差異)、`line`(近 N 天折線,N 可選 7/30/90)、`table`(最近 N 筆)、
+      `multi-line`(多任務同圖比較)。
+    - 版面:12 欄 CSS grid;卡片寬 3/4/6/12 欄,高 1~3 單位;拖曳排序與調整大小(原生 drag events,不引庫)。
+    - 版面存 `storage.local.layout`,隨設定匯出;新任務自動排在最後(寬 4、型別 number)。
+    - 可建立多個儀表板頁籤(如「工作」「投資」),各自版面。
+- 圖表純 SVG 自繪,不引外部圖表庫。
+- 動作:立即抓取、暫停/恢復任務、複製任務、匯出當日 JSON / CSV、匯出/匯入設定、匯入歷史日檔、刪除任務(連同紀錄,需確認)。
+- 錯過清單橫幅(§4 補抓)。
+
+## §10 告警
+
+- 任務可設條件:值 > / < / = 閾值、相較前一筆變動超過 X%、連續 N 次抓取失敗。
+- 觸發時 `notifications` 通知,並在紀錄標 `alert: true`;Report 每日檢視以顏色標示。
+- 同一條件在 60 分鐘內(暫定)只通知一次。
+
+## §11 數值後處理(number 模式)
+
+- 擷取後可套用:正則擷取群組(如從「餘額:1,234 元」取數字)、乘數(單位換算)、小數位數。
+- 解析規則同 §7:去千分位、貨幣符號、百分號、全形數字;負數支援 `-` 與 `(1,234)` 會計格式。
 
 ## §9 權限(manifest)
 
 `contextMenus`, `alarms`, `storage`, `tabs`, `scripting`, `notifications`, `downloads`,
 `host_permissions: ["<all_urls>"]`(或改為 `optional_host_permissions` 於首次設定任務時逐站授權,見 BACKLOG)。
+`downloads` 為 JSON 匯出所需;`notifications` 為失敗/告警/補抓詢問所需。

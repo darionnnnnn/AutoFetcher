@@ -1,36 +1,48 @@
-# AF-1 規劃:骨架 + 單值抓取 + 排程 + 儲存(草案,待使用者定案)
+# AF-1 規劃:骨架 + 單值抓取 + 排程 + JSON 日檔 + 基本 Report
 
-> 尚未定案。§待決 全部回答後才拆階段規格並委派。
+> 狀態:方向已定案(2026-09-05),§待決 第二批待答;答完拆階段規格再委派。不實作。
 
-## 目標
+## 已定案(2026-09-05)
 
-能在真實網頁上:右鍵選一個數值 → 命名 + 設兩個時間 → 到點自動開分頁抓取 → 紀錄進 storage 並寫日檔 JSON
-→ Report 頁看得到。區塊聚合(§7)與自動登入(§6)留到 AF-2。
+| # | 決定 |
+|---|---|
+| 1 | 區塊聚合以 HTML 表格各種寫法為主(table / ARIA grid / grid-flex 假表格 / list),見 SPEC §7 |
+| 2 | JSON 先寫 Chrome 下載資料夾底下 `AutoFetcher/`(`chrome.downloads`);選資料夾與 Native host 進 BACKLOG |
+| 3 | 排程同時支援每日 HH:mm 與每 N 分鐘,使用者選 |
+| 4 | 錯過的抓取列成清單,由使用者決定補抓或略過 |
+| 5 | 不做 storage.sync;提供設定匯出/匯入(密碼預設不含) |
+| 6 | 前景抓取不預設;背景失敗 2 次才提示可改前景(理由見 SPEC §4) |
+| 7 | GitHub repo 已改 public |
 
-## 作業總覽
+## 分輪範圍
+
+| 輪 | 內容 |
+|---|---|
+| **AF-1(本輪)** | 骨架、右鍵單值(text/number)、四層選擇器、daily + interval 排程、背景開分頁擷取、重試、錯過清單、storage、日檔 JSON、設定匯出/匯入、Report 每日檢視 + 手動抓取 |
+| AF-2 | 區塊聚合(§7)、自動登入(§6)、前置動作、數值後處理(§11) |
+| AF-3 | 儀表板自訂版面(§8)、告警(§10)、CSV、歷史匯入 |
+
+## AF-1 作業總覽
 
 | 作業 | 內容 | 執行者(暫定) | 驗收 |
 |---|---|---|---|
-| A 骨架 | manifest、background/content/report 空殼、shared/storage 讀寫、Node 測試環境 | 地端 LLM | `npm test` 綠;`chrome://extensions` 載入無錯 |
-| B 選擇器 | content: 記錄右鍵目標、產生四層選擇器、依序解析(SPEC §3) | 地端 LLM | 對 5 個固定 HTML fixture 的 jsdom 測試:每層各自命中/失效情境 |
-| C Picker UI | 右鍵後彈出視窗:名稱、模式(text/number)、時間清單、預覽值 | agy | Puppeteer 煙霧:建立任務後 storage 內容正確 |
-| D 排程與擷取 | alarms 建立/重建、到點開分頁、擷取、重試、補抓(SPEC §4) | agy | 單元測試 mock chrome.alarms/tabs;煙霧測試以 1 分鐘後的時間實測一次 |
-| E JSON 匯出 | File System Access 授權、日檔合併寫入、回填、downloads 備援(SPEC §5) | agy | 授權後抓一筆 → 磁碟上日檔內容符合 schema |
-| F Report | 日期清單、紀錄表、手動抓取、匯出按鈕(SPEC §8,趨勢圖留 AF-2) | 地端 LLM | Puppeteer 開 report.html 驗 DOM |
+| A 骨架 | manifest、background/content/report 空殼、`shared/storage` 讀寫 + schema 版本欄、Node 測試環境(`node --test` + jsdom)、chrome API mock | 地端 LLM | `npm test` 綠;`chrome://extensions` 載入無錯 |
+| B 選擇器 | content:記錄右鍵目標、產生四層選擇器、依序解析、`not_found` 附 DOM 片段(SPEC §3) | 地端 LLM | 5 個 HTML fixture:每層各有「命中」與「該層失效退到下一層」測試 |
+| C Picker UI | 彈出視窗:名稱、模式、排程型別(daily 時間清單+星期 / interval N+時段)、預覽值、儲存後建 alarms | agy | Puppeteer 煙霧:建立任務後 storage 與 `chrome.alarms.getAll()` 內容正確 |
+| D 排程與擷取 | alarm handler、找既有分頁或背景開分頁、等待載入、擷取、重試、錯過清單與通知按鈕(SPEC §4) | agy | 單元測試 mock alarms/tabs/scripting;煙霧:設 1 分鐘後的 daily 任務實抓一次 |
+| E JSON 與設定 | 日檔產生與 `downloads` 覆寫、設定匯出/匯入(含 alarms 重建)(SPEC §5) | 地端 LLM | 抓一筆 → 下載資料夾日檔符合 schema;匯出→清空→匯入後任務與 alarms 一致 |
+| F Report | 每日檢視、紀錄表排序、錯過清單橫幅、立即抓取、暫停/恢復、匯出設定按鈕(SPEC §8 每日檢視部分) | agy | Puppeteer 開 report.html:塞假紀錄後 DOM 正確;按立即抓取觸發 D |
 
-整輪委派模型:暫定「A/B/F 地端 LLM,C/D/E agy」;中途切換註明起點。
+整輪委派模型:暫定 A/B/E 地端 LLM,C/D/F agy;中途切換註明起點。
+順序 A → B → E → C → D → F(E 早做讓 C/D 有儲存層可用)。
 
-## 待決(請逐項回答)
+## 待決(第二批)
 
-1. **「區塊取 X 軸 / Y 軸最大值、平均值」的對象**是 HTML 表格/清單(建議,SPEC §7 照此寫),還是畫出來的圖表(canvas/SVG)?
-   後者做不到通用,需針對特定圖表庫或走 OCR。
-2. **JSON 存放路徑**:擴充功能無法直接寫任意路徑。建議 File System Access API 讓你選資料夾(每次 Chrome 重啟可能要重新授權一次,
-   Report 頁會提示)。若要完全無人值守,需另裝 Native Messaging host(多一個安裝步驟)。選哪個?
-3. **時間精度**:只需每日固定 HH:mm(建議),還是也要「每 N 分鐘」?
-4. **Chrome 沒開時錯過的抓取**:建議「啟動後只補當日、最多一次、標記 late」。可接受?
-5. **多台電腦**:任務設定要不要 `storage.sync` 同步(密碼除外)?建議 AF-1 先不做。
-6. **抓取時要不要讓分頁真的顯示**?背景分頁(`active:false`)有些網站 lazy-load 不觸發;建議預設背景,任務可勾「前景抓取」。
-7. **GitHub repo 已建為 private**;要 public 再說。
+1. **interval 下限**:1 分鐘(暫定)可以嗎?更短要常駐分頁,不建議。
+2. **錯過清單通知方式**:Chrome 啟動時跳一則系統通知附「補抓全部 / 略過」兩鈕,細選到 Report 頁。可接受?
+3. **下載氣泡**:每次寫日檔 Chrome 右上角會閃一下下載提示,無法從擴充功能關閉,只能由你在 Chrome 設定關。可接受,還是改成「每小時/每日整批寫一次」?
+4. **number 模式抓不到數字**(例如頁面顯示「--」):記 `status: "parse_error"` 並保留原文,不當作 0。可接受?
+5. **AF-1 要不要先把 §11 的正則擷取拉進來**?很多頁面的數字帶單位文字,不做的話 number 模式實用性打折;工作量小,建議併入作業 C。
 
 ## 執行紀錄
 
