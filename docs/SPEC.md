@@ -59,7 +59,10 @@
 - JSON 匯出(預設目錄):
   - 擴充功能無法寫任意本機路徑;採 `chrome.downloads.download({filename:"AutoFetcher/<YYYY-MM>/<YYYY-MM-DD>.json",
     conflictAction:"overwrite", saveAs:false})`,固定落在 Chrome 下載資料夾底下的 `AutoFetcher/`。
-  - 每筆紀錄寫入後重新產生當日整檔並覆寫(檔案小,不做增量)。Chrome 的下載氣泡每次會閃一下,設定頁說明如何關閉。
+  - 用途:`storage.local` 是主資料,日檔是**給 Chrome 以外使用**的副本(備份、Excel/其他程式讀取、換機帶走、
+    擴充功能被移除時資料不消失)。
+  - 寫入時機(節流):一次抓取後 5 分鐘內(暫定)的所有紀錄合併成一次覆寫;另每日 00:05 alarm 把前一日整檔重寫一次收尾;
+    Report 頁可手動「立即匯出」。Chrome 的下載氣泡每次寫入會閃一下,節流後一天最多與排程次數相當。
   - 若使用者變更 Chrome 下載目錄,檔案跟著走;設定頁顯示目前實際路徑(`chrome.downloads.search` 取最近一筆)。
   - 選資料夾(File System Access)與 Native Messaging 皆列 BACKLOG。
 - 設定匯出/匯入(換機):
@@ -115,9 +118,17 @@
 - 觸發時 `notifications` 通知,並在紀錄標 `alert: true`;Report 每日檢視以顏色標示。
 - 同一條件在 60 分鐘內(暫定)只通知一次。
 
-## §11 數值後處理(number 模式)
+## §11 數值擷取策略與後處理(number 模式)
 
-- 擷取後可套用:正則擷取群組(如從「餘額:1,234 元」取數字)、乘數(單位換算)、小數位數。
+- 擷取來源(策略鏈,使用者在 Picker 選主策略,其餘為自動備援;紀錄寫入 `strategy_used`):
+  1. `auto`:取元素 `innerText` 中第一個數字(預設)。
+  2. `regex`:使用者給正則,取第一個群組(如從「餘額:1,234 元」取 `([\d,\.]+)`)。
+  3. `attr`:取指定屬性(`value`、`data-*`、`title`、`aria-label`)——SPA 常把精確值放屬性、畫面顯示四捨五入。
+  4. `child`:元素內指定子節點(以相對 CSS 選擇器)。
+  5. `label`:相鄰標籤錨定——找含指定文字的元素,取其右側/下方第一個含數字的元素(表格「項目 | 值」最常見)。
+  - 主策略失敗時依 1→5 順序試其他策略,成功則紀錄標 `status: "fallback"` 並在 Report 提示。
+  - 全部失敗或解析不出數字(如顯示「--」)→ `status: "parse_error"`,保留原文 `raw`,**不寫 0**。
+- 後處理:乘數(單位換算)、小數位數。
 - 解析規則同 §7:去千分位、貨幣符號、百分號、全形數字;負數支援 `-` 與 `(1,234)` 會計格式。
 
 ## §9 權限(manifest)
