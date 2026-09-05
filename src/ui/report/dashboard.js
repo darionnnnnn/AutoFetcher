@@ -5,6 +5,7 @@ import { getRecordsInRange, getTasks } from '../../shared/storage.js'
 import { renderCard } from './cards.js'
 import { resolvePeriod } from './series.js'
 import { placeCard, resizeCard, compact } from './layout.js'
+import { openDrawer } from './drawer.js'
 
 // 編輯模式狀態與復原歷史
 let editing = false
@@ -331,43 +332,9 @@ function setupEvents(grid) {
 }
 
 /**
- * 渲染儀表板
+ * 建立卡片渲染共用 Context
  */
-export async function renderDashboard(dashId) {
-  const layout = await getLayout()
-  let dash = null
-  if (dashId) {
-    dash = layout.dashboards.find(d => d.id === dashId)
-  }
-  if (!dash) {
-    dash = layout.dashboards[0]
-  }
-  if (!dash) return
-
-  currentDashId = dash.id
-
-  const note = document.getElementById('layout-version-note')
-  if (note) {
-    note.hidden = !layout.newerVersion
-  }
-
-  const grid = document.getElementById('dashboard-grid')
-  if (!grid) return
-
-  setupEvents(grid)
-
-  if (typeof window !== 'undefined' && typeof window.innerWidth === 'number' && window.innerWidth < 900) {
-    grid.classList.add('single-column')
-  } else {
-    grid.classList.remove('single-column')
-  }
-
-  if (editing) {
-    grid.classList.add('editing')
-  } else {
-    grid.classList.remove('editing')
-  }
-
+async function buildDashboardContext(dash) {
   const today = getTodayString()
   const rangeFromInput = document.getElementById('range-from')
   const rangeToInput = document.getElementById('range-to')
@@ -430,7 +397,7 @@ export async function renderDashboard(dashId) {
     } catch {}
   }
 
-  const ctx = {
+  return {
     records,
     tasksById,
     health,
@@ -439,26 +406,114 @@ export async function renderDashboard(dashId) {
     today,
     range: { from: defaultFrom, to: defaultTo }
   }
+}
+
+/**
+ * 準備單張卡片 DOM 元素並綁定基本事件
+ */
+function prepareCardElement(card, ctx, dashId) {
+  const cardEl = renderCard(card, ctx)
+  cardEl.style.setProperty('--card-x', String(card.x))
+  cardEl.style.setProperty('--card-y', String(card.y))
+  cardEl.style.setProperty('--card-w', String(card.w))
+  cardEl.style.setProperty('--card-h', String(card.h))
+
+  let handle = cardEl.querySelector('[data-role="resize-handle"]')
+  if (!handle) {
+    handle = document.createElement('div')
+    handle.dataset.role = 'resize-handle'
+    handle.className = 'resize-handle'
+    cardEl.appendChild(handle)
+  }
+  handle.hidden = !editing
+
+  cardEl.addEventListener('pointerdown', (e) => onPointerDown(e, card))
+
+  const configBtn = cardEl.querySelector('[data-action="config"]')
+  if (configBtn) {
+    configBtn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      openDrawer(dashId, card.id)
+    })
+  }
+
+  return cardEl
+}
+
+/**
+ * 渲染儀表板
+ */
+export async function renderDashboard(dashId) {
+  const layout = await getLayout()
+  let dash = null
+  if (dashId) {
+    dash = layout.dashboards.find(d => d.id === dashId)
+  }
+  if (!dash) {
+    dash = layout.dashboards[0]
+  }
+  if (!dash) return
+
+  currentDashId = dash.id
+
+  const note = document.getElementById('layout-version-note')
+  if (note) {
+    note.hidden = !layout.newerVersion
+  }
+
+  const grid = document.getElementById('dashboard-grid')
+  if (!grid) return
+
+  setupEvents(grid)
+
+  if (typeof window !== 'undefined' && typeof window.innerWidth === 'number' && window.innerWidth < 900) {
+    grid.classList.add('single-column')
+  } else {
+    grid.classList.remove('single-column')
+  }
+
+  if (editing) {
+    grid.classList.add('editing')
+  } else {
+    grid.classList.remove('editing')
+  }
+
+  const ctx = await buildDashboardContext(dash)
+  const cards = Array.isArray(dash.cards) ? dash.cards : []
 
   grid.textContent = ''
 
   for (const card of cards) {
-    const cardEl = renderCard(card, ctx)
-    cardEl.style.setProperty('--card-x', String(card.x))
-    cardEl.style.setProperty('--card-y', String(card.y))
-    cardEl.style.setProperty('--card-w', String(card.w))
-    cardEl.style.setProperty('--card-h', String(card.h))
-
-    let handle = cardEl.querySelector('[data-role="resize-handle"]')
-    if (!handle) {
-      handle = document.createElement('div')
-      handle.dataset.role = 'resize-handle'
-      handle.className = 'resize-handle'
-      cardEl.appendChild(handle)
-    }
-    handle.hidden = !editing
-
-    cardEl.addEventListener('pointerdown', (e) => onPointerDown(e, card))
+    const cardEl = prepareCardElement(card, ctx, dash.id)
     grid.appendChild(cardEl)
   }
+}
+
+/**
+ * 僅重新渲染指定單張卡片（不重建其他卡片 DOM 節點）
+ */
+export async function rerenderCard(dashId, cardId) {
+  const layout = await getLayout()
+  let dash = null
+  if (dashId) {
+    dash = layout.dashboards.find(d => d.id === dashId)
+  }
+  if (!dash) {
+    dash = layout.dashboards.find(d => d.id === currentDashId) || layout.dashboards[0]
+  }
+  if (!dash) return
+
+  const card = dash.cards.find(c => c.id === cardId)
+  if (!card) return
+
+  const grid = document.getElementById('dashboard-grid')
+  if (!grid) return
+
+  const oldCardEl = grid.querySelector(`[data-card-id="${cardId}"]`)
+  if (!oldCardEl) return
+
+  const ctx = await buildDashboardContext(dash)
+  const newCardEl = prepareCardElement(card, ctx, dash.id)
+
+  oldCardEl.replaceWith(newCardEl)
 }
