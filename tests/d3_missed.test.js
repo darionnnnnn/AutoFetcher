@@ -54,9 +54,25 @@ test('computeMissedSlots:停用的任務不算', async () => {
 
 test('computeMissedSlots:interval 任務不列入(太頻繁,靠正常失敗回報)', async () => {
   const { ms } = await fresh()
+  // 故意也給 times:拿掉 type 判斷的話就會被當成 daily 算出一堆槽,測試才抓得到
   const t = { id: 'i1', name: 'i1', url: 'https://a.test/p', enabled: true,
-    schedule: { type: 'interval', everyMinutes: 5, weekdays: [0, 1, 2, 3, 4, 5, 6] } }
+    schedule: { type: 'interval', everyMinutes: 5, times: ['09:00', '15:00'], weekdays: [0, 1, 2, 3, 4, 5, 6] } }
   assert.equal(ms.computeMissedSlots([t], {}, TWO_DAYS_AGO, NOW).length, 0)
+})
+
+test('computeMissedSlots:剛好等於起點的槽不算(避免重複計入上次已看過的)', async () => {
+  const { ms } = await fresh()
+  const start = new Date(2026, 8, 6, 9, 0).getTime()
+  const got = ms.computeMissedSlots([daily('t1', ['09:00'])], {}, start, NOW)
+  assert.ok(!got.some(x => x.slot === '2026-09-06T09:00'), '起點那一格已經處理過了')
+  assert.ok(got.some(x => x.slot === '2026-09-07T09:00'), '之後的仍要算')
+})
+
+test('computeMissedSlots:剛好等於終點的槽要算進去', async () => {
+  const { ms } = await fresh()
+  const end = new Date(2026, 8, 7, 9, 0).getTime()
+  const got = ms.computeMissedSlots([daily('t1', ['09:00'])], {}, end - 3600000, end)
+  assert.deepEqual(got.map(x => x.slot), ['2026-09-07T09:00'])
 })
 
 test('computeMissedSlots:未來的時間不算錯過', async () => {
