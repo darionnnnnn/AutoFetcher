@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "AutoFetcher",
+  "version": "0.1.0",
+  "description": "網頁元素定時自動擷取與報表檢視工具",
+  "background": {
+    "service_worker": "background/main.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "ui/popup/popup.html",
+    "default_title": "AutoFetcher"
+  },
+  "permissions": [
+    "alarms",
+    "contextMenus",
+    "downloads",
+    "notifications",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ]
+}
