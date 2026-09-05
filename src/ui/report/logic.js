@@ -231,5 +231,50 @@ export const buildHash = function (state = {}) {
   return qs ? `#${qs}` : '#'
 }
 
+const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/
+
+function parseUtcDate(str) {
+  if (typeof str !== 'string' || !DATE_REGEX.test(str)) return null
+  const [y, m, d] = str.split('-').map(Number)
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) {
+    return null
+  }
+  return dt
+}
+
+function formatUtcDate(date) {
+  const y = date.getUTCFullYear()
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0')
+  const d = String(date.getUTCDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+// 日期範圍平移（days 為位移天數，正數往後、負數往前）
+export function shiftRange(from, to, days = 0) {
+  const dFrom = parseUtcDate(from)
+  const dTo = parseUtcDate(to)
+  if (!dFrom || !dTo) return null
+  if (typeof days !== 'number' || Number.isNaN(days)) return null
+  if (days === 0) return { from, to }
+
+  dFrom.setUTCDate(dFrom.getUTCDate() + days)
+  dTo.setUTCDate(dTo.getUTCDate() + days)
+
+  return {
+    from: formatUtcDate(dFrom),
+    to: formatUtcDate(dTo)
+  }
+}
+
+// 標準化日期範圍：若 from 晚於 to 則交換
+export function normalizeRange(from, to) {
+  if (from > to) {
+    return { from: to, to: from }
+  }
+  return { from, to }
+}
+
+
 
 

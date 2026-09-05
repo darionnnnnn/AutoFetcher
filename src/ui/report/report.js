@@ -2,7 +2,8 @@
 
 import {
   quickRange, filterRecords, summarize, buildCalendar,
-  sortRecords, parseHash, buildHash
+  sortRecords, parseHash, buildHash,
+  shiftRange, normalizeRange
 } from './logic.js'
 import { getRecordsInRange, getSettings, saveSettings, getTasks } from '../../shared/storage.js'
 
@@ -62,6 +63,15 @@ export function joinTaskNames(records = [], tasks = []) {
   return records.map(r => ({ ...r, taskName: r.taskName ?? byId.get(r.taskId) ?? r.taskId }))
 }
 
+export function applyTheme(theme) {
+  if (typeof document === 'undefined' || !document.documentElement) return
+  if (theme === 'dark' || theme === 'light') {
+    document.documentElement.setAttribute('data-theme', theme)
+  } else {
+    document.documentElement.removeAttribute('data-theme')
+  }
+}
+
 export function getState() {
   return state
 }
@@ -76,7 +86,13 @@ export function initFromHash(hash) {
   const today = quickRange('today', Date.now())
   state.from = parsed.from || (today ? today.from : '')
   state.to = parsed.to || (today ? today.to : '')
-  if (typeof document !== 'undefined') renderRangeBar()
+  if (typeof document !== 'undefined') {
+    renderRangeBar()
+    const fromInput = document.getElementById('range-from')
+    const toInput = document.getElementById('range-to')
+    if (fromInput) fromInput.value = state.from || ''
+    if (toInput) toInput.value = state.to || ''
+  }
 }
 
 export function showTab(name) {
@@ -266,6 +282,17 @@ export function renderColumnConfig(columns) {
 export function renderRangeBar() {
   const bar = document.getElementById('range-bar')
   if (!bar) return
+
+  const fromInput = document.getElementById('range-from')
+  const toInput = document.getElementById('range-to')
+
+  const syncInputs = () => {
+    if (fromInput) fromInput.value = state.from || ''
+    if (toInput) toInput.value = state.to || ''
+  }
+
+  syncInputs()
+
   const buttons = bar.querySelectorAll('[data-range]')
   for (const btn of buttons) {
     btn.onclick = () => {
@@ -274,9 +301,47 @@ export function renderRangeBar() {
         state.from = range.from
         state.to = range.to
         if (typeof window !== 'undefined') window.location.hash = buildHash(state)
+        syncInputs()
       }
     }
   }
+
+  const shift = (days) => {
+    const shifted = shiftRange(state.from, state.to, days)
+    if (shifted) {
+      state.from = shifted.from
+      state.to = shifted.to
+      if (typeof window !== 'undefined') window.location.hash = buildHash(state)
+      syncInputs()
+    }
+  }
+
+  const prevDay = document.getElementById('range-prev-day')
+  if (prevDay) prevDay.onclick = () => shift(-1)
+
+  const nextDay = document.getElementById('range-next-day')
+  if (nextDay) nextDay.onclick = () => shift(1)
+
+  const prevWeek = document.getElementById('range-prev-week')
+  if (prevWeek) prevWeek.onclick = () => shift(-7)
+
+  const nextWeek = document.getElementById('range-next-week')
+  if (nextWeek) nextWeek.onclick = () => shift(7)
+
+  const onDateChange = () => {
+    const rawFrom = fromInput ? fromInput.value : state.from
+    const rawTo = toInput ? toInput.value : state.to
+    if (rawFrom && rawTo) {
+      const normalized = normalizeRange(rawFrom, rawTo)
+      state.from = normalized.from
+      state.to = normalized.to
+      if (typeof window !== 'undefined') window.location.hash = buildHash(state)
+      syncInputs()
+    }
+  }
+
+  if (fromInput) fromInput.onchange = onDateChange
+  if (toInput) toInput.onchange = onDateChange
 }
 
 async function loadAndRenderPage() {
@@ -287,11 +352,14 @@ async function loadAndRenderPage() {
   let cols = currentColumns
   try {
     const settings = await getSettings()
-    if (settings.history?.columns) {
+    applyTheme(settings?.theme)
+    if (settings?.history?.columns) {
       cols = settings.history.columns
       currentColumns = cols
     }
-  } catch {}
+  } catch {
+    applyTheme('system')
+  }
 
   renderColumnConfig(cols)
 

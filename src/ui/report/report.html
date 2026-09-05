@@ -4,19 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AutoFetcher 報表歷史</title>
+  <link rel="stylesheet" href="../theme.css">
   <style>
-    :root {
-      --bg: #f8fafc; --surface: #ffffff; --text: #0f172a; --text-muted: #64748b;
-      --border: #e2e8f0; --primary: #2563eb; --danger: #dc2626; --danger-bg: #fef2f2;
-      --hover: #f1f5f9; --radius: 6px;
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --bg: #0f172a; --surface: #1e293b; --text: #f8fafc; --text-muted: #94a3b8;
-        --border: #334155; --primary: #3b82f6; --danger: #ef4444; --danger-bg: #450a0a;
-        --hover: #334155;
-      }
-    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; padding: 1rem; }
     .tab-nav { display: flex; gap: 0.5rem; border-bottom: 1px solid var(--border); margin-bottom: 1rem; padding-bottom: 0.5rem; }
@@ -24,8 +13,9 @@
     .tab-btn:hover { background: var(--hover); color: var(--text); }
     .history-layout { display: grid; grid-template-columns: 280px 1fr; gap: 1.25rem; align-items: start; }
     @media (max-width: 768px) { .history-layout { grid-template-columns: 1fr; } }
-    #range-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
-    #range-bar button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.75rem; border-radius: var(--radius); font-size: 0.85rem; cursor: pointer; }
+    #range-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; align-items: center; }
+    #range-bar button, #range-bar input[type="date"] { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.75rem; border-radius: var(--radius); font-size: 0.85rem; }
+    #range-bar button { cursor: pointer; }
     #range-bar button:hover { background: var(--hover); border-color: var(--primary); }
     #calendar { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.75rem; }
     #calendar table { width: 100%; border-collapse: collapse; text-align: center; font-size: 0.85rem; }
@@ -68,19 +58,25 @@
     <button id="tab-settings" class="tab-btn" type="button">設定</button>
   </nav>
 
+  <div id="range-bar">
+    <button type="button" id="range-prev-week">«</button>
+    <button type="button" id="range-prev-day">‹</button>
+    <input type="date" id="range-from">
+    <input type="date" id="range-to">
+    <button type="button" id="range-next-day">›</button>
+    <button type="button" id="range-next-week">»</button>
+    <button type="button" data-range="today">今天</button>
+    <button type="button" data-range="yesterday">昨天</button>
+    <button type="button" data-range="last7">近 7 天</button>
+    <button type="button" data-range="last30">近 30 天</button>
+    <button type="button" data-range="thisMonth">本月</button>
+    <button type="button" data-range="lastMonth">上月</button>
+  </div>
+
   <main>
     <section id="panel-dashboard" class="placeholder-panel" hidden>儀表板將於下一輪加入</section>
 
     <section id="panel-history">
-      <div id="range-bar">
-        <button type="button" data-range="today">今天</button>
-        <button type="button" data-range="yesterday">昨天</button>
-        <button type="button" data-range="last7">近 7 天</button>
-        <button type="button" data-range="last30">近 30 天</button>
-        <button type="button" data-range="thisMonth">本月</button>
-        <button type="button" data-range="lastMonth">上月</button>
-      </div>
-
       <div id="filters"></div>
 
       <div class="history-layout">
