@@ -288,3 +288,20 @@
   異常項目有「立即重試」「開啟頁面」(開目標 URL 讓使用者自己處理,例如手動登入或看網站改版)「暫停」按鈕;
   底部「全部暫停 / 恢復」、「開啟 Report」。
 - popup 只讀 storage 與發訊息,不做抓取。
+
+## §13 瀏覽器相容(Chrome + Edge)
+
+- Edge 為 Chromium 核心,`chrome.*` 命名空間與 MV3 API 相同;**同一份程式碼、同一個 manifest**,不分版本。
+- 只用 §9 列出的 API,不用 Chrome 專屬或實驗性 API(`sidePanel`、`offscreen`、`declarativeNetRequest` 等一律不引入)。
+- Edge 特有行為與對策:
+
+| Edge 機制 | 影響 | 對策 |
+|---|---|---|
+| 睡眠索引標籤(Sleeping Tabs,預設 2 小時,可設 5 分鐘) | 背景分頁被卸載比 Chrome 積極 | 自開分頁 `autoDiscardable:false`;既有分頁若 `discarded` 先 reload(§4.1 已涵蓋) |
+| 效率模式(Efficiency mode) | 背景 JS 節流更重 | 載入等待上限與擷取逾時已放寬;預檢(§4.2)會提早暴露問題 |
+| 啟動加速(Startup boost)/ 關閉視窗後仍在背景執行 | 無視窗狀態更常見 | §4.1「沒有任何視窗」對策 |
+| `edge://extensions` 載入未封裝 | 路徑不同 | README 兩個瀏覽器的安裝步驟都寫 |
+| Edge Add-ons 商店獨立審核 | 上架要分別送 | BACKLOG |
+
+- 驗收:Puppeteer 煙霧腳本以環境變數 `BROWSER_PATH` 指定執行檔,CI/本機各跑一次 Chrome 與 Edge(未安裝 Edge 時自動略過並標示)。
+- 使用者可見差異只有一處:設定頁「排程健康」顯示目前瀏覽器名稱與版本(`navigator.userAgentData`)。

@@ -16,7 +16,7 @@ Chrome 擴充功能:在網頁上右鍵選取文字/數值/區塊,設定多個抓
 
 ## 安裝(開發模式)
 
-1. `chrome://extensions` → 開啟「開發人員模式」→「載入未封裝項目」→ 選 `src/`。
+1. Chrome:`chrome://extensions`;Edge:`edge://extensions` → 開啟「開發人員模式」→「載入未封裝項目」→ 選 `src/`。
 2. 到目標網頁,右鍵即可看到 AutoFetcher 選單。
 
 ## 狀態

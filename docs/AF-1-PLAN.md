@@ -13,6 +13,7 @@
 | 5 | 不做 storage.sync;提供設定匯出/匯入(密碼預設不含) |
 | 6 | 前景抓取不預設;背景失敗 2 次才提示可改前景(理由見 SPEC §4) |
 | 7 | GitHub repo 已改 public |
+| 8 | Chrome 與 Edge 同一份程式碼,煙霧測試兩者各跑一次(SPEC §13) |
 
 ## 分輪範圍
 
@@ -54,7 +55,7 @@
 
 | 階段 | 目標 | 契約 | 驗收 |
 |---|---|---|---|
-| A1 | 可載入的空擴充功能 + 測試環境 | `src/manifest.json`(MV3、§9 權限)、background/content/report 三個空入口;`package.json` 只用 `node --test` + `jsdom`,無 bundler;`tests/chrome-mock.js` 提供 alarms/tabs/storage/scripting/downloads/notifications/contextMenus 的最小 mock(記錄呼叫、可設回傳) | `npm test` 0 失敗;`node -e` 讀 manifest 驗 `manifest_version===3`;Puppeteer 以 `--load-extension` 啟動無 console error(煙霧腳本 `tests/smoke/load.mjs`) |
+| A1 | 可載入的空擴充功能 + 測試環境 | `src/manifest.json`(MV3、§9 權限)、background/content/report 三個空入口;`package.json` 只用 `node --test` + `jsdom`,無 bundler;`tests/chrome-mock.js` 提供 alarms/tabs/storage/scripting/downloads/notifications/contextMenus 的最小 mock(記錄呼叫、可設回傳) | `npm test` 0 失敗;`node -e` 讀 manifest 驗 `manifest_version===3`;Puppeteer 以 `--load-extension` 啟動無 console error(煙霧腳本 `tests/smoke/load.mjs`,`BROWSER_PATH` 可指向 Chrome 或 Edge,兩者各跑一次;Edge 未安裝則標 skipped) |
 | A2 | 儲存層 | `src/shared/storage.js`:`getTasks/saveTask/deleteTask/getSites/saveSite/appendRecord/getRecordsByDate/listDates/getSettings/saveSettings`;所有寫入經此模組;`schemaVersion` 欄位 + 升版函式;記錄依 §5 結構、保留天數裁剪 | 單元測試 ≥ 12 條,含「超過保留天數最舊日期被刪」「schemaVersion 缺少時補 1」;`grep -rn "chrome.storage" src/ \| grep -v shared/storage.js` 為 0 行 |
 
 ### B 選擇器

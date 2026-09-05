@@ -10,7 +10,8 @@
 | Native Messaging host 寫任意路徑、完全無人值守 | 上一項仍不夠時(多一個安裝步驟) |
 | 深色模式以外的主題色 | 使用者提出 |
 | 秒級抓取 | 目前最小 1 分鐘;alarms 下限 30 秒,再快要常駐分頁 |
-| 多瀏覽器(Firefox)支援 | 有需求時;選擇器與 alarms API 皆可移植,contextMenus 差異最大 |
+| Firefox 支援 | 有需求時;選擇器與 alarms API 皆可移植,contextMenus 差異最大 |
+| Chrome Web Store 與 Edge Add-ons 上架 | 使用者想分享給別人安裝時(兩邊分別審核) |
 | 任務設定 `storage.sync` 自動同步 | 使用者常在多台機器切換且嫌手動匯入麻煩時 |
 | 抓取時同時截圖存證 | 使用者需要查證抓到的值時 |
 | 同一頁多元素合併為一個任務(一次抓多值) | 使用者一頁要抓 5 個以上的值時 |
