@@ -1,6 +1,6 @@
 # AF-2 規劃:報表儀表板自訂版面
 
-> 狀態:規劃完成(2026-09-06),A~J 已定案(全採建議);**待定案第三批 K~M**。基線 `npm test` 293 綠 + `./run_smoke.sh` 通過。
+> 狀態:規劃完成(2026-09-06),A~M 全部定案(全採建議),14 段階段規格已展開,**待動工**。基線 `npm test` 293 綠 + `./run_smoke.sh` 通過。
 
 ## 目標
 
@@ -119,51 +119,158 @@
 | L | 刪紀錄要不要留痕 | 不留痕,直接刪 | 使用者自己的本機資料;留痕是另一套機制 |
 | M | 儀表板空狀態要不要放「示範資料」 | 不放 | 假資料會混進匯出;用三個範本 + 說明文字就夠 |
 
+## 作業總覽
+
+- 委派模型:整輪 agy `gemini-3.8-flash-high`;幾行內的修改標「Claude」自己做。
+- 每段流程:Claude 寫驗收測試並 commit → 抄一份階段規格到 `.gemini-tasks/` → agy 實作 → Claude 突變驗收 → 填執行紀錄。
+- 測試檔命名 `tests/<段代號小寫>_<主題>.test.js`;基線 **293 綠**,每段驗收寫「總數 ≥ N」。
+- 共用限制(每段規格都附):只改白名單檔案;不重整目錄與文件;不加規格沒要求的抽象層、設定項、泛化參數;同一判定用在兩處以上就抽函式;不用 `innerHTML` 塞任何來自 storage 的內容;UI 模組載入時不得讀 storage 或渲染;動手前不要跑測試建基準;不讀 `docs/archive/`。
+- 順序:**G0 → F3 → F4 → G1 → G2 → H1 → H2 → H3 → G3 → I1 → I2 → J1 → J2 → K1**。
+- 儲存 schema 新增(G2 定案,H/I/J 沿用):
+
+```
+layout = { version: 1, dashboards: [ { id, name, cards: [ Card ] } ], lastDashboardId? }
+Card   = { id, type, x, y, w, h, title?, source: [ { taskId, aggregation } ], options: {} }
+type   ∈ number | line | bar | table | gauge | text | status
+aggregation ∈ raw | dailyLast | dailyMax | dailyMin | dailyAvg | dailySum
+options(依型別):
+  共用  period: 'range' | 1 | 7 | 30 | 90(預設 'range' = 跟隨範圍列)
+  number  decimals, unit, compare: 'prev' | 'prevDay', thresholds: [{op:'gte'|'lte', value, color}], sparkline: bool
+  line/bar yMin, yMax, normalize: 'none' | 'percentFromFirst'
+  table   mode: 'recent' | 'pivot', limit(N), columns: [key]
+  gauge   min, max, warn
+  text    content(僅支援 **粗體** 與行首 "- " 清單)
+  status  taskIds: [](空 = 全部)
+```
+
 ## 作業與階段
 
-每階段一次委派、可獨立驗收。測試一律 Claude 先寫並 commit,再委派實作,驗收含突變測試。
+### G0 基礎整備(Claude 為主,小段委派)
 
-### G 版面引擎
+| 項目 | 契約 | 執行者 |
+|---|---|---|
+| 抽出 `src/ui/theme.css` | report/popup/picker 三個 html 的 `:root` 變數搬到同一檔,加 `--chart-1`~`--chart-8`(亮/暗各一組)、`--ok`/`--warn`;深色切換改為 `html[data-theme="dark"]` 與 `prefers-color-scheme` 雙軌;report 載入時依 `settings.theme`(system/light/dark)設 `data-theme` | agy |
+| 日期範圍列升級 | `#range-bar` 搬到 `nav` 之下、所有 panel 之上;加「自訂」(兩個 date input)與 `‹ ›` 逐日、`« »` 逐週翻;翻頁保持目前範圍長度;`logic.js` 加 `shiftRange(from, to, days)` 純函式 | agy |
+| manifest | 加 `options_page: "ui/report/report.html"`、permission `unlimitedStorage` | Claude |
+| 紀錄補任務名 | report 載入時 `getTasks()` 建 `tasksById`,紀錄併入 `taskName`(已刪任務顯示 `taskId`) | Claude |
+| 移除假修 | 刪 `settings-io.js` 的 exportedAt 日期改寫;`e2_settings` 改為斷言 `data` 內沒有 `rec:` 鍵 | Claude |
 
-| 階段 | 目標 | 契約 | 驗收 |
-|---|---|---|---|
-| G1 | 格線數學(純函式)`src/ui/report/layout.js` | `clampCard(card)` 夾到 1≤w≤12、1≤h≤6、x+w≤12、y≥0;`collides(a,b)`;`compact(cards)` 依 y 再 x 排序後逐張往上推到不重疊;`placeCard(cards, card)` 放入並擠開被壓到的(被壓者往下移,遞迴處理連鎖);`findFreeSlot(cards, w, h)` 找最上最左的空位;`autoArrange(cards, widthByType)` 依型別給寬度後由上到下填滿 | 30+ 測試:邊界夾取、連鎖擠壓、compact 冪等(跑兩次結果相同)、autoArrange 不重疊且不超出 12 欄、空清單不丟錯 |
-| G2 | 版面儲存 `src/shared/layout-store.js` | `getLayout()`/`saveLayout(l)`;`addDashboard(name)`/`renameDashboard(id,name)`/`deleteDashboard(id)`/`duplicateDashboard(id)`/`reorderDashboards(ids)`;`addCard(dashId,card)`(自動配 id 與空位)/`updateCard(dashId,cardId,patch)`/`removeCard(dashId,cardId)`;`pruneCardsForDeletedTasks()` 刪除已不存在任務的卡片(多來源卡片只移除該來源,來源清空才刪卡);唯一寫入口仍是 `shared/storage.js` | 25+ 測試:含「刪任務後卡片一併消失」「多來源卡片只掉一個來源」「複製儀表板的卡片 id 全新」「刪掉最後一個儀表板會自動留一個空的」 |
-| G3 | 拖曳、縮放、編輯模式、復原重做 `src/ui/report/dashboard.js` | Pointer Events;編輯模式開關(`#edit-layout`);拖曳中顯示佔位陰影與吸附格線;右下角把手縮放;`undo()`/`redo()` 上限 50、離開編輯模式清空;視窗寬 < 900px 時單欄疊放(**不改存檔版面**) | 20+ 測試(jsdom 合成 pointer 事件):拖到某格後 card.x/y 正確、縮放後 w/h 正確且被 clamp、瀏覽模式下拖曳無效、undo 回到前一版面、redo 再回來、窄視窗時 DOM 有 `single-column` 類別但 storage 內 x/y 不變 |
+驗收:`npm test` ≥ 305;`grep -c "^\s*--[a-z]" src/ui/*/*.html` 為 0(變數只在 theme.css);`grep -c "chart-[1-8]" src/ui/theme.css` ≥ 16;`grep -c "2026-09-05" src/shared/settings-io.js` 為 0;煙霧測試三頁開啟正常。
+測試(Claude 寫 12+):shiftRange 逐日/逐週/月底跨月;自訂範圍 from>to 時交換;theme 三種值對應 data-theme;紀錄 taskName 併入與已刪任務退回 id。
 
-### H 卡片型別
+### F3 任務頁
 
-| 階段 | 目標 | 契約 | 驗收 |
-|---|---|---|---|
-| H1 | 資料序列(純函式)`src/ui/report/series.js` | `buildSeries(records, source, options)` → `[{t, v}]`;`aggregation` 支援 `raw`/`dailyLast`/`dailyMax`/`dailyMin`/`dailyAvg`/`dailySum`;期間 1/7/30/90 天切片;**缺值產生 `{t, v: null}` 不是略過**(圖表才畫得出斷線);多來源回多條序列;`latest(records, taskId)` 回最新一筆與前一筆供 number 卡片算差異 | 25+ 測試:每種聚合各一組、缺值保留為 null、跨日邊界、空資料回空陣列、非數值不計入聚合 |
-| H2 | SVG 圖表 `src/ui/report/charts.js` | `lineChart(series, opts)`/`barChart`/`gauge`/`sparkline` → 回傳 SVG 元素;多序列各一條路徑;`v: null` 處**斷開路徑**;Y 軸自動範圍或指定;顏色取自 CSS 變數 `--chart-1`~`--chart-8`;每點有 `<title>` 供 hover 顯示值與時間 | 20+ 測試:斷線處 path 的 `M` 指令數等於區段數、單點資料不炸、全 null 顯示「沒有資料」、Y 軸範圍指定時生效、顏色用的是變數不是色碼 |
-| H3 | 卡片渲染 `src/ui/report/cards.js` | `renderCard(card, ctx)` → 元素。七型別:`number`(值+差異箭頭+閾值色)、`line`、`bar`、`table`(最近 N 筆或樞紐表)、`gauge`、`text`、`status`。失敗值一律顯示 `—`;卡片標題可自訂,沒填就用來源任務名 | 25+ 測試:每型別各 2~4 條,含「抓不到不顯示 0」「差異為負顯示下箭頭」「閾值超過時上色」「未知型別回錯誤卡片不丟例外」 |
+- **目標**:SPEC §8.4 全部 + 錯過清單橫幅 + 失敗可見性。
+- **檔案**:`src/ui/report/tasks.js`(新)、`report.html`(panel-tasks 內容)、`src/background/missed.js`(加 `catchUpOne`)、`src/background/main.js`(訊息)、`src/shared/messages.js`、`src/ui/picker/picker.js`(`?taskId=` 載入)、`src/content/main.js`(REPICK,暫定)。
+- **契約**:
+  - `renderTasks(tasks, health, missed)` 列出:名稱、網址(截斷)、模式、排程摘要、啟用開關、下次執行、最後狀態、連續失敗數(`notFoundStreak`)、最後錯誤(hover)。
+  - 拖曳排序寫回 `order`(Pointer Events,與 G3 同一套接線原則:只讀 clientX/Y,`setPointerCapture` 存在才呼叫)。
+  - 動作:立即抓取(`MSG.RUN_TASK`)、編輯(開 `picker.html?taskId=`)、複製(新 id、名稱加「(副本)」、`enabled:false`、不進儀表板)、刪除(對話框顯示「將一併刪除 N 筆紀錄」+「先匯出再刪除」按 CSV 匯出後才刪,取消時 storage 不變)、重新選取。
+  - 搜尋框(名稱/網址包含)與「只看失敗」勾選,純函式 `filterTasks(tasks, {q, failedOnly})`。
+  - 錯過清單橫幅在清單上方:逐筆勾選 → 「補抓勾選」/「略過勾選」;新增訊息 `MSG.CATCH_UP_ONE {taskId, slot}`、`MSG.SKIP_ONE`;background `catchUpOne` 走既有帳本冪等路徑。
+  - Picker 以 `?taskId=` 開啟時從 storage 載任務並 `render({task})`,沒有 tabId 時隱藏「立即測試」。
+  - 重新選取(**暫定**):新增 `MSG.REPICK {taskId}`,content 進入高亮選取模式,點選後以既有右鍵流程開 Picker 並帶入原任務;若 content 現有結構不易接,退化為「開目標頁 + 提示右鍵重選」並在回報說明。
+- **不要做**:不改 Picker 表單欄位;不改排程邏輯。
+- **驗收**:`npm test` ≥ 330;`grep -c "CATCH_UP_ONE\|SKIP_ONE\|REPICK" src/shared/messages.js` = 3;煙霧測試:任務頁列出 2 個任務、刪除取消後 storage 不變。
+- 測試(Claude 寫 25+):filterTasks 四組;複製任務屬性;刪除確認取消不動、確認後 tasks 與 rec 皆清;catchUpOne 同 slot 重呼叫不重複寫;missed 橫幅勾選後只送勾選那幾筆;`?taskId=` 載入帶入表單;排序後 order 連續。
 
-### I 設定體驗
+### F4 設定頁
 
-| 階段 | 目標 | 契約 | 驗收 |
-|---|---|---|---|
-| I1 | 卡片設定抽屜 `src/ui/report/drawer.js` | 點卡片齒輪滑出;欄位:型別、來源任務(多選)、聚合、期間、標題、單位、小數位、閾值與顏色、Y 軸範圍;**每次變更立即套用並重畫該卡片**;「還原」回到開啟抽屜時的狀態;關閉即存檔 | 20+ 測試:改型別後卡片重畫、改來源後序列變、還原真的還原、關閉後 storage 內容正確、抽屜開著時不影響其他卡片 |
-| I2 | 一鍵排版、範本、多儀表板頁籤 | `autoArrange` 按鈕;三種範本(總覽 / 單一指標深入 / 多任務比較)套用到目前儀表板;頁籤新增、改名、排序、複製、刪除(刪除要確認) | 15+ 測試:套範本後卡片數與型別正確且不重疊、自動排列後無重疊、頁籤操作反映到 storage |
+- **目標**:SPEC §8.5(站台登入除外)+ 排程健康 + 儲存用量 + 隱私說明。
+- **檔案**:`src/ui/report/settings.js`(新)、`report.html`、`src/shared/storage.js`(加 `importRecords`、`getStorageStats`)。
+- **契約**:
+  - 匯出區:範圍(單日/本月/全部/自訂,沿用頂部範圍列的值為預設)+ 格式 JSON/CSV/HTML(HTML 按鈕本段先停用並標「K1 後啟用」);按下才呼叫既有 `buildExport`+`download`。
+  - 設定匯出/匯入:呼叫既有 `exportSettings`/`importSettings`;含密碼勾選時要求密語;匯入結果顯示新增/覆蓋數。
+  - 歷史匯入:多選日檔 JSON → `importRecords(dayFiles)` 以 `taskId+capturedAt` 去重,回 `{added, skipped}`;接受 §5 日檔 schema 與 `{days:[...]}` 打包格式兩種。
+  - 偏好:保留天數、通知開關、額外等待秒數、深色模式;每個變更立即 `saveSettings`。
+  - 排程健康:每任務下次觸發實值(alarms `scheduledTime`,經 `MSG.GET_NEXT_RUNS` 回)、看門狗上次時間、最近 20 筆 `diag.getAll()`、「立即自檢」按鈕(`MSG.SELF_CHECK`)。
+  - 儲存用量:`getStorageStats()` 回 `{bytes, recordCount, oldestDate, lastSettingsExportAt, lastRecordsExportAt}`;匯出成功時寫入對應時間戳到 settings。
+  - 隱私段落固定文字:不連任何伺服器、資料只在本機、每個權限的用途一句。
+- **驗收**:`npm test` ≥ 355;`grep -c "GET_NEXT_RUNS\|SELF_CHECK" src/shared/messages.js` = 2;煙霧測試:每個按鈕觸發對應 mock 一次。
+- 測試(Claude 寫 25+):importRecords 去重/兩種格式/壞 JSON 回錯不寫;getStorageStats 空庫;偏好變更寫入;匯出後時間戳更新;HTML 按鈕 disabled。
 
-### J 接線與歷史進階
+### G1 格線數學(純函式)
 
-| 階段 | 目標 | 契約 | 驗收 |
-|---|---|---|---|
-| J1 | Picker「加入儀表板」 | 建立任務最後一步:選儀表板 + 卡片型別(number 模式預設 `number` + `line`,text 模式預設 `table`),存檔後卡片排到版面末端;可選「不加入」 | 12+ 測試:存檔後 layout 內有對應卡片、選不加入時沒有、編輯既有任務不重複加入 |
-| J2 | 歷史查詢進階(SPEC §8.3 剩餘) | 樞紐表模式(列=時間、欄=任務,欄序沿用任務頁順序)、與另一天比較、值範圍與關鍵字篩選 UI、超過 90 天時分頁(每頁 500 筆,摘要仍算全範圍) | 18+ 測試 |
+- **檔案**:`src/ui/report/layout.js`(新,無 DOM、無 storage)。
+- **契約**:`COLS=12`、`MAX_H=6`;`clampCard(card)`;`collides(a,b)`;`compact(cards)`(依 y 再 x 排序後逐張往上推,回新陣列不改原物件);`placeCard(cards, card)`(放入並把被壓到的往下推,連鎖處理,回新陣列);`findFreeSlot(cards, w, h)` 最上最左;`autoArrange(cards, widthByType)`(預設 number 3、gauge 3、status 4、line 6、bar 6、text 6、table 12)由上到下填滿,不重疊、不超欄;`resizeCard(cards, id, w, h)` clamp 後 placeCard。
+- **驗收**:`npm test` ≥ 390;`grep -c "document\|chrome\." src/ui/report/layout.js` = 0。
+- 測試(Claude 寫 35+):邊界夾取六組;連鎖擠壓三層;compact 冪等;autoArrange 不重疊且每張 x+w ≤ 12;空清單;不改輸入(deepEqual 前後)。
 
-### K 匯出
+### G2 版面儲存
 
-| 階段 | 目標 | 契約 | 驗收 |
-|---|---|---|---|
-| K1 | 獨立 HTML 報表 | 單一 `.html`,內嵌所選範圍的資料與目前儀表板版面,離線可開、可寄給別人;不含任何外部資源與 `chrome.*` 呼叫 | 10+ 測試:產出字串可被 jsdom 載入、含資料、不含 `chrome.`、不含 http 連結;端到端在瀏覽器開起來有內容 |
+- **檔案**:`src/shared/layout-store.js`(新)、`src/shared/storage.js`(`deleteTask` 內呼叫 prune;`getLayout`/`saveLayout` 為唯一讀寫)、`src/shared/settings-io.js`(匯入時走 `saveLayout` 以套用版本補齊)。
+- **契約**:schema 見作業總覽;`getLayout()` 讀取時補 `version` 與缺欄位、未知更高版本照讀並回傳 `{layout, newerVersion:true}`;沒有任何儀表板時自動建一個「預設」;`addDashboard/renameDashboard/deleteDashboard(刪最後一個則重建空的)/duplicateDashboard(卡片 id 全新)/reorderDashboards`;`addCard(dashId, card)` 自動配 id 與 `findFreeSlot`;`updateCard`/`removeCard`;`pruneCardsForTask(taskId)` 多來源只移除該來源、來源清空才刪卡、text 卡片不受影響;`setLastDashboard(id)`。
+- **驗收**:`npm test` ≥ 420;`grep -c "storage.local" src/shared/layout-store.js` = 0(只經 storage.js);`grep -c "pruneCardsForTask" src/shared/storage.js` ≥ 1。
+- 測試(Claude 寫 30+):版本補齊、更高版本旗標、deleteTask 連動、多來源只掉一個、複製 id 不重複、刪最後一個自動留一個、settings 匯入舊版 layout 補欄位。
 
-執行順序:G1 → G2 → H1 → H2 → H3 → G3 → I1 → I2 → J1 → J2 → K1。
-(G3 排在 H 之後,因為拖曳要有真的卡片才驗得出來。)
+### H1 資料序列(純函式)
 
-委派:全部 agy `gemini-3.8-flash-high`;測試與驗收由 Claude 負責,每段做突變測試。
-每段完成後跑 `./run_smoke.sh`,G3 與 I2 之後另外在真實瀏覽器手動確認一次拖曳手感。
+- **檔案**:`src/ui/report/series.js`(新)。
+- **契約**:`buildSeries(records, source, {from, to, aggregation, normalize})` → 每個來源一條 `{taskId, points:[{t, v}]}`;`raw` 用 slot 為 t;每日聚合的 t 為 `YYYY-MM-DD`;**失敗紀錄產生 `{t, v:null}`**,每日聚合當天全失敗也是 null;非數值 value 不計入;`normalize:'percentFromFirst'` 以第一個非 null 值為 100;`resolvePeriod(period, rangeFrom, rangeTo, today)` 回實際 from/to(`'range'` 用範圍列,數字用近 N 天含今天);`latest(records, taskId, today)` → `{current, prev, prevDay}`(prevDay = 前一天最後成功筆,沒有則 null);`pivot(records, taskIds, taskOrder)` → `{columns, rows:[{t, values}]}`;`summarizeRange` 沿用 logic.js 不重寫。
+- **驗收**:`npm test` ≥ 450;`grep -c "document\|chrome\." src/ui/report/series.js` = 0。
+- 測試(Claude 寫 30+):六種聚合各一組(含當天全失敗)、null 保留、跨日邊界(Asia/Taipei)、normalize 首值 null 時取下一個、resolvePeriod 四種、latest 三種基準、pivot 欄序照 taskOrder、空輸入。
+
+### H2 SVG 圖表
+
+- **檔案**:`src/ui/report/charts.js`(新)。
+- **契約**:`lineChart(seriesList, {width, height, yMin, yMax, unit})`、`barChart`、`gauge({value, min, max, warn})`、`sparkline(points, {width, height})` 皆回 `<svg>` 元素;`v:null` 處路徑斷開(下一個非 null 重新 `M`);多序列顏色 `var(--chart-n)` 循環;每個資料點有 `<title>` 含時間與值;`data-t` 屬性供點擊;全 null 或空序列回帶「沒有資料」文字的 svg;Y 軸自動範圍留 5% 邊距,指定時生效;gauge 超過 warn 時加 class `over-warn`;不畫格線以外的裝飾。
+- **驗收**:`npm test` ≥ 475;`grep -cE "#[0-9a-fA-F]{3,6}|rgb\(" src/ui/report/charts.js` = 0。
+- 測試(Claude 寫 25+):`M` 數等於區段數、單點、全 null、yMin/yMax 生效、顏色字串含 `--chart-`、每點有 title 與 data-t、gauge warn class、sparkline 無軸。
+
+### H3 卡片渲染
+
+- **檔案**:`src/ui/report/cards.js`(新)。
+- **契約**:`renderCard(card, ctx)` → 元素;`ctx = {records, tasksById, health, nextRuns, missed, range:{from,to}, today, onPointClick}`;七型別;標題沒填用來源任務名(多來源用「、」串);值失敗一律 `—` 並在 `title` 屬性放最後錯誤;number:小數位/單位/差異箭頭與百分比(基準 prev/prevDay)/閾值上色(class `threshold-hit` + inline `--card-accent` 變數)/可選 sparkline;line/bar 點擊呼叫 `onPointClick({taskId, date})`;table recent 模式最近 N 筆、pivot 模式用 series.pivot,附「複製 TSV」按鈕(`navigator.clipboard` 不存在時隱藏);gauge;text 只解析 `**粗體**` 與行首 `- `,以 DOM 節點組裝;status 每任務最後狀態、下次執行、錯過筆數;未知型別回錯誤卡片不丟例外;period 固定時右上角小標「近 N 天」。
+- **驗收**:`npm test` ≥ 505;`grep -c "innerHTML" src/ui/report/cards.js` = 0。
+- 測試(Claude 寫 30+):每型別 3~5 條,含「失敗不顯示 0」「負差異下箭頭」「閾值上色」「text 的 `<b>` 注入被當純文字」「未知型別」「多來源標題」「period 小標」。
+
+### G3 儀表板接線:拖曳、縮放、編輯模式、復原重做
+
+- **檔案**:`src/ui/report/dashboard.js`(新)、`report.html`(panel-dashboard 結構與 CSS)、`report.js`(view=dashboard 時呼叫)。
+- **契約**:
+  - `renderDashboard(dash, ctx)`:一次讀取(所有卡片需要的最大範圍 + prevDay 多一天)後各卡片切片;每張卡片各自重畫。
+  - 編輯模式按鈕 `#edit-layout`;瀏覽模式下卡片無把手、拖曳無效。
+  - 拖曳與縮放用 Pointer Events,只讀 `clientX/clientY/pointerId`,`setPointerCapture` 存在才呼叫;像素→格線換算純函式 `pxToGrid`;拖曳中顯示佔位陰影(`.ghost`)與吸附;放開時 `placeCard`+`compact` 後 `saveLayout`。
+  - `undo()`/`redo()` 只記版面快照,上限 50,離開編輯模式清空;⌘Z/⌘⇧Z(Ctrl 同)僅在編輯模式且焦點不在輸入元件時攔截。
+  - 視窗 < 900px:容器加 `single-column`,以 DOM 順序(y 再 x)疊放,**storage 不變**。
+  - 儀表板頂部若 `newerVersion` 顯示提示列。
+- **驗收**:`npm test` ≥ 530;真實瀏覽器手動確認拖曳手感並截圖;煙霧測試:儀表板有 1 張卡片且渲染出 svg。
+- 測試(Claude 寫 25+,MouseEvent 合成):拖到格後 x/y 正確、縮放 clamp、瀏覽模式無效、undo/redo、上限 50、窄視窗 class 且 storage 不變、keydown 在 input 內不攔截、一次讀取(mock 計數 `storage.local.get` 呼叫次數 ≤ 2)。
+
+### I1 卡片設定抽屜
+
+- **檔案**:`src/ui/report/drawer.js`(新)、`report.html`。
+- **契約**:齒輪開抽屜;欄位依型別顯示(對照作業總覽 options);來源清單依型別過濾(text 模式任務在 number/line/bar/gauge 下 disabled 並顯示原因);每次變更即 `updateCard` 並只重畫該卡片;「還原」回開啟時快照;關閉即存;抽屜開著時其他卡片不重畫;刪除卡片按鈕(confirm)。
+- **驗收**:`npm test` ≥ 555。
+- 測試(Claude 寫 25+):改型別重畫、改來源序列變、還原、關閉後 storage、來源過濾 disabled、其他卡片 DOM 節點同一參照、刪卡片。
+
+### I2 一鍵排版、範本、多儀表板、空狀態
+
+- **檔案**:`src/ui/report/templates.js`(新,純函式)、`dashboard.js`、`report.html`、`report.js`(預設 view)。
+- **契約**:自動排列按鈕(`autoArrange`);三範本 `overview`/`deepDive`/`compare` 接受任務清單回卡片陣列(套用 = 取代目前儀表板卡片,confirm);儀表板頁籤新增/改名/排序(拖曳)/複製/刪除(confirm);hash `dash=<id>`,無 hash 用 `lastDashboardId`;預設 view 改 `dashboard`;空狀態:文字明講「只在 Chrome 開著時抓取;錯過的排程列在任務頁」+「套用範本」「去任務頁」按鈕。
+- **驗收**:`npm test` ≥ 575;煙霧測試:無 hash 開啟落在儀表板。
+- 測試(Claude 寫 20+):三範本卡片數/型別/不重疊、text 任務在 deepDive 只進 table、頁籤操作反映 storage、lastDashboardId、空狀態文字。
+
+### J1 Picker「加入儀表板」
+
+- **檔案**:`src/ui/picker/picker.js`、`picker.html`。
+- **契約**:新建任務(`currentCtx.task` 為空)時表單底部區塊:儀表板下拉(含「不加入」)+ 型別勾選(number 模式預設 number+line,text 模式預設 table);`saveTask` 後依勾選 `addCard`,再 REBUILD_ALARMS、close;編輯既有任務不顯示此區塊;儀表板清單來自 `getLayout()`。
+- **驗收**:`npm test` ≥ 590。
+- 測試(Claude 寫 12+):預設勾選依模式、存檔後 layout 有卡片且 source 正確、不加入時無、編輯不重複、儀表板不存在時退回預設儀表板。
+
+### J2 歷史查詢進階
+
+- **檔案**:`report.js`、`logic.js`、`report.html`、`storage.js`(`deleteRecord`)。
+- **契約**:篩選 UI(任務多選、狀態、只看告警、值範圍 ≥/≤、關鍵字)全部進 hash;月曆切月/跳年月/拖曳選範圍;欄序拖曳並存 `settings.history`;樞紐表模式(欄序依任務頁 order)與「與另一天比較」(第二日期,並排值與差異);摘要點任務名 → 儀表板臨時折線(不存版面,直接在歷史頁下方畫,用 H2);單筆展開可刪除(confirm,`deleteRecord(date, taskId, capturedAt)`);「複製 TSV」;範圍 > 90 天分頁 500 筆,摘要仍算全範圍;`filterRecords` 擴充值範圍與關鍵字。
+- **驗收**:`npm test` ≥ 620;煙霧測試:篩狀態=失敗後列數為 1。
+- 測試(Claude 寫 30+):新篩選各組、hash 往返、樞紐表欄序、比較差異計算、分頁邊界(1500 筆 3 頁,摘要全範圍)、deleteRecord 只刪那一筆、欄序存取。
+
+### K1 獨立 HTML 報表
+
+- **檔案**:`src/shared/export.js`(加 `buildHtmlReport`)、`settings.js`(啟用按鈕)。
+- **契約**:輸入範圍 + 目前儀表板;輸出單一 HTML 字串:內嵌 `theme.css` 亮色變數、卡片以 H3/H2 渲染成靜態 DOM(把 svg 序列化)、下方附紀錄表;無 `<script>`、無外部資源、無 `chrome.`;`@media print` 卡片不跨頁;檔名 `AutoFetcher/report-<from>_<to>.html`。
+- **驗收**:`npm test` ≥ 632;`grep -c "<script" <產出>` = 0;在瀏覽器直接開產出檔有卡片與表格。
+- 測試(Claude 寫 12+):jsdom 可載入、含卡片標題與 svg、不含 `chrome.`/`http`/`<script`、空儀表板仍有紀錄表、print 樣式存在。
 
 ## 風險與對策
 
