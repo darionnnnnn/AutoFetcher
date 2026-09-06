@@ -35,6 +35,11 @@ test('table:index 超出範圍時夾在合法區間', () => {
   assert.deepEqual(patch.source.map(s => s.taskId), ['t1', 't2'])
 })
 
+test('table:負數 index 夾成第一欄(splice 對負數是從尾端算,會插錯位置)', () => {
+  const patch = applyDrop(card('table', src('t1', 't2', 't3')), 't4', { index: -1 })
+  assert.deepEqual(patch.source.map(s => s.taskId), ['t4', 't1', 't2', 't3'])
+})
+
 // ---- line / bar:追加,有上限 ----
 
 test('line:追加到最後並去重', () => {
@@ -57,6 +62,11 @@ test('line:超過調色盤上限時拒絕,並說明原因', () => {
 test('bar 與 line 規則相同', () => {
   const patch = applyDrop(card('bar', src('t1')), 't2', {})
   assert.deepEqual(patch.source.map(s => s.taskId), ['t1', 't2'])
+})
+
+
+test('圖表上限固定為 8,與 theme.css 的 --chart-1~8 對齊', () => {
+  assert.equal(MAX_CHART_SERIES, 8, '改了上限就要同步 theme.css 的調色盤')
 })
 
 // ---- number / gauge:取代唯一來源 ----
