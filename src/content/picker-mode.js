@@ -9,6 +9,8 @@ let active = false, currentPurpose = null, currentTaskId = undefined, currentTar
 let overlayEl = null, highlightEl = null, panelEl = null, menuEl = null
 let tableAxis = null, cellIndex = null, colIndex = null, rowIndex = null, currentDataRows = [], currentRowEl = null
 let selectedList = [], maxPicks = 20, limitReached = false, headerChangedNotice = false
+// 已選的值屬於哪一張表格：滑鼠漂出表格不清空，換到另一張表格才清
+let pickedTableEl = null
 let originalUserSelect = '', dragStart = null, isDragging = false, suppressClick = false, menuTargetContext = null
 
 // detectKind 會掃整棵子樹，而滑鼠每移動一格都要問一次，因此記住最後一次的結果
@@ -257,12 +259,13 @@ function updatePanel(panel, el) {
 function setTarget(el) {
   // 換到另一張表格（或離開表格）時，先前選的列欄索引就沒有意義了；
   // 不清掉會把 A 表的索引配上 B 表的定位一起送出去
-  const wasTable = currentTargetEl && isTableMode(currentTargetEl)
-  const nowTable = el && isTableMode(el)
-  if (selectedList.length > 0 && (!nowTable || (wasTable && el !== currentTargetEl))) {
+  // 滑鼠落在「另一張表格」裡（不論停在表格本身或它的某一格）才算換表
+  const hostTable = el && typeof el.closest === 'function' ? el.closest('table, [role="grid"], [role="table"]') : null
+  if (selectedList.length > 0 && pickedTableEl && hostTable && hostTable !== pickedTableEl && !pickedTableEl.contains(hostTable)) {
     clearPickedMarks(document)
     selectedList = []
     limitReached = false
+    pickedTableEl = null
   }
   clearMarkedCells(document)
   currentTargetEl = el; currentDataRows = []; currentRowEl = null; colIndex = null; rowIndex = null; cellIndex = null
@@ -359,6 +362,10 @@ function computeNameHint(el) {
 
 // 送出確認訊息並離開
 function confirmPick() {
+  // 已選了值就以那張表格為準：滑鼠可能正停在表格外的一段文字上
+  if (selectedList.length > 0 && pickedTableEl && currentTargetEl !== pickedTableEl) {
+    setTarget(pickedTableEl)
+  }
   if (!currentTargetEl) return
   const preview = (currentTargetEl.textContent || '').trim()
   const previewValue = parseNumber(preview)
@@ -605,6 +612,7 @@ function addPick(pick) {
     return false
   }
   selectedList.push(pick)
+  if (!pickedTableEl && currentTargetEl && isTableMode(currentTargetEl)) pickedTableEl = currentTargetEl
   return true
 }
 
@@ -790,6 +798,7 @@ function onKeyDown(event) {
       limitReached = false
       cellIndex = tableAxis === 'row' ? rowIndex : colIndex
       selectedList = []
+      pickedTableEl = null
       clearPickedMarks(document)
       markCells(currentDataRows, currentRowEl, tableAxis, colIndex)
       updatePanel(panelEl, currentTargetEl)

@@ -242,8 +242,14 @@ export async function handleMessage(msg, sender) {
       // 多值任務要逐值回報，只回第一筆使用者看不出另外幾個值怎麼了
       let values
       if (Array.isArray(task.fields) && task.fields.length > 0 && typeof record.slot === 'string') {
-        const sameSlot = (await getRecordsByDate(record.slot.slice(0, 10)))
-          .filter(r => r.slot === record.slot && parentIdOf(r.taskId) === task.id)
+        // 同一分鐘按兩次會有兩組紀錄，每個值只留最新的那一筆
+        const latestById = new Map()
+        for (const r of await getRecordsByDate(record.slot.slice(0, 10))) {
+          if (r.slot !== record.slot || parentIdOf(r.taskId) !== task.id) continue
+          const prev = latestById.get(r.taskId)
+          if (!prev || String(r.capturedAt) >= String(prev.capturedAt)) latestById.set(r.taskId, r)
+        }
+        const sameSlot = [...latestById.values()]
         if (sameSlot.length > 0) {
           const idx = buildSeriesIndex([task])
           values = sameSlot.map(r => ({

@@ -194,10 +194,11 @@ test('既有任務用到已移除的策略時，重新儲存不得把設定弄�
     spec: { strategy: 'attr', attr: 'data-value' },
     schedule: { type: 'daily', times: ['09:00'], weekdays: [1] }
   }
-  const values = { name: '既有', url: old.url, mode: 'number', strategy: 'auto', scheduleType: 'daily', times: ['09:00'], weekdays: [1] }
+  // 下拉會把舊策略當一個選項顯示，沒動它時表單回的就是原值
+  const values = { name: '既有', url: old.url, mode: 'number', strategy: 'attr', scheduleType: 'daily', times: ['09:00'], weekdays: [1] }
   const task = pk.buildTask(values, {}, old)
-  assert.equal(task.spec.strategy, 'attr', '表單沒有這個選項就保留原值')
-  assert.equal(task.spec.attr, 'data-value')
+  assert.equal(task.spec.strategy, 'attr')
+  assert.equal(task.spec.attr, 'data-value', '沒有對應控制項的參數要原樣保留')
 })
 
 // ---- 進階設定摺疊 ----

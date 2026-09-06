@@ -268,13 +268,8 @@ export function buildTask(values, locator, existing) {
   const id = existing?.id || crypto.randomUUID()
   const spec = buildSpec(values)
   if (existing?.spec) {
-    // 表單只提供 auto / regex；舊任務用的是被移除的策略時才沿用原值，
-    // 使用者主動在表單上選了別的就該照做
-    const formHasStrategy = ['auto', 'regex'].includes(values.strategy)
-    const legacyStrategy = existing.spec.strategy && !['auto', 'regex'].includes(existing.spec.strategy)
-    if (legacyStrategy && (!formHasStrategy || values.strategy === existing.spec.strategy || values.strategy === 'auto')) {
-      spec.strategy = existing.spec.strategy
-    }
+    // 下拉會把舊策略當一個選項顯示，所以表單選什麼就是使用者要什麼；
+    // 沒有對應控制項的參數（attr / childSel / labelText）一律保留
     for (const k of ['attr', 'childSel', 'labelText']) {
       if (existing.spec[k] !== undefined) {
         spec[k] = existing.spec[k]
@@ -388,7 +383,18 @@ export function render(ctx) {
       urlEl.textContent = t.url
     }
     if (t.mode !== undefined) document.getElementById('mode').value = t.mode
-    if (t.spec?.strategy) document.getElementById('strategy').value = t.spec.strategy
+    if (t.spec?.strategy) {
+      const sel = document.getElementById('strategy')
+      const legacy = !['auto', 'regex'].includes(t.spec.strategy)
+      // 下拉已不提供的舊策略：補一個選項讓它顯示得出來，否則會假裝成「自動」
+      if (legacy && sel && ![...sel.options].some(o => o.value === t.spec.strategy)) {
+        const opt = document.createElement('option')
+        opt.value = t.spec.strategy
+        opt.textContent = `${t.spec.strategy}（舊策略，保留）`
+        sel.appendChild(opt)
+      }
+      if (sel) sel.value = t.spec.strategy
+    }
     // 這個任務用的是已經從下拉移除的策略：不說明的話使用者會以為設定不見了
     const legacyNote = document.getElementById('legacy-strategy-note')
     if (legacyNote) {
