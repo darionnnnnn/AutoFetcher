@@ -582,15 +582,16 @@ function renderTextCard(card, ctx, { bodyEl }) {
  * 渲染狀態清單卡片
  */
 function renderStatusCard(card, ctx, { bodyEl }) {
+  const parents = ctx?.parentTasksById || ctx?.tasksById || {};
   const taskIds = Array.isArray(card.options?.taskIds)
-    ? card.options.taskIds
-    : Object.keys(ctx?.tasksById || {});
+    ? [...new Set(card.options.taskIds.map(id => parentIdOf(id)))]
+    : Object.keys(ctx?.parentTasksById || ctx?.tasksById || {});
 
   const list = document.createElement('div');
   list.className = 'status-list';
 
   for (const id of taskIds) {
-    const task = ctx?.tasksById?.[id] || { id, name: id };
+    const task = parents[id] || { id, name: id };
     const taskName = task.name || id;
     const healthStatus = ctx?.health?.[id]?.status || '—';
     const nextRun = ctx?.nextRuns?.[id] || '—';

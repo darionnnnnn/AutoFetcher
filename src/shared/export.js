@@ -5,6 +5,7 @@ import { getLayout } from './layout-store.js'
 import { renderCard } from '../ui/report/cards.js'
 import { isSuccess } from './record-status.js'
 import { effectiveTimeOf } from '../ui/report/series.js'
+import { buildSeriesIndex, nameOf } from './series-index.js'
 
 // 跳脫 HTML 特殊字元
 function escapeHtml(str) {
@@ -48,14 +49,14 @@ async function collectDays(from, to) {
 }
 
 // 將紀錄資料格式化為 JSON 字串
-function formatJson(days, taskMap, isSingleDay) {
+function formatJson(days, seriesIndex, isSingleDay) {
   const dayObjects = days.map(({ date, records }) => {
     const dayTasks = {}
     for (const record of records) {
       const taskId = record.taskId
       if (!dayTasks[taskId]) {
         dayTasks[taskId] = {
-          name: taskMap.get(taskId) ?? taskId,
+          name: nameOf(seriesIndex, taskId),
           records: []
         }
       }
@@ -69,13 +70,13 @@ function formatJson(days, taskMap, isSingleDay) {
 }
 
 // 將紀錄資料格式化為 CSV 字串
-function formatCsv(days, taskMap) {
+function formatCsv(days, seriesIndex) {
   const lines = ['date,slot,capturedAt,taskId,taskName,value,raw,status']
 
   for (const { date, records } of days) {
     for (const record of records) {
       const taskId = record.taskId
-      const taskName = taskMap.get(taskId) ?? taskId
+      const taskName = nameOf(seriesIndex, taskId)
       const row = [
         escapeCsvCell(date),
         escapeCsvCell(record.slot),
@@ -134,8 +135,9 @@ export async function buildHtmlReport({ from, to, dashId }) {
   const themeCss = await loadThemeCss()
 
   const tasks = await getTasks()
-  const taskMap = new Map(tasks.map(t => [t.id, t.name]))
-  const tasksById = Object.fromEntries(tasks.map(t => [t.id, t]))
+  const seriesIndex = buildSeriesIndex(tasks)
+  const tasksById = seriesIndex.byId
+  const parentTasksById = seriesIndex.parents
   const records = await getRecordsInRange(from, to)
 
   let health = {}
@@ -148,6 +150,8 @@ export async function buildHtmlReport({ from, to, dashId }) {
   const ctx = {
     records,
     tasksById,
+    parentTasksById,
+    index: seriesIndex,
     health,
     nextRuns: {},
     missed,
@@ -184,7 +188,7 @@ export async function buildHtmlReport({ from, to, dashId }) {
 
     const rows = sortedRecords.map(r => {
       const time = effectiveTimeOf(r) || r.date || ''
-      const taskName = taskMap.get(r.taskId) ?? r.taskId ?? ''
+      const taskName = nameOf(seriesIndex, r.taskId)
       const val = r.value !== undefined && r.value !== null
         ? String(r.value)
         : (r.raw !== undefined && r.raw !== null ? String(r.raw) : '—')
@@ -420,7 +424,7 @@ export async function buildExport({ from, to, format, dashId }) {
   }
 
   const tasks = await getTasks()
-  const taskMap = new Map(tasks.map(t => [t.id, t.name]))
+  const seriesIndex = buildSeriesIndex(tasks)
   const days = await collectDays(from, to)
 
   const filename = from === to
@@ -428,8 +432,8 @@ export async function buildExport({ from, to, format, dashId }) {
     : `AutoFetcher/${from}_${to}.${format}`
 
   const content = format === 'json'
-    ? formatJson(days, taskMap, from === to)
-    : formatCsv(days, taskMap)
+    ? formatJson(days, seriesIndex, from === to)
+    : formatCsv(days, seriesIndex)
 
   return { filename, content }
 }

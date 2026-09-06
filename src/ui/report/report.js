@@ -17,6 +17,7 @@ import { renderSettings } from './settings.js'
 import { renderDashboard, isEditing } from './dashboard.js'
 import { isSuccess } from '../../shared/record-status.js'
 import { MSG } from '../../shared/messages.js'
+import { buildSeriesIndex, nameOf } from '../../shared/series-index.js'
 
 const DEFAULT_COLUMNS = [
   { key: 'slot', label: '時間', visible: true },
@@ -82,9 +83,8 @@ function createTableRow(cells, isHeader = false, options = {}) {
 
 // 紀錄本身只存 taskId；顯示用的任務名在載入時由任務清單併入（已刪任務退回顯示 taskId）
 export function joinTaskNames(records = [], tasks = []) {
-  const byId = new Map()
-  for (const t of tasks) if (t && t.id) byId.set(t.id, t.name)
-  return records.map(r => ({ ...r, taskName: r.taskName ?? byId.get(r.taskId) ?? r.taskId }))
+  const index = buildSeriesIndex(tasks)
+  return records.map(r => ({ ...r, taskName: r.taskName ?? nameOf(index, r.taskId) }))
 }
 
 export function applyTheme(theme) {
@@ -203,7 +203,11 @@ async function onFilterChange() {
   const valMaxInput = container.querySelector('#filter-value-max')
   const kwInput = container.querySelector('#filter-keyword')
 
-  state.taskIds = tasksContainer ? [...tasksContainer.querySelectorAll('input:checked')].map(cb => cb.value) : []
+  state.taskIds = tasksContainer
+    ? [...tasksContainer.querySelectorAll('input:checked')]
+        .filter(cb => !cb.dataset.parent)
+        .map(cb => cb.value)
+    : []
   state.statuses = statusesContainer ? [...statusesContainer.querySelectorAll('input:checked')].map(cb => cb.value) : []
   state.alertsOnly = alertsCb ? alertsCb.checked : false
   state.valueMin = (valMinInput && valMinInput.value !== '') ? Number(valMinInput.value) : null
@@ -254,15 +258,77 @@ export async function renderFilters() {
   // 1. 任務多選容器 #filter-tasks
   const tasksContainer = document.createElement('div')
   tasksContainer.id = 'filter-tasks'
+  const seriesIndex = buildSeriesIndex(tasks)
+
   for (const t of tasks) {
-    const label = document.createElement('label')
-    const cb = document.createElement('input')
-    cb.type = 'checkbox'
-    cb.value = t.id
-    cb.checked = Array.isArray(state.taskIds) && state.taskIds.includes(t.id)
-    label.appendChild(cb)
-    label.appendChild(document.createTextNode(` ${t.name || t.id}`))
-    tasksContainer.appendChild(label)
+    if (!t || !t.id) continue
+    const taskGroup = document.createElement('div')
+    taskGroup.className = 'filter-task-group'
+
+    const parentLabel = document.createElement('label')
+    const parentCb = document.createElement('input')
+    parentCb.type = 'checkbox'
+    parentCb.value = t.id
+
+    parentLabel.appendChild(parentCb)
+    parentLabel.appendChild(document.createTextNode(` ${t.name || t.id}`))
+    taskGroup.appendChild(parentLabel)
+
+    const isMulti = Array.isArray(t.fields) && t.fields.length > 0
+    if (isMulti) {
+      parentCb.dataset.parent = 'true'
+      const childrenContainer = document.createElement('div')
+      childrenContainer.className = 'filter-task-children'
+
+      const childCbs = []
+      const children = seriesIndex.childrenOf[t.id] || []
+
+      function updateParentState() {
+        const checkedCount = childCbs.filter(c => c.checked).length
+        if (checkedCount === childCbs.length) {
+          parentCb.checked = true
+          parentCb.indeterminate = false
+        } else if (checkedCount > 0) {
+          parentCb.checked = false
+          parentCb.indeterminate = true
+        } else {
+          parentCb.checked = false
+          parentCb.indeterminate = false
+        }
+      }
+
+      parentCb.addEventListener('change', () => {
+        parentCb.indeterminate = false
+        for (const c of childCbs) {
+          c.checked = parentCb.checked
+        }
+      })
+
+      for (const sid of children) {
+        const item = seriesIndex.byId[sid]
+        const childLabel = document.createElement('label')
+        const childCb = document.createElement('input')
+        childCb.type = 'checkbox'
+        childCb.value = sid
+        childCb.checked = Array.isArray(state.taskIds) && (state.taskIds.includes(sid) || state.taskIds.includes(t.id))
+        childCbs.push(childCb)
+
+        childLabel.appendChild(childCb)
+        childLabel.appendChild(document.createTextNode(` ${item?.shortName || item?.name || sid}`))
+        childrenContainer.appendChild(childLabel)
+
+        childCb.addEventListener('change', () => {
+          updateParentState()
+        })
+      }
+
+      updateParentState()
+      taskGroup.appendChild(childrenContainer)
+    } else {
+      parentCb.checked = Array.isArray(state.taskIds) && state.taskIds.includes(t.id)
+    }
+
+    tasksContainer.appendChild(taskGroup)
   }
 
   // 2. 狀態多選容器 #filter-statuses
@@ -913,12 +979,12 @@ export function renderPivot(records = [], tasks = []) {
   tbody.textContent = ''
 
   const sortedTasks = [...tasks].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-  const taskIds = sortedTasks.map(t => t.id)
-  const taskNamesById = new Map(sortedTasks.map(t => [t.id, t.name || t.id]))
+  const seriesIndex = buildSeriesIndex(sortedTasks)
+  const seriesIds = seriesIndex.seriesIds
 
-  const { columns, rows } = pivot(records, taskIds, { taskOrder: taskIds })
+  const { columns, rows } = pivot(records, seriesIds, { taskOrder: seriesIds })
 
-  const headerCells = ['時間', ...columns.map(id => taskNamesById.get(id) || id)]
+  const headerCells = ['時間', ...columns.map(id => nameOf(seriesIndex, id))]
   thead.appendChild(createTableRow(headerCells, true))
 
   if (!rows || rows.length === 0) {
@@ -947,24 +1013,25 @@ export async function renderCompare(compareDate) {
 
   let tasks = []
   try { tasks = await getTasks() } catch {}
-  const taskIds = tasks.map(t => t.id)
-  const taskNamesById = new Map(tasks.map(t => [t.id, t.name || t.id]))
+  const sortedTasks = [...tasks].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+  const seriesIndex = buildSeriesIndex(sortedTasks)
+  const seriesIds = seriesIndex.seriesIds
 
   const recordsA = await getRecordsInRange(state.from, state.to)
   const recordsB = await getRecordsByDate(compareDate)
 
-  const { rows } = compareDays(recordsA, recordsB, taskIds)
+  const { rows } = compareDays(recordsA, recordsB, seriesIds)
 
   const headers = ['時間']
-  for (const id of taskIds) {
-    const name = taskNamesById.get(id) || id
+  for (const id of seriesIds) {
+    const name = nameOf(seriesIndex, id)
     headers.push(`${name} (基準)`, `${name} (比較)`, '差異')
   }
   thead.appendChild(createTableRow(headers, true))
 
   for (const row of rows) {
     const cells = [row.time]
-    for (const id of taskIds) {
+    for (const id of seriesIds) {
       const v = row.values[id] || { a: null, b: null, delta: null }
       cells.push(formatValue(v.a), formatValue(v.b), formatValue(v.delta))
     }

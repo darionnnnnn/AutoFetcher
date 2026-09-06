@@ -12,6 +12,7 @@ import { applyTemplate } from './templates.js'
 import { MSG } from '../../shared/messages.js'
 import { createDragSource, registerDropTarget, resetDnd, isPointInside } from './dnd.js'
 import { applyDrop, cardTypeForTask } from './drop-rules.js'
+import { buildSeriesIndex } from '../../shared/series-index.js'
 
 // 編輯模式狀態與復原歷史
 let editing = false
@@ -544,10 +545,9 @@ async function buildDashboardContext(dash) {
 
   const records = (fetchFrom && fetchTo) ? await getRecordsInRange(fetchFrom, fetchTo) : []
   const tasks = await getTasks()
-  const tasksById = {}
-  for (const t of tasks) {
-    if (t && t.id) tasksById[t.id] = t
-  }
+  const index = buildSeriesIndex(tasks)
+  const tasksById = index.byId
+  const parentTasksById = index.parents
 
   let health = {}
   let missed = []
@@ -579,6 +579,8 @@ async function buildDashboardContext(dash) {
   return {
     records,
     tasksById,
+    parentTasksById,
+    index,
     health,
     missed,
     nextRuns,

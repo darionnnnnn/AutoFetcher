@@ -167,6 +167,20 @@ function createTaskRow(t) {
   nameEl.textContent = t.name || t.id
   row.appendChild(nameEl)
 
+  if (Array.isArray(t.fields) && t.fields.length > 0) {
+    const fieldsEl = document.createElement('span')
+    fieldsEl.className = 'task-fields'
+    const fieldNames = t.fields.map(f => (f && f.name) ? f.name : (f?.key || '')).filter(Boolean)
+    let text = ''
+    if (t.fields.length > 3) {
+      text = `${fieldNames.slice(0, 3).join('、')} 等 ${t.fields.length} 個值`
+    } else {
+      text = fieldNames.join('、')
+    }
+    fieldsEl.textContent = text
+    row.appendChild(fieldsEl)
+  }
+
   const urlEl = document.createElement('span')
   urlEl.className = 'task-url'
   urlEl.textContent = t.url || ''
