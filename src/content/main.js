@@ -200,10 +200,17 @@ if (!globalThis.__afContentLoaded) {
     }
 
     if (msg.type === MSG.ENTER_PICK) {
+      // 重選是在新分頁開的，沒有「上次右鍵的元素」；先用任務自己的 locator 找回目標
+      let target = lastTarget
+      if (msg.locator) {
+        const resolved = resolve(document, msg.locator)
+        if (!resolved.error && resolved.el) target = resolved.el
+      }
       enterPickMode({
         purpose: msg.purpose,
         taskId: msg.taskId,
-        initialTarget: lastTarget
+        initialTarget: target,
+        preselect: msg.preselect
       })
       sendResponse({ ok: true })
       return true

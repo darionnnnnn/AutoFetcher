@@ -1,6 +1,7 @@
 import { saveTask, getTask, getSettings, saveSettings } from '../../shared/storage.js'
 import { MSG } from '../../shared/messages.js'
 import { getLayout, addCard } from '../../shared/layout-store.js'
+import { seriesIdOf } from '../../shared/series-index.js'
 
 let currentCtx = null
 let currentBlock = null
@@ -77,6 +78,7 @@ function getFormData() {
     return { type, locator }
   })
 
+  const aggregateValue = document.getElementById('block-aggregate')?.value || 'sum'
   const fieldRows = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
   let fields = undefined
   if (fieldRows.length > 0) {
@@ -87,7 +89,9 @@ function getFormData() {
       const spec = row._spec || fieldSpecs.get(key) || {}
       const item = { key, name }
       if (spec.cell) item.cell = spec.cell
-      if (spec.block) item.block = spec.block
+      // 整欄／整列的值要聚合，聚合方式來自表單（全任務一份）；
+      // 少了這一行，抓取端會拿不到設定而預設成加總，下拉等於裝飾品
+      if (spec.block) item.block = { ...spec.block, aggregate: aggregateValue }
       return item
     })
   }
@@ -474,6 +478,8 @@ export function render(ctx) {
       return { key, name, spec }
     })
     renderFieldList(items)
+    // 值的數量會改變預設要建哪幾張卡，清單建好才算得準
+    applyDefaultCardTypes()
   } else if (ctx?.task && Array.isArray(ctx.task.fields) && ctx.task.fields.length > 0) {
     const items = ctx.task.fields.map(field => {
       const matchingSpec = ctx.task.spec?.fields?.find(f => f.key === field.key)
@@ -487,8 +493,12 @@ export function render(ctx) {
       }
     })
     renderFieldList(items)
+    // 值的數量會改變預設要建哪幾張卡，清單建好才算得準
+    applyDefaultCardTypes()
   } else {
     renderFieldList([])
+    // 值的數量會改變預設要建哪幾張卡，清單建好才算得準
+    applyDefaultCardTypes()
   }
 
   const alertList = document.getElementById('alert-list')
@@ -555,9 +565,13 @@ function applyDefaultCardTypes() {
   const modeVal = document.getElementById('mode')?.value || 'number'
   const cardTypes = document.getElementById('card-types')
   if (!cardTypes) return
+  // 多個值用一張樞紐表加一張折線就看得完；一個值長兩張卡會被當成重複
+  const multi = document.querySelectorAll('#field-list [data-field-row]').length >= 2
   const checkboxes = cardTypes.querySelectorAll('input[type="checkbox"]')
   for (const cb of checkboxes) {
-    if (modeVal === 'text') {
+    if (multi) {
+      cb.checked = (cb.value === 'table' || cb.value === 'line')
+    } else if (modeVal === 'text') {
       cb.checked = (cb.value === 'table')
     } else {
       cb.checked = (cb.value === 'number')
@@ -1142,13 +1156,24 @@ export async function handleSave() {
           targetDash = dashboards[0]
         }
         if (targetDash) {
+          // 多值任務的紀錄寫在子序列 id 底下，卡片來源指到父任務會永遠顯示破折號
+          const sourceIds = Array.isArray(task.fields) && task.fields.length > 0
+            ? task.fields.map(f => seriesIdOf(task.id, f.key))
+            : [task.id]
           for (const box of checkedBoxes) {
             const type = box.value
             const size = CARD_SIZES[type] ?? { w: 6, h: 3 }
+            // 單一來源的卡片型別只吃第一個值，多來源的型別全部帶上
+            const ids = ['number', 'gauge'].includes(type) ? sourceIds.slice(0, 1) : sourceIds
             await addCard(targetDash.id, {
               type,
-              source: [{ taskId: task.id, aggregation: 'raw' }],
-              options: type === 'table' ? { mode: 'recent' } : {},
+              source: ids.map(id => ({ taskId: id, aggregation: 'raw' })),
+              options: type === 'table'
+                ? (sourceIds.length > 1
+                    // 多個值要看的是「同一時刻各值並排」與「每天差多少」
+                    ? { mode: 'pivot', bucketMinutes: 1440, showDelta: true }
+                    : { mode: 'recent' })
+                : {},
               x: 0,
               y: 0,
               w: size.w,
