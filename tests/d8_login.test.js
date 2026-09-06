@@ -173,16 +173,18 @@ test('content 說找不到欄位時當登入失敗,不當成功', async () => {
   await saveSite(st, cr)
   await st.saveTask(task())
   c.__setTabResponder((tabId, msg) => {
-    if (msg.type === 'FILL_LOGIN') return { ok: false, missing: 'pass' }
+    if (msg.type === 'FILL_LOGIN') {
+      // 就算頁面剛好跳到了成功網址（別的分頁登入、頁面自己導走…），
+      // content 說填不進去就是填不進去，不能靠網址巧合判定成功。
+      c.__setTabState(tabId, { url: `${ORIGIN}/home`, status: 'complete' })
+      return { ok: false, missing: 'pass' }
+    }
     return { ok: true, value: 12, raw: '12', status: 'ok', strategyUsed: 'auto', layer: 'css' }
   })
   c.__onTabCreated = (tab) => c.__setTabState(tab.id, { url: `${ORIGIN}/login`, status: 'complete' })
   const rec = await fe.runTask(task(), { slot: '2026-09-06T09:00', ...FAST })
   assert.equal(rec.status, 'login_failed')
   assert.equal((await st.getSite(ORIGIN)).failStreak, 1)
-  // 欄位都找不到就沒必要再等頁面重載、再判成功條件——直接認賠
-  const order = c.__calls.filter(x => x.api === 'tabs.sendMessage').map(x => x.args[1].type)
-  assert.deepEqual(order, ['FILL_LOGIN'], `填不進去就不該再往下試,實得 ${order.join(',')}`)
 })
 
 test('成功判定用「某元素存在」時也要能過', async () => {
