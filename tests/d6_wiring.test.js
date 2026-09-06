@@ -184,24 +184,21 @@ test('通知按鈕:第一顆補抓全部,第二顆全部略過', async () => {
   assert.deepEqual(await ms.getMissed(), [], '第二顆是略過')
 })
 
-test('右鍵選單:抓取此文字會向分頁要描述並開設定視窗', async () => {
+test('右鍵選單:選取要抓的內容會讓分頁進入選取模式(不再直接開視窗)', async () => {
   const { c, bg } = await fresh()
-  c.__setTabResponder(() => ({ ok: true, locator: { css: '#v' }, preview: '12', previewValue: 12 }))
-  await bg.handleContextMenu({ menuItemId: 'af-capture' }, { id: 9, url: 'https://a.test/p' })
+  await bg.handleContextMenu({ menuItemId: 'af-pick' }, { id: 9, url: 'https://a.test/p' })
   const sent = c.__calls.find(x => x.api === 'tabs.sendMessage')
   assert.equal(sent.args[0], 9)
-  assert.equal(sent.args[1].type, 'DESCRIBE')
-  const win = c.__calls.find(x => x.api === 'windows.create')
-  assert.ok(win, '要開設定視窗')
-  assert.match(String(win.args[0].url), /picker\.html/)
+  assert.equal(sent.args[1].type, 'ENTER_PICK')
+  assert.equal(c.__calls.filter(x => x.api === 'windows.create').length, 0,
+    '設定視窗要等使用者在頁面上選完才開')
 })
 
-test('右鍵選單:分頁上沒有右鍵目標時提示使用者,不開視窗', async () => {
+test('右鍵選單:沒有分頁 id 時安靜略過,不注入也不送訊息', async () => {
   const { c, bg } = await fresh()
-  c.__setTabResponder(() => ({ ok: false, error: 'no_target' }))
-  await bg.handleContextMenu({ menuItemId: 'af-capture' }, { id: 9, url: 'https://a.test/p' })
-  assert.equal(c.__calls.filter(x => x.api === 'windows.create').length, 0)
-  assert.ok(c.__calls.some(x => x.api === 'notifications.create'), '要告訴使用者發生什麼事')
+  await bg.handleContextMenu({ menuItemId: 'af-pick' }, {})
+  assert.equal(c.__calls.filter(x => x.api === 'scripting.executeScript').length, 0)
+  assert.equal(c.__calls.filter(x => x.api === 'tabs.sendMessage').length, 0)
 })
 
 test('右鍵選單:開啟報表', async () => {

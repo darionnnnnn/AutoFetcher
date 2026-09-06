@@ -153,6 +153,8 @@ function buildChromeMock() {
           ...props
         }
         tabsMap.set(tab.id, tab)
+        // 讓測試模擬「開啟後被伺服器轉址」（例如沒登入就被導到登入頁）
+        if (typeof mock.__onTabCreated === 'function') mock.__onTabCreated(tab)
         return tab
       },
       async query(queryInfo = {}) {
@@ -367,6 +369,7 @@ function buildChromeMock() {
       for (const fn of notificationsOnButtonClicked._listeners) await fn(notificationId, buttonIndex)
     },
 
+    __onTabCreated: null,
     __setTabResponder(fn) {
       tabResponder = fn
     },

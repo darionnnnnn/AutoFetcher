@@ -1,5 +1,6 @@
 // AutoFetcher 儲存層：所有 chrome.storage 存取的唯一入口
 import { pruneCardsForTask } from './layout-store.js'
+import { encryptSecret } from './crypto.js'
 
 const DEFAULT_SETTINGS = {
   retentionDays: 365,
@@ -24,12 +25,43 @@ function keyToDate(key) {
   return key.slice(REC_PREFIX.length)
 }
 
-// 初始化儲存空間（冪等：已存在值不得覆蓋）
+const SCHEMA_VERSION = 2
+
+// v1 → v2：站台從「登入頁前綴 + 明文密碼」改為「loginCheck + AES-GCM 密文」
+async function migrateSitesToV2(sites) {
+  const migrated = {}
+  for (const [origin, site] of Object.entries(sites)) {
+    if (!site || typeof site !== 'object') continue
+    const next = { ...site }
+    if (next.loginCheck === undefined && typeof next.loginPageUrlPrefix === 'string') {
+      next.loginCheck = { type: 'urlPrefix', value: next.loginPageUrlPrefix }
+    }
+    delete next.loginPageUrlPrefix
+    if (next.password !== undefined) {
+      if (next.passwordEnc === undefined && typeof next.password === 'string' && next.password !== '') {
+        next.passwordEnc = await encryptSecret(next.password)
+      }
+      delete next.password
+    }
+    migrated[origin] = next
+  }
+  return migrated
+}
+
+// 初始化儲存空間（冪等：已存在值不得覆蓋；順便做一次性的 schema 遷移）
 export async function init() {
-  const current = await chrome.storage.local.get(['schemaVersion', 'settings'])
+  const current = await chrome.storage.local.get(['schemaVersion', 'settings', 'sites'])
   const patch = {}
-  if (current.schemaVersion === undefined) patch.schemaVersion = 1
   if (current.settings === undefined) patch.settings = { ...DEFAULT_SETTINGS }
+
+  const version = typeof current.schemaVersion === 'number' ? current.schemaVersion : SCHEMA_VERSION
+  if (version < 2 && current.sites && typeof current.sites === 'object') {
+    patch.sites = await migrateSitesToV2(current.sites)
+  }
+  if (current.schemaVersion === undefined || version < SCHEMA_VERSION) {
+    patch.schemaVersion = SCHEMA_VERSION
+  }
+
   if (Object.keys(patch).length > 0) {
     await chrome.storage.local.set(patch)
   }
@@ -143,6 +175,13 @@ export async function getSite(origin) {
 export async function saveSite(origin, site) {
   const sites = await getSites()
   sites[origin] = site
+  await chrome.storage.local.set({ sites })
+}
+
+// 刪除單一站台設定
+export async function deleteSite(origin) {
+  const sites = await getSites()
+  delete sites[origin]
   await chrome.storage.local.set({ sites })
 }
 
@@ -368,6 +407,19 @@ export async function getHealthMap() {
   return (res.health && typeof res.health === 'object') ? res.health : {}
 }
 
+// 記下某個任務最後一次抓到的值
+export async function setLastValue(taskId, entry) {
+  const all = await getLastValues()
+  all[taskId] = entry
+  await chrome.storage.local.set({ lastValues: all })
+}
+
+// 取得各任務最後一次抓到的值（popup 顯示用）
+export async function getLastValues() {
+  const res = await chrome.storage.local.get('lastValues')
+  return res.lastValues && typeof res.lastValues === 'object' ? res.lastValues : {}
+}
+
 // 取得補抓清單
 export async function getMissedList() {
   const res = await chrome.storage.local.get('missed')
@@ -378,6 +430,17 @@ export async function getMissedList() {
 export async function getDiagList() {
   const res = await chrome.storage.local.get('diag')
   return Array.isArray(res.diag) ? res.diag : []
+}
+
+// 取得告警通知時間帳本（無資料回傳空物件）
+export async function getAlertLog() {
+  const res = await chrome.storage.local.get('alertLog')
+  return (res.alertLog && typeof res.alertLog === 'object') ? res.alertLog : {}
+}
+
+// 寫入告警通知時間帳本
+export async function setAlertLog(log) {
+  await chrome.storage.local.set({ alertLog: log })
 }
 
 // 查詢單一任務在所有日期的紀錄總數（使用 listDates + 逐日 getRecordsByDate）

@@ -165,7 +165,7 @@ test('右鍵選單以 func + 動態 import 注入 content script', async () => {
   const mainMod = await import('../src/background/main.js?t=' + Math.random())
   c.__setTabResponder(() => ({ ok: true, locator: { css: '#v' }, preview: '1,234', previewValue: 1234 }))
   const tab = await c.tabs.create({ url: 'https://a.test/p' })
-  await mainMod.handleContextMenu({ menuItemId: 'af-capture' }, tab)
+  await mainMod.handleContextMenu({ menuItemId: 'af-pick' }, tab)
   assertModuleInjection(c.__calls.find(x => x.api === 'scripting.executeScript'))
 })
 

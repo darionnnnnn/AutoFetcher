@@ -1,8 +1,7 @@
 import {
   quickRange, filterRecords, summarize, buildCalendar,
   sortRecords, parseHash, buildHash,
-  shiftRange, normalizeRange, paginate, compareDays
-} from './logic.js'
+  shiftRange, normalizeRange, paginate, compareDays, buildDateStats } from './logic.js'
 import {
   getRecordsInRange, getRecordsByDate, deleteRecord,
   getSettings, saveSettings, getTasks,
@@ -273,6 +272,8 @@ export async function renderFilters() {
     { key: 'fallback', label: '備援 (fallback)' },
     { key: 'late', label: '逾時 (late)' },
     { key: 'not_found', label: '未找到 (not_found)' },
+    { key: 'parse_error', label: '抓不到數值 (parse_error)' },
+    { key: 'login_failed', label: '無法登入 (login_failed)' },
     { key: 'error', label: '錯誤 (error)' }
   ]
   for (const item of allStatuses) {
@@ -493,8 +494,18 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
 
   for (const record of displayRecords) {
     const isFailed = !isSuccess(record)
-    const cells = visibleCols.map(col => formatValue(record[col.key]))
-    const tr = createTableRow(cells, false, { className: isFailed ? 'failed' : '' })
+    const hasAlert = record.alert === true
+    const cells = visibleCols.map(col => {
+      const text = formatValue(record[col.key])
+      if (col.key === 'status' && hasAlert) {
+        return `${text} 🔔`
+      }
+      return text
+    })
+    const classNames = []
+    if (isFailed) classNames.push('failed')
+    if (hasAlert) classNames.push('has-alert')
+    const tr = createTableRow(cells, false, { className: classNames.join(' ') })
 
     tr.addEventListener('click', () => {
       const next = tr.nextElementSibling
@@ -515,6 +526,16 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
         ['排定時間 (slot)', record.slot ?? '—'], ['擷取時間 (capturedAt)', record.capturedAt ?? '—'],
         ['時間差 (diff)', diffText]
       ]
+      if (record.strategyUsed === 'block') {
+        detailItems.push(['聚合格數 (used)', record.used ?? '—'])
+        detailItems.push(['略過格數 (skipped)', record.skipped ?? 0])
+        if (record.partial === true) {
+          detailItems.push(['只抓到部分 (partial)', '是（表格可能有未載入的列）'])
+        }
+      }
+      if (record.alert === true) {
+        detailItems.push(['告警 (alert)', (Array.isArray(record.alertHits) && record.alertHits.length > 0) ? record.alertHits.join(', ') : '是'])
+      }
 
       const detailTr = createTableRow([{ colSpan: visibleCols.length || 1, text: '' }], false, { className: 'detail' })
       const td = detailTr.querySelector('td'), box = document.createElement('div')
@@ -719,6 +740,7 @@ export function renderCalendar(year, month, statsByDate = {}) {
       if (!day.inMonth) td.classList.add('out-of-month')
       if (day.count > 0) td.classList.add('has-records')
       if (day.hasFail) td.classList.add('has-fail')
+      if (day.hasAlert) td.classList.add('has-alert')
 
       td.addEventListener('click', () => {
         state.from = day.date
@@ -1041,13 +1063,7 @@ async function loadAndRenderPage() {
   const month = baseDate.getMonth() + 1
   const monthRange = quickRange('thisMonth', baseDate.getTime())
   const monthRecords = monthRange ? await getRecordsInRange(monthRange.from, monthRange.to) : records
-  const statsByDate = {}
-  for (const r of monthRecords) {
-    if (!r.date) continue
-    if (!statsByDate[r.date]) statsByDate[r.date] = { count: 0, hasFail: false }
-    statsByDate[r.date].count++
-    if (!isSuccess(r)) statsByDate[r.date].hasFail = true
-  }
+  const statsByDate = buildDateStats(monthRecords, isSuccess)
   renderCalendar(year, month, statsByDate)
 
   const compareInput = document.getElementById('compare-date')

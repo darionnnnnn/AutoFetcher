@@ -2,31 +2,9 @@
 import { runTask } from './fetcher.js'
 import { setTaskHealth, refreshBadge } from './health.js'
 import { nextDailyRun } from './scheduler.js'
-import { getTasks, getSites } from '../shared/storage.js'
+import { getTasks } from '../shared/storage.js'
 import { log as diagLog } from '../shared/diag.js'
 import { notify } from './notify.js'
-
-// 解析 URL 取得 origin
-function getOrigin(url) {
-  try {
-    return new URL(url).origin
-  } catch {
-    return ''
-  }
-}
-
-// 判定網址是否停留在登入頁
-async function isAtLoginPage(url) {
-  if (typeof url !== 'string' || !url) return false
-  const origin = getOrigin(url)
-  if (!origin) return false
-  const sites = await getSites()
-  const site = sites[origin]
-  if (site && typeof site.loginPageUrlPrefix === 'string' && site.loginPageUrlPrefix.trim() !== '') {
-    return url.startsWith(site.loginPageUrlPrefix)
-  }
-  return false
-}
 
 // 計算任務下一次抓取時間字串（HH:mm）
 function getNextCaptureTime(task) {
@@ -74,7 +52,7 @@ export function isPrecheckAlarm(name) {
 }
 
 // 排定所有啟用中每日任務的預檢 alarm
-export async function schedulePrechecks() {
+export async function schedulePrechecks(nowMs = Date.now()) {
   const existing = await chrome.alarms.getAll()
   for (const alarm of existing) {
     if (parsePrecheckName(alarm.name) !== null) {
@@ -83,7 +61,7 @@ export async function schedulePrechecks() {
   }
 
   const tasks = await getTasks()
-  const now = Date.now()
+  const now = nowMs
 
   for (const task of tasks) {
     if (!task || task.enabled === false) continue
@@ -98,9 +76,17 @@ export async function schedulePrechecks() {
     if (typeof lead !== 'number' || lead <= 0) continue
 
     for (let i = 0; i < times.length; i++) {
-      const nextRun = nextDailyRun(now, [times[i]], weekdays)
+      let nextRun = nextDailyRun(now, [times[i]], weekdays)
       if (nextRun === null) continue
-      const when = nextRun - lead * 60000
+      let when = nextRun - lead * 60000
+      // 現在剛好落在「預檢時間」與「抓取時間」之間時，when 會是過去的時間點：
+      // Chrome 會立刻觸發、alarm 隨即消失，使用者看到一次沒頭沒尾的預檢警報。
+      // 這種情況跳過這一輪，排到下一次的那一槽。
+      if (when <= now) {
+        nextRun = nextDailyRun(nextRun + 60000, [times[i]], weekdays)
+        if (nextRun === null) continue
+        when = nextRun - lead * 60000
+      }
       await chrome.alarms.create(`${task.id}:pre:${i}`, { when })
     }
   }
@@ -117,23 +103,20 @@ export async function runPrecheck(task, opts = {}) {
 
     if (res?.ok === true) {
       status = 'ok'
+    } else if (res?.error === 'login_failed') {
+      status = 'login_failed'
+      reason = '無法登入'
+    } else if (res?.error === 'not_found') {
+      status = 'selector_lost'
+      reason = '找不到元素'
+    } else if (res?.error === 'parse_error') {
+      status = 'parse_error'
+      reason = '抓不到數值'
     } else {
-      const atLogin = await isAtLoginPage(task?.url)
-      if (atLogin) {
-        status = 'login_failed'
-        reason = '無法登入'
-      } else if (res?.error === 'not_found') {
-        status = 'selector_lost'
-        reason = '找不到元素'
-      } else if (res?.error === 'parse_error') {
-        status = 'parse_error'
-        reason = '抓不到數值'
-      } else {
-        status = 'failed'
-        reason = '抓取失敗'
-      }
-      detail = res?.snippet || res?.raw || res?.error || ''
+      status = 'failed'
+      reason = '抓取失敗'
     }
+    detail = res?.snippet || res?.raw || res?.error || ''
 
     if (status === 'ok') {
       await setTaskHealth(task.id, { status: 'ok' })

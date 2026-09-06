@@ -2,6 +2,7 @@
 // 負責任務、站台與全域設定的備份匯出與還原匯入，支援 PBKDF2 + AES-GCM 加解密
 
 import { exportAll, saveTask, saveSite, saveSettings, setRawLayout } from './storage.js'
+import { encryptSecret, decryptSecret } from './crypto.js'
 import { getLayout, saveLayout } from './layout-store.js'
 import { rebuildAlarms } from '../background/scheduler.js'
 
@@ -54,10 +55,18 @@ export async function exportSettings({ includePasswords = false, passphrase } = 
 
   if (data.sites && typeof data.sites === 'object') {
     for (const [origin, site] of Object.entries(data.sites)) {
-      if (site && site.password !== undefined) {
-        passwords[origin] = site.password
-        delete site.password
+      if (!site) continue
+      // 本機金鑰的密文換一台機器解不開，所以要先解回明文，
+      // 再用使用者給的密語重新加密；不含密碼時就整個丟掉。
+      if (includePasswords && site.passwordEnc !== undefined) {
+        try {
+          passwords[origin] = await decryptSecret(site.passwordEnc)
+        } catch {
+          // 解不開（例如金鑰被清掉）就跳過這一個站台，不要讓整份匯出失敗
+        }
       }
+      delete site.password
+      delete site.passwordEnc
     }
   }
 
@@ -135,8 +144,10 @@ export async function importSettings(json, { passphrase } = {}) {
     for (const [origin, site] of Object.entries(data.sites)) {
       if (!site || typeof site !== 'object') continue
       const siteToSave = { ...site }
-      if (decryptedPasswords && decryptedPasswords[origin] !== undefined) {
-        siteToSave.password = decryptedPasswords[origin]
+      delete siteToSave.password
+      if (decryptedPasswords && typeof decryptedPasswords[origin] === 'string') {
+        // 一律以本機金鑰重新加密，storage 內不得留下明文
+        siteToSave.passwordEnc = await encryptSecret(decryptedPasswords[origin])
       }
       await saveSite(origin, siteToSave)
     }

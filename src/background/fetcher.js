@@ -1,9 +1,13 @@
 // AutoFetcher 擷取流程：開分頁、注入、擷取、寫紀錄、重試
-import { getTask, saveTask, appendRecord } from '../shared/storage.js'
+import { getTask, saveTask, appendRecord, getRecordsInRange, getSettings, getAlertLog, setAlertLog, setLastValue, trimOldRecords } from '../shared/storage.js'
 import { MSG } from '../shared/messages.js'
 import { slotOf } from './scheduler.js'
 import { notify } from './notify.js'
 import { injectContent } from './inject.js'
+import { evaluateAlerts } from '../shared/alerts.js'
+import { isSuccess } from '../shared/record-status.js'
+import { setTaskHealth, refreshBadge } from './health.js'
+import { ensureLoggedIn } from './login.js'
 
 // 短暫等待輔助函式（非排程）
 function sleep(ms) {
@@ -61,10 +65,92 @@ async function scheduleRetry(taskId, attempt, isOffline = false) {
   await chrome.alarms.create(`${taskId}:retry:${attempt}`, { when: Date.now() + delayMs })
 }
 
+// 取得本地日期字串（YYYY-MM-DD）
+function getLocalDateStr(d) {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+// 評估告警並發送通知
+async function processAlerts(record) {
+  if (!record || !record.taskId) return
+
+  // 1. 取任務：沒有 alerts 或空陣列直接返回
+  const task = await getTask(record.taskId)
+  if (!task || !Array.isArray(task.alerts) || task.alerts.length === 0) {
+    return
+  }
+
+  // 2. 取先前紀錄當 prevRecords：今天與前 6 天（共 7 天）
+  const today = (typeof record.slot === 'string' && record.slot.length >= 10)
+    ? record.slot.slice(0, 10)
+    : getLocalDateStr(new Date())
+
+  const [y, m, d] = today.split('-').map(Number)
+  const pastDate = new Date(y, m - 1, d - 6, 12, 0, 0)
+  const fromDate = getLocalDateStr(pastDate)
+
+  const recordsInRange = await getRecordsInRange(fromDate, today)
+  // 本筆還沒寫入，所以範圍查詢不會包含它；只要挑出同一任務、由舊到新即可
+  const prevRecords = recordsInRange
+    .filter(r => r.taskId === record.taskId)
+    .sort((a, b) => (a.capturedAt || '').localeCompare(b.capturedAt || ''))
+
+  // 3. 評估告警
+  const { hits } = evaluateAlerts(task, record, prevRecords)
+  if (!Array.isArray(hits) || hits.length === 0) {
+    return
+  }
+
+  // 4. hits 非空時標記紀錄
+  record.alert = true
+  record.alertHits = hits.map(h => h.alertId)
+
+  // 5. 去重與通知
+  const alertLog = await getAlertLog()
+  const settings = await getSettings()
+  const cooldownMin = typeof settings?.alertCooldownMin === 'number' ? settings.alertCooldownMin : 60
+  const cooldownMs = cooldownMin * 60 * 1000
+  const now = Date.now()
+
+  const taskAlerts = alertLog[task.id] ? { ...alertLog[task.id] } : {}
+  let logChanged = false
+
+  for (const hit of hits) {
+    const lastNotified = taskAlerts[hit.alertId]
+    if (typeof lastNotified === 'number' && (now - lastNotified) < cooldownMs) {
+      continue
+    }
+
+    const notificationId = `${task.id}:alert:${hit.alertId}:${today}`
+    const title = `AutoFetcher: ${task.name}`
+    await notify(notificationId, { title, message: hit.message })
+
+    taskAlerts[hit.alertId] = now
+    logChanged = true
+  }
+
+  if (logChanged) {
+    alertLog[task.id] = taskAlerts
+    await setAlertLog(alertLog)
+  }
+}
+
 // 寫入抓取紀錄並更新帳本
 async function writeRecord(record) {
+  await processAlerts(record)
   await appendRecord(record.slot.slice(0, 10), record)
   await recordLedger(record.taskId, record.slot, record.status)
+  // popup 顯示「最後值」讀的是 lastValues；失敗的紀錄不覆蓋上一次成功的值
+  if (isSuccess(record)) {
+    await setLastValue(record.taskId, { value: record.value, capturedAt: record.capturedAt })
+  }
+  // 保留天數是設定頁的偏好，總得有人真的去清
+  try {
+    await trimOldRecords(getLocalDateStr(new Date()))
+  } catch {}
   return record
 }
 
@@ -115,10 +201,19 @@ export async function runTask(task, opts = {}) {
     attempt = 1,
     pollMs = 250,
     loadTimeoutMs = 30000,
-    extraDelayMs = 3000,
     extractTimeoutMs = 15000,
     dryRun = false
   } = opts
+
+  let extraDelayMs
+  if (opts.extraDelayMs !== undefined) {
+    extraDelayMs = opts.extraDelayMs
+  } else if (typeof task?.extraDelaySec === 'number') {
+    extraDelayMs = task.extraDelaySec * 1000
+  } else {
+    const settings = await getSettings()
+    extraDelayMs = typeof settings?.extraDelaySec === 'number' ? settings.extraDelaySec * 1000 : 3000
+  }
 
   // 1. 冪等檢查：已在帳本中則直接返回 null（dryRun 略過）
   if (!dryRun) {
@@ -146,6 +241,7 @@ export async function runTask(task, opts = {}) {
     await setInflight(inflightKey, { state: 'running', startedAt: new Date().toISOString() })
     await chrome.runtime.getPlatformInfo()
 
+    let originalTabId = null
     try {
       // 4. 視窗檢查：若目前無視窗則建立最小化視窗
       const windows = await chrome.windows.getAll()
@@ -154,13 +250,32 @@ export async function runTask(task, opts = {}) {
         if (win?.id) queueCtx.createdWindows.add(win.id)
       }
 
-      // 5. 分頁檢查：已存在則沿用，無則建立背景分頁
+      // 若為前景抓取，先記住目前作用中的分頁
+      if (task.foreground === true) {
+        try {
+          const currentActive = await chrome.tabs.query({ active: true, currentWindow: true })
+          if (Array.isArray(currentActive) && currentActive[0]?.id != null) {
+            originalTabId = currentActive[0].id
+          }
+        } catch {}
+      }
+
+      // 5. 分頁檢查：已存在則沿用，無則建立分頁
       const tabs = await chrome.tabs.query({ url: task.url })
       let tabId
       if (tabs.length > 0) {
         tabId = tabs[0].id
+        if (task.foreground === true) {
+          try {
+            await chrome.tabs.update(tabId, { active: true })
+          } catch {}
+        }
       } else {
-        const newTab = await chrome.tabs.create({ url: task.url, active: false, autoDiscardable: false })
+        const newTab = await chrome.tabs.create({
+          url: task.url,
+          active: task.foreground === true,
+          autoDiscardable: false
+        })
         tabId = newTab.id
         queueCtx.createdTabs.add(tabId)
       }
@@ -180,10 +295,34 @@ export async function runTask(task, opts = {}) {
       }
       if (extraDelayMs > 0) await sleep(extraDelayMs)
 
-      // 8. 注入 content script（必須在送訊息之前）
+      // 8. 確認登入狀態（若停留在登入頁則執行自動登入）
+      const login = await ensureLoggedIn(tabId, task, { pollMs, loadTimeoutMs, extraDelayMs })
+      if (login?.ok !== true) {
+        if (dryRun) return { ok: false, error: 'login_failed' }
+        return await writeRecord({
+          taskId: task.id,
+          slot,
+          capturedAt: new Date().toISOString(),
+          status: 'login_failed',
+          error: login?.reason || '無法登入'
+        })
+      }
+
+      // 9. 注入 content script（必須在送訊息之前）
       await injectContent(tabId)
 
-      // 9. 擷取：先 SCROLL_INTO_VIEW，再 EXTRACT
+      // 執行前置動作（若有指定）
+      if (Array.isArray(task.preActions) && task.preActions.length > 0) {
+        const preRes = await chrome.tabs.sendMessage(tabId, {
+          type: MSG.RUN_PRE_ACTIONS,
+          actions: task.preActions
+        })
+        if (preRes?.ok !== true) {
+          throw new Error(`前置動作失敗：${preRes?.error || '未知錯誤'}`)
+        }
+      }
+
+      // 10. 擷取：先 SCROLL_INTO_VIEW，再 EXTRACT
       await chrome.tabs.sendMessage(tabId, { type: MSG.SCROLL_INTO_VIEW, locator: task.locator })
 
       const res = await Promise.race([
@@ -197,13 +336,14 @@ export async function runTask(task, opts = {}) {
       // 結果處理：成功路徑
       if (res?.ok === true) {
         const currentTask = await getTask(task.id)
-        if (currentTask && (currentTask.notFoundStreak || 0) > 0) {
+        if (currentTask && ((currentTask.notFoundStreak || 0) > 0 || currentTask.suggestForeground)) {
           currentTask.notFoundStreak = 0
+          delete currentTask.suggestForeground
           await saveTask(currentTask)
         }
 
         const status = reason === 'late' ? 'late' : (res.status || 'ok')
-        return await writeRecord({
+        const record = {
           taskId: task.id,
           slot,
           capturedAt: new Date().toISOString(),
@@ -212,7 +352,21 @@ export async function runTask(task, opts = {}) {
           status,
           strategyUsed: res.strategyUsed,
           layer: res.layer
-        })
+        }
+
+        if (res.used !== undefined) {
+          record.used = res.used
+        }
+        if (res.skipped !== undefined) {
+          record.skipped = res.skipped
+        }
+        if (res.partial === true) {
+          record.partial = true
+          await setTaskHealth(task.id, { status: 'partial', reason: '只抓到部分', detail: '' })
+          await refreshBadge()
+        }
+
+        return await writeRecord(record)
       }
 
       // 結果處理：元素未找到（可重試）
@@ -281,6 +435,12 @@ export async function runTask(task, opts = {}) {
         error: String(err?.message || err)
       })
     } finally {
+      // 若有記錄前景抓取前作用中的分頁，將焦點還原
+      if (originalTabId != null) {
+        try {
+          await chrome.tabs.update(originalTabId, { active: true })
+        } catch {}
+      }
       // 清除 inflight 狀態
       await removeInflight(inflightKey)
     }

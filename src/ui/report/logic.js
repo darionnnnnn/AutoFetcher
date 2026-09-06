@@ -123,6 +123,19 @@ export function summarize(records) {
   return result
 }
 
+// 依日期彙總月曆需要的統計：筆數、有沒有失敗、有沒有命中告警
+export function buildDateStats(records = [], isSuccessFn) {
+  const stats = {}
+  for (const r of records) {
+    if (!r?.date) continue
+    if (!stats[r.date]) stats[r.date] = { count: 0, hasFail: false, hasAlert: false }
+    stats[r.date].count++
+    if (!isSuccessFn(r)) stats[r.date].hasFail = true
+    if (r.alert === true) stats[r.date].hasAlert = true
+  }
+  return stats
+}
+
 // 產生日曆週陣列，前後補滿整週（週日在第一格）
 export function buildCalendar(year, month, statsByDate = {}) {
   const stats = statsByDate || {}
@@ -145,7 +158,8 @@ export function buildCalendar(year, month, statsByDate = {}) {
       day: curr.getDate(),
       inMonth,
       count: stat?.count ?? 0,
-      hasFail: !!stat?.hasFail
+      hasFail: !!stat?.hasFail,
+      hasAlert: !!stat?.hasAlert
     })
 
     if (currentWeek.length === 7) {

@@ -24,7 +24,7 @@ const rec = (over = {}) => ({
 
 test('init 在空 storage 建立 schemaVersion 與預設 settings', async () => {
   const s = await fresh()
-  assert.equal(await s.getSchemaVersion(), 1)
+  assert.equal(await s.getSchemaVersion(), 2)
   const st = await s.getSettings()
   assert.equal(st.retentionDays, 365)
 })
@@ -147,13 +147,13 @@ test('saveSettings 是合併不是覆寫', async () => {
   assert.equal(st.notifications, false)
 })
 
-test('schemaVersion 缺少時 init 補成 1 且保留既有資料', async () => {
+test('schemaVersion 缺少時 init 補成現行版本且保留既有資料', async () => {
   resetChromeMock()
   const c = installChromeMock()
   await c.storage.local.set({ tasks: [task()] })
   const s = await import('../src/shared/storage.js?t=' + Math.random())
   await s.init()
-  assert.equal(await s.getSchemaVersion(), 1)
+  assert.equal(await s.getSchemaVersion(), 2)
   assert.equal((await s.getTasks()).length, 1, '既有資料不得被清掉')
 })
 

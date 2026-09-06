@@ -3,6 +3,7 @@ import { MSG } from '../../shared/messages.js'
 import { getLayout, addCard } from '../../shared/layout-store.js'
 
 let currentCtx = null
+let currentBlock = null
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
 
 function getFormData() {
@@ -27,7 +28,65 @@ function getFormData() {
   const windowFrom = document.getElementById('window-from')?.value ?? ''
   const windowTo = document.getElementById('window-to')?.value ?? ''
 
-  return { name, url, mode, strategy, regex, scheduleType, times, weekdays, everyMinutes, windowFrom, windowTo }
+  const alertRows = document.querySelectorAll('[data-alert-row]')
+  const alerts = Array.from(alertRows).map(row => {
+    const id = row.dataset.id || crypto.randomUUID()
+    const type = row.querySelector('select')?.value || 'gt'
+    const valInput = row.querySelector('input:not([type="checkbox"])') || row.querySelector('input')
+    const valStr = valInput?.value?.trim() ?? ''
+    const value = valStr === '' ? NaN : Number(valStr)
+    const cb = row.querySelector('input[type="checkbox"]')
+    const enabled = cb ? cb.checked : true
+    return { id, type, value, enabled }
+  })
+
+  const preActionRows = document.querySelectorAll('[data-preaction-row]')
+  const preActions = Array.from(preActionRows).map(row => {
+    const type = row.querySelector('select')?.value || 'waitFor'
+    const locator = row._locator || null
+    const valInput = row.querySelector('input[type="number"]') || row.querySelector('input')
+    const valStr = valInput?.value?.trim() ?? ''
+    const num = valStr === '' ? NaN : Number(valStr)
+
+    if (type === 'waitFor') {
+      return {
+        type,
+        locator,
+        timeoutMs: Number.isFinite(num) ? num : (valStr === '' ? 20000 : NaN)
+      }
+    }
+    if (type === 'click') {
+      return {
+        type,
+        locator
+      }
+    }
+    if (type === 'wait') {
+      return {
+        type,
+        ms: num
+      }
+    }
+    return { type, locator }
+  })
+
+  const data = {
+    name, url, mode, strategy, regex, scheduleType, times, weekdays, everyMinutes, windowFrom, windowTo,
+    alerts,
+    preActions
+  }
+
+  if (mode === 'block') {
+    const agg = document.getElementById('block-aggregate')?.value || 'sum'
+    data.block = {
+      axis: currentBlock?.axis,
+      index: currentBlock?.index,
+      headerText: currentBlock?.headerText,
+      aggregate: agg
+    }
+  }
+
+  return data
 }
 
 export function validateForm(values) {
@@ -80,6 +139,11 @@ export function buildTask(values, locator, existing) {
   const id = existing?.id || crypto.randomUUID()
   const spec = { strategy: values.strategy }
   if (values.mode === 'text') spec.mode = 'text'
+  if (values.mode === 'block' && values.block) {
+    // extract.js 是看 spec.mode 分派的，少了這一行會落回數值策略鏈、抓到整張表的第一個數字
+    spec.mode = 'block'
+    spec.block = values.block
+  }
   for (const k of ['regex', 'attr', 'childSel', 'labelText']) {
     if (values[k]) spec[k] = values[k]
   }
@@ -105,6 +169,48 @@ export function buildTask(values, locator, existing) {
     locator,
     spec,
     schedule
+  }
+  if (Array.isArray(values.alerts)) {
+    const validAlerts = values.alerts
+      .filter(a => a && typeof a === 'object' && Number.isFinite(a.value))
+      .map(a => ({
+        id: a.id || crypto.randomUUID(),
+        type: a.type,
+        value: Number(a.value),
+        enabled: a.enabled !== false
+      }))
+    if (validAlerts.length > 0) {
+      task.alerts = validAlerts
+    }
+  }
+  if (Array.isArray(values.preActions)) {
+    const validPreActions = values.preActions
+      .map(a => {
+        if (!a || typeof a !== 'object') return null
+        if (a.type === 'click') {
+          const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
+          if (!hasLoc) return null
+          return { type: 'click', locator: a.locator }
+        }
+        if (a.type === 'waitFor') {
+          const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
+          if (!hasLoc) return null
+          const timeoutMs = Number.isFinite(Number(a.timeoutMs)) ? Number(a.timeoutMs) : 20000
+          return { type: 'waitFor', locator: a.locator, timeoutMs }
+        }
+        if (a.type === 'wait') {
+          // 空字串經 Number() 會變成 0，看起來合法但其實是使用者沒填
+          if (a.ms === '' || a.ms === null || a.ms === undefined) return null
+          const ms = Number(a.ms)
+          if (!Number.isFinite(ms)) return null
+          return { type: 'wait', ms }
+        }
+        return null
+      })
+      .filter(Boolean)
+    if (validPreActions.length > 0) {
+      task.preActions = validPreActions
+    }
   }
   if (existing?.order !== undefined) task.order = existing.order
   return task
@@ -154,7 +260,58 @@ export function render(ctx) {
       if (t.schedule.window.from) document.getElementById('window-from').value = t.schedule.window.from
       if (t.schedule.window.to) document.getElementById('window-to').value = t.schedule.window.to
     }
+    if (t.spec?.block) {
+      currentBlock = { ...t.spec.block }
+      const aggEl = document.getElementById('block-aggregate')
+      if (aggEl && t.spec.block.aggregate) aggEl.value = t.spec.block.aggregate
+    }
   }
+
+  if (ctx?.blockInfo && (ctx.blockInfo.kind === 'table' || ctx.blockInfo.kind === 'grid')) {
+    const b = ctx.blockInfo
+    currentBlock = {
+      axis: b.axis,
+      index: b.index,
+      headerText: b.headerText,
+      rows: b.rows,
+      cols: b.cols,
+      kind: b.kind
+    }
+    const modeEl = document.getElementById('mode')
+    if (modeEl) modeEl.value = 'block'
+  } else if (!ctx?.task?.spec?.block) {
+    currentBlock = null
+    const modeEl = document.getElementById('mode')
+    if (modeEl && !ctx?.task && modeEl.value === 'block') {
+      modeEl.value = 'number'
+    }
+  }
+
+  const alertList = document.getElementById('alert-list')
+  if (alertList) {
+    alertList.replaceChildren()
+  }
+  if (Array.isArray(ctx?.task?.alerts)) {
+    for (const a of ctx.task.alerts) {
+      addAlertRow(a)
+    }
+  }
+
+  const preactionList = document.getElementById('preaction-list')
+  if (preactionList) {
+    preactionList.replaceChildren()
+  }
+  if (Array.isArray(ctx?.task?.preActions)) {
+    for (const pa of ctx.task.preActions) {
+      addPreActionRow(pa)
+    }
+  }
+
+  bindModeEvents()
+  bindAlertEvents()
+  bindPreActionEvents()
+  bindPreActionMessageListener()
+  updateBlockSection()
 }
 
 // 卡片型別對應的預設尺寸
@@ -180,6 +337,296 @@ function applyDefaultCardTypes() {
     } else {
       cb.checked = (cb.value === 'number' || cb.value === 'line')
     }
+  }
+}
+
+/**
+ * 更新區塊設定區顯示與說明文字
+ */
+function updateBlockSection() {
+  const section = document.getElementById('block-section')
+  if (!section) return
+  const modeVal = document.getElementById('mode')?.value || 'number'
+  if (modeVal !== 'block') {
+    section.hidden = true
+    return
+  }
+
+  section.hidden = false
+  const summaryEl = document.getElementById('block-summary')
+  if (!summaryEl) return
+
+  // index 為 null 代表使用者只選到表格、還沒點任何一欄或一列，不能當成選了第 0 欄
+  if (currentBlock && (currentBlock.headerText || currentBlock.index !== undefined && currentBlock.index !== null)) {
+    const isRow = currentBlock.axis === 'row'
+    const targetDesc = currentBlock.headerText
+      ? `「${currentBlock.headerText}」這${isRow ? '一列' : '一欄'}`
+      : `第 ${Number(currentBlock.index) + 1} ${isRow ? '列' : '欄'}`
+
+    const prefix = (currentBlock.rows !== undefined && currentBlock.cols !== undefined)
+      ? `表格 ${currentBlock.rows} 列 × ${currentBlock.cols} 欄，`
+      : '表格，'
+    summaryEl.textContent = `${prefix}取${targetDesc}`
+  } else {
+    summaryEl.textContent = '請回到目標頁面重新選取，並在表格上點一欄或一列'
+  }
+}
+
+/**
+ * 綁定模式切換事件
+ */
+function bindModeEvents() {
+  const modeEl = document.getElementById('mode')
+  if (modeEl && !modeEl._modeEventsBound) {
+    modeEl.addEventListener('change', () => {
+      applyDefaultCardTypes()
+      updateBlockSection()
+    })
+    modeEl._modeEventsBound = true
+  }
+}
+
+/**
+ * 在 #alert-list 裡新增一列告警條件
+ */
+function addAlertRow(data = {}) {
+  const list = document.getElementById('alert-list')
+  if (!list) return null
+
+  const row = document.createElement('div')
+  row.className = 'alert-row'
+  row.setAttribute('data-alert-row', '')
+  row.dataset.id = data.id || crypto.randomUUID()
+
+  const select = document.createElement('select')
+  select.className = 'alert-type'
+  const options = [
+    { value: 'gt', text: '值大於' },
+    { value: 'lt', text: '值小於' },
+    { value: 'eq', text: '值等於' },
+    { value: 'deltaPct', text: '變動幅度(%)超過' },
+    { value: 'failStreak', text: '連續失敗次數達到' }
+  ]
+  for (const opt of options) {
+    const el = document.createElement('option')
+    el.value = opt.value
+    el.textContent = opt.text
+    if (opt.value === (data.type || 'gt')) {
+      el.selected = true
+    }
+    select.appendChild(el)
+  }
+  select.value = data.type || 'gt'
+
+  const input = document.createElement('input')
+  input.type = 'number'
+  input.className = 'alert-value'
+  input.placeholder = '數值'
+  input.step = 'any'
+  if (data.value !== undefined && data.value !== null && !Number.isNaN(data.value) && String(data.value).trim() !== '') {
+    input.value = String(data.value)
+  }
+
+  const label = document.createElement('label')
+  label.className = 'alert-enable'
+  const checkbox = document.createElement('input')
+  checkbox.type = 'checkbox'
+  checkbox.className = 'alert-enabled'
+  checkbox.checked = data.enabled !== false
+  label.appendChild(checkbox)
+  label.appendChild(document.createTextNode('啟用'))
+
+  const removeBtn = document.createElement('button')
+  removeBtn.type = 'button'
+  removeBtn.setAttribute('data-action', 'alert-remove')
+  removeBtn.textContent = '刪除'
+  removeBtn.addEventListener('click', () => {
+    row.remove()
+  })
+
+  row.appendChild(select)
+  row.appendChild(input)
+  row.appendChild(label)
+  row.appendChild(removeBtn)
+
+  list.appendChild(row)
+  return row
+}
+
+/**
+ * 綁定告警條件新增按鈕事件（僅綁定一次）
+ */
+function bindAlertEvents() {
+  const addBtn = document.getElementById('alert-add')
+  if (addBtn && !addBtn._alertEventsBound) {
+    addBtn.addEventListener('click', () => {
+      addAlertRow()
+    })
+    addBtn._alertEventsBound = true
+  }
+}
+
+let lastPreActionPickRow = null
+let _preActionMessageBound = false
+
+/**
+ * 更新單列前置動作的定位資訊顯示文字
+ */
+function updatePreActionLocatorText(row) {
+  const targetEl = row.querySelector('.preaction-target')
+  if (!targetEl) return
+  const loc = row._locator
+  targetEl.textContent = (loc?.css || loc?.path || '') || '尚未選取'
+}
+
+/**
+ * 切換單列前置動作欄位的顯示狀態
+ */
+function updatePreActionRowVisibility(row) {
+  const select = row.querySelector('select')
+  const pickBtn = row.querySelector('[data-action="preaction-pick"]')
+  const targetEl = row.querySelector('.preaction-target')
+  const input = row.querySelector('input[type="number"]')
+
+  const type = select?.value || 'waitFor'
+  if (pickBtn) pickBtn.hidden = (type === 'wait')
+  if (targetEl) targetEl.hidden = (type === 'wait')
+  if (input) {
+    input.hidden = (type === 'click')
+    if (type === 'wait') {
+      input.placeholder = '毫秒數'
+    } else if (type === 'waitFor') {
+      input.placeholder = '逾時毫秒'
+      if (!input.value) {
+        input.value = '20000'
+      }
+    }
+  }
+}
+
+/**
+ * 在 #preaction-list 裡新增一列前置動作
+ */
+function addPreActionRow(data = {}) {
+  const list = document.getElementById('preaction-list')
+  if (!list) return null
+
+  const row = document.createElement('div')
+  row.className = 'preaction-row'
+  row.setAttribute('data-preaction-row', '')
+  row._locator = data.locator || null
+
+  const select = document.createElement('select')
+  select.className = 'preaction-type'
+  const options = [
+    { value: 'waitFor', text: '等元素出現' },
+    { value: 'click', text: '點擊元素' },
+    { value: 'wait', text: '等待秒數' }
+  ]
+  for (const opt of options) {
+    const el = document.createElement('option')
+    el.value = opt.value
+    el.textContent = opt.text
+    if (opt.value === (data.type || 'waitFor')) {
+      el.selected = true
+    }
+    select.appendChild(el)
+  }
+  select.value = data.type || 'waitFor'
+  select.addEventListener('change', () => {
+    updatePreActionRowVisibility(row)
+  })
+
+  const pickBtn = document.createElement('button')
+  pickBtn.type = 'button'
+  pickBtn.setAttribute('data-action', 'preaction-pick')
+  pickBtn.textContent = '在頁面上選取'
+  pickBtn.addEventListener('click', () => {
+    lastPreActionPickRow = row
+    if (globalThis.chrome?.runtime?.sendMessage) {
+      chrome.runtime.sendMessage({
+        type: MSG.ENTER_PICK,
+        purpose: 'preaction',
+        tabId: currentCtx?.tabId,
+        taskId: currentCtx?.task?.id
+      })
+    }
+  })
+
+  const targetEl = document.createElement('span')
+  targetEl.className = 'preaction-target'
+
+  const input = document.createElement('input')
+  input.type = 'number'
+  input.className = 'preaction-num'
+  input.min = '0'
+  input.step = '1'
+  if (data.type === 'wait') {
+    if (data.ms !== undefined && data.ms !== null && !Number.isNaN(data.ms) && String(data.ms).trim() !== '') {
+      input.value = String(data.ms)
+    }
+  } else if (data.type === 'click') {
+    input.value = ''
+  } else {
+    if (data.timeoutMs !== undefined && data.timeoutMs !== null && !Number.isNaN(data.timeoutMs) && String(data.timeoutMs).trim() !== '') {
+      input.value = String(data.timeoutMs)
+    } else {
+      input.value = '20000'
+    }
+  }
+
+  const removeBtn = document.createElement('button')
+  removeBtn.type = 'button'
+  removeBtn.setAttribute('data-action', 'preaction-remove')
+  removeBtn.textContent = '刪除'
+  removeBtn.addEventListener('click', () => {
+    if (lastPreActionPickRow === row) {
+      lastPreActionPickRow = null
+    }
+    row.remove()
+  })
+
+  row.appendChild(select)
+  row.appendChild(pickBtn)
+  row.appendChild(targetEl)
+  row.appendChild(input)
+  row.appendChild(removeBtn)
+
+  updatePreActionLocatorText(row)
+  updatePreActionRowVisibility(row)
+
+  list.appendChild(row)
+  return row
+}
+
+/**
+ * 綁定前置動作新增按鈕事件（僅綁定一次）
+ */
+function bindPreActionEvents() {
+  const addBtn = document.getElementById('preaction-add')
+  if (addBtn && !addBtn._preactionEventsBound) {
+    addBtn.addEventListener('click', () => {
+      addPreActionRow()
+    })
+    addBtn._preactionEventsBound = true
+  }
+}
+
+/**
+ * 綁定選取結果接收監聽器（僅綁定一次）
+ */
+function bindPreActionMessageListener() {
+  if (_preActionMessageBound) return
+  if (globalThis.chrome?.runtime?.onMessage?.addListener) {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg?.type === MSG.PICKED && msg.purpose === 'preaction') {
+        if (lastPreActionPickRow && !msg.cancelled) {
+          lastPreActionPickRow._locator = msg.locator || null
+          updatePreActionLocatorText(lastPreActionPickRow)
+        }
+      }
+    })
+    _preActionMessageBound = true
   }
 }
 
@@ -220,12 +667,7 @@ export async function renderDashboardSection(task) {
   }
 
   applyDefaultCardTypes()
-
-  const modeEl = document.getElementById('mode')
-  if (modeEl && !modeEl._dashSectionBound) {
-    modeEl.addEventListener('change', applyDefaultCardTypes)
-    modeEl._dashSectionBound = true
-  }
+  bindModeEvents()
 }
 
 export async function handleSave() {
@@ -333,6 +775,10 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
   document.getElementById('save')?.addEventListener('click', () => handleSave())
   document.getElementById('cancel')?.addEventListener('click', () => window.close())
   document.getElementById('test-now')?.addEventListener('click', () => handleTestNow())
+  bindModeEvents()
+  bindAlertEvents()
+  bindPreActionEvents()
+  bindPreActionMessageListener()
 
   const search = typeof window !== 'undefined' ? window.location?.search : ''
   const params = new URLSearchParams(search || '')

@@ -170,3 +170,24 @@ test('預檢丟例外不會讓呼叫端炸掉', async () => {
   await st.saveTask(task())
   await assert.doesNotReject(() => pc.runPrecheck(task(), FAST))
 })
+
+test('預檢時間已經過了(現在就在抓取前的空窗內)時,排到下一次而不是立刻觸發', async () => {
+  const { c, st, pc } = await fresh()
+  // 現在 14:44，抓取時間 15:00，提前 30 分鐘的預檢時間 14:30 已經過去了
+  const now = new Date('2026-09-06T14:44:00+08:00').getTime()
+  await st.saveTask({
+    id: 't1', name: '電費', url: 'https://a.test/p', mode: 'number', enabled: true,
+    locator: { css: '#v' }, spec: {},
+    schedule: { type: 'daily', times: ['15:00'], weekdays: [0, 1, 2, 3, 4, 5, 6] }
+  })
+  await pc.schedulePrechecks(now)
+  const alarm = (await c.alarms.getAll()).find(a => a.name === 't1:pre:0')
+  assert.ok(alarm, '仍然要有預檢 alarm')
+  assert.ok(alarm.scheduledTime > now,
+    `不得排在過去(排在過去 Chrome 會立刻觸發、alarm 消失、還跳一次假警報);` +
+    `now=${new Date(now).toISOString()} when=${new Date(alarm.scheduledTime).toISOString()}`)
+  const d = new Date(alarm.scheduledTime)
+  assert.equal(d.getHours(), 14)
+  assert.equal(d.getMinutes(), 30)
+  assert.equal(d.getDate(), 7, '應該是明天的那一槽')
+})

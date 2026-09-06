@@ -16,11 +16,18 @@ const task = (id) => ({
   id, name: id, url: 'https://a.test/p', mode: 'number', enabled: true,
   schedule: { type: 'daily', times: ['09:00'], weekdays: [0, 1, 2, 3, 4, 5, 6] }
 })
-const site = { loginUrl: 'https://a.test/login', userSel: '#u', passSel: '#p', user: 'wayne', password: 'hunter2' }
+// 現行 schema:密碼一律以本機金鑰加密後存 passwordEnc（storage 內不得有明文）
+async function makeSite() {
+  const cr = await import('../src/shared/crypto.js?t=' + Math.random())
+  return {
+    loginUrl: 'https://a.test/login', userSel: '#u', passSel: '#p', user: 'wayne',
+    passwordEnc: await cr.encryptSecret('hunter2')
+  }
+}
 
 test('匯出不含密碼時,密碼欄位被移除', async () => {
   const { st, se } = await fresh()
-  await st.saveSite('https://a.test', site)
+  await st.saveSite('https://a.test', await makeSite())
   const json = await se.exportSettings({ includePasswords: false })
   assert.ok(!json.includes('hunter2'), '明文密碼不得出現')
   const obj = JSON.parse(json)
@@ -31,7 +38,7 @@ test('匯出不含密碼時,密碼欄位被移除', async () => {
 
 test('匯出含密碼時以密語加密,密文中找不到明文', async () => {
   const { st, se } = await fresh()
-  await st.saveSite('https://a.test', site)
+  await st.saveSite('https://a.test', await makeSite())
   const json = await se.exportSettings({ includePasswords: true, passphrase: 'my-pass-phrase' })
   assert.ok(!json.includes('hunter2'), '密文中不得出現明文密碼')
   const obj = JSON.parse(json)
@@ -83,7 +90,7 @@ test('往返:匯出→清空→匯入,任務完全一致且 alarms 重建', asyn
 
 test('匯入含密碼:密語正確時還原明文密碼', async () => {
   const { st, se } = await fresh()
-  await st.saveSite('https://a.test', site)
+  await st.saveSite('https://a.test', await makeSite())
   const json = await se.exportSettings({ includePasswords: true, passphrase: 'pw' })
 
   resetChromeMock(); installChromeMock()
@@ -91,12 +98,15 @@ test('匯入含密碼:密語正確時還原明文密碼', async () => {
   await st2.init()
   const se2 = await import('../src/shared/settings-io.js?t=' + Math.random())
   await se2.importSettings(json, { passphrase: 'pw' })
-  assert.equal((await st2.getSite('https://a.test')).password, 'hunter2')
+  const site2 = await st2.getSite('https://a.test')
+  assert.equal(site2.password, undefined, 'storage 內不得留明文')
+  const cr2 = await import('../src/shared/crypto.js?t=' + Math.random())
+  assert.equal(await cr2.decryptSecret(site2.passwordEnc), 'hunter2', '要以新機器的金鑰重新加密')
 })
 
 test('匯入含密碼但密語錯誤:丟錯且 storage 完全不變', async () => {
   const { st, se } = await fresh()
-  await st.saveSite('https://a.test', site)
+  await st.saveSite('https://a.test', await makeSite())
   const json = await se.exportSettings({ includePasswords: true, passphrase: 'right' })
 
   resetChromeMock(); installChromeMock()
@@ -139,7 +149,7 @@ test('匯入未來版本要丟錯,不亂猜格式', async () => {
 
 test('匯入含密碼的檔案但沒給密語:丟錯', async () => {
   const { st, se } = await fresh()
-  await st.saveSite('https://a.test', site)
+  await st.saveSite('https://a.test', await makeSite())
   const json = await se.exportSettings({ includePasswords: true, passphrase: 'pw' })
   await assert.rejects(() => se.importSettings(json))
 })

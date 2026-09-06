@@ -1,5 +1,5 @@
 // AutoFetcher MV3 Background Service Worker 入口總接線
-import { init as initStorage, getTask } from '../shared/storage.js'
+import { init as initStorage, getTask, saveTask } from '../shared/storage.js'
 import { MSG } from '../shared/messages.js'
 import * as diag from '../shared/diag.js'
 import {
@@ -19,8 +19,8 @@ import {
   runPrecheck,
   parsePrecheckName
 } from './precheck.js'
-import { notify } from './notify.js'
 import { injectContent } from './inject.js'
+import { scheduleSiteCheck, runSiteCheck } from './sitecheck.js'
 
 
 // 取任務並檢查存在與啟用狀態（共用小函式）
@@ -72,13 +72,18 @@ function getDailySlot(task, index) {
   return `${y}-${m}-${day}T${h.padStart(2, '0')}:${min.padStart(2, '0')}`
 }
 
+// 短暫等待輔助函式
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 // 建立右鍵選單項目
-async function setupContextMenus() {
+export async function setupContextMenus() {
   try {
     await chrome.contextMenus.removeAll()
     chrome.contextMenus.create({ id: 'af-root', title: 'AutoFetcher', contexts: ['all'] })
-    chrome.contextMenus.create({ id: 'af-capture', parentId: 'af-root', title: '抓取此文字/數值', contexts: ['all'] })
-    chrome.contextMenus.create({ id: 'af-capture-block', parentId: 'af-root', title: '抓取此區塊', contexts: ['all'] })
+    chrome.contextMenus.create({ id: 'af-pick', parentId: 'af-root', title: '選取要抓的內容', contexts: ['all'] })
+    chrome.contextMenus.create({ id: 'af-site-login', parentId: 'af-root', title: '設定此站台登入', contexts: ['all'] })
     chrome.contextMenus.create({ id: 'af-open-report', parentId: 'af-root', title: '開啟 AutoFetcher 報表', contexts: ['all'] })
   } catch {}
 }
@@ -90,6 +95,7 @@ export async function handleInstalled(details) {
     await setupContextMenus()
     await rebuildAlarms()
     await schedulePrechecks()
+    await scheduleSiteCheck()
     await ensureWatchdog()
     await refreshBadge()
   } catch {}
@@ -101,6 +107,7 @@ export async function handleStartup() {
     await initStorage()
     await rebuildAlarms()
     await schedulePrechecks()
+    await scheduleSiteCheck()
     await ensureWatchdog()
     await refreshMissed(Date.now())
     await refreshBadge()
@@ -126,7 +133,14 @@ export async function handleAlarm(alarm, testOpts = {}) {
       return
     }
 
-    // 3. 預檢演練
+    // 3. 站台健康檢查
+    if (name === '__sitecheck') {
+      await runSiteCheck(testOpts)
+      await scheduleSiteCheck()
+      return
+    }
+
+    // 4. 預檢演練
     const precheck = parsePrecheckName(name)
     if (precheck !== null) {
       const { task, active } = await getValidTask(precheck.taskId)
@@ -205,16 +219,85 @@ export async function handleMessage(msg, sender) {
       return { ok: true }
     }
 
-    if (msg.type === MSG.REPICK) {
-      const { task } = await getValidTask(msg.taskId)
-      if (task?.url) {
-        const tab = await chrome.tabs.create({ url: task.url })
-        if (tab?.id) {
-          try {
-            await chrome.tabs.sendMessage(tab.id, { type: MSG.REPICK, taskId: msg.taskId })
-          } catch {}
-        }
+    if (msg.type === MSG.PICKED) {
+      if (msg.cancelled === true) {
+        return { ok: true }
       }
+
+      if (msg.purpose === 'preaction' || (typeof msg.purpose === 'string' && msg.purpose.startsWith('login-'))) {
+        try {
+          await chrome.runtime.sendMessage(msg)
+        } catch {}
+        return { ok: true }
+      }
+
+      if (msg.purpose === 'task') {
+        const payload = {
+          locator: msg.locator,
+          preview: msg.preview,
+          previewValue: msg.previewValue,
+          blockInfo: msg.blockInfo,
+          tabId: sender?.tab?.id,
+          url: sender?.tab?.url
+        }
+        const ctx = encodeURIComponent(JSON.stringify(payload))
+        const base = typeof chrome.runtime?.getURL === 'function'
+          ? await chrome.runtime.getURL('ui/picker/picker.html')
+          : 'ui/picker/picker.html'
+
+        await chrome.windows.create({
+          url: `${base}?ctx=${ctx}`,
+          type: 'popup',
+          width: 480,
+          height: 760
+        })
+        return { ok: true }
+      }
+
+      if (msg.purpose === 'repick') {
+        const task = await getTask(msg.taskId)
+        if (!task) {
+          return { ok: true }
+        }
+        task.locator = msg.locator
+        await saveTask(task)
+        return { ok: true }
+      }
+
+      return { ok: true }
+    }
+
+    if (msg.type === MSG.ENTER_PICK) {
+      if (msg.tabId) {
+        await injectContent(msg.tabId)
+        await chrome.tabs.sendMessage(msg.tabId, {
+          type: MSG.ENTER_PICK,
+          purpose: msg.purpose,
+          taskId: msg.taskId
+        })
+        return { ok: true }
+      }
+
+      const task = await getTask(msg.taskId)
+      if (!task) {
+        return { ok: false }
+      }
+      const tab = await chrome.tabs.create({ url: task.url, active: true })
+      if (!tab?.id) return { ok: false }
+      const pollMs = msg.pollMs ?? 250
+      const loadTimeoutMs = msg.loadTimeoutMs ?? 30000
+      let tabInfo = await chrome.tabs.get(tab.id)
+      const loadStart = Date.now()
+      while (tabInfo?.status !== 'complete' && Date.now() - loadStart < loadTimeoutMs) {
+        await sleep(pollMs)
+        tabInfo = await chrome.tabs.get(tab.id)
+      }
+      await injectContent(tab.id)
+      await chrome.tabs.sendMessage(tab.id, {
+        type: MSG.ENTER_PICK,
+        purpose: msg.purpose || 'repick',
+        taskId: msg.taskId
+      })
       return { ok: true }
     }
 
@@ -267,6 +350,29 @@ export async function handleNotificationButton(notificationId, buttonIndex) {
   } catch {}
 }
 
+// 處理通知本體點擊事件
+export async function handleNotificationClick(notificationId) {
+  try {
+    if (typeof notificationId !== 'string') return
+
+    // 格式：<taskId>:alert:<alertId>:<YYYY-MM-DD>
+    const match = notificationId.match(/^(.+):alert:(.+):(\d{4}-\d{2}-\d{2})$/)
+    if (!match) return
+
+    const taskId = match[1]
+    const date = match[3]
+
+    const base = typeof chrome.runtime?.getURL === 'function'
+      ? await chrome.runtime.getURL('ui/report/report.html')
+      : 'ui/report/report.html'
+    // 報表的 hash 參數是 taskIds（複數），寫成 task= 的話只會定位到日期、篩不到任務
+    const url = `${base}#view=history&from=${date}&to=${date}&taskIds=${encodeURIComponent(taskId)}`
+
+    await chrome.tabs.create({ url })
+    await chrome.notifications.clear(notificationId)
+  } catch {}
+}
+
 // 處理右鍵選單點擊事件
 export async function handleContextMenu(info, tab) {
   try {
@@ -280,38 +386,31 @@ export async function handleContextMenu(info, tab) {
       return
     }
 
-    if (info.menuItemId === 'af-capture' || info.menuItemId === 'af-capture-block') {
+    if (info.menuItemId === 'af-site-login') {
       if (!tab?.id) return
-
-      await injectContent(tab.id)
-
-      const res = await chrome.tabs.sendMessage(tab.id, { type: MSG.DESCRIBE })
-      if (!res || res.ok !== true) {
-        await notify(null, {
-          title: 'AutoFetcher',
-          message: '請先在要抓取的內容上按右鍵'
-        })
-        return
-      }
-
-      const payload = {
-        locator: res.locator,
-        preview: res.preview,
-        previewValue: res.previewValue,
-        tabId: tab.id,
-        url: tab.url
-      }
-      const ctx = encodeURIComponent(JSON.stringify(payload))
+      let origin = ''
+      try {
+        origin = tab.url ? new URL(tab.url).origin : ''
+      } catch {}
       const base = typeof chrome.runtime?.getURL === 'function'
-        ? await chrome.runtime.getURL('ui/picker/picker.html')
-        : 'ui/picker/picker.html'
-
+        ? await chrome.runtime.getURL('ui/site/site.html')
+        : 'ui/site/site.html'
       await chrome.windows.create({
-        url: `${base}?ctx=${ctx}`,
+        url: `${base}?origin=${encodeURIComponent(origin)}&tabId=${tab.id}`,
         type: 'popup',
         width: 480,
-        height: 640
+        height: 760
       })
+      await injectContent(tab.id)
+      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'login-user' })
+      return
+    }
+
+    if (info.menuItemId === 'af-pick') {
+      if (!tab?.id) return
+      await injectContent(tab.id)
+      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'task' })
+      return
     }
   } catch {}
 }
@@ -325,4 +424,5 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true
 })
 chrome.notifications.onButtonClicked.addListener(handleNotificationButton)
+chrome.notifications.onClicked.addListener(handleNotificationClick)
 chrome.contextMenus.onClicked.addListener(handleContextMenu)

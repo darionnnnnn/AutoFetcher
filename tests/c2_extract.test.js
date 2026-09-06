@@ -126,3 +126,30 @@ test('元素為 null 時回 not_found,不丟例外', () => {
   assert.equal(r.ok, false)
   assert.equal(r.error, 'not_found')
 })
+
+test('會計負數:全形括號也算負數(繁中財務頁面常見)', () => {
+  assert.equal(parseNumber('（50）'), -50)
+  assert.equal(parseNumber('（1,234）'), -1234)
+  assert.equal(parseNumber('(50)'), -50, '半形的行為不得改變')
+  assert.equal(parseNumber('（未提供）'), null, '括號裡沒有數字仍然是 null')
+})
+
+// 「整串看起來像日期或範圍」一律不當數值（AF-3 批次 C 定案）。
+// 理由：抓到錯的數字是看不見的錯誤，回 parse_error 是看得見、使用者可以改設定的錯誤。
+test('整串是日期時不當數值,回 null', () => {
+  assert.equal(parseNumber('09-02'), null)
+  assert.equal(parseNumber('2026-09-02'), null)
+  assert.equal(parseNumber('2026/09/02'), null)
+})
+
+test('像範圍或分數的整串也回 null(已知的取捨,不是漏洞)', () => {
+  assert.equal(parseNumber('10-20'), null, '範圍沒有單一值可取')
+  assert.equal(parseNumber('5/8'), null)
+})
+
+test('日期判定只認「整串」,夾在文字裡的數值照樣抓得到', () => {
+  assert.equal(parseNumber('09-02 用電 1,234 度'), 9, '開頭是數字就從第一個數值片段取')
+  assert.equal(parseNumber('用電 1,234 度'), 1234)
+  assert.equal(parseNumber('-5'), -5, '負數不受影響')
+  assert.equal(parseNumber('1.5'), 1.5, '小數不受影響')
+})

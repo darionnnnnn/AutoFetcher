@@ -50,7 +50,7 @@ try {
   //    所有檢查一律從擴充功能頁面做(頁面同樣有完整的 chrome API)。
 
   // 2. 三個 UI 頁面都打得開,而且沒有 console 錯誤
-  for (const page of ['ui/report/report.html', 'ui/popup/popup.html', 'ui/picker/picker.html']) {
+  for (const page of ['ui/report/report.html', 'ui/popup/popup.html', 'ui/picker/picker.html', 'ui/site/site.html']) {
     const p = await browser.newPage()
     const pageErrors = []
     p.on('console', m => { if (m.type() === 'error') pageErrors.push(m.text()) })
@@ -85,7 +85,9 @@ try {
   const alarms = await ext.evaluate(() => chrome.alarms.getAll())
   const names = alarms.map(a => a.name)
   // 名稱格式由 scheduler.alarmName / precheck 決定,這裡只要求「每個時間點各有一個正式與一個預檢」
-  const taskAlarms = names.filter(n => n.includes('smoke-1') && !n.includes(':pre:'))
+  // 只算正式排程：預檢（:pre:）與重試（:retry:）都不是。
+  // 測試在 09:00/15:00 兩個時間點附近跑時，任務可能真的觸發並排出重試 alarm。
+  const taskAlarms = names.filter(n => n.includes('smoke-1') && !n.includes(':pre:') && !n.includes(':retry:'))
   const preAlarms = names.filter(n => n.includes('smoke-1') && n.includes(':pre:'))
   const missing = []
   if (taskAlarms.length !== 2) missing.push(`正式 alarm 應有 2 個,實際 ${taskAlarms.length}`)
@@ -140,9 +142,14 @@ try {
 <div id="v">1,234</div>
 <table id="t"><thead><tr><th>日期</th><th>數量</th></tr></thead>
 <tbody><tr><td>09-01</td><td>10</td></tr><tr><td>09-02</td><td>32</td></tr></tbody></table>`
-  const server = http.createServer((_, res) => {
+  const loginHtml = `<!doctype html><meta charset="utf-8">
+<form><input id="u"><input id="p" type="password"><button id="go" type="button">送出</button></form>
+<script>document.getElementById('go').onclick = () => {
+  document.title = document.getElementById('u').value + '/' + document.getElementById('p').value
+}</script>`
+  const server = http.createServer((req, res) => {
     res.setHeader('content-type', 'text/html; charset=utf-8')
-    res.end(fixtureHtml)
+    res.end(req.url.startsWith('/login') ? loginHtml : fixtureHtml)
   })
   await new Promise(r => server.listen(48123, '127.0.0.1', r))
 
@@ -196,6 +203,86 @@ try {
   } else {
     console.log(`${browserName}:通知送出正常`)
   }
+
+  // 5c. 區塊聚合:對 fixture 的表格取「數量」欄加總（10 + 32 = 42）
+  const blockResult = await ext2.evaluate(async () => {
+    const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/*' })
+    return chrome.tabs.sendMessage(tabs[0].id, {
+      type: 'EXTRACT',
+      locator: { css: '#t', path: '', anchor: null, xpath: '' },
+      spec: { mode: 'block', block: { axis: 'col', index: 1, headerText: '數量', aggregate: 'sum' } }
+    })
+  })
+  if (blockResult?.ok !== true) {
+    errors.push(`區塊聚合失敗:${JSON.stringify(blockResult)}`)
+  } else if (blockResult.value !== 42) {
+    errors.push(`區塊聚合應得 42,實得 ${blockResult.value}`)
+  } else {
+    console.log(`${browserName}:區塊聚合正常 (數量欄加總 = ${blockResult.value})`)
+  }
+
+  // 5b. 選取模式:真的在網頁上畫出 overlay,離開時收乾淨
+  const pickResult = await ext2.evaluate(async () => {
+    const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/*' })
+    const tabId = tabs[0].id
+    const out = {}
+    await chrome.tabs.sendMessage(tabId, { type: 'ENTER_PICK', purpose: 'task' })
+    const probe = () => chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => ({
+        overlay: !!document.querySelector('[data-af-overlay]'),
+        panel: (document.querySelector('[data-af-panel]')?.textContent || '').slice(0, 60)
+      })
+    }).then(r => r[0].result)
+    out.during = await probe()
+    await chrome.tabs.sendMessage(tabId, { type: 'EXIT_PICK' })
+    out.after = await probe()
+    return out
+  })
+  if (!pickResult.during?.overlay) errors.push('進入選取模式後頁面上沒有 overlay')
+  if (pickResult.after?.overlay) errors.push('離開選取模式後 overlay 沒有移除')
+  if (!pickResult.during?.panel) errors.push('選取模式面板沒有文字')
+  if (pickResult.during?.overlay && !pickResult.after?.overlay) {
+    console.log(`${browserName}:選取模式進出正常 (面板:${pickResult.during.panel.split('\n')[0]})`)
+  }
+
+  // 5d. 自動登入:content 真的填得進欄位並按得到送出鈕
+  const loginPage = await browser.newPage()
+  await loginPage.goto('http://127.0.0.1:48123/login', { waitUntil: 'load' })
+  const loginResult = await ext2.evaluate(async () => {
+    const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/login*' })
+    const tabId = tabs[0].id
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (url) => import(url),
+      args: [chrome.runtime.getURL('content/main.js')]
+    })
+    const filled = await chrome.tabs.sendMessage(tabId, {
+      type: 'FILL_LOGIN',
+      selectors: {
+        user: { css: '#u', path: '', anchor: null, xpath: '' },
+        pass: { css: '#p', path: '', anchor: null, xpath: '' },
+        submit: { css: '#go', path: '', anchor: null, xpath: '' }
+      },
+      username: 'wayne',
+      password: 'hunter2'
+    })
+    const probe = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => ({ title: document.title, user: document.getElementById('u').value })
+    })
+    return { filled, page: probe[0].result }
+  })
+  if (loginResult.filled?.ok !== true) {
+    errors.push(`自動登入填不進去:${JSON.stringify(loginResult.filled)}`)
+  } else if (loginResult.page.user !== 'wayne') {
+    errors.push(`帳號欄沒填到:${JSON.stringify(loginResult.page)}`)
+  } else if (loginResult.page.title !== 'wayne/hunter2') {
+    errors.push(`送出鈕沒被按到(標題應為 wayne/hunter2):${loginResult.page.title}`)
+  } else {
+    console.log(`${browserName}:自動登入填入與送出正常`)
+  }
+  await loginPage.close()
 
   await ext2.close()
   await pageUnderTest.close()

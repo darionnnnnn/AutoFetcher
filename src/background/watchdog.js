@@ -94,7 +94,9 @@ async function cleanStuckInflight() {
   let changed = false
 
   for (const [key, val] of Object.entries(inflight)) {
-    if (val && typeof val.startedAt === 'number' && now - val.startedAt > 3 * 60 * 1000) {
+    // fetcher 寫進去的是 ISO 字串，早期這裡比對 typeof === 'number'，所以清理從未觸發過
+    const startedAt = typeof val?.startedAt === 'string' ? Date.parse(val.startedAt) : val?.startedAt
+    if (Number.isFinite(startedAt) && now - startedAt > 3 * 60 * 1000) {
       changed = true
       await diag.log('interrupted', key)
     } else {

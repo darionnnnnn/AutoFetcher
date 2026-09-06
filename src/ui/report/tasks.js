@@ -175,7 +175,7 @@ function createTaskRow(t) {
   const nextEl = document.createElement('span')
   nextEl.className = 'task-next'
   const nextVal = currentCtx?.nextRuns?.[t.id]
-  nextEl.textContent = nextVal ? String(nextVal) : '—'
+  nextEl.textContent = nextVal ? new Date(nextVal).toLocaleString() : '—'
   row.appendChild(nextEl)
 
   const healthInfo = currentHealth?.[t.id]
@@ -192,6 +192,33 @@ function createTaskRow(t) {
     streakEl.className = 'task-streak'
     streakEl.textContent = `連續失敗 ${t.notFoundStreak} 次`
     row.appendChild(streakEl)
+  }
+
+  if (t.suggestForeground === true && !t.foreground) {
+    const suggestEl = document.createElement('span')
+    suggestEl.className = 'task-suggest-foreground'
+    suggestEl.textContent = '連續抓不到，建議改用前景抓取'
+
+    const useFgBtn = document.createElement('button')
+    useFgBtn.type = 'button'
+    useFgBtn.dataset.action = 'use-foreground'
+    useFgBtn.textContent = '改用前景抓取'
+    useFgBtn.addEventListener('click', async () => {
+      const current = await getTask(t.id)
+      if (current) {
+        current.foreground = true
+        await saveTask(current)
+        const idx = currentTasks.findIndex((taskItem) => taskItem.id === t.id)
+        if (idx !== -1) {
+          currentTasks[idx] = current
+        }
+        const updated = await getTask(t.id)
+        const newRow = createTaskRow(updated || current)
+        row.replaceWith(newRow)
+      }
+    })
+    suggestEl.appendChild(useFgBtn)
+    row.appendChild(suggestEl)
   }
 
   const actionsEl = document.createElement('div')
@@ -236,21 +263,20 @@ function createTaskRow(t) {
   repickBtn.dataset.action = 'repick'
   repickBtn.textContent = '重選'
   repickBtn.addEventListener('click', async () => {
-    let tab = null
+    let res = null
     try {
-      tab = await chrome.tabs.create({ url: t.url })
+      res = await chrome.runtime.sendMessage({
+        type: MSG.ENTER_PICK,
+        taskId: t.id,
+        purpose: 'repick'
+      })
     } catch {}
 
-    let res = null
-    if (tab && tab.id) {
-      try {
-        res = await chrome.tabs.sendMessage(tab.id, { type: MSG.REPICK, taskId: t.id })
-      } catch {}
-    }
-
-    if (!res || !res.ok) {
-      const note = document.getElementById('task-note')
-      if (note) {
+    const note = document.getElementById('task-note')
+    if (note) {
+      if (res && res.ok) {
+        note.textContent = '已開啟目標頁，請在頁面上選取要抓的元素。'
+      } else {
         note.textContent = '無法直接啟動選取模式，請在開啟的頁面上使用右鍵選單重新選取元素。'
       }
     }

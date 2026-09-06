@@ -16,6 +16,9 @@ const STATUS_TEXT = {
 const RED_STATUSES = new Set(['login_failed', 'selector_lost', 'parse_error', 'failed'])
 const YELLOW_STATUSES = new Set(['fallback', 'late', 'partial'])
 
+// 健康紀錄裡站台項目的鍵前綴（sitecheck.js 寫入）
+const SITE_PREFIX = 'site:'
+
 // 依啟用任務、健康紀錄與錯過清單計算燈號狀態（純函式）
 export function computeHealth(tasks = [], healthMap = {}, missed = []) {
   const taskList = Array.isArray(tasks) ? tasks : []
@@ -53,6 +56,19 @@ export function computeHealth(tasks = [], healthMap = {}, missed = []) {
       if (isUnread) {
         unreadYellowTasks.push({ task, record })
       }
+    }
+  }
+
+  // 站台層級的健康項目（key 為 site:<origin>，來自每日站台登入檢查）。
+  // 站台登不進去等於所有靠它的任務都會失敗，只跳一次通知不夠，要一起進燈號。
+  for (const [key, record] of Object.entries(health)) {
+    if (!key.startsWith(SITE_PREFIX)) continue
+    if (!record || !record.status || record.read === true) continue
+    const site = { name: key.slice(SITE_PREFIX.length) }
+    if (RED_STATUSES.has(record.status)) {
+      unreadRedTasks.push({ task: site, record })
+    } else if (YELLOW_STATUSES.has(record.status)) {
+      unreadYellowTasks.push({ task: site, record })
     }
   }
 
