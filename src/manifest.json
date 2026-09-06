@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AutoFetcher",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "網頁元素定時自動擷取與報表檢視工具",
   "icons": {
     "16": "icons/icon-16.png",

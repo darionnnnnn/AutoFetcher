@@ -1,6 +1,6 @@
 # AF-4 第 4 輪規劃:排程對齊、表格報表補齊、拖曳資料來源
 
-> 狀態:全案完成已併 dev(體檢:Claude Fable 5.1;實作:Claude Opus 5 + gemma-4 + agy)
+> 狀態:全案完成已併 dev,終檢無新發現(體檢:Claude Fable 5.1;實作:Claude Opus 5 + gemma-4 + agy)
 > 基準:dev@31eb2ed(947 綠,manifest 0.2.0)
 > 來源:使用者新需求(一~五分時段抓多站多值 → 自訂表格報表 → 拖曳規劃版面)
 
@@ -277,3 +277,7 @@ status 卡片加得進拿不出(且移除路徑寫死 `source`)、`pointercancel
 CLAUDE.md 合併兩條 `periodInMinutes`、三條規則改為指向 SPEC、基線 1138;README 補本輪功能與基線;BACKLOG「本輪」改 AF-4。
 
 體檢後 `npm test` **1138 綠**,煙霧測試 13 項全過,9 項突變全紅(1 項補測試後紅)。
+
+## 終檢輪
+
+併入 dev 後重掃:`periodInMinutes` 無殘留、現況文件無輪次敘事、全套 1138 綠。終檢無新發現。manifest 0.2.0 → 0.3.0。
