@@ -13,6 +13,10 @@ async function fresh() {
   return { c, st, dg, wd }
 }
 
+// 任務 alarm 名稱格式是 task:<taskId>:<index>（scheduler.alarmName）。
+// 舊版測試直接 startsWith('t1')，逼得實作去猴補 String.prototype；改成照格式比對。
+const isTaskAlarm = (name, taskId) => name === `task:${taskId}:${name.split(':').pop()}`
+
 const daily = (id, times) => ({
   id, name: id, url: 'https://a.test/p', mode: 'number', enabled: true,
   schedule: { type: 'daily', times, weekdays: [0, 1, 2, 3, 4, 5, 6] }
@@ -41,19 +45,19 @@ test('diag:每筆有時間、種類、內容', async () => {
 test('看門狗:任務的 alarm 不見了會補建', async () => {
   const { c, st, wd } = await fresh()
   await st.saveTask(daily('t1', ['09:00']))
-  assert.equal((await c.alarms.getAll()).filter(a => a.name.startsWith('t1')).length, 0)
+  assert.equal((await c.alarms.getAll()).filter(a => isTaskAlarm(a.name, 't1')).length, 0)
   await wd.runWatchdog()
-  assert.equal((await c.alarms.getAll()).filter(a => a.name.startsWith('t1')).length, 1)
+  assert.equal((await c.alarms.getAll()).filter(a => isTaskAlarm(a.name, 't1')).length, 1)
 })
 
 test('看門狗:alarm 都在時不重建(不製造抖動)', async () => {
   const { c, st, wd } = await fresh()
   await st.saveTask(daily('t1', ['09:00']))
   await wd.runWatchdog()
-  const before = (await c.alarms.getAll()).find(a => a.name.startsWith('t1')).scheduledTime
+  const before = (await c.alarms.getAll()).find(a => isTaskAlarm(a.name, 't1')).scheduledTime
   const calls = c.__calls.filter(x => x.api === 'alarms.create').length
   await wd.runWatchdog()
-  const after = (await c.alarms.getAll()).find(a => a.name.startsWith('t1')).scheduledTime
+  const after = (await c.alarms.getAll()).find(a => isTaskAlarm(a.name, 't1')).scheduledTime
   assert.equal(after, before, '時間不該被重算')
   assert.equal(c.__calls.filter(x => x.api === 'alarms.create').length, calls)
 })
@@ -115,7 +119,7 @@ test('看門狗:任務全部停用時清掉它們的 alarm', async () => {
   await wd.runWatchdog()
   await st.saveTask({ ...daily('t1', ['09:00']), enabled: false })
   await wd.runWatchdog()
-  assert.equal((await c.alarms.getAll()).filter(a => a.name.startsWith('t1')).length, 0)
+  assert.equal((await c.alarms.getAll()).filter(a => isTaskAlarm(a.name, 't1')).length, 0)
 })
 
 test('看門狗:單一步驟丟例外不會讓整輪掛掉', async () => {

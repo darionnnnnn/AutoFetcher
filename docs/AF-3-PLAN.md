@@ -1,6 +1,6 @@
 # AF-3 第 3 輪規劃
 
-> 狀態:規劃中
+> 狀態:實作中(批次 A 已完成並併回 dev,690 綠)
 > 基準:dev@fcb2ed7(671 綠;煙霧測試通過但**未涵蓋真實注入**,見批次 A)
 > 來源:SPEC 標示 AF-3 的四個目標段落(§6 §7 §10 §4 前置動作)+ 使用者實測「右鍵沒反應」+ 使用者提案「右鍵直接進入選取模式」
 > 實作方:全部派 agy;Claude 先寫測試(含突變)、逐段驗收、寫文件。地端 LLM 不用(AF-2 回顧:此機不堪用)。
@@ -25,6 +25,18 @@
 | D13 | 通知點擊沒有路由 | `main.js:341` 只註冊 `onButtonClicked`,沒有 `notifications.onClicked` | §4.2「點通知開 Report 定位任務」無效 | E |
 
 好消息(不用做的):`r.alert` 的消費端已在(`logic.js:55` alertOnly 篩選、`report.js:289` 「只看告警」核取);number 卡片閾值色已在(`cards.js:154`);`settings-io.js` 已有 PBKDF2 + AES-GCM 工具函式可抽出共用。
+
+## 執行紀錄
+
+| 段 | 執行方 | 結果 | 測試數 | 驗收/終檢抓到什麼 |
+|---|---|---|---|---|
+| A1 通知單一入口 | agy | 綠 | 690(A 段測試先寫) | 一次過。diff 精準在白名單內,37 行無過度設計;讀 diff 時發現 `main.js` 還有第二處原型猴補(`RegExp.prototype.test`),規劃時只知道 watchdog 那處 |
+| A2 注入修復 | agy | 綠 | 690 | 一次過。它多加了一個 `__afContentDoc !== document` 的重置條件——那是為了讓 `b3_content` 的多份 JSDOM 通過,屬「為測試遷就正式碼」;Claude 改回單純旗標,把重置移進測試的 setup |
+| A3 圖示/猴補/manifest | Claude 自做 | 綠 | 690 | 規模幾十行,委派的固定成本大於節省。連帶要改 `d6_wiring` 的 alarm 名稱斷言(它假設名稱是 `t1:0`,真實是 `task:t1:0`——這正是猴補的成因) |
+| A4 煙霧測試真注入 | Claude 自做 | 綠 | — | **抓到規劃寫錯的一條**:計畫寫 `iconUrl: 'icons/icon-128.png'`,實測相對路徑會相對呼叫端解析(service worker 是 `/background/`)而 404,必須 `chrome.runtime.getURL()`。單元測試與 a4 守門都跟著改成要求絕對網址 |
+
+突變驗證(五個,全部由綠轉紅):注入退回 `files:` → 4 條紅;`iconUrl` 改回 `assets/` → 5 條紅;
+拿掉通知偏好判斷 → 2 條紅;冪等守衛改恆真 → 1 條紅;加回原型賦值 → 1 條紅。
 
 ## 批次總覽
 

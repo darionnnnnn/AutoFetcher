@@ -5,10 +5,6 @@ import { extractValue, parseNumber } from '../shared/extract.js'
 // 記住使用者最後右鍵點擊的元素
 let lastTarget = null
 
-// 監聽右鍵選單事件，後一次覆蓋前一次
-document.addEventListener('contextmenu', (event) => {
-  lastTarget = event.target
-})
 
 // 處理 DESCRIBE 訊息：回傳目標元素的四層定位與預覽數值
 function handleDescribe(sendResponse) {
@@ -70,27 +66,37 @@ function handleScrollIntoView(msg, sendResponse) {
   sendResponse({ ok: true })
 }
 
-// 監聽來自 background 或 popup 的訊息
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (!msg || typeof msg !== 'object') return
+// 冪等守衛：同一個分頁可能被右鍵與排程各注入一次，不得重複註冊監聽
+if (!globalThis.__afContentLoaded) {
+  globalThis.__afContentLoaded = true
 
-  if (msg.type === MSG.DESCRIBE) {
-    handleDescribe(sendResponse)
-    return true
-  }
+  // 監聽右鍵選單事件，後一次覆蓋前一次
+  document.addEventListener('contextmenu', (event) => {
+    lastTarget = event.target
+  })
 
-  if (msg.type === MSG.EXTRACT) {
-    handleExtract(msg, sendResponse)
-    return true
-  }
+  // 監聽來自 background 或 popup 的訊息
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (!msg || typeof msg !== 'object') return
 
-  if (msg.type === MSG.SCROLL_INTO_VIEW) {
-    handleScrollIntoView(msg, sendResponse)
-    return true
-  }
+    if (msg.type === MSG.DESCRIBE) {
+      handleDescribe(sendResponse)
+      return true
+    }
 
-  if (msg.type === MSG.REPICK) {
-    sendResponse({ ok: false, reason: 'unsupported' })
-    return true
-  }
-})
+    if (msg.type === MSG.EXTRACT) {
+      handleExtract(msg, sendResponse)
+      return true
+    }
+
+    if (msg.type === MSG.SCROLL_INTO_VIEW) {
+      handleScrollIntoView(msg, sendResponse)
+      return true
+    }
+
+    if (msg.type === MSG.REPICK) {
+      sendResponse({ ok: false, reason: 'unsupported' })
+      return true
+    }
+  })
+}

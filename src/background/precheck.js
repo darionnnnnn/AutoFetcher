@@ -4,6 +4,7 @@ import { setTaskHealth, refreshBadge } from './health.js'
 import { nextDailyRun } from './scheduler.js'
 import { getTasks, getSites } from '../shared/storage.js'
 import { log as diagLog } from '../shared/diag.js'
+import { notify } from './notify.js'
 
 // 解析 URL 取得 origin
 function getOrigin(url) {
@@ -145,9 +146,7 @@ export async function runPrecheck(task, opts = {}) {
       const title = `AutoFetcher 預檢失敗：${taskName}（${reason}）`
       const message = `任務「${taskName}」預檢失敗：${reason}。${timeText}，請盡速確認。`
 
-      await chrome.notifications.create(`${task.id}:precheck`, {
-        type: 'basic',
-        iconUrl: 'assets/icon-128.png',
+      await notify(`${task.id}:precheck`, {
         title,
         message
       })

@@ -39,7 +39,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 671 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 690 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅)。
   AF-2 靠突變抓到多處同義反覆的測試;併回前另做兩份獨立終檢(程式碼 + 文件),抓到 14 類真實缺陷。
@@ -59,6 +59,12 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - 不要在帳本之外直接呼叫 `runTask`(同一排程槽會重複抓;冪等靠 `runs[taskId][slot]`,SPEC §4.1)。
 - 不要假設抓取時目標分頁已開啟(排程到點由 background 自己開分頁,SPEC §4)。
 - **不要在 background 用動態 `import()`**(MV3 service worker 規格禁止,會在真實瀏覽器才炸;一律靜態匯入)。
+- **不要用 `executeScript({files})` 注入 content script**:它是 ES module,傳統 script 注入會直接在頁面爆掉
+  (AF-3 前這個 bug 讓擴充功能從來沒抓成功過一次);一律走 `background/inject.js` 的 `func` + 動態 `import()`。
+- **不要直接呼叫 `chrome.notifications.create`**:一律走 `background/notify.js`(唯一入口,統一圖示、遵守通知偏好)。
+  `iconUrl` 必須是 `chrome.runtime.getURL()` 的絕對網址,相對路徑會 404 而讓整則通知不顯示。
+- **不要為了讓測試好寫去改寫內建原型**(`String.prototype`/`RegExp.prototype` 都犯過):改測試,不要改實作。
+  `tests/a4_conventions.test.js` 會擋住這三類再犯。
 - 不要用一般 Chrome 跑煙霧測試:152 起已封鎖 `--load-extension`,必須用 Chrome for Testing(見 `run_smoke.sh`)。
 - 不要用 `worker.evaluate` 做端到端斷言(service worker 閒置會被回收);從擴充功能頁面做。
 - 不要在 UI 模組載入時就讀 storage 或渲染(測試要能自己呼叫 render)。

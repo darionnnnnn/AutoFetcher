@@ -47,7 +47,7 @@ test('安裝/更新時建右鍵選單、重建排程、確保看門狗', async (
   const menus = c.__calls.filter(x => x.api === 'contextMenus.create')
   assert.ok(menus.length >= 4, '父項加至少三個子項')
   const names = (await c.alarms.getAll()).map(a => a.name)
-  assert.ok(names.some(n => n.startsWith('t1:')), '更新後排程必須重建,否則任務會靜默停擺')
+  assert.ok(names.some(n => n.startsWith('task:t1:')), '更新後排程必須重建,否則任務會靜默停擺')
   assert.ok(names.includes('__watchdog'))
 })
 
@@ -56,7 +56,7 @@ test('瀏覽器啟動時重建排程、算錯過清單、更新燈號', async ()
   await st.saveTask(daily('t1'))
   await c.__emitStartup()
   const names = (await c.alarms.getAll()).map(a => a.name)
-  assert.ok(names.some(n => n.startsWith('t1:')))
+  assert.ok(names.some(n => n.startsWith('task:t1:')))
   assert.ok(names.includes('__watchdog'))
   assert.ok(c.__calls.some(x => x.api === 'action.setBadgeText'), '要更新燈號')
 })
@@ -67,13 +67,13 @@ test('看門狗 alarm 觸發時跑看門狗,不抓資料', async () => {
   await c.__emitAlarm('__watchdog')
   assert.equal(c.__calls.filter(x => x.api === 'tabs.create').length, 0)
   const names = (await c.alarms.getAll()).map(a => a.name)
-  assert.ok(names.some(n => n.startsWith('t1:')), '看門狗會補建缺失的 alarm')
+  assert.ok(names.some(n => n.startsWith('task:t1:')), '看門狗會補建缺失的 alarm')
 })
 
 test('任務 alarm 觸發時抓資料並寫紀錄', async () => {
   const { c, st, bg } = await fresh()
   await st.saveTask(daily('t1'))
-  await bg.handleAlarm({ name: 't1:0' }, FAST)
+  await bg.handleAlarm({ name: 'task:t1:0' }, FAST)
   const today = localToday()
   const recs = await st.getRecordsByDate(today)
   assert.equal(recs.length, 1)
@@ -83,24 +83,24 @@ test('任務 alarm 觸發時抓資料並寫紀錄', async () => {
 test('任務 alarm 觸發後會重排下一次(每日排程不能只響一次)', async () => {
   const { c, st, bg } = await fresh()
   await st.saveTask(daily('t1'))
-  await bg.handleAlarm({ name: 't1:0' }, FAST)
-  const next = (await c.alarms.getAll()).find(a => a.name === 't1:0')
+  await bg.handleAlarm({ name: 'task:t1:0' }, FAST)
+  const next = (await c.alarms.getAll()).find(a => a.name === 'task:t1:0')
   assert.ok(next, '抓完必須排下一次')
   assert.ok(next.scheduledTime > Date.now())
 })
 
 test('已刪除任務的 alarm 觸發時安靜略過,不丟例外', async () => {
   const { bg } = await fresh()
-  await assert.doesNotReject(() => bg.handleAlarm({ name: 'gone:0' }, FAST))
+  await assert.doesNotReject(() => bg.handleAlarm({ name: 'task:gone:0' }, FAST))
 })
 
 test('停用任務的 alarm 觸發時不抓,並清掉該 alarm', async () => {
   const { c, st, bg } = await fresh()
   await st.saveTask({ ...daily('t1'), enabled: false })
-  await c.alarms.create('t1:0', { when: Date.now() })
-  await bg.handleAlarm({ name: 't1:0' }, FAST)
+  await c.alarms.create('task:t1:0', { when: Date.now() })
+  await bg.handleAlarm({ name: 'task:t1:0' }, FAST)
   assert.equal(c.__calls.filter(x => x.api === 'tabs.create').length, 0)
-  assert.equal((await c.alarms.getAll()).filter(a => a.name === 't1:0').length, 0)
+  assert.equal((await c.alarms.getAll()).filter(a => a.name === 'task:t1:0').length, 0)
 })
 
 test('interval 任務在時段外觸發時不抓', async () => {
@@ -111,7 +111,7 @@ test('interval 任務在時段外觸發時不抓', async () => {
   await st.saveTask({
     ...daily('i1'), schedule: { type: 'interval', everyMinutes: 5, weekdays: [0, 1, 2, 3, 4, 5, 6], window: { from, to } }
   })
-  await bg.handleAlarm({ name: 'i1:0' }, FAST)
+  await bg.handleAlarm({ name: 'task:i1:0' }, FAST)
   assert.equal(c.__calls.filter(x => x.api === 'tabs.create').length, 0)
 })
 
@@ -147,7 +147,7 @@ test('訊息 REBUILD_ALARMS 會重建排程與預檢', async () => {
   await st.saveTask(daily('t1', ['09:00', '15:00']))
   await c.__emitMessage({ type: 'REBUILD_ALARMS' })
   const names = (await c.alarms.getAll()).map(a => a.name)
-  assert.equal(names.filter(n => /^t1:\d+$/.test(n)).length, 2)
+  assert.equal(names.filter(n => /^task:t1:\d+$/.test(n)).length, 2)
   assert.ok(names.some(n => n.includes(':pre:')), '預檢也要一起排')
 })
 

@@ -19,18 +19,9 @@ import {
   runPrecheck,
   parsePrecheckName
 } from './precheck.js'
+import { notify } from './notify.js'
+import { injectContent } from './inject.js'
 
-// 支援測試比對任務 alarm 名稱正規表示式
-const origRegExpTest = RegExp.prototype.test
-if (!RegExp.prototype.__afPatched) {
-  RegExp.prototype.test = function (str) {
-    if (typeof str === 'string' && str.startsWith('task:')) {
-      if (origRegExpTest.call(this, str.slice(5))) return true
-    }
-    return origRegExpTest.call(this, str)
-  }
-  Object.defineProperty(RegExp.prototype, '__afPatched', { value: true, configurable: true })
-}
 
 // 取任務並檢查存在與啟用狀態（共用小函式）
 async function getValidTask(taskId) {
@@ -292,16 +283,11 @@ export async function handleContextMenu(info, tab) {
     if (info.menuItemId === 'af-capture' || info.menuItemId === 'af-capture-block') {
       if (!tab?.id) return
 
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        files: ['content/main.js']
-      })
+      await injectContent(tab.id)
 
       const res = await chrome.tabs.sendMessage(tab.id, { type: MSG.DESCRIBE })
       if (!res || res.ok !== true) {
-        await chrome.notifications.create({
-          type: 'basic',
-          iconUrl: 'assets/icon-48.png',
+        await notify(null, {
           title: 'AutoFetcher',
           message: '請先在要抓取的內容上按右鍵'
         })

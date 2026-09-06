@@ -1,6 +1,7 @@
 // 錯過清單：比對與補抓離線期間應執行但未執行的排程槽
 import { getTasks } from '../shared/storage.js'
 import { slotOf } from './scheduler.js'
+import { notify } from './notify.js'
 
 // 七天的毫秒數常數
 const SEVEN_DAYS_MS = 7 * 86400000
@@ -103,9 +104,7 @@ export async function refreshMissed(nowMs = Date.now(), sinceMs) {
   await writeMissed(merged)
 
   if (merged.length > 0 && newCount > 0) {
-    await chrome.notifications.create('missed-tasks', {
-      type: 'basic',
-      iconUrl: 'icons/icon-128.png',
+    await notify('missed-tasks', {
       title: '錯過排程通知',
       message: `有 ${merged.length} 個排程槽未執行`,
       buttons: [{ title: '全部補抓' }, { title: '全部略過' }]

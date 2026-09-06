@@ -10,6 +10,9 @@ async function setup(html) {
   globalThis.window = jd.window
   globalThis.document = jd.window.document
   globalThis.Event = jd.window.Event
+  // content script 有冪等守衛（同一分頁被注入兩次不重複註冊）；每個測試換了新的
+  // document，等同新分頁，所以要清掉旗標。正式環境每個分頁本來就是獨立的全域。
+  globalThis.__afContentLoaded = false
   const mod = await import('../src/content/main.js?t=' + Math.random())
   return { c, doc: jd.window.document, win: jd.window, mod }
 }
