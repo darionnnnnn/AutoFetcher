@@ -113,9 +113,13 @@ export async function setTaskHealth(taskId, { status, reason, detail } = {}) {
   const statusChanged = !prev || prev.status !== status
   const read = statusChanged ? false : (prev.read === true)
 
+  const resolvedReason = (reason !== undefined && reason !== '')
+    ? reason
+    : (STATUS_TEXT[status] || '')
+
   const record = {
     status,
-    reason,
+    reason: resolvedReason,
     detail,
     at: Date.now(),
     read

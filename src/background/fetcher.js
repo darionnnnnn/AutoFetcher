@@ -5,7 +5,7 @@ import { slotOf } from './scheduler.js'
 import { notify } from './notify.js'
 import { injectContent } from './inject.js'
 import { evaluateAlerts } from '../shared/alerts.js'
-import { isSuccess } from '../shared/record-status.js'
+import { isSuccess, healthStatusOf } from '../shared/record-status.js'
 import { setTaskHealth, refreshBadge } from './health.js'
 import { ensureLoggedIn } from './login.js'
 
@@ -140,11 +140,17 @@ async function processAlerts(record) {
   }
 }
 
-// 寫入抓取紀錄並更新帳本
-async function writeRecord(record) {
+// 寫入抓取紀錄並更新帳本與 health
+async function writeRecord(record, opts = {}) {
+  const { parentId, skipLedger } = opts
   await processAlerts(record)
   await appendRecord(record.slot.slice(0, 10), record)
-  await recordLedger(record.taskId, record.slot, record.status)
+  if (!skipLedger) {
+    await recordLedger(parentId, record.slot, record.status)
+  }
+  const healthStatus = record.partial === true ? 'partial' : healthStatusOf(record.status)
+  await setTaskHealth(parentId, { status: healthStatus, detail: record.error })
+  await refreshBadge()
   // popup 顯示「最後值」讀的是 lastValues；失敗的紀錄不覆蓋上一次成功的值
   if (isSuccess(record)) {
     await setLastValue(record.taskId, { value: record.value, capturedAt: record.capturedAt })
@@ -202,6 +208,7 @@ export async function runTask(task, opts = {}) {
     extractTimeoutMs = 15000,
     dryRun = false
   } = opts
+  const isManual = reason === 'manual'
 
   let extraDelayMs
   if (opts.extraDelayMs !== undefined) {
@@ -213,8 +220,8 @@ export async function runTask(task, opts = {}) {
     extraDelayMs = typeof settings?.extraDelaySec === 'number' ? settings.extraDelaySec * 1000 : 3000
   }
 
-  // 1. 冪等檢查：已在帳本中則直接返回 null（dryRun 略過）
-  if (!dryRun) {
+  // 1. 冪等檢查：已在帳本中則直接返回 null（dryRun 與手動抓取略過）
+  if (!dryRun && !isManual) {
     const ledger = await getLedger()
     if (ledger[task.id]?.[slot]) return null
   }
@@ -228,8 +235,8 @@ export async function runTask(task, opts = {}) {
   // 同站台串行佇列執行
   const origin = getOrigin(task.url)
   return enqueueForOrigin(origin, async (queueCtx) => {
-    // 佇列中再次確認冪等，防止併發重複執行（dryRun 略過）
-    if (!dryRun) {
+    // 佇列中再次確認冪等，防止併發重複執行（dryRun 與手動抓取略過）
+    if (!dryRun && !isManual) {
       const currentLedger = await getLedger()
       if (currentLedger[task.id]?.[slot]) return null
     }
@@ -303,7 +310,7 @@ export async function runTask(task, opts = {}) {
           capturedAt: new Date().toISOString(),
           status: 'login_failed',
           error: login?.reason || '無法登入'
-        })
+        }, { parentId: task.id, skipLedger: isManual })
       }
 
       // 9. 注入 content script（必須在送訊息之前）
@@ -360,31 +367,31 @@ export async function runTask(task, opts = {}) {
         }
         if (res.partial === true) {
           record.partial = true
-          await setTaskHealth(task.id, { status: 'partial', reason: '只抓到部分', detail: '' })
-          await refreshBadge()
         }
 
-        return await writeRecord(record)
+        return await writeRecord(record, { parentId: task.id, skipLedger: isManual })
       }
 
       // 結果處理：元素未找到（可重試）
       if (res?.error === 'not_found') {
-        if (attempt < 3) {
+        if (!isManual && attempt < 3) {
           await scheduleRetry(task.id, attempt, false, slot)
           return null
         }
 
-        // 重試用盡：更新 notFoundStreak，連兩次建議前台擷取
-        const currentTask = (await getTask(task.id)) || { ...task }
-        const streak = (currentTask.notFoundStreak || 0) + 1
-        currentTask.notFoundStreak = streak
-        if (streak >= 2) currentTask.suggestForeground = true
-        await saveTask(currentTask)
+        if (!isManual) {
+          // 重試用盡：更新 notFoundStreak，連兩次建議前台擷取
+          const currentTask = (await getTask(task.id)) || { ...task }
+          const streak = (currentTask.notFoundStreak || 0) + 1
+          currentTask.notFoundStreak = streak
+          if (streak >= 2) currentTask.suggestForeground = true
+          await saveTask(currentTask)
 
-        await notify(`${task.id}:not_found`, {
-          title: `AutoFetcher: ${task.name}`,
-          message: '擷取失敗：找不到目標元素'
-        })
+          await notify(`${task.id}:not_found`, {
+            title: `AutoFetcher: ${task.name}`,
+            message: '擷取失敗：找不到目標元素'
+          })
+        }
 
         return await writeRecord({
           taskId: task.id,
@@ -392,7 +399,7 @@ export async function runTask(task, opts = {}) {
           capturedAt: new Date().toISOString(),
           status: 'not_found',
           snippet: res.snippet
-        })
+        }, { parentId: task.id, skipLedger: isManual })
       }
 
       // 結果處理：解析錯誤（不重試，不得含 value 欄位）
@@ -403,11 +410,11 @@ export async function runTask(task, opts = {}) {
           capturedAt: new Date().toISOString(),
           status: 'parse_error',
           raw: res.raw
-        })
+        }, { parentId: task.id, skipLedger: isManual })
       }
 
       // 其他未知錯誤
-      if (attempt < 3) {
+      if (!isManual && attempt < 3) {
         await scheduleRetry(task.id, attempt, false, slot)
         return null
       }
@@ -417,11 +424,11 @@ export async function runTask(task, opts = {}) {
         capturedAt: new Date().toISOString(),
         status: 'error',
         error: String(res?.error || '擷取失敗')
-      })
+      }, { parentId: task.id, skipLedger: isManual })
 
     } catch (err) {
       if (dryRun) return { ok: false, error: String(err?.message || err) }
-      if (attempt < 3) {
+      if (!isManual && attempt < 3) {
         await scheduleRetry(task.id, attempt, false, slot)
         return null
       }
@@ -431,7 +438,7 @@ export async function runTask(task, opts = {}) {
         capturedAt: new Date().toISOString(),
         status: 'error',
         error: String(err?.message || err)
-      })
+      }, { parentId: task.id, skipLedger: isManual })
     } finally {
       // 若有記錄前景抓取前作用中的分頁，將焦點還原
       if (originalTabId != null) {
