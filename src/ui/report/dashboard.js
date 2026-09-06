@@ -488,6 +488,17 @@ function setupEvents(grid) {
     }
   }
 
+  const paletteToggle = document.getElementById('palette-toggle')
+  if (paletteToggle && !paletteToggle._paletteToggleAttached) {
+    paletteToggle._paletteToggleAttached = true
+    paletteToggle.addEventListener('click', () => {
+      const palette = document.getElementById('source-palette')
+      if (!palette) return
+      const collapsed = palette.classList.toggle('collapsed')
+      paletteToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true')
+    })
+  }
+
   const search = document.getElementById('palette-search')
   if (search && !search._paletteSearchAttached) {
     search._paletteSearchAttached = true

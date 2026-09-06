@@ -13,6 +13,12 @@
     .tab-btn:hover { background: var(--hover); color: var(--text); }
     .history-layout { display: grid; grid-template-columns: 280px 1fr; gap: 1.25rem; align-items: start; }
     @media (max-width: 768px) { .history-layout { grid-template-columns: 1fr; } }
+    /* 窄視窗:資料來源側欄改成整列排在格線上方,並可收合,不與格線搶寬度 */
+    @media (max-width: 900px) {
+      .dashboard-layout { flex-direction: column; }
+      #source-palette { width: auto; max-height: 40vh; }
+      #source-palette #palette-list { max-height: 30vh; }
+    }
     #range-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; align-items: center; }
     #range-bar button, #range-bar input[type="date"] { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.75rem; border-radius: var(--radius); font-size: 0.85rem; }
     #range-bar button { cursor: pointer; }
@@ -115,6 +121,8 @@
     .dashboard-layout { display: flex; gap: 1rem; align-items: flex-start; }
     #source-palette { width: 220px; flex-shrink: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; }
     #source-palette[hidden] { display: none; }
+    #source-palette.collapsed #palette-list, #source-palette.collapsed #palette-search { display: none; }
+    #palette-toggle { background: transparent; border: none; color: var(--text-muted); font-size: 0.8rem; text-align: left; padding: 0; cursor: pointer; }
     #palette-search { width: 100%; background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.6rem; border-radius: var(--radius); font-size: 0.85rem; }
     #palette-list { display: flex; flex-direction: column; gap: 0.35rem; max-height: 70vh; overflow-y: auto; }
     [data-palette-task] { padding: 0.4rem 0.6rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.85rem; cursor: grab; user-select: none; }
@@ -269,6 +277,7 @@
       <div id="dnd-toast" hidden></div>
       <div class="dashboard-layout">
         <aside id="source-palette" hidden>
+          <button type="button" id="palette-toggle" aria-expanded="true">資料來源</button>
           <input type="text" id="palette-search" placeholder="搜尋任務">
           <div id="palette-list"></div>
         </aside>

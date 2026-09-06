@@ -80,3 +80,39 @@ test('只有 slot 的紀錄之間也要比得出新舊', () => {
   const out = pivot(recs, ['a'], { bucketMinutes: 5 })
   assert.equal(out.rows[0].values.a, 9)
 })
+
+// ---- 有效時刻必須是唯一一份:每日聚合與 latest 也要用同一套 ----
+
+test('每日聚合也吃得到沒有 slot 的紀錄', async () => {
+  const { JSDOM } = await import('jsdom')
+  const jd = new JSDOM('<!doctype html><body></body>')
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  const recs = [{ taskId: 'a', capturedAt: UTC_0900_TPE, value: 5, status: 'ok' }]
+  const series = buildSeries(recs, [{ taskId: 'a', aggregation: 'dailyLast' }],
+    { from: '2026-09-07', to: '2026-09-07' })
+  const pts = (series[0]?.points || []).filter(p => p.v !== null)
+  assert.equal(pts.length, 1, '每日聚合把無 slot 紀錄歸到 undefined 那一天就會整筆消失')
+})
+
+test('latest 取最新時,沒有 slot 的紀錄不可被當成最舊', async () => {
+  const { latest } = await import('../src/ui/report/series.js')
+  const recs = [
+    { taskId: 'a', slot: '2026-09-07T09:00', capturedAt: '2026-09-07T01:00:00.000Z', value: 1, status: 'ok' },
+    // 同一天稍晚的手動觸發:沒有 slot
+    { taskId: 'a', capturedAt: '2026-09-07T02:00:00.000Z', value: 2, status: 'ok' }
+  ]
+  const { current } = latest(recs, 'a', '2026-09-07')
+  assert.equal(current?.value, 2, '數值卡片會顯示舊值,而表格顯示新值,同一份資料兩種答案')
+})
+
+test('latest 的前一日比較也用同一套有效時刻', async () => {
+  const { latest } = await import('../src/ui/report/series.js')
+  const recs = [
+    // 前一天,只有 capturedAt(UTC)
+    { taskId: 'a', capturedAt: '2026-09-05T01:00:00.000Z', value: 10, status: 'ok' },
+    { taskId: 'a', slot: '2026-09-07T09:00', capturedAt: '2026-09-07T01:00:00.000Z', value: 20, status: 'ok' }
+  ]
+  const { prevDay } = latest(recs, 'a', '2026-09-07')
+  assert.equal(prevDay?.value, 10, '前一日的值要找得到,才算得出日變化')
+})

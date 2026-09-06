@@ -186,6 +186,39 @@ test('落點被既有卡片佔住時仍要找得到不重疊的位置', async ()
 
 test('窄視窗時側欄不與格線搶寬度', async () => {
   const css = readFileSync(new URL('../src/ui/report/report.html', import.meta.url), 'utf8')
-  const hasNarrowRule = /@media[^{]*max-width:\s*(768|900)px[^{]*\{[\s\S]*?(#source-palette|\.dashboard-layout)/.test(css)
-  assert.ok(hasNarrowRule, '窄視窗要有側欄的版面規則(改為整列或收合)')
+  // 逐個 @media 區塊檢查;跨整份檔案的鬆散比對會讓任何一條 @media 都通過
+  const blocks = []
+  const re = /@media([^{]*)\{/g
+  let m
+  while ((m = re.exec(css)) !== null) {
+    let depth = 1
+    let i = re.lastIndex
+    while (i < css.length && depth > 0) {
+      if (css[i] === '{') depth++
+      else if (css[i] === '}') depth--
+      i++
+    }
+    blocks.push({ cond: m[1], body: css.slice(re.lastIndex, i - 1) })
+  }
+  const narrow = blocks.filter(b => /max-width:\s*([7-9]\d\d)px/.test(b.cond))
+  assert.ok(narrow.length > 0, '要有窄視窗的 media query')
+  assert.ok(narrow.some(b => /#source-palette|\.dashboard-layout/.test(b.body)),
+    '窄視窗要真的有側欄或版面容器的規則,不能只是別的元素的規則')
+})
+
+test('側欄可以收合(窄視窗時不佔畫面)', async () => {
+  const { ls, db, doc } = await fresh()
+  const did = (await ls.getLayout()).dashboards[0].id
+  await db.renderDashboard(did)
+  doc.getElementById('edit-layout').click()
+  await new Promise(r => setTimeout(r, 30))
+  const toggle = doc.getElementById('palette-toggle')
+  assert.ok(toggle, '要有收合切換鈕')
+  const palette = doc.getElementById('source-palette')
+  assert.equal(palette.classList.contains('collapsed'), false)
+  toggle.click()
+  assert.equal(palette.classList.contains('collapsed'), true)
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+  toggle.click()
+  assert.equal(palette.classList.contains('collapsed'), false)
 })

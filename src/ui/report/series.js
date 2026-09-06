@@ -89,7 +89,7 @@ export function buildSeries(records, source, options = {}) {
       const days = (from && to) ? getDaysInRange(from, to) : [];
       const recordsByDay = new Map();
       for (const r of matched) {
-        const d = r.slot ? r.slot.slice(0, 10) : r.date;
+        const d = effectiveTimeOf(r).slice(0, 10) || r.date;
         if (!recordsByDay.has(d)) {
           recordsByDay.set(d, []);
         }
@@ -107,7 +107,8 @@ export function buildSeries(records, source, options = {}) {
         let v = null;
         switch (agg) {
           case 'dailyLast': {
-            const sorted = [...valids].sort((a, b) => (a.slot || '').localeCompare(b.slot || ''));
+            const sorted = [...valids].sort((a, b) =>
+              (effectiveTimeOf(a) || '').localeCompare(effectiveTimeOf(b) || ''));
             v = sorted[sorted.length - 1].value;
             break;
           }
@@ -170,13 +171,16 @@ export function latest(records, taskId, today) {
     return { current: null, prev: null, prevDay: null };
   }
 
-  const sorted = [...matched].sort((a, b) => (a.slot || '').localeCompare(b.slot || ''));
+  // 排序用有效時刻:只看 slot 的話,手動觸發/補抓(沒有 slot)會被當成最舊,
+  // 數值卡片就會顯示舊值,而表格顯示新值
+  const sorted = [...matched].sort((a, b) =>
+    (effectiveTimeOf(a) || '').localeCompare(effectiveTimeOf(b) || ''));
   const current = sorted[sorted.length - 1];
   const prev = sorted.length >= 2 ? sorted[sorted.length - 2] : null;
 
-  const currentDate = current.slot ? current.slot.slice(0, 10) : current.date;
+  const currentDate = effectiveTimeOf(current).slice(0, 10) || current.date;
   const earlierSuccess = sorted.filter(r => {
-    const d = r.slot ? r.slot.slice(0, 10) : r.date;
+    const d = effectiveTimeOf(r).slice(0, 10) || r.date;
     return d < currentDate && isSuccess(r);
   });
   const prevDay = earlierSuccess.length > 0 ? earlierSuccess[earlierSuccess.length - 1] : null;
