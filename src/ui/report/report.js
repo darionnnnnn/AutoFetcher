@@ -273,6 +273,7 @@ export async function renderFilters() {
     { key: 'late', label: '逾時 (late)' },
     { key: 'not_found', label: '未找到 (not_found)' },
     { key: 'parse_error', label: '抓不到數值 (parse_error)' },
+    { key: 'login_failed', label: '無法登入 (login_failed)' },
     { key: 'error', label: '錯誤 (error)' }
   ]
   for (const item of allStatuses) {

@@ -169,7 +169,7 @@ test('歷史頁的狀態篩選要涵蓋所有真的會產生的狀態', async ()
   const rp = await import('../src/ui/report/report.js?t=' + Math.random())
   await rp.renderFilters()
   const keys = [...jd.window.document.querySelectorAll('#filter-statuses input[type="checkbox"]')].map(cb => cb.value)
-  for (const k of ['ok', 'fallback', 'late', 'not_found', 'parse_error', 'error']) {
+  for (const k of ['ok', 'fallback', 'late', 'not_found', 'parse_error', 'login_failed', 'error']) {
     assert.ok(keys.includes(k), `狀態篩選缺少 ${k}(實際會寫出這個狀態卻篩不到),實得 ${keys.join(',')}`)
   }
 })
