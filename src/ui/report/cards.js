@@ -585,7 +585,28 @@ function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
 function renderGaugeCard(card, ctx, { bodyEl }) {
   const taskId = card.source?.[0]?.taskId;
   const { current } = taskId ? latest(ctx.records, taskId, ctx.today) : { current: null };
-  const val = current && typeof current.value === 'number' && Number.isFinite(current.value) ? current.value : null;
+  // 與數值卡同一條規則：紅燈或最新一筆不成功就不畫指針，畫了等於報一個假的讀數
+  const health = taskId ? ctx.health?.[parentIdOf(taskId)] : null;
+  const isFailed = (current && !isSuccess(current)) || isRed(health);
+  const val = (!isFailed && current && typeof current.value === 'number' && Number.isFinite(current.value))
+    ? current.value
+    : null;
+
+  if (isFailed) {
+    const noteEl = document.createElement('div');
+    noteEl.className = 'card-number-display';
+    const valEl = document.createElement('span');
+    valEl.className = 'card-number-value';
+    valEl.textContent = '—';
+    if (health?.reason) valEl.setAttribute('title', health.reason);
+    noteEl.appendChild(valEl);
+    bodyEl.appendChild(noteEl);
+    return;
+  }
+
+  if (isWarn(health) && health?.reason) {
+    bodyEl.setAttribute('title', health.reason);
+  }
 
   const svg = gauge({
     value: val,

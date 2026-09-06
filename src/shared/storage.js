@@ -455,11 +455,19 @@ export async function getHealthMap() {
   return (res.health && typeof res.health === 'object') ? res.health : {}
 }
 
+// 一次記下多個序列最後抓到的值（多值任務逐個寫等於整包讀寫 N 遍）
+export async function setLastValues(entries) {
+  if (!entries || typeof entries !== 'object') return
+  const keys = Object.keys(entries)
+  if (keys.length === 0) return
+  const all = await getLastValues()
+  for (const k of keys) all[k] = entries[k]
+  await chrome.storage.local.set({ lastValues: all })
+}
+
 // 記下某個任務最後一次抓到的值
 export async function setLastValue(taskId, entry) {
-  const all = await getLastValues()
-  all[taskId] = entry
-  await chrome.storage.local.set({ lastValues: all })
+  return setLastValues({ [taskId]: entry })
 }
 
 // 取得各任務最後一次抓到的值（popup 顯示用）

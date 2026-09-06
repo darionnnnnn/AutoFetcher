@@ -291,7 +291,12 @@ function createTaskRow(t) {
     runBtn.disabled = true
     try {
       const res = await chrome.runtime.sendMessage({ type: MSG.RUN_TASK, taskId: t.id })
-      if (res && res.outcome === 'done') {
+      if (Array.isArray(res?.values) && res.values.length > 0) {
+        // 多值任務逐值回報，只說一個數字看不出其他值怎麼了
+        showResult(res.values
+          .map(v => `${v.name}: ${v.ok ? v.value : (v.error || '失敗')}`)
+          .join('  '))
+      } else if (res && res.outcome === 'done') {
         showResult(res.value !== null && res.value !== undefined ? `抓到 ${res.value}` : '抓到值')
       } else {
         showResult(`失敗：${res?.error || res?.status || ''}`.trim())

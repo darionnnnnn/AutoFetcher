@@ -1,5 +1,5 @@
 // AutoFetcher MV3 Background Service Worker 入口總接線
-import { init as initStorage, getTask, saveTask } from '../shared/storage.js'
+import { init as initStorage, getTask, saveTask, getRecordsByDate } from '../shared/storage.js'
 import { MSG } from '../shared/messages.js'
 import * as diag from '../shared/diag.js'
 import {
@@ -23,6 +23,7 @@ import {
 import { injectContent } from './inject.js'
 import { scheduleSiteCheck, runSiteCheck } from './sitecheck.js'
 import { isSuccess } from '../shared/record-status.js'
+import { parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
 
 
 // 由任務的擷取規格推出選取模式要預先勾回去的值（多值走 spec.fields，單值走 spec.block）
@@ -238,10 +239,27 @@ export async function handleMessage(msg, sender) {
       if (!record) {
         return { ok: true, outcome: 'failed', status: 'error', error: '沒有結果' }
       }
-      if (isSuccess(record)) {
-        return { ok: true, outcome: 'done', status: record.status, value: record.value }
+      // 多值任務要逐值回報，只回第一筆使用者看不出另外幾個值怎麼了
+      let values
+      if (Array.isArray(task.fields) && task.fields.length > 0 && typeof record.slot === 'string') {
+        const sameSlot = (await getRecordsByDate(record.slot.slice(0, 10)))
+          .filter(r => r.slot === record.slot && parentIdOf(r.taskId) === task.id)
+        if (sameSlot.length > 0) {
+          const idx = buildSeriesIndex([task])
+          values = sameSlot.map(r => ({
+            // 按鈕就在那個任務旁邊，用值名就夠，不必每個都重複任務名
+            name: idx.byId[r.taskId]?.shortName || nameOf(idx, r.taskId),
+            ok: isSuccess(r),
+            value: isSuccess(r) ? r.value : undefined,
+            error: isSuccess(r) ? undefined : (r.error || r.status)
+          }))
+        }
       }
-      return { ok: true, outcome: 'failed', status: record.status, error: record.error || '' }
+
+      if (isSuccess(record)) {
+        return { ok: true, outcome: 'done', status: record.status, value: record.value, values }
+      }
+      return { ok: true, outcome: 'failed', status: record.status, error: record.error || '', values }
     }
 
     if (msg.type === MSG.REBUILD_ALARMS) {
@@ -349,7 +367,11 @@ export async function handleMessage(msg, sender) {
       await chrome.tabs.sendMessage(tab.id, {
         type: MSG.ENTER_PICK,
         purpose: msg.purpose || 'repick',
-        taskId: msg.taskId
+        taskId: msg.taskId,
+        // 這是重選最常走的那條路（任務頁不帶 tabId）：新分頁沒有「上次右鍵的元素」，
+        // 不帶這兩個欄位就沒有預選對象，既有的值也勾不回來
+        locator: msg.locator || task.locator,
+        preselect: msg.preselect || preselectOf(task)
       })
       return { ok: true }
     }

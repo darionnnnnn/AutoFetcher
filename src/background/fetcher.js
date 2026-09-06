@@ -1,5 +1,5 @@
 // AutoFetcher 擷取流程：開分頁、注入、擷取、寫紀錄、重試
-import { getTask, saveTask, appendRecord, appendRecords, getRecordsInRange, getSettings, getAlertLog, setAlertLog, setLastValue } from '../shared/storage.js'
+import { getTask, saveTask, appendRecord, appendRecords, getRecordsInRange, getSettings, getAlertLog, setAlertLog, setLastValue, setLastValues } from '../shared/storage.js'
 import { seriesIdOf, parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
 import { MSG } from '../shared/messages.js'
 import { slotOf } from './scheduler.js'
@@ -9,6 +9,7 @@ import { evaluateAlerts } from '../shared/alerts.js'
 import { isSuccess, healthStatusOf } from '../shared/record-status.js'
 import { setTaskHealth, refreshBadge } from './health.js'
 import { ensureLoggedIn } from './login.js'
+import * as diag from '../shared/diag.js'
 
 // 短暫等待輔助函式（非排程）
 function sleep(ms) {
@@ -446,12 +447,14 @@ export async function runTask(task, opts = {}) {
             await recordLedger(task.id, slot, ledgerStatus)
           }
 
-          // lastValues：成功的值各自以子序列 id 寫入
+          // lastValues：成功的值各自以子序列 id 寫入（整組一次寫完，不逐個讀寫）
+          const lastEntries = {}
           for (const rec of records) {
             if (isSuccess(rec)) {
-              await setLastValue(rec.taskId, { value: rec.value, capturedAt: rec.capturedAt })
+              lastEntries[rec.taskId] = { value: rec.value, capturedAt: rec.capturedAt }
             }
           }
+          await setLastValues(lastEntries)
 
           // health：整個任務只寫一次，寫在父任務 id 上；狀態的算法與單值共用同一份
           const failCount = records.filter(r => !isSuccess(r)).length
@@ -465,6 +468,18 @@ export async function runTask(task, opts = {}) {
               await saveTask(currentTask)
             }
           }
+
+          // 設定頁的診斷要看得出這一次抓了幾個值、哪幾個沒抓到
+          const idx = buildSeriesIndex([task])
+          const failedNames = records
+            .filter(r => !isSuccess(r))
+            .map(r => nameOf(idx, r.taskId))
+          await diag.log('fetch_fields', {
+            taskId: task.id,
+            slot,
+            total: records.length,
+            failed: failedNames
+          })
 
           const firstSuccess = records.find(r => isSuccess(r))
           return firstSuccess || records[0] || null

@@ -99,7 +99,9 @@ function renderTaskRow(task, { lastValues, nextRuns, healthMap }) {
       retryBtn.disabled = true
       try {
         const res = await chrome.runtime.sendMessage({ type: MSG.RUN_TASK, taskId: task.id })
-        if (res && res.outcome === 'done') {
+        if (Array.isArray(res?.values) && res.values.length > 0) {
+          showResult(res.values.map(v => `${v.name}: ${v.ok ? v.value : (v.error || '失敗')}`).join('  '))
+        } else if (res && res.outcome === 'done') {
           showResult(res.value !== null && res.value !== undefined ? `抓到 ${res.value}` : '抓到值')
         } else {
           showResult(`失敗：${res?.error || res?.status || ''}`.trim())

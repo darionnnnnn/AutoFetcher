@@ -804,7 +804,7 @@ function registerCardDropTarget(cardEl, card, ctx) {
       }
 
       const patch = (Array.isArray(payload.seriesIds) && payload.seriesIds.length > 0)
-        ? applyDropMany(card, payload.seriesIds, opts)
+        ? applyDropMany(card, payload.seriesIds, { ...opts, nameOf: (id) => ctx?.tasksById?.[id]?.name || id })
         : applyDrop(card, payload.taskId, opts)
       if (!patch) return
       if (patch.rejected) {

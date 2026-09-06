@@ -95,7 +95,12 @@ test('多個值拖到數值卡時要說明只用了哪一個', async () => {
   const patch = dr.applyDropMany(card, ['bank#k1', 'bank#k2'], {})
   assert.deepEqual(patch.source.map(s => s.taskId), ['bank#k1'])
   assert.ok(patch.notice, '只吃得下一個值卻不說，使用者會以為另一個掉了')
-  assert.ok(String(patch.notice).includes('bank#k1') || String(patch.notice).includes('第一'))
+  const named = dr.applyDropMany(
+    { type: 'number', source: [{ taskId: 'old' }], options: {} },
+    ['bank#k1', 'bank#k2'],
+    { nameOf: (id) => ({ 'bank#k1': '臺銀 · 美金買入' })[id] || id }
+  )
+  assert.ok(String(named.notice).includes('美金買入'), `提示要說得出是哪個值：${named.notice}`)
 })
 
 // ---- B5-4：範本產不出東西時要說 ----
