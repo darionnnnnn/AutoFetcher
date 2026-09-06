@@ -17,8 +17,14 @@ function createEvent() {
   }
 }
 
-function createStorageArea(ns, recordCall) {
+function createStorageArea(ns, recordCall, emitChanges) {
   let store = {}
+  // 變更通知：只有真的改到值才發，形狀比照 chrome.storage.onChanged
+  function notify(changes) {
+    if (typeof emitChanges === 'function' && Object.keys(changes).length > 0) {
+      emitChanges(changes)
+    }
+  }
   return {
     async get(keys) {
       recordCall(`${ns}.get`, [keys])
@@ -53,15 +59,25 @@ function createStorageArea(ns, recordCall) {
     async set(items) {
       recordCall(`${ns}.set`, [items])
       if (items && typeof items === 'object') {
+        const changes = {}
+        for (const [k, v] of Object.entries(items)) {
+          changes[k] = { oldValue: store[k], newValue: v }
+        }
         Object.assign(store, items)
+        notify(changes)
       }
     },
     async remove(keys) {
       recordCall(`${ns}.remove`, [keys])
       const arr = Array.isArray(keys) ? keys : [keys]
+      const changes = {}
       for (const k of arr) {
+        if (k in store) {
+          changes[k] = { oldValue: store[k], newValue: undefined }
+        }
         delete store[k]
       }
+      notify(changes)
     },
     async clear() {
       recordCall(`${ns}.clear`, [])
@@ -80,8 +96,16 @@ function buildChromeMock() {
     calls.push({ api, args })
   }
 
-  const localStorage = createStorageArea('storage.local', recordCall)
-  const sessionStorage = createStorageArea('storage.session', recordCall)
+  const storageOnChanged = createEvent()
+  function emitStorageChanges(areaName) {
+    return (changes) => {
+      for (const fn of storageOnChanged._listeners) {
+        fn(changes, areaName)
+      }
+    }
+  }
+  const localStorage = createStorageArea('storage.local', recordCall, emitStorageChanges('local'))
+  const sessionStorage = createStorageArea('storage.session', recordCall, emitStorageChanges('session'))
 
   const alarmsMap = new Map()
   const onAlarm = createEvent()
@@ -103,13 +127,15 @@ function buildChromeMock() {
   const windowsMap = new Map()
   let defaultTabStatus = 'complete'
   let tabResponder = () => undefined
+  let runtimeResponder = () => undefined
 
   const mock = {
     __calls: calls,
 
     storage: {
       local: localStorage,
-      session: sessionStorage
+      session: sessionStorage,
+      onChanged: storageOnChanged
     },
 
     alarms: {
@@ -263,6 +289,8 @@ function buildChromeMock() {
       },
       async sendMessage(message) {
         recordCall('runtime.sendMessage', [message])
+        // 預設回 undefined（與改動前相同）；測試可用 __setRuntimeResponder 給回覆內容
+        return runtimeResponder(message)
       },
       onMessage,
       onStartup,
@@ -373,6 +401,9 @@ function buildChromeMock() {
     __setTabResponder(fn) {
       tabResponder = fn
     },
+    __setRuntimeResponder(fn) {
+      runtimeResponder = fn
+    },
     __setTabState(tabId, patch) {
       const tab = tabsMap.get(tabId)
       if (tab) Object.assign(tab, patch)
@@ -389,8 +420,10 @@ function buildChromeMock() {
       calls.length = 0
       defaultTabStatus = 'complete'
       tabResponder = () => undefined
+      runtimeResponder = () => undefined
       localStorage._reset()
       sessionStorage._reset()
+      storageOnChanged._reset()
       alarmsMap.clear()
       onAlarm._reset()
       tabsMap.clear()
