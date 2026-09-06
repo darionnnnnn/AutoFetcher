@@ -8,6 +8,7 @@ import {
   slotOf,
   nextDailyRun,
   shouldRunInterval,
+  nextIntervalRun,
   parseAlarmName
 } from './scheduler.js'
 import { runTask } from './fetcher.js'
@@ -168,9 +169,17 @@ export async function handleAlarm(alarm, testOpts = {}) {
         await chrome.alarms.clear(alarm.name)
         return
       }
-      if (task.schedule?.type === 'interval' && !shouldRunInterval(task, Date.now())) return
+      // interval 是 one-shot alarm,必須先把下一次排好,任何提早 return 都不能跳過重排
+      if (task.schedule?.type === 'interval') {
+        const nextWhen = nextIntervalRun(task, Date.now())
+        if (nextWhen !== null) await chrome.alarms.create(alarm.name, { when: nextWhen })
+        if (!shouldRunInterval(task, Date.now())) return
+      }
 
-      const slot = task.schedule?.type === 'daily' ? getDailySlot(task, parsed.index) : slotOf(Date.now())
+      // interval 的槽取 alarm 排定時刻(對齊格線),晚觸發不可自成新槽,冪等帳本靠它
+      const slot = task.schedule?.type === 'daily'
+        ? getDailySlot(task, parsed.index)
+        : slotOf(alarm.scheduledTime ?? Date.now())
       await runTask(task, { slot, ...testOpts })
 
       if (task.schedule?.type === 'daily') {

@@ -65,7 +65,7 @@ export function shouldRunInterval(task, nowMs) {
   const schedule = task?.schedule || {}
   const weekdays = schedule.weekdays ?? task?.weekdays
   const now = new Date(nowMs)
-  if (!Array.isArray(weekdays) || !weekdays.includes(now.getDay())) {
+  if (Array.isArray(weekdays) && weekdays.length > 0 && !weekdays.includes(now.getDay())) {
     return false
   }
   const window = schedule.window
@@ -131,11 +131,10 @@ export async function rebuildAlarms() {
           }
         }
       } else if (schedule.type === 'interval') {
-        const weekdays = schedule.weekdays ?? task.weekdays
-        if (typeof schedule.everyMinutes !== 'number' || schedule.everyMinutes <= 0) continue
-        if (weekdays !== undefined && (!Array.isArray(weekdays) || weekdays.length === 0)) continue
-
-        await chrome.alarms.create(alarmName(task.id, 0), { periodInMinutes: schedule.everyMinutes })
+        const when = nextIntervalRun(task, Date.now())
+        if (when !== null) {
+          await chrome.alarms.create(alarmName(task.id, 0), { when })
+        }
       }
     } catch {
       continue
