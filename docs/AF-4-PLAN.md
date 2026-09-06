@@ -177,8 +177,9 @@
 | A2a | 地端(gemma-4) | pass,1 輪 99s | diff 逐行乾淨,無偷改無註解流失 | 無 |
 | A2b(main.js 接線) | Claude | 完成 | 10 條新測試 + 3 項突變全紅 | main.js 428 行超過 forge 整檔重寫上限,八行改動改由 Claude 自做 |
 | A3 | Claude | 完成 | 7 條新測試 + 2 項突變全紅,全套 976 綠 | picker.js 800 行超過委派上限,改由 Claude 自做 |
-| B1 | 地端 | | | |
-| B2 | 地端 | | | |
+| B1 | 地端(gemma-4) | pass,1 輪 95s | 14 條新測試 + 4 項突變全紅 | 產出用 `new Date(字串)` 解析本地時間(規格明文禁止)且該欄位是死碼、一個空的 else 死區塊、漏 `?? null`;Claude 三處清掉 |
+| B2a(cards.js) | Claude | 完成 | 13 條新測試 + 6 項突變(1 項等價,換真突變後紅) | cards.js 562 行超過 forge 整檔重寫上限 |
+| B2b(drawer + html) | Claude | 完成 | 13 條新測試 + 6 項突變全紅,全套 1015 綠 | drawer.js 503 行同樣超過上限。`normalizeCard` 未加三個新選項的預設:cards.js render 已處理 undefined,再加一份等於兩個事實來源 |
 | C1 | agy | | | |
 | C2 | agy | | | |
 | C3 | agy | | | |
