@@ -644,7 +644,8 @@ function filterPaletteItems(q) {
     const parentName = (parentNameEl ? parentNameEl.textContent : parent.textContent) || ''
     const parentMatches = !query || parentName.toLowerCase().includes(query)
 
-    const childItems = document.querySelectorAll(`[data-palette-series][data-parent-id="${parentId}"]`)
+    const childItems = [...document.querySelectorAll('[data-palette-series]')]
+      .filter(el => el.getAttribute('data-parent-id') === parentId)
     let anyChildMatches = false
 
     for (const child of childItems) {
@@ -679,6 +680,25 @@ async function renderPalette() {
     item.setAttribute('data-palette-task', '')
     item.setAttribute('data-task-id', t.id)
     item.setAttribute('data-mode', t.mode || 'number')
+    if (isMulti) {
+      // 三家銀行各六個值就是十八列，要收得起來才看得完
+      const toggle = document.createElement('button')
+      toggle.type = 'button'
+      toggle.setAttribute('data-palette-toggle', t.id)
+      toggle.className = 'palette-toggle'
+      toggle.textContent = '▾'
+      toggle.addEventListener('click', (ev) => {
+        ev.stopPropagation()
+        const children = [...document.querySelectorAll('[data-palette-series]')]
+          .filter(el => el.getAttribute('data-parent-id') === t.id)
+        const collapsed = toggle.getAttribute('aria-expanded') === 'false'
+        for (const c of children) c.hidden = !collapsed
+        toggle.setAttribute('aria-expanded', collapsed ? 'true' : 'false')
+        toggle.textContent = collapsed ? '▾' : '▸'
+      })
+      toggle.setAttribute('aria-expanded', 'true')
+      item.appendChild(toggle)
+    }
     const nameEl = document.createElement('span')
     nameEl.className = 'palette-task-name'
     nameEl.textContent = t.name || ''

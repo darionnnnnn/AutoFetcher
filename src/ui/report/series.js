@@ -373,3 +373,30 @@ export function pivot(records, taskIds, options = {}) {
 
   return { columns, rows };
 }
+
+/**
+ * 幫樞紐表的每一列算出「與上一列同欄的差」（純函式，不碰 DOM）。
+ * 缺值不補、不內插：這一列或上一列沒有值就沒有差可算（SPEC §8.6）。
+ * 不修改傳入的資料，差值放在每一列新的 `deltas` 欄位。
+ */
+export function withDelta(rows, columnIds) {
+  const cols = Array.isArray(columnIds) ? columnIds : [];
+  const list = Array.isArray(rows) ? rows : [];
+  const prev = {};
+  return list.map(row => {
+    const deltas = {};
+    for (const col of cols) {
+      const raw = row?.values?.[col];
+      const cur = typeof raw === 'number' && Number.isFinite(raw)
+        ? raw
+        : (raw && typeof raw.value === 'number' && Number.isFinite(raw.value) ? raw.value : null);
+      const before = prev[col];
+      if (cur !== null && typeof before === 'number') {
+        deltas[col] = { diff: cur - before, prev: before };
+      }
+      // 這一列沒有值就把上一列忘掉：規格是「上一列」，不是「往前找最近的成功值」
+      prev[col] = cur;
+    }
+    return { ...row, deltas };
+  });
+}

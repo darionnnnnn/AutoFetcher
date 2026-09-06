@@ -389,6 +389,15 @@ export function render(ctx) {
     }
     if (t.mode !== undefined) document.getElementById('mode').value = t.mode
     if (t.spec?.strategy) document.getElementById('strategy').value = t.spec.strategy
+    // 這個任務用的是已經從下拉移除的策略：不說明的話使用者會以為設定不見了
+    const legacyNote = document.getElementById('legacy-strategy-note')
+    if (legacyNote) {
+      const legacy = t.spec?.strategy && !['auto', 'regex'].includes(t.spec.strategy)
+      legacyNote.hidden = !legacy
+      legacyNote.textContent = legacy
+        ? `這個任務用的抓取策略是「${t.spec.strategy}」，下拉已不再提供，但設定會原樣保留;改選其他策略就會換掉。`
+        : ''
+    }
     if (t.spec?.regex !== undefined) document.getElementById('regex').value = t.spec.regex
     if (t.schedule?.type) document.getElementById('schedule-type').value = t.schedule.type
     if (t.schedule?.times) document.getElementById('times').value = t.schedule.times.join(', ')
@@ -824,6 +833,13 @@ function renderFieldList(items) {
   }
 
   updateFieldListState()
+  // 一格就是一個值，沒有東西要聚合；有整欄／整列的值時才需要選聚合方式
+  const aggLabel = document.getElementById('block-aggregate')?.closest('label')
+  if (aggLabel) {
+    const hasBlockField = (items || []).some(it => it && it.spec && it.spec.block)
+    aggLabel.hidden = (items || []).length > 0 && !hasBlockField
+  }
+
 }
 
 /**

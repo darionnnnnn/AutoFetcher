@@ -1,6 +1,6 @@
 // AutoFetcher 卡片渲染模組（將卡片設定與資料渲染為 DOM 元素）
 
-import { buildSeries, resolvePeriod, latest, pivot, effectiveTimeOf } from './series.js';
+import { buildSeries, resolvePeriod, latest, pivot, effectiveTimeOf, withDelta } from './series.js';
 
 // 樞紐表未指定列數上限時的預設(避免長時間區間渲染上千列)
 const DEFAULT_PIVOT_ROWS = 50;
@@ -436,6 +436,8 @@ function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
     thead.appendChild(headTr);
 
     const showDelta = Boolean(card.options?.showDelta);
+    // 差值的算法在 series.js 的純函式裡，這裡只負責畫
+    const deltaRows = showDelta ? withDelta(rows, columns) : rows;
 
     // 表身各列
     for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
@@ -460,11 +462,11 @@ function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
           td.textContent = formatted;
           rowTsv.push(formatted);
 
-          if (showDelta && rowIndex > 0) {
-            const prevRow = rows[rowIndex - 1];
-            const prevVal = prevRow?.values?.[col];
-            if (prevVal != null && typeof prevVal === 'number' && Number.isFinite(prevVal)) {
-              const diff = val - prevVal;
+          if (showDelta) {
+            const d = deltaRows[rowIndex]?.deltas?.[col];
+            if (d) {
+              const diff = d.diff;
+              const prevVal = d.prev;
               const roundedDiff = Math.round(diff * 1e8) / 1e8;
               if (roundedDiff !== 0) {
                 const deltaEl = document.createElement('span');

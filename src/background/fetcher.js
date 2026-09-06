@@ -154,7 +154,11 @@ export function healthFromRecords(records, partial) {
   const list = Array.isArray(records) ? records : []
   const failed = list.filter(r => !isSuccess(r))
   if (list.length > 0 && failed.length === list.length) {
-    const first = failed[0]
+    // 取出現次數最多的那個錯誤：三個值裡兩個找不到元素，就該報找不到元素
+    const counts = new Map()
+    for (const r of failed) counts.set(r.status, (counts.get(r.status) || 0) + 1)
+    const topStatus = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0]
+    const first = failed.find(r => r.status === topStatus) || failed[0]
     return {
       status: healthStatusOf(first.status),
       reason: list.length > 1 ? `${failed.length} 個值抓不到` : undefined,

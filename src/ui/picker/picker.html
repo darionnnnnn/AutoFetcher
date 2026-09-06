@@ -75,7 +75,7 @@
     }
     #errors { color: var(--danger); font-size: var(--text-xs, 12px); white-space: pre-line; }
     #block-summary { font-size: var(--text-xs, 12px); color: var(--text-muted); line-height: 1.4; }
-    #field-list { display: flex; flex-direction: column; gap: 6px; }
+    #field-list { display: flex; flex-direction: column; gap: 6px;  max-height: 220px; overflow-y: auto; }
     [data-field-row] { display: flex; align-items: center; gap: 6px; }
     [data-field-row] input[type="text"] { flex: 1; min-width: 0; }
     [data-field-row] button {
@@ -256,7 +256,8 @@
             <option value="regex">正規表達式</option>
           </select>
         </label>
-        <label>正規表達式<input type="text" id="regex" placeholder="策略為正規表達式時必填"></label>
+        <div id="legacy-strategy-note" class="hint" hidden></div>
+      <label>正規表達式<input type="text" id="regex" placeholder="策略為正規表達式時必填"></label>
         <label data-schedule-only="interval">生效時段起（HH:mm）<input type="text" id="window-from" placeholder="09:00"></label>
         <label data-schedule-only="interval">生效時段訖（HH:mm）<input type="text" id="window-to" placeholder="18:00"></label>
         <fieldset id="alert-section">
