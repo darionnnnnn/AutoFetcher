@@ -62,14 +62,14 @@ test('儀表板下拉列出所有儀表板並含不加入選項', async () => {
 
 // ---- 預設勾選 ----
 
-test('number 模式預設勾選數字與折線', async () => {
+test('number 模式預設只勾選數字（一個值不該同時長出兩張卡）', async () => {
   const { pk, doc, win } = await fresh()
   await pk.renderDashboardSection(null)
   doc.getElementById('mode').value = 'number'
   doc.getElementById('mode').dispatchEvent(new win.Event('change', { bubbles: true }))
   await new Promise(r => setTimeout(r, 20))
   const checked = [...doc.querySelectorAll('#card-types input:checked')].map(i => i.value).sort()
-  assert.deepEqual(checked, ['line', 'number'])
+  assert.deepEqual(checked, ['number'])
 })
 
 test('text 模式預設只勾選表格', async () => {
@@ -93,8 +93,8 @@ test('存檔後在所選儀表板加入對應卡片', async () => {
   await pk.handleSave()
   await new Promise(r => setTimeout(r, 40))
   const cards = (await ls.getLayout()).dashboards[0].cards
-  assert.equal(cards.length, 2, `number 模式預設兩張卡片，實得 ${cards.length}`)
-  assert.deepEqual(cards.map(c => c.type).sort(), ['line', 'number'])
+  assert.equal(cards.length, 1, `number 模式預設一張卡片，實得 ${cards.length}`)
+  assert.deepEqual(cards.map(c => c.type), ['number'])
 })
 
 test('加入的卡片來源指向新任務', async () => {
