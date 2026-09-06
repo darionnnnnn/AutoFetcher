@@ -27,8 +27,15 @@ async function setup() {
   globalThis.Event = jd.window.Event
   globalThis.MouseEvent = jd.window.MouseEvent
   globalThis.KeyboardEvent = jd.window.KeyboardEvent
+  // 記錄 document 上實際掛了幾個監聽、拆了幾個（離開時必須拆乾淨，否則每開一次選取模式就漏一組）
+  const doc = jd.window.document
+  const listeners = { added: {}, removed: {} }
+  const origAdd = doc.addEventListener.bind(doc)
+  const origRemove = doc.removeEventListener.bind(doc)
+  doc.addEventListener = (type, ...a) => { listeners.added[type] = (listeners.added[type] || 0) + 1; return origAdd(type, ...a) }
+  doc.removeEventListener = (type, ...a) => { listeners.removed[type] = (listeners.removed[type] || 0) + 1; return origRemove(type, ...a) }
   const pm = await import('../src/content/picker-mode.js?t=' + Math.random())
-  return { c, doc: jd.window.document, win: jd.window, pm }
+  return { c, doc, win: jd.window, pm, listeners }
 }
 
 const $ = (doc, sel) => doc.querySelector(sel)
@@ -82,6 +89,22 @@ test('離開後不再回應滑鼠與鍵盤(監聽要拆乾淨)', async () => {
   key(doc, 'Enter')
   assert.equal(picked(c).length, 1, '取消之後不該再送出任何 PICKED')
   assert.equal(overlay(doc), null)
+})
+
+test('離開時 document 上的監聽要拆得跟掛的一樣多', async () => {
+  const { doc, pm, listeners } = await setup()
+  pm.enterPickMode({ purpose: 'task', initialTarget: $(doc, '#v') })
+  for (const type of ['mousemove', 'keydown', 'click']) {
+    assert.ok(listeners.added[type] > 0, `必須掛上 ${type}`)
+  }
+  pm.exitPickMode()
+  // jsdom 自己會在派發滑鼠事件時掛 mouseover/mouseout，只看選取模式自己掛的那三種
+  for (const type of ['mousemove', 'keydown', 'click']) {
+    assert.ok(
+      (listeners.removed[type] || 0) >= listeners.added[type],
+      `${type} 掛了 ${listeners.added[type]} 次只拆了 ${listeners.removed[type] || 0} 次,長時間使用會累積`
+    )
+  }
 })
 
 test('重複進入不會疊出兩層 overlay', async () => {
@@ -199,6 +222,14 @@ test('選到表格時面板顯示表格資訊,預設以「欄」為軸', async (
   assert.equal(pm.currentAxis(), 'col')
 })
 
+test('第二個資料列的索引是 1(列索引與欄索引一樣 0-based)', async () => {
+  const { doc, pm } = await setup()
+  pm.enterPickMode({ purpose: 'task', initialTarget: $(doc, '#t') })
+  move(doc, $(doc, '#c22'))
+  key(doc, 'Tab')
+  assert.equal(pm.currentCellIndex(), 1)
+})
+
 test('在表格內移動滑鼠時,整欄被標示為待選', async () => {
   const { doc, pm } = await setup()
   pm.enterPickMode({ purpose: 'task', initialTarget: $(doc, '#t') })
@@ -208,13 +239,23 @@ test('在表格內移動滑鼠時,整欄被標示為待選', async () => {
   assert.equal(marked.length, 2, '同一欄的兩個資料格都要標示')
 })
 
+test('換到另一欄時,上一欄的標示要先清掉', async () => {
+  const { doc, pm } = await setup()
+  pm.enterPickMode({ purpose: 'task', initialTarget: $(doc, '#t') })
+  move(doc, $(doc, '#c12'))
+  assert.equal(doc.querySelectorAll('[data-af-cell]').length, 2)
+  move(doc, $(doc, '#c11'))
+  assert.equal(doc.querySelectorAll('[data-af-cell]').length, 2, '只能標示目前這一欄,不能累加')
+  assert.equal(pm.currentCellIndex(), 0)
+})
+
 test('Tab 切換成以「列」為軸', async () => {
   const { doc, pm } = await setup()
   pm.enterPickMode({ purpose: 'task', initialTarget: $(doc, '#t') })
   move(doc, $(doc, '#c12'))
   key(doc, 'Tab')
   assert.equal(pm.currentAxis(), 'row')
-  assert.equal(pm.currentCellIndex(), 1, '資料列索引(不含表頭)')
+  assert.equal(pm.currentCellIndex(), 0, '第一個資料列的索引是 0,與欄索引一樣是 0-based')
 })
 
 test('在表格格子上點擊 → 送出 blockInfo 的軸、索引與表頭文字', async () => {
