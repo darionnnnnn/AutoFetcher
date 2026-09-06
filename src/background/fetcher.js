@@ -1,5 +1,6 @@
 // AutoFetcher 擷取流程：開分頁、注入、擷取、寫紀錄、重試
-import { getTask, saveTask, appendRecord, getRecordsInRange, getSettings, getAlertLog, setAlertLog, setLastValue } from '../shared/storage.js'
+import { getTask, saveTask, appendRecord, appendRecords, getRecordsInRange, getSettings, getAlertLog, setAlertLog, setLastValue } from '../shared/storage.js'
+import { seriesIdOf, parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
 import { MSG } from '../shared/messages.js'
 import { slotOf } from './scheduler.js'
 import { notify } from './notify.js'
@@ -76,32 +77,38 @@ function getLocalDateStr(d) {
 }
 
 // 評估告警並發送通知
-async function processAlerts(record) {
+async function processAlerts(record, cachedRecordsInRange) {
   if (!record || !record.taskId) return
 
   // 1. 取任務：沒有 alerts 或空陣列直接返回
-  const task = await getTask(record.taskId)
+  const task = await getTask(parentIdOf(record.taskId))
   if (!task || !Array.isArray(task.alerts) || task.alerts.length === 0) {
     return
   }
+
+  const sIndex = buildSeriesIndex([task])
+  const displayName = nameOf(sIndex, record.taskId)
 
   // 2. 取先前紀錄當 prevRecords：今天與前 6 天（共 7 天）
   const today = (typeof record.slot === 'string' && record.slot.length >= 10)
     ? record.slot.slice(0, 10)
     : getLocalDateStr(new Date())
 
-  const [y, m, d] = today.split('-').map(Number)
-  const pastDate = new Date(y, m - 1, d - 6, 12, 0, 0)
-  const fromDate = getLocalDateStr(pastDate)
+  let recordsInRange = cachedRecordsInRange
+  if (!recordsInRange) {
+    const [y, m, d] = today.split('-').map(Number)
+    const pastDate = new Date(y, m - 1, d - 6, 12, 0, 0)
+    const fromDate = getLocalDateStr(pastDate)
+    recordsInRange = await getRecordsInRange(fromDate, today)
+  }
 
-  const recordsInRange = await getRecordsInRange(fromDate, today)
   // 本筆還沒寫入，所以範圍查詢不會包含它；只要挑出同一任務、由舊到新即可
   const prevRecords = recordsInRange
     .filter(r => r.taskId === record.taskId)
     .sort((a, b) => (a.capturedAt || '').localeCompare(b.capturedAt || ''))
 
   // 3. 評估告警
-  const { hits } = evaluateAlerts(task, record, prevRecords)
+  const { hits } = evaluateAlerts(task, record, prevRecords, displayName)
   if (!Array.isArray(hits) || hits.length === 0) {
     return
   }
@@ -117,7 +124,7 @@ async function processAlerts(record) {
   const cooldownMs = cooldownMin * 60 * 1000
   const now = Date.now()
 
-  const taskAlerts = alertLog[task.id] ? { ...alertLog[task.id] } : {}
+  const taskAlerts = alertLog[record.taskId] ? { ...alertLog[record.taskId] } : {}
   let logChanged = false
 
   for (const hit of hits) {
@@ -126,8 +133,8 @@ async function processAlerts(record) {
       continue
     }
 
-    const notificationId = `${task.id}:alert:${hit.alertId}:${today}`
-    const title = `AutoFetcher: ${task.name}`
+    const notificationId = `${record.taskId}:alert:${hit.alertId}:${today}`
+    const title = `AutoFetcher: ${displayName}`
     await notify(notificationId, { title, message: hit.message })
 
     taskAlerts[hit.alertId] = now
@@ -135,9 +142,15 @@ async function processAlerts(record) {
   }
 
   if (logChanged) {
-    alertLog[task.id] = taskAlerts
+    alertLog[record.taskId] = taskAlerts
     await setAlertLog(alertLog)
   }
+}
+
+// 更新任務健康狀態並重整圖示
+async function updateHealth(taskId, healthObj) {
+  await setTaskHealth(taskId, healthObj)
+  await refreshBadge()
 }
 
 // 寫入抓取紀錄並更新帳本與 health
@@ -149,8 +162,7 @@ async function writeRecord(record, opts = {}) {
     await recordLedger(parentId, record.slot, record.status)
   }
   const healthStatus = record.partial === true ? 'partial' : healthStatusOf(record.status)
-  await setTaskHealth(parentId, { status: healthStatus, detail: record.error })
-  await refreshBadge()
+  await updateHealth(parentId, { status: healthStatus, detail: record.error })
   // popup 顯示「最後值」讀的是 lastValues；失敗的紀錄不覆蓋上一次成功的值
   if (isSuccess(record)) {
     await setLastValue(record.taskId, { value: record.value, capturedAt: record.capturedAt })
@@ -340,6 +352,108 @@ export async function runTask(task, opts = {}) {
 
       // 結果處理：成功路徑
       if (res?.ok === true) {
+        if (res.fields && typeof res.fields === 'object') {
+          const date = (typeof slot === 'string' && slot.length >= 10)
+            ? slot.slice(0, 10)
+            : getLocalDateStr(new Date())
+          const capturedAt = new Date().toISOString()
+          const records = []
+
+          for (const [key, r] of Object.entries(res.fields)) {
+            const rec = {
+              taskId: seriesIdOf(task.id, key),
+              slot,
+              capturedAt
+            }
+            if (r?.ok) {
+              rec.value = r.value
+              rec.raw = r.raw
+              rec.status = reason === 'late' ? 'late' : (r.status || 'ok')
+              if (r.used !== undefined) {
+                rec.used = r.used
+              }
+              if (r.skipped !== undefined) {
+                rec.skipped = r.skipped
+              }
+            } else {
+              rec.status = r?.error || 'error'
+              if (r?.raw !== undefined) {
+                rec.raw = r.raw
+              }
+            }
+            if (res.partial === true) {
+              rec.partial = true
+            }
+            records.push(rec)
+          }
+
+          // 告警評估：整組只讀一次 getRecordsInRange
+          const [y, m, d] = date.split('-').map(Number)
+          const pastDate = new Date(y, m - 1, d - 6, 12, 0, 0)
+          const fromDate = getLocalDateStr(pastDate)
+          const recordsInRange = await getRecordsInRange(fromDate, date)
+
+          for (const rec of records) {
+            await processAlerts(rec, recordsInRange)
+          }
+
+          // 批次寫入：整組紀錄只呼叫一次 appendRecords
+          await appendRecords(date, records)
+
+          // 帳本：整組只寫一次，用父任務 id（手動抓取不寫帳本）
+          if (!isManual) {
+            const hasSuccess = records.some(r => isSuccess(r))
+            const firstFail = records.find(r => !isSuccess(r))
+            const ledgerStatus = hasSuccess ? 'ok' : (firstFail ? firstFail.status : 'error')
+            await recordLedger(task.id, slot, ledgerStatus)
+          }
+
+          // lastValues：成功的值各自以子序列 id 寫入
+          for (const rec of records) {
+            if (isSuccess(rec)) {
+              await setLastValue(rec.taskId, { value: rec.value, capturedAt: rec.capturedAt })
+            }
+          }
+
+          // health：整個任務只寫一次，寫在父任務 id 上
+          const failRecords = records.filter(r => !isSuccess(r))
+          const failCount = failRecords.length
+          const totalCount = records.length
+
+          let healthStatus = 'ok'
+          let healthReason = undefined
+          let healthDetail = undefined
+
+          if (failCount === totalCount && totalCount > 0) {
+            const firstFail = failRecords[0]
+            healthStatus = healthStatusOf(firstFail.status)
+            healthReason = `${failCount} 個值抓不到`
+            healthDetail = firstFail.raw || firstFail.status || ''
+          } else if (failCount > 0) {
+            healthStatus = 'partial'
+            healthReason = `${failCount} 個值抓不到`
+          } else if (res.partial === true) {
+            healthStatus = 'partial'
+          } else {
+            const warnRecord = records.find(r => r.status === 'fallback') || records.find(r => r.status === 'late')
+            healthStatus = warnRecord ? warnRecord.status : 'ok'
+          }
+
+          await updateHealth(task.id, { status: healthStatus, reason: healthReason, detail: healthDetail })
+
+          if (failCount === 0) {
+            const currentTask = await getTask(task.id)
+            if (currentTask && ((currentTask.notFoundStreak || 0) > 0 || currentTask.suggestForeground)) {
+              currentTask.notFoundStreak = 0
+              delete currentTask.suggestForeground
+              await saveTask(currentTask)
+            }
+          }
+
+          const firstSuccess = records.find(r => isSuccess(r))
+          return firstSuccess || records[0] || null
+        }
+
         const currentTask = await getTask(task.id)
         if (currentTask && ((currentTask.notFoundStreak || 0) > 0 || currentTask.suggestForeground)) {
           currentTask.notFoundStreak = 0

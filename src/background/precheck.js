@@ -101,22 +101,45 @@ export async function runPrecheck(task, opts = {}) {
     let reason = ''
     let detail = ''
 
-    if (res?.ok === true) {
-      status = 'ok'
-    } else if (res?.error === 'login_failed') {
-      status = 'login_failed'
-      reason = '無法登入'
-    } else if (res?.error === 'not_found') {
-      status = 'selector_lost'
-      reason = '找不到元素'
-    } else if (res?.error === 'parse_error') {
-      status = 'parse_error'
-      reason = '抓不到數值'
+    if (res?.ok === true && res.fields && typeof res.fields === 'object') {
+      const fieldEntries = Object.entries(res.fields)
+      const hasOk = fieldEntries.some(([_, r]) => r?.ok === true)
+      if (hasOk) {
+        status = 'ok'
+      } else {
+        const failedEntries = fieldEntries.filter(([_, r]) => !r?.ok)
+        const firstFail = failedEntries[0]?.[1]
+        const firstError = firstFail?.error
+        if (firstError === 'not_found') {
+          status = 'selector_lost'
+          reason = '找不到元素'
+        } else if (firstError === 'parse_error') {
+          status = 'parse_error'
+          reason = '抓不到數值'
+        } else {
+          status = 'failed'
+          reason = '抓取失敗'
+        }
+        detail = failedEntries.map(([k]) => k).join(', ')
+      }
     } else {
-      status = 'failed'
-      reason = '抓取失敗'
+      if (res?.ok === true) {
+        status = 'ok'
+      } else if (res?.error === 'login_failed') {
+        status = 'login_failed'
+        reason = '無法登入'
+      } else if (res?.error === 'not_found') {
+        status = 'selector_lost'
+        reason = '找不到元素'
+      } else if (res?.error === 'parse_error') {
+        status = 'parse_error'
+        reason = '抓不到數值'
+      } else {
+        status = 'failed'
+        reason = '抓取失敗'
+      }
+      detail = res?.snippet || res?.raw || res?.error || ''
     }
-    detail = res?.snippet || res?.raw || res?.error || ''
 
     if (status === 'ok') {
       await setTaskHealth(task.id, { status: 'ok' })

@@ -223,13 +223,19 @@ export async function deleteHealthEntry(key) {
   await chrome.storage.local.set({ health })
 }
 
-// 追加紀錄至指定日期的 storage 鍵（rec:<date>）
-export async function appendRecord(date, record) {
+// 追加多筆紀錄至指定日期的 storage 鍵（rec:<date>）
+export async function appendRecords(date, records) {
+  if (!Array.isArray(records) || records.length === 0) return
   const key = dateToKey(date)
   const res = await chrome.storage.local.get(key)
   const list = Array.isArray(res[key]) ? res[key] : []
-  list.push(record)
+  list.push(...records)
   await chrome.storage.local.set({ [key]: list })
+}
+
+// 追加紀錄至指定日期的 storage 鍵（rec:<date>）
+export async function appendRecord(date, record) {
+  return appendRecords(date, [record])
 }
 
 // 取得指定日期的所有紀錄（無資料回傳空陣列）

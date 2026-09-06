@@ -176,13 +176,15 @@ test('單值任務的紀錄 taskId 仍是任務 id 本身', async () => {
 const withAlert = (alerts) => multi({ alerts })
 
 test('告警可以只套用在某一個值上', async () => {
-  const { c, st, fe } = await fresh(BOTH_OK)
-  const t = withAlert([{ id: 'a1', type: 'gt', value: 31.25, enabled: true, field: 'sell' }])
+  const { st, fe } = await fresh(BOTH_OK)
+  // 門檻 31 兩個值都超過，唯一的差別是這條告警只指定 sell
+  const t = withAlert([{ id: 'a1', type: 'gt', value: 31, enabled: true, field: 'sell' }])
   await st.saveTask(t)
   await fe.runTask(t, { slot: '2026-09-06T09:30', ...FAST })
   const recs = await st.getRecordsByDate('2026-09-06')
-  assert.equal(recs.find(r => r.taskId === 'bank#sell').alert, true, '31.3 > 31.25 要命中')
-  assert.ok(!recs.find(r => r.taskId === 'bank#buy').alert, '31.2 不是這條告警的對象')
+  assert.equal(recs.find(r => r.taskId === 'bank#sell').alert, true, '指定的值要命中')
+  assert.ok(!recs.find(r => r.taskId === 'bank#buy').alert,
+    '31.2 也超過門檻，但這條告警沒有指定它')
 })
 
 test('沒指定值的告警對每個值各自評估', async () => {

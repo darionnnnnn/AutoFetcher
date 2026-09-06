@@ -230,9 +230,34 @@
 - 有 2FA / 驗證碼的站台不支援自動登入;連續 3 次登入失敗即停用該站台並通知一次。
 - `login_failed` 是紀錄狀態之一,**不算成功**,而且**不重試**(密碼錯了重試幾次都一樣)。
 
-## §7 區塊聚合(block 模式)
+## §7 區塊模式:儲存格、欄列聚合、一個任務多個值
 
-- `task.mode = 'block'`,`task.spec.block = { axis: 'col'|'row', index, headerText, aggregate }`。
+- `task.mode = 'block'`;`task.spec` 有三種形狀,擇一:
+  - `spec.block = { axis: 'col'|'row', index, headerText, aggregate }` —— 整欄或整列聚合(原有)。
+  - `spec.block = { cell: { row: {index, header}, col: {index, header} } }` —— **單一儲存格**
+    (列 × 欄交會的那一格,匯率表「美金 × 即期買入」就是這種)。不聚合。
+  - `spec.fields = [{ key, cell? , block? }]` —— **一個任務抓多個值**,每個值各自是儲存格或欄列聚合。
+- **表頭解析只有一份**:`shared/table.js` 的 `columnHeaders(el)`(與資料欄一一對齊)與
+  `rowHeader(row)`(該列第一個非空文字格,跳過國旗圖之類的空格子)。
+  `extract.js`、`content/picker-mode.js`、`shared/block-detect.js` 一律用它們,不得各自數表頭。
+  **多層表頭**:最後一層決定欄名,上層有 `colspan` 的視為群組,組成「群組 · 欄」——
+  匯率表的四個「買入/賣出」因此變成「現金匯率 · 買入」「即期匯率 · 買入」…,
+  漂移偵測才分得出是哪一組(舊版把所有表頭列攤平,`indexOf('買入')` 永遠找到第一個,會抓到錯的欄)。
+- **定位與漂移**(欄與列同一套規則,`extract.js` 的 `locateByHeader`):
+  表頭對得上原索引 → 用它、`ok`;搬家了 → 跟著表頭走、`fallback`;
+  **同名表頭有多個時取離原索引最近的那一個**;表頭整個不見 → `not_found`。
+  儲存格的欄或列任一為 `fallback`,整格就是 `fallback`。
+- **多值的成敗分界**:表格本身解析不出來 → `{ok:false, error:'not_found'}`,這才走重試;
+  表格解析得出來就是 `{ok:true, fields:{...}}`,**即使每個值都失敗**——
+  欄位漂移不是暫時性問題,重試沒有意義。
+- **多值的寫入**(`fetcher.js`):一次載入、一次擷取,每個值各寫一筆紀錄,
+  `taskId` 是**子序列 id**、`slot` 全部相同;整組只呼叫一次 `appendRecords` 與一次
+  `getRecordsInRange`(每個值各讀寫一遍會讓 N 個值變成 N 倍成本)。
+  帳本與 health 寫在**父任務 id** 上,`lastValues` 寫在子序列上。
+  health:全成功 `ok` / 有備援或遲到取該狀態 / 部分值失敗 `partial` 並註明幾個 /
+  全部值失敗取第一個失敗狀態(紅)。
+- `task.fields = [{ key, name, ... }]` 是**顯示用**的值清單(名稱、順序);
+  `key` 建立後不變、同任務內唯一、不得含保留字元。改名不改 `key`。
 - 解析(`shared/table.js` 的 `parseTable`)→ 聚合(`shared/aggregate.js` 的 `aggregateCells`),
   兩層都是純函式;`extract.js` 的 block 分支串起來,**不走數值策略鏈**。
 - **欄位漂移偵測**:`axis: 'col'` 且有 `headerText` 時,先在表頭找它——
@@ -410,7 +435,8 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
 
 ## §10 告警
 
-- 任務可設多條條件(`task.alerts`,每條 `{id, type, value, enabled}`):
+- 任務可設多條條件(`task.alerts`,每條 `{id, type, value, enabled, field?}`;
+  `field` 是值的 `key`,只對該值評估,缺省則對每個值各自評估):
   `gt` / `lt` / `eq`(值大於 / 小於 / 等於)、`deltaPct`(相較**前一筆成功紀錄**變動超過 X%,
   漲跌都算)、`failStreak`(連續 N 次非成功)。判定是純函式 `shared/alerts.js`。
 - 評估時機在**寫入紀錄之前**,命中就把 `alert: true` 與 `alertHits: [alertId…]` 一起寫進同一筆紀錄
@@ -420,6 +446,9 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
 - Report:月曆對有告警的日期上色(與失敗分開)、歷史列標記並可展開看到命中哪一條、
   「只看告警」可篩選;number 卡片沿用既有的閾值色機制,不另加一套顏色規則。
 - `deltaPct` 找不到前一筆成功紀錄、或前一筆是 0 時不命中(除以 0 沒有意義)。
+- **多值任務**:去重紀錄(`alertLog`)與通知 id 都用**子序列 id**,兩個值才不會互相把通知吃掉;
+  `prevRecords` 也用子序列精確比對——用父任務比對會讓「買入」拿「賣出」的舊值算變動比例。
+  通知與訊息裡的名稱用序列名(「臺銀匯率 · 美金賣出」)。
 
 ### §2.1 Picker 表單的預設值
 
