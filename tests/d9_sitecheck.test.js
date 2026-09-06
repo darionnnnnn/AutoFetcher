@@ -135,6 +135,7 @@ async function settings() {
   globalThis.window = jd.window
   globalThis.document = jd.window.document
   const se = await import('../src/ui/report/settings.js?t=' + Math.random())
+  globalThis.window = jd.window
   return { c, st, cr, se, doc: jd.window.document }
 }
 
@@ -191,4 +192,32 @@ test('設定匯出不含站台密碼', async () => {
   const json = await io.exportSettings()
   assert.ok(!json.includes('passwordEnc'), `匯出檔不得含密碼欄位:${json.slice(0, 400)}`)
   assert.ok(!json.includes('hunter2'))
+})
+
+// ---- 新設定項要設定得到(AF-2 回顧:有人消費、沒人設定得到是最常見的跨段斷鏈) ----
+
+test('設定頁能調整告警冷卻分鐘數與站台檢查時間', async () => {
+  const { st, se, doc } = await settings()
+  await se.renderSettings()
+
+  const cooldown = doc.getElementById('pref-alert-cooldown')
+  assert.ok(cooldown, '告警冷卻分鐘數要設定得到(background 已經在讀它)')
+  cooldown.value = '15'
+  cooldown.dispatchEvent(new globalThis.window.Event('change'))
+  await new Promise(r => setTimeout(r, 30))
+  assert.equal((await st.getSettings()).alertCooldownMin, 15)
+
+  const checkTime = doc.getElementById('pref-site-check-time')
+  assert.ok(checkTime, '每日站台檢查時間要設定得到')
+  checkTime.value = '07:15'
+  checkTime.dispatchEvent(new globalThis.window.Event('change'))
+  await new Promise(r => setTimeout(r, 30))
+  assert.equal((await st.getSettings()).siteCheckTime, '07:15')
+})
+
+test('這兩個設定的預設值要顯示出來,不是空白', async () => {
+  const { se, doc } = await settings()
+  await se.renderSettings()
+  assert.equal(doc.getElementById('pref-alert-cooldown').value, '60')
+  assert.equal(doc.getElementById('pref-site-check-time').value, '08:00')
 })

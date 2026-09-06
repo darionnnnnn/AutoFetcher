@@ -246,6 +246,28 @@ function setupPreferenceListeners(settings) {
     }
   }
 
+  const alertCooldownEl = document.getElementById('pref-alert-cooldown')
+  if (alertCooldownEl) {
+    alertCooldownEl.value = settings.alertCooldownMin ?? 60
+    if (!alertCooldownEl._afBound) {
+      alertCooldownEl._afBound = true
+      alertCooldownEl.addEventListener('change', async () => {
+        await saveSettings({ alertCooldownMin: Number(alertCooldownEl.value) })
+      })
+    }
+  }
+
+  const siteCheckTimeEl = document.getElementById('pref-site-check-time')
+  if (siteCheckTimeEl) {
+    siteCheckTimeEl.value = settings.siteCheckTime ?? '08:00'
+    if (!siteCheckTimeEl._afBound) {
+      siteCheckTimeEl._afBound = true
+      siteCheckTimeEl.addEventListener('change', async () => {
+        await saveSettings({ siteCheckTime: siteCheckTimeEl.value })
+      })
+    }
+  }
+
   const themeEl = document.getElementById('pref-theme')
   if (themeEl) {
     themeEl.value = settings.theme ?? 'system'
