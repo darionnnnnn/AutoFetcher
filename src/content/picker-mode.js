@@ -232,7 +232,7 @@ function updatePanel(panel, el) {
     const lines = []
     if (limitReached || selectedList.length >= maxPicks) lines.push('（已達選取上限）')
     if (headerChangedNotice) lines.push('（位置已變）')
-    lines.push('↑ 放大選取 ↓ 縮小 Enter 確認 Esc 取消')
+    lines.push('↑ 放大 ↓ 縮小 / Shift 點選加選 / 拖曳框選 / 右鍵選單 / Enter 確認 Esc 取消')
     panel.textContent = lines.join('\n')
     return
   }
@@ -240,8 +240,8 @@ function updatePanel(panel, el) {
   const preview = (el.textContent || '').trim().slice(0, 80)
   const info = kindOf(el)
   const typeDesc = info.kind === 'number' ? `數值 ${info.value}`
-    : info.kind === 'table' ? `表格 ${info.rows} 列 × ${info.cols} 欄\n點一格選整欄,Tab 切換欄/列`
-    : info.kind === 'grid' ? `表格(版面) ${info.rows} 列 × ${info.cols} 欄\n點一格選整欄,Tab 切換欄/列`
+    : info.kind === 'table' ? `表格 ${info.rows} 列 × ${info.cols} 欄\n點一格選那一格,Shift 加選,右鍵有更多`
+    : info.kind === 'grid' ? `表格(版面) ${info.rows} 列 × ${info.cols} 欄\n點一格選那一格,Shift 加選,右鍵有更多`
     : info.kind === 'list' ? `清單 ${info.rows} 項`
     : '文字'
   const lines = [tagDesc]
@@ -249,7 +249,7 @@ function updatePanel(panel, el) {
   lines.push(typeDesc)
   if (limitReached || selectedList.length >= maxPicks) lines.push('（已達選取上限）')
   if (headerChangedNotice) lines.push('（位置已變）')
-  lines.push('↑ 放大選取 ↓ 縮小 Enter 確認 Esc 取消')
+  lines.push('↑ 放大 ↓ 縮小 / Shift 點選加選 / 拖曳框選 / 右鍵選單 / Enter 確認 Esc 取消')
   panel.textContent = lines.join('\n')
 }
 

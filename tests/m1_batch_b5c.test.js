@@ -187,3 +187,53 @@ test('再點一次或按 Esc 關掉浮層', async () => {
   await new Promise(r => setTimeout(r, 20))
   assert.equal(doc.querySelector('[data-trend-popover]'), null)
 })
+
+// ---- 顯示品質(視覺驗收時抓到的) ----
+
+test('數值不得露出浮點運算的尾巴', async () => {
+  const { CR } = await fresh()
+  const el = CR.renderCard(
+    pivotCard({ options: { mode: 'pivot', bucketMinutes: 1440 } }),
+    ctxOf({ records: [rec('bank#k1', '2026-09-06T09:30', 31.400000000000002)] })
+  )
+  assert.ok(!el.textContent.includes('31.400000000000002'), `實得：${el.textContent}`)
+  assert.ok(el.textContent.includes('31.4'))
+})
+
+test('報表頁的 hidden 屬性壓得過各區塊自己的 display', () => {
+  const src = readFileSync(new URL('../src/ui/report/report.html', import.meta.url), 'utf8')
+  assert.ok(/\[hidden\]\s*\{\s*display:\s*none\s*!important/.test(src),
+    '空的錯過清單橫幅會露出一條空殼')
+})
+
+test('圖表要有格線與座標標籤，不能只是一條線', async () => {
+  const C = await import('../src/ui/report/charts.js?t=' + Math.random())
+  const svg = C.lineChart([{ taskId: 'a', points: [{ t: '09-01', v: 10 }, { t: '09-02', v: 20 }] }], {})
+  assert.ok(svg.querySelectorAll('[data-gridline]').length >= 3, '要有背景格線')
+  const yLabels = [...svg.querySelectorAll('[data-axis-label="y"]')].map(e => e.textContent)
+  assert.ok(yLabels.length >= 2, `要標得出數值範圍：${yLabels.join(',')}`)
+  const xLabels = [...svg.querySelectorAll('[data-axis-label="x"]')].map(e => e.textContent)
+  assert.deepEqual(xLabels, ['09-01', '09-02'], '兩端要標出時間')
+})
+
+test('長條圖同樣有格線', async () => {
+  const C = await import('../src/ui/report/charts.js?t=' + Math.random())
+  const svg = C.barChart([{ taskId: 'a', points: [{ t: '09-01', v: 10 }, { t: '09-02', v: 20 }] }], {})
+  assert.ok(svg.querySelectorAll('[data-gridline]').length >= 3)
+})
+
+test('圖表不得出現色碼字面值', () => {
+  const src = readFileSync(new URL('../src/ui/report/charts.js', import.meta.url), 'utf8')
+  assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(src.replace(/^\s*\/\/.*$/gm, '')))
+})
+
+test('圖表的長寬比跟著卡片走，不會在卡片裡縮成一小塊', async () => {
+  const { CR } = await fresh()
+  const wide = CR.renderCard({
+    id: 'w', type: 'line', x: 0, y: 0, w: 12, h: 2,
+    source: [{ taskId: 'bank#k1' }], options: {}
+  }, ctxOf())
+  const vb = wide.querySelector('svg').getAttribute('viewBox').split(' ').map(Number)
+  const ratio = vb[2] / vb[3]
+  assert.ok(ratio > 4, `12 欄 2 列的卡片是扁長型，viewBox 比例應該跟著扁，實得 ${ratio.toFixed(1)}`)
+})

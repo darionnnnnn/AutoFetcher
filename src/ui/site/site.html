@@ -8,9 +8,9 @@
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      padding: 12px;
+      padding: var(--space-3, 12px);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      font-size: 13px;
+      font-size: var(--text-sm, 13px);
       color: var(--text);
       background: var(--bg);
       width: 480px;
@@ -18,20 +18,26 @@
       display: flex;
       flex-direction: column;
     }
+    :focus-visible {
+      outline: 2px solid var(--focus-ring);
+      outline-offset: 1px;
+    }
     h2 {
-      margin: 0 0 10px;
-      font-size: 15px;
+      margin: 0 0 var(--space-2, 10px);
+      font-size: var(--text-md, 15px);
+      font-weight: 700;
       flex-shrink: 0;
       color: var(--text);
     }
     .risk-notice {
-      padding: 8px 10px;
+      padding: var(--space-2, 8px) var(--space-3, 10px);
       background: var(--hover);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      font-size: 12px;
+      font-size: var(--text-xs, 12px);
       color: var(--text-muted);
       line-height: 1.5;
+      margin-bottom: var(--space-2);
     }
     form {
       display: flex;
@@ -44,31 +50,31 @@
       overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: var(--space-2, 10px);
       padding-right: 2px;
     }
     label {
       display: flex;
       flex-direction: column;
-      gap: 3px;
-      font-size: 12px;
+      gap: var(--space-1, 3px);
+      font-size: var(--text-xs, 12px);
       color: var(--text-muted);
     }
     input[type="text"], input[type="password"], select {
       width: 100%;
-      padding: 5px 8px;
+      padding: var(--space-1, 5px) var(--space-2, 8px);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      font-size: 13px;
+      font-size: var(--text-sm, 13px);
       background: var(--surface);
       color: var(--text);
     }
     .origin-box {
-      padding: 6px 8px;
+      padding: var(--space-1, 6px) var(--space-2, 8px);
       background: var(--hover);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      font-size: 13px;
+      font-size: var(--text-sm, 13px);
       color: var(--text);
       word-break: break-all;
       min-height: 30px;
@@ -79,11 +85,12 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 8px;
-      padding: 8px;
+      gap: var(--space-2, 8px);
+      padding: var(--space-2, 8px);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       background: var(--surface);
+      box-shadow: var(--shadow-1);
     }
     .selector-info {
       display: flex;
@@ -93,20 +100,20 @@
       min-width: 0;
     }
     .selector-label {
-      font-size: 12px;
+      font-size: var(--text-xs, 12px);
       font-weight: 600;
       color: var(--text);
     }
     .selector-value {
-      font-size: 12px;
+      font-size: var(--text-xs, 12px);
       color: var(--text-muted);
-      font-family: monospace;
+      font-family: var(--font-mono, monospace);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
     .site-note {
-      font-size: 12px;
+      font-size: var(--text-xs, 12px);
       color: var(--danger);
       min-height: 18px;
       white-space: pre-line;
@@ -114,18 +121,21 @@
     footer {
       display: flex;
       justify-content: flex-end;
-      gap: 8px;
-      padding-top: 10px;
+      gap: var(--space-2, 8px);
+      padding-top: var(--space-2, 10px);
+      border-top: 1px solid var(--border);
       flex-shrink: 0;
     }
+    /* 按鈕分三級 */
     button {
-      padding: 6px 12px;
+      padding: var(--space-1, 6px) var(--space-3, 12px);
       border-radius: var(--radius);
       border: 1px solid var(--border);
       background: var(--surface);
       color: var(--text);
       cursor: pointer;
-      font-size: 13px;
+      font-size: var(--text-sm, 13px);
+      transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
     }
     button:hover {
       background: var(--hover);
@@ -133,7 +143,11 @@
     .btn-save {
       background: var(--primary);
       border-color: var(--primary);
-      color: var(--surface);
+      color: white;
+      font-weight: 500;
+    }
+    .btn-save:hover {
+      filter: brightness(1.08);
     }
   </style>
   <script type="module" src="./site.js"></script>

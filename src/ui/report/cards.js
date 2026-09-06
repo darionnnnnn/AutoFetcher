@@ -21,7 +21,9 @@ function formatNumber(val, decimals) {
   if (typeof decimals === 'number' && Number.isFinite(decimals)) {
     return val.toFixed(decimals);
   }
-  return String(val);
+  // 沒指定小數位時去掉浮點運算的尾巴（31.400000000000002 要顯示成 31.4）；
+  // 12 位有效數字足以保留真實資料的精度，又能把二進位誤差修掉
+  return String(Number(val.toPrecision(12)));
 }
 
 const CARD_TYPE_SUFFIXES = {
@@ -279,7 +281,12 @@ function renderChartCard(card, ctx, { bodyEl }) {
     normalize: card.options?.normalize
   });
 
+  // viewBox 的長寬比要貼近卡片實際的格子比例，否則等比縮放後會在左右留一大片空白
+  const cols = Number.isFinite(Number(card.w)) ? Number(card.w) : 6;
+  const rows = Number.isFinite(Number(card.h)) ? Number(card.h) : 3;
   const chartOpts = {
+    width: Math.max(320, cols * 110),
+    height: Math.max(140, rows * 70),
     yMin: card.options?.yMin,
     yMax: card.options?.yMax,
     unit: card.options?.unit

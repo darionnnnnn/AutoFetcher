@@ -126,6 +126,26 @@ async function loadThemeCss() {
       --chart-6: var(--chart-6, currentColor);
       --chart-7: var(--chart-7, currentColor);
       --chart-8: var(--chart-8, currentColor);
+      --surface-2: rgb(241, 245, 249);
+      --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.1);
+      --shadow-2: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --text-xs: 0.75rem;
+      --text-sm: 0.875rem;
+      --text-md: 1rem;
+      --text-lg: 1.125rem;
+      --text-xl: 1.5rem;
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 24px;
+      --primary-soft: rgba(37, 99, 235, 0.1);
+      --focus-ring: rgba(37, 99, 235, 0.4);
+      --ok-soft: rgba(22, 163, 74, 0.1);
+      --warn-soft: rgba(217, 119, 6, 0.1);
+      --danger-soft: rgba(220, 38, 38, 0.1);
+      --radius-lg: 10px;
     }`
 }
 
@@ -229,38 +249,43 @@ export async function buildHtmlReport({ from, to, dashId }) {
       background: var(--bg);
       color: var(--text);
       line-height: 1.5;
-      padding: 1.5rem;
+      padding: var(--space-4, 1.5rem);
     }
     .report-header {
-      margin-bottom: 1.5rem;
+      margin-bottom: var(--space-4, 1.5rem);
       border-bottom: 1px solid var(--border);
-      padding-bottom: 1rem;
+      padding-bottom: var(--space-3, 1rem);
     }
     .report-title {
-      font-size: 1.5rem;
+      font-size: var(--text-xl, 1.5rem);
       font-weight: 700;
     }
     .report-range {
       color: var(--text-muted);
-      font-size: 0.9rem;
-      margin-top: 0.25rem;
+      font-size: var(--text-sm, 0.9rem);
+      margin-top: var(--space-1, 0.25rem);
     }
     .cards-grid {
       display: grid;
       grid-template-columns: repeat(12, 1fr);
-      gap: 12px;
-      margin-bottom: 2rem;
+      gap: var(--space-3, 12px);
+      margin-bottom: var(--space-5, 2rem);
     }
     .report-card {
       grid-column: span 6;
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      padding: 1rem;
+      padding: var(--space-3, 1rem);
       display: flex;
       flex-direction: column;
       overflow: hidden;
       break-inside: avoid;
+      box-shadow: var(--shadow-1);
+      transition: box-shadow 0.2s;
+    }
+    .report-card:hover {
+      box-shadow: var(--shadow-2);
     }
     .report-card[data-card-type="table"] {
       grid-column: span 12;
@@ -269,19 +294,21 @@ export async function buildHtmlReport({ from, to, dashId }) {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 0.5rem;
+      margin-bottom: var(--space-2, 0.5rem);
+      padding-bottom: var(--space-2, 0.5rem);
+      border-bottom: 1px solid var(--border);
     }
     .report-card .card-title {
       font-weight: 600;
-      font-size: 1rem;
+      font-size: var(--text-md, 1rem);
     }
     .report-card .card-meta {
       display: flex;
       align-items: center;
-      gap: 0.5rem;
+      gap: var(--space-2, 0.5rem);
     }
     .report-card .card-period {
-      font-size: 0.75rem;
+      font-size: var(--text-xs, 0.75rem);
       color: var(--text-muted);
     }
     .report-card .card-actions {
@@ -296,70 +323,93 @@ export async function buildHtmlReport({ from, to, dashId }) {
     .card-number-display {
       display: flex;
       align-items: baseline;
-      gap: 0.25rem;
-      margin: 0.5rem 0;
+      gap: var(--space-1, 0.25rem);
+      margin: var(--space-2, 0.5rem) 0;
     }
     .card-number-value {
-      font-size: 2rem;
+      font-size: var(--text-xl, 2rem);
       font-weight: 700;
       color: var(--text);
     }
     .card-number-unit {
-      font-size: 1rem;
+      font-size: var(--text-md, 1rem);
       color: var(--text-muted);
     }
     .card-number-diff {
-      font-size: 0.9rem;
+      font-size: var(--text-xs, 0.9rem);
       font-weight: 500;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      display: inline-flex;
+      align-items: center;
     }
-    .diff-up { color: var(--ok); }
-    .diff-down { color: var(--danger); }
+    .diff-up { color: var(--ok); background: var(--ok-soft); }
+    .diff-down { color: var(--danger); background: var(--danger-soft); }
     .card-table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 0.85rem;
+      font-size: var(--text-sm, 0.85rem);
     }
     .card-table th, .card-table td {
-      padding: 0.4rem 0.6rem;
+      padding: var(--space-1, 0.4rem) var(--space-2, 0.6rem);
       border-bottom: 1px solid var(--border);
     }
     .card-table th {
       background: var(--hover);
       color: var(--text-muted);
       font-weight: 600;
+      position: sticky;
+      top: 0;
+    }
+    .card-table th:not(:first-child), .card-table td:not(:first-child) {
+      text-align: right;
+    }
+    .card-table tbody tr:nth-child(even) {
+      background: var(--surface-2);
     }
     .status-list {
       display: flex;
       flex-direction: column;
-      gap: 0.4rem;
+      gap: var(--space-1, 0.4rem);
     }
     .status-item {
       display: flex;
       align-items: center;
-      gap: 0.75rem;
-      font-size: 0.85rem;
+      gap: var(--space-2, 0.75rem);
+      font-size: var(--text-sm, 0.85rem);
     }
     .status-name { font-weight: 500; }
     .status-state, .status-next, .status-missed {
-      color: var(--text-muted);
-      font-size: 0.8rem;
+      font-size: var(--text-xs, 0.8rem);
     }
-    .status-missed { color: var(--danger); }
+    .status-state {
+      padding: 2px 8px;
+      border-radius: 9999px;
+      background: var(--ok-soft);
+      color: var(--ok);
+    }
+    .status-missed {
+      padding: 2px 8px;
+      border-radius: 9999px;
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
     .records-section {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      padding: 1.25rem;
+      padding: var(--space-4, 1.25rem);
+      box-shadow: var(--shadow-1);
     }
     .records-section h2 {
-      font-size: 1.15rem;
+      font-size: var(--text-lg, 1.15rem);
       font-weight: 600;
-      margin-bottom: 1rem;
+      margin-bottom: var(--space-3, 1rem);
     }
     .report-table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 0.9rem;
+      font-size: var(--text-sm, 0.9rem);
       text-align: left;
     }
     .report-table th, .report-table td {
@@ -370,6 +420,19 @@ export async function buildHtmlReport({ from, to, dashId }) {
       background: var(--hover);
       color: var(--text-muted);
       font-weight: 600;
+      position: sticky;
+      top: 0;
+    }
+    .report-table th:first-child, .report-table td:first-child {
+      position: sticky;
+      left: 0;
+      background: inherit;
+    }
+    .report-table th:nth-child(3), .report-table td:nth-child(3) {
+      text-align: right;
+    }
+    .report-table tbody tr:nth-child(even):not(.status-failed) {
+      background: var(--surface-2);
     }
     .report-table tbody tr:hover {
       background: var(--hover);
@@ -382,7 +445,7 @@ export async function buildHtmlReport({ from, to, dashId }) {
       text-align: center;
       padding: 2.5rem 1rem;
       color: var(--text-muted);
-      font-size: 0.95rem;
+      font-size: var(--text-sm, 0.95rem);
     }
     @media print {
       body {
