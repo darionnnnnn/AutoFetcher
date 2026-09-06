@@ -46,6 +46,10 @@ test('D2 守門:notify.js 用的圖示檔案真的存在', () => {
   const src = read(join(SRC, 'background/notify.js'))
   const m = src.match(/['"](icons\/[^'"]+\.png)['"]/)
   assert.ok(m, 'notify.js 必須指定 icons/ 底下的圖示')
+  assert.ok(
+    /getURL\s*\(\s*ICON_PATH\s*\)/.test(src),
+    'iconUrl 必須經 chrome.runtime.getURL 轉成絕對網址（相對路徑在 service worker 會 404）'
+  )
   assert.ok(statSync(join(SRC, m[1])).isFile(), `圖示不存在:${m[1]}`)
 })
 
@@ -63,7 +67,7 @@ test('D3 守門:manifest 宣告的每個圖示檔案都存在', () => {
 
 test('D4 守門:不得改寫內建原型', () => {
   const offenders = jsFiles()
-    .filter((p) => /(String|Array|Object|Number)\s*\.\s*prototype\s*\.\s*\w+\s*=/.test(read(p)))
+    .filter((p) => /(String|Array|Object|Number|RegExp|Function|Promise)\s*\.\s*prototype\s*\.\s*\w+\s*=/.test(read(p)))
     .map(rel)
   assert.deepEqual(offenders, [], `不得猴補內建原型:${offenders.join(', ')}`)
 })

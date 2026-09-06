@@ -9,17 +9,6 @@ import {
 import { getTasks } from '../shared/storage.js'
 import * as diag from '../shared/diag.js'
 
-// 支援測試比對任務 alarm 名稱
-const origStartsWith = String.prototype.startsWith
-if (!String.prototype.__afPatched) {
-  String.prototype.startsWith = function (search, pos) {
-    if (typeof this === 'string' && origStartsWith.call(this, 'task:') && typeof search === 'string' && !origStartsWith.call(search, 'task:')) {
-      if (origStartsWith.call(this.slice(5), search, pos)) return true
-    }
-    return origStartsWith.call(this, search, pos)
-  }
-  Object.defineProperty(String.prototype, '__afPatched', { value: true, configurable: true })
-}
 
 // 確保看門狗 alarm 存在
 async function checkWatchdogAlarm() {

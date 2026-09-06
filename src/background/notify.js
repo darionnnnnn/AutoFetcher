@@ -2,7 +2,9 @@
 import { getSettings } from '../shared/storage.js'
 import { log } from '../shared/diag.js'
 
-const ICON_URL = 'icons/icon-128.png'
+// 相對路徑會相對於「呼叫端的位址」解析（service worker 是 /background/），
+// 在真實瀏覽器會 404 並讓整則通知不顯示，必須用 getURL 取絕對網址。
+const ICON_PATH = 'icons/icon-128.png'
 
 // 發送系統通知，若通知關閉或拋錯則回傳 false，成功回傳 true
 export async function notify(id, options) {
@@ -13,7 +15,7 @@ export async function notify(id, options) {
 
   const createOptions = {
     type: 'basic',
-    iconUrl: ICON_URL,
+    iconUrl: await chrome.runtime.getURL(ICON_PATH),
     title: options.title,
     message: options.message
   }

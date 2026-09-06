@@ -22,17 +22,6 @@ import {
 import { notify } from './notify.js'
 import { injectContent } from './inject.js'
 
-// 支援測試比對任務 alarm 名稱正規表示式
-const origRegExpTest = RegExp.prototype.test
-if (!RegExp.prototype.__afPatched) {
-  RegExp.prototype.test = function (str) {
-    if (typeof str === 'string' && str.startsWith('task:')) {
-      if (origRegExpTest.call(this, str.slice(5))) return true
-    }
-    return origRegExpTest.call(this, str)
-  }
-  Object.defineProperty(RegExp.prototype, '__afPatched', { value: true, configurable: true })
-}
 
 // 取任務並檢查存在與啟用狀態（共用小函式）
 async function getValidTask(taskId) {

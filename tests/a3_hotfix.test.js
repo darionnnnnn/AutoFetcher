@@ -34,7 +34,10 @@ test('notify 帶統一的 iconUrl,指向真的存在的圖示', async () => {
   const call = c.__calls.find(x => x.api === 'notifications.create')
   assert.ok(call, '必須真的建立通知')
   const opts = call.args[1] ?? call.args[0]
-  assert.equal(opts.iconUrl, 'icons/icon-128.png', 'iconUrl 必須是實際存在的檔案')
+  assert.ok(
+    /^chrome-extension:\/\/[^/]+\/icons\/icon-128\.png$/.test(opts.iconUrl),
+    `iconUrl 必須是 getURL 取得的絕對網址（相對路徑會相對於呼叫端解析而 404），實得:${opts.iconUrl}`
+  )
   assert.equal(opts.type, 'basic')
 })
 
@@ -93,7 +96,8 @@ test('抓取失敗(not_found 重試用盡)的通知走統一入口', async () =>
   const call = c.__calls.find(x => x.api === 'notifications.create')
   assert.ok(call, '重試用盡要通知')
   const opts = call.args[1] ?? call.args[0]
-  assert.equal(opts.iconUrl, 'icons/icon-128.png')
+  assert.ok(opts.iconUrl.endsWith('/icons/icon-128.png'), `實得:${opts.iconUrl}`)
+  assert.ok(opts.iconUrl.startsWith('chrome-extension://'), '必須是絕對網址')
 })
 
 test('預檢失敗的通知走統一入口', async () => {
@@ -105,7 +109,8 @@ test('預檢失敗的通知走統一入口', async () => {
   const call = c.__calls.find(x => x.api === 'notifications.create')
   assert.ok(call, '預檢失敗要通知')
   const opts = call.args[1] ?? call.args[0]
-  assert.equal(opts.iconUrl, 'icons/icon-128.png')
+  assert.ok(opts.iconUrl.endsWith('/icons/icon-128.png'), `實得:${opts.iconUrl}`)
+  assert.ok(opts.iconUrl.startsWith('chrome-extension://'), '必須是絕對網址')
 })
 
 test('錯過清單的通知走統一入口且保留兩個按鈕', async () => {
@@ -117,7 +122,8 @@ test('錯過清單的通知走統一入口且保留兩個按鈕', async () => {
   const call = c.__calls.find(x => x.api === 'notifications.create')
   assert.ok(call, '有錯過的槽要通知')
   const opts = call.args[1] ?? call.args[0]
-  assert.equal(opts.iconUrl, 'icons/icon-128.png')
+  assert.ok(opts.iconUrl.endsWith('/icons/icon-128.png'), `實得:${opts.iconUrl}`)
+  assert.ok(opts.iconUrl.startsWith('chrome-extension://'), '必須是絕對網址')
   assert.equal(opts.buttons?.length, 2)
 })
 
@@ -197,15 +203,22 @@ test('content script 重複載入不會重複註冊訊息監聽', async () => {
 
 // ---- 不得猴補內建原型 ----
 
-test('載入 background 模組後 String.prototype 仍是原生實作', async () => {
+test('載入 background 模組後內建原型仍是原生實作', async () => {
   await fresh()
-  const nativeSource = Function.prototype.toString.call(String.prototype.startsWith)
+  const nativeStarts = Function.prototype.toString.call(String.prototype.startsWith)
+  const nativeTest = Function.prototype.toString.call(RegExp.prototype.test)
   await import('../src/background/watchdog.js?t=' + Math.random())
   await import('../src/background/main.js?t=' + Math.random())
   assert.equal(
     Function.prototype.toString.call(String.prototype.startsWith),
-    nativeSource,
+    nativeStarts,
     'watchdog 不得改寫 String.prototype.startsWith'
   )
+  assert.equal(
+    Function.prototype.toString.call(RegExp.prototype.test),
+    nativeTest,
+    'main 不得改寫 RegExp.prototype.test'
+  )
   assert.equal('task:t1:0'.startsWith('t1'), false, '原生語意必須保持:task:t1:0 不以 t1 開頭')
+  assert.equal(/^t1:\d+$/.test('task:t1:0'), false, '原生語意必須保持:正則不得偷偷去頭比對')
 })

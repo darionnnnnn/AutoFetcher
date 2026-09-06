@@ -272,6 +272,16 @@
 `unlimitedStorage` 讓歷史紀錄不受 `storage.local` 預設 10MB 上限限制(保留天數預設 365 天很容易超過)。
 另設 `options_page: "ui/report/report.html"`,可從 `chrome://extensions` 的擴充功能選項開啟報表。
 
+`web_accessible_resources`(`content/*.js`、`shared/*.js`,`matches: ["<all_urls>"]`)是**必要的**:
+content script 是 ES module,`executeScript({files})` 以傳統 script 注入會拋
+`Cannot use import statement outside a module`,注入必須改成 `executeScript({func: (url) => import(url)})`,
+而動態 import 只能讀 web accessible 的資源。代價是網頁可以探測本擴充功能是否安裝(列 BACKLOG)。
+
+`icons`(16/32/48/128)與 `action.default_icon` 為必填:通知的 `iconUrl` 只要載不到,
+Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runtime.getURL()` 取絕對網址**——
+相對路徑會相對於呼叫端的位址解析(service worker 是 `/background/`),在真實瀏覽器一律 404。
+所有通知走 `background/notify.js` 這個唯一入口,它同時負責遵守 `settings.notifications` 偏好。
+
 ## §10 告警
 
 - 任務可設條件:值 > / < / = 閾值、相較前一筆變動超過 X%、連續 N 次抓取失敗。

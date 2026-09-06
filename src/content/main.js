@@ -66,12 +66,7 @@ function handleScrollIntoView(msg, sendResponse) {
   sendResponse({ ok: true })
 }
 
-// 冪等守衛：若已載入過則不重複註冊監聽
-if (globalThis.__afContentDoc !== document) {
-  globalThis.__afContentDoc = document
-  globalThis.__afContentLoaded = false
-}
-
+// 冪等守衛：同一個分頁可能被右鍵與排程各注入一次，不得重複註冊監聽
 if (!globalThis.__afContentLoaded) {
   globalThis.__afContentLoaded = true
 

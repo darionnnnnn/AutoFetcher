@@ -3,6 +3,7 @@
 //       BROWSER_PATH="/path/to/Edge" node tests/smoke/load.mjs
 import puppeteer from 'puppeteer-core'
 import { existsSync } from 'node:fs'
+import http from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 
@@ -131,6 +132,74 @@ try {
   }
   if (view.emptyHidden !== true) errors.push('有資料時空狀態沒有隱藏')
   if (view.rows === 2) console.log(`${browserName}:報表顯示 2 筆紀錄,含 1,234 與失敗列`)
+
+  // 5. 真實注入:在一個真的網頁上注入 content script 並擷取(D1 的守門)
+  //    這一段是本專案唯一抓得到「content script 根本沒載入」的手段——
+  //    單元測試用 jsdom 直接 import 模組,永遠不會踩到 classic script 不支援 import 的問題。
+  const fixtureHtml = `<!doctype html><meta charset="utf-8">
+<div id="v">1,234</div>
+<table id="t"><thead><tr><th>日期</th><th>數量</th></tr></thead>
+<tbody><tr><td>09-01</td><td>10</td></tr><tr><td>09-02</td><td>32</td></tr></tbody></table>`
+  const server = http.createServer((_, res) => {
+    res.setHeader('content-type', 'text/html; charset=utf-8')
+    res.end(fixtureHtml)
+  })
+  await new Promise(r => server.listen(48123, '127.0.0.1', r))
+
+  const pageUnderTest = await browser.newPage()
+  const targetErrors = []
+  pageUnderTest.on('pageerror', e => targetErrors.push(String(e)))
+  await pageUnderTest.goto('http://127.0.0.1:48123/', { waitUntil: 'load' })
+
+  const ext2 = await browser.newPage()
+  await ext2.goto(`chrome-extension://${extId}/ui/report/report.html`, { waitUntil: 'domcontentloaded' })
+  const injectResult = await ext2.evaluate(async () => {
+    const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/*' })
+    if (tabs.length === 0) return { error: '找不到目標分頁' }
+    const tabId = tabs[0].id
+    const out = {}
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (url) => import(url),
+        args: [chrome.runtime.getURL('content/main.js')]
+      })
+    } catch (e) { out.injectError = String(e) }
+    try {
+      out.extract = await chrome.tabs.sendMessage(tabId, {
+        type: 'EXTRACT',
+        locator: { css: '#v', path: '', anchor: null, xpath: '' },
+        spec: { strategy: 'auto' }
+      })
+    } catch (e) { out.extractError = String(e) }
+    try {
+      await chrome.notifications.create('smoke-notify', {
+        type: 'basic', iconUrl: chrome.runtime.getURL('icons/icon-128.png'), title: 'AutoFetcher', message: '煙霧測試'
+      })
+      out.notifyOk = true
+    } catch (e) { out.notifyError = String(e) }
+    return out
+  })
+
+  for (const e of targetErrors) errors.push(`目標頁注入後有錯誤:${e}`)
+  if (injectResult.injectError) errors.push(`注入失敗:${injectResult.injectError}`)
+  if (injectResult.extractError) errors.push(`擷取失敗(content script 沒載入?):${injectResult.extractError}`)
+  if (injectResult.extract?.ok !== true) {
+    errors.push(`擷取沒有成功:${JSON.stringify(injectResult.extract)}`)
+  } else if (injectResult.extract.value !== 1234) {
+    errors.push(`擷取到的值應為 1234,實際 ${injectResult.extract.value}`)
+  } else {
+    console.log(`${browserName}:真實網頁注入並擷取成功 (value=${injectResult.extract.value})`)
+  }
+  if (injectResult.notifyError) {
+    errors.push(`通知發不出去(圖示載不到?):${injectResult.notifyError}`)
+  } else {
+    console.log(`${browserName}:通知送出正常`)
+  }
+
+  await ext2.close()
+  await pageUnderTest.close()
+  await new Promise(r => server.close(r))
 
   await ext.evaluate(() => chrome.storage.local.clear())
   await ext.close()
