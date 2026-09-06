@@ -20,6 +20,7 @@ import {
   parsePrecheckName
 } from './precheck.js'
 import { injectContent } from './inject.js'
+import { scheduleSiteCheck, runSiteCheck } from './sitecheck.js'
 
 
 // 取任務並檢查存在與啟用狀態（共用小函式）
@@ -94,6 +95,7 @@ export async function handleInstalled(details) {
     await setupContextMenus()
     await rebuildAlarms()
     await schedulePrechecks()
+    await scheduleSiteCheck()
     await ensureWatchdog()
     await refreshBadge()
   } catch {}
@@ -105,6 +107,7 @@ export async function handleStartup() {
     await initStorage()
     await rebuildAlarms()
     await schedulePrechecks()
+    await scheduleSiteCheck()
     await ensureWatchdog()
     await refreshMissed(Date.now())
     await refreshBadge()
@@ -130,7 +133,14 @@ export async function handleAlarm(alarm, testOpts = {}) {
       return
     }
 
-    // 3. 預檢演練
+    // 3. 站台健康檢查
+    if (name === '__sitecheck') {
+      await runSiteCheck(testOpts)
+      await scheduleSiteCheck()
+      return
+    }
+
+    // 4. 預檢演練
     const precheck = parsePrecheckName(name)
     if (precheck !== null) {
       const { task, active } = await getValidTask(precheck.taskId)

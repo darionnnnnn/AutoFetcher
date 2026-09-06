@@ -146,6 +146,13 @@ export async function saveSite(origin, site) {
   await chrome.storage.local.set({ sites })
 }
 
+// 刪除單一站台設定
+export async function deleteSite(origin) {
+  const sites = await getSites()
+  delete sites[origin]
+  await chrome.storage.local.set({ sites })
+}
+
 // 追加紀錄至指定日期的 storage 鍵（rec:<date>）
 export async function appendRecord(date, record) {
   const key = dateToKey(date)

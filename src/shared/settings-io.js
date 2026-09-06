@@ -54,9 +54,14 @@ export async function exportSettings({ includePasswords = false, passphrase } = 
 
   if (data.sites && typeof data.sites === 'object') {
     for (const [origin, site] of Object.entries(data.sites)) {
-      if (site && site.password !== undefined) {
-        passwords[origin] = site.password
-        delete site.password
+      if (site) {
+        if (site.password !== undefined) {
+          passwords[origin] = site.password
+          delete site.password
+        }
+        if (site.passwordEnc !== undefined) {
+          delete site.passwordEnc
+        }
       }
     }
   }

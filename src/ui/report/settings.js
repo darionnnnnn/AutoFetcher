@@ -5,7 +5,12 @@ import {
   getTasks,
   getStorageStats,
   importRecords,
-  getDiagList
+  getDiagList,
+  getSites,
+  getSite,
+  saveSite,
+  deleteSite,
+  getHealthMap
 } from '../../shared/storage.js'
 import { buildExport, download } from '../../shared/export.js'
 import { exportSettings, importSettings } from '../../shared/settings-io.js'
@@ -303,6 +308,127 @@ function renderPrivacyNote() {
   noteEl.appendChild(ul)
 }
 
+// 綁定站台清單事件處理（事件委派，避免重複監聽）
+function setupSitesListListeners() {
+  const listEl = document.getElementById('sites-list')
+  if (!listEl || listEl._afBound) return
+  listEl._afBound = true
+  listEl.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-action]')
+    if (!btn) return
+    const origin = btn.dataset.origin
+    if (!origin) return
+    const action = btn.dataset.action
+    if (action === 'site-toggle') {
+      const site = await getSite(origin)
+      if (!site) return
+      const nextEnabled = site.enabled === false ? true : false
+      site.enabled = nextEnabled
+      if (nextEnabled) {
+        site.failStreak = 0
+      }
+      await saveSite(origin, site)
+      await renderSitesList()
+    } else if (action === 'site-delete') {
+      await deleteSite(origin)
+      await renderSitesList()
+    }
+  })
+}
+
+// 繪製站台登入管理清單
+async function renderSitesList() {
+  const listEl = document.getElementById('sites-list')
+  if (!listEl) return
+  listEl.textContent = ''
+
+  let sites = {}
+  try {
+    sites = await getSites()
+  } catch {}
+
+  const entries = Object.entries(sites)
+  if (entries.length === 0) {
+    const placeholder = document.createElement('div')
+    placeholder.id = 'sites-placeholder'
+    placeholder.textContent = '目前尚未設定任何站台。'
+    listEl.appendChild(placeholder)
+    return
+  }
+
+  let healthMap = {}
+  try {
+    healthMap = await getHealthMap()
+  } catch {}
+
+  for (const [origin, site] of entries) {
+    if (!site) continue
+
+    const row = document.createElement('div')
+    row.className = 'site-row'
+
+    const originEl = document.createElement('span')
+    originEl.className = 'site-origin'
+    originEl.textContent = origin
+    row.appendChild(originEl)
+
+    const userEl = document.createElement('span')
+    userEl.className = 'site-user'
+    userEl.textContent = site.username ? `帳號：${site.username}` : '無帳號'
+    row.appendChild(userEl)
+
+    const isEnabled = site.enabled !== false
+
+    const statusEl = document.createElement('span')
+    statusEl.className = 'site-status'
+    statusEl.textContent = isEnabled ? '啟用中' : '已停用'
+    row.appendChild(statusEl)
+
+    const streakEl = document.createElement('span')
+    streakEl.className = 'site-streak'
+    streakEl.textContent = `失敗次數：${site.failStreak || 0}`
+    row.appendChild(streakEl)
+
+    const healthEl = document.createElement('span')
+    healthEl.className = 'site-health'
+    const record = healthMap['site:' + origin]
+    let healthText = '尚未檢查'
+    if (record && record.status) {
+      if (record.status === 'ok') {
+        healthText = '正常'
+      } else if (record.status === 'login_failed') {
+        healthText = record.reason || '無法登入'
+      } else {
+        healthText = record.reason || record.status
+      }
+    }
+    healthEl.textContent = `最近檢查：${healthText}`
+    row.appendChild(healthEl)
+
+    const actionsEl = document.createElement('div')
+    actionsEl.className = 'site-actions'
+
+    const toggleBtn = document.createElement('button')
+    toggleBtn.type = 'button'
+    toggleBtn.dataset.action = 'site-toggle'
+    toggleBtn.dataset.origin = origin
+    toggleBtn.textContent = isEnabled ? '停用' : '啟用'
+    actionsEl.appendChild(toggleBtn)
+
+    const deleteBtn = document.createElement('button')
+    deleteBtn.type = 'button'
+    deleteBtn.dataset.action = 'site-delete'
+    deleteBtn.dataset.origin = origin
+    deleteBtn.textContent = '刪除'
+    actionsEl.appendChild(deleteBtn)
+
+    row.appendChild(actionsEl)
+    listEl.appendChild(row)
+  }
+
+  setupSitesListListeners()
+}
+
 // 渲染整個設定頁
 export async function renderSettings() {
   setupDefaultExportDates()
@@ -319,7 +445,8 @@ export async function renderSettings() {
     renderNextRuns(),
     renderWatchdog(),
     renderDiag(),
-    renderStorageStats()
+    renderStorageStats(),
+    renderSitesList()
   ])
 
   renderPrivacyNote()

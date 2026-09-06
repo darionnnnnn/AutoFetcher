@@ -140,9 +140,14 @@ try {
 <div id="v">1,234</div>
 <table id="t"><thead><tr><th>日期</th><th>數量</th></tr></thead>
 <tbody><tr><td>09-01</td><td>10</td></tr><tr><td>09-02</td><td>32</td></tr></tbody></table>`
-  const server = http.createServer((_, res) => {
+  const loginHtml = `<!doctype html><meta charset="utf-8">
+<form><input id="u"><input id="p" type="password"><button id="go" type="button">送出</button></form>
+<script>document.getElementById('go').onclick = () => {
+  document.title = document.getElementById('u').value + '/' + document.getElementById('p').value
+}</script>`
+  const server = http.createServer((req, res) => {
     res.setHeader('content-type', 'text/html; charset=utf-8')
-    res.end(fixtureHtml)
+    res.end(req.url.startsWith('/login') ? loginHtml : fixtureHtml)
   })
   await new Promise(r => server.listen(48123, '127.0.0.1', r))
 
@@ -238,6 +243,44 @@ try {
   if (pickResult.during?.overlay && !pickResult.after?.overlay) {
     console.log(`${browserName}:選取模式進出正常 (面板:${pickResult.during.panel.split('\n')[0]})`)
   }
+
+  // 5d. 自動登入:content 真的填得進欄位並按得到送出鈕
+  const loginPage = await browser.newPage()
+  await loginPage.goto('http://127.0.0.1:48123/login', { waitUntil: 'load' })
+  const loginResult = await ext2.evaluate(async () => {
+    const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/login*' })
+    const tabId = tabs[0].id
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (url) => import(url),
+      args: [chrome.runtime.getURL('content/main.js')]
+    })
+    const filled = await chrome.tabs.sendMessage(tabId, {
+      type: 'FILL_LOGIN',
+      selectors: {
+        user: { css: '#u', path: '', anchor: null, xpath: '' },
+        pass: { css: '#p', path: '', anchor: null, xpath: '' },
+        submit: { css: '#go', path: '', anchor: null, xpath: '' }
+      },
+      username: 'wayne',
+      password: 'hunter2'
+    })
+    const probe = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => ({ title: document.title, user: document.getElementById('u').value })
+    })
+    return { filled, page: probe[0].result }
+  })
+  if (loginResult.filled?.ok !== true) {
+    errors.push(`自動登入填不進去:${JSON.stringify(loginResult.filled)}`)
+  } else if (loginResult.page.user !== 'wayne') {
+    errors.push(`帳號欄沒填到:${JSON.stringify(loginResult.page)}`)
+  } else if (loginResult.page.title !== 'wayne/hunter2') {
+    errors.push(`送出鈕沒被按到(標題應為 wayne/hunter2):${loginResult.page.title}`)
+  } else {
+    console.log(`${browserName}:自動登入填入與送出正常`)
+  }
+  await loginPage.close()
 
   await ext2.close()
   await pageUnderTest.close()
