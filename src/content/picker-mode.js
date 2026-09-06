@@ -467,8 +467,10 @@ function openMenu(event) {
   const items = isTable
     ? [
         { key: 'cell', label: '選這一格' },
-        { key: 'col', label: '選這一欄' },
-        { key: 'row', label: '選這一列' },
+        { key: 'col-each', label: '這一欄：每格各一個值' },
+        { key: 'col', label: '這一欄：整欄聚合成一個值' },
+        { key: 'row-each', label: '這一列：每格各一個值' },
+        { key: 'row', label: '這一列：整列聚合成一個值' },
         { key: 'done', label: '完成' },
         { key: 'cancel', label: '取消' }
       ]
@@ -521,6 +523,30 @@ function handleMenuAction(action) {
         applyPickedMarks(tableEl)
         updatePanel(panelEl, tableEl)
       }
+    }
+    return
+  }
+
+  if (action === 'col-each' || action === 'row-each') {
+    if (tableEl && isTableMode(tableEl)) {
+      const dataRows = resolveDataRows(tableEl)
+      if (action === 'col-each') {
+        // 一整欄的每一格各是一個值（各幣別的買入），與「整欄加總成一個值」是兩件事
+        const cIdx = cellInfo ? cellInfo.cIdx : (colIndex !== null ? colIndex : 0)
+        for (let r = 0; r < dataRows.length; r++) {
+          addPick(makeCellPick(r, cIdx, tableEl, dataRows))
+          if (limitReached) break
+        }
+      } else {
+        const rIdx = cellInfo ? cellInfo.rIdx : (rowIndex !== null ? rowIndex : 0)
+        const cols = columnHeaders(tableEl).length || getRowCells(dataRows[rIdx] || dataRows[0]).length
+        for (let c = 0; c < cols; c++) {
+          addPick(makeCellPick(rIdx, c, tableEl, dataRows))
+          if (limitReached) break
+        }
+      }
+      applyPickedMarks(tableEl)
+      updatePanel(panelEl, tableEl)
     }
     return
   }

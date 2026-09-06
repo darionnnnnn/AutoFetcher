@@ -159,3 +159,74 @@ test('預檢失敗的說明用值的名稱，不是內部代號', async () => {
   const h = (await he.getHealth()).bank
   assert.ok(String(h.detail).includes('美金買入'), `使用者看不懂內部代號：${h.detail}`)
 })
+
+// ---- B3-1：選整欄／整列時要能選「每格一值」 ----
+
+const BANK = `
+<table id="rate">
+  <thead><tr><th>幣別</th><th>買入</th><th>賣出</th></tr></thead>
+  <tbody>
+    <tr id="r0"><td id="c0-0">美金</td><td id="c0-1">30.9</td><td id="c0-2">31.5</td></tr>
+    <tr id="r1"><td id="c1-0">日圓</td><td id="c1-1">0.208</td><td id="c1-2">0.216</td></tr>
+  </tbody>
+</table>`
+
+async function pickMode() {
+  resetChromeMock()
+  const c = installChromeMock()
+  const jd = new JSDOM(`<!doctype html><html><head><title>臺銀</title></head><body>${BANK}</body></html>`)
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  globalThis.MouseEvent = jd.window.MouseEvent
+  globalThis.KeyboardEvent = jd.window.KeyboardEvent
+  const pm = await import('../src/content/picker-mode.js?t=' + Math.random())
+  return { c, pm, doc: jd.window.document, win: jd.window }
+}
+
+const lastMsg = (c) => c.__calls.filter(x => x.api === 'runtime.sendMessage').map(x => x.args[0]).pop()
+
+test('右鍵選單把「整欄」拆成每格一值與整欄一值兩種', async () => {
+  const { pm, doc, win } = await pickMode()
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('rate') })
+  doc.getElementById('c0-1').dispatchEvent(new win.MouseEvent('mousemove', { bubbles: true }))
+  doc.getElementById('c0-1').dispatchEvent(new win.MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+  const items = [...doc.querySelectorAll('[data-af-menu-item]')].map(el => el.dataset.afMenuItem)
+  assert.deepEqual(items, ['cell', 'col-each', 'col', 'row-each', 'row', 'done', 'cancel'],
+    '一整欄的每一格各是一個值（各幣別的買入），跟整欄加總是兩件事')
+  pm.exitPickMode()
+})
+
+test('選「這一欄的每一格」會把整欄的資料格都加進來', async () => {
+  const { c, pm, doc, win } = await pickMode()
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('rate') })
+  doc.getElementById('c0-1').dispatchEvent(new win.MouseEvent('mousemove', { bubbles: true }))
+  doc.getElementById('c0-1').dispatchEvent(new win.MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+  doc.querySelector('[data-af-menu-item="col-each"]').dispatchEvent(new win.MouseEvent('click', { bubbles: true }))
+  assert.equal(pm.selectedCount(), 2, '兩列資料就是兩個值')
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  const picks = lastMsg(c).picks
+  assert.ok(picks.every(p => p.cell), '每一個都是儲存格，不是聚合')
+  assert.deepEqual(picks.map(p => p.cell.row.header), ['美金', '日圓'])
+})
+
+test('選「這一列的每一格」同理', async () => {
+  const { c, pm, doc, win } = await pickMode()
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('rate') })
+  doc.getElementById('c0-1').dispatchEvent(new win.MouseEvent('mousemove', { bubbles: true }))
+  doc.getElementById('c0-1').dispatchEvent(new win.MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+  doc.querySelector('[data-af-menu-item="row-each"]').dispatchEvent(new win.MouseEvent('click', { bubbles: true }))
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  const picks = lastMsg(c).picks
+  assert.ok(picks.length >= 2)
+  assert.ok(picks.every(p => p.cell))
+})
+
+test('整欄聚合那一項仍然是聚合', async () => {
+  const { c, pm, doc, win } = await pickMode()
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('rate') })
+  doc.getElementById('c0-1').dispatchEvent(new win.MouseEvent('mousemove', { bubbles: true }))
+  doc.getElementById('c0-1').dispatchEvent(new win.MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+  doc.querySelector('[data-af-menu-item="col"]').dispatchEvent(new win.MouseEvent('click', { bubbles: true }))
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  assert.ok(lastMsg(c).picks[0].block, '整欄一值是聚合型')
+})

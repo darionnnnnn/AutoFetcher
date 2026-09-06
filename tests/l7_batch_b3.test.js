@@ -148,13 +148,14 @@ test('框選放開時不會被誤判成「單擊確認」', async () => {
 const rightClick = (doc, id) =>
   doc.getElementById(id).dispatchEvent(new globalThis.MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
 
-test('表格內右鍵開出四個選項', async () => {
+test('表格內右鍵開出完整的選取方式', async () => {
   const { pm, doc } = await setup()
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('rate') })
   hover(doc, 'c0-3')
   rightClick(doc, 'c0-3')
   const items = [...doc.querySelectorAll('[data-af-menu-item]')].map(el => el.dataset.afMenuItem)
-  assert.deepEqual(items, ['cell', 'col', 'row', 'done', 'cancel'])
+  assert.deepEqual(items, ['cell', 'col-each', 'col', 'row-each', 'row', 'done', 'cancel'],
+    '欄與列各有「每格一值」與「整欄一值」兩種，是兩件不同的事')
 })
 
 test('右鍵選「選這一欄」加入的是整欄聚合，不是一格', async () => {
