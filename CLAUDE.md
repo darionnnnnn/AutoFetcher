@@ -9,7 +9,9 @@ Chrome 擴充功能(Manifest V3):在指定網頁上以右鍵選取元素/區塊,
 ```
 src/
 ├── manifest.json        ← MV3;permissions 只加有消費端的
-├── background/          ← service worker:排程(chrome.alarms)、開分頁抓取、寫入儲存
+├── background/          ← service worker:main 總接線 / scheduler 排程 / fetcher 抓取 / login 自動登入
+│                          precheck 預檢 / sitecheck 每日站台檢查 / missed 補抓 / watchdog 看門狗
+│                          health 燈號 / notify 通知唯一入口 / inject 注入唯一入口
 ├── content/             ← 注入頁面:main.js 訊息路由/擷取/填登入/前置動作
 │                          picker-mode.js 選取模式(高亮 overlay、↑↓、表格點欄列)
 ├── ui/theme.css         ← **顏色的唯一來源**(亮/暗雙軌 + --chart-1~8 圖表調色盤)
@@ -22,8 +24,9 @@ src/
 │   │   templates.js 儀表板範本 / charts.js SVG 圖表(只碰 document 建元素)
 │   └── DOM 層:report.js 路由與歷史頁 / dashboard.js 儀表板與拖曳 / cards.js 卡片
 │       drawer.js 卡片設定抽屜 / tasks.js 任務頁 / settings.js 設定頁
-└── shared/              ← 型別、儲存 schema、選擇器工具、layout-store.js(版面唯一入口)
-                           record-status.js(成功狀態判定唯一來源)、crypto.js(站台密碼)
+└── shared/              ← storage(唯一寫入口)、messages(訊息型別)、selector(四層定位)
+                           extract(策略鏈)、export(三種匯出)、settings-io(設定匯出入)、diag(診斷)
+                           layout-store(版面唯一入口)、record-status(成功狀態唯一來源)、crypto(站台密碼)
                            純函式:block-detect / table / aggregate / alerts
 docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ```
@@ -42,7 +45,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 905 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 931 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅)。
   AF-2 靠突變抓到多處同義反覆的測試;併回前另做兩份獨立終檢(程式碼 + 文件),抓到 14 類真實缺陷。

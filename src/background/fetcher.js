@@ -1,10 +1,11 @@
 // AutoFetcher 擷取流程：開分頁、注入、擷取、寫紀錄、重試
-import { getTask, saveTask, appendRecord, getRecordsInRange, getSettings, getAlertLog, setAlertLog } from '../shared/storage.js'
+import { getTask, saveTask, appendRecord, getRecordsInRange, getSettings, getAlertLog, setAlertLog, setLastValue, trimOldRecords } from '../shared/storage.js'
 import { MSG } from '../shared/messages.js'
 import { slotOf } from './scheduler.js'
 import { notify } from './notify.js'
 import { injectContent } from './inject.js'
 import { evaluateAlerts } from '../shared/alerts.js'
+import { isSuccess } from '../shared/record-status.js'
 import { setTaskHealth, refreshBadge } from './health.js'
 import { ensureLoggedIn } from './login.js'
 
@@ -142,6 +143,14 @@ async function writeRecord(record) {
   await processAlerts(record)
   await appendRecord(record.slot.slice(0, 10), record)
   await recordLedger(record.taskId, record.slot, record.status)
+  // popup 顯示「最後值」讀的是 lastValues；失敗的紀錄不覆蓋上一次成功的值
+  if (isSuccess(record)) {
+    await setLastValue(record.taskId, { value: record.value, capturedAt: record.capturedAt })
+  }
+  // 保留天數是設定頁的偏好，總得有人真的去清
+  try {
+    await trimOldRecords(getLocalDateStr(new Date()))
+  } catch {}
   return record
 }
 

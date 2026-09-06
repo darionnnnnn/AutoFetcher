@@ -175,7 +175,7 @@ function createTaskRow(t) {
   const nextEl = document.createElement('span')
   nextEl.className = 'task-next'
   const nextVal = currentCtx?.nextRuns?.[t.id]
-  nextEl.textContent = nextVal ? String(nextVal) : '—'
+  nextEl.textContent = nextVal ? new Date(nextVal).toLocaleString() : '—'
   row.appendChild(nextEl)
 
   const healthInfo = currentHealth?.[t.id]

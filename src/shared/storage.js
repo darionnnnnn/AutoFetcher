@@ -407,6 +407,13 @@ export async function getHealthMap() {
   return (res.health && typeof res.health === 'object') ? res.health : {}
 }
 
+// 記下某個任務最後一次抓到的值
+export async function setLastValue(taskId, entry) {
+  const all = await getLastValues()
+  all[taskId] = entry
+  await chrome.storage.local.set({ lastValues: all })
+}
+
 // 取得各任務最後一次抓到的值（popup 顯示用）
 export async function getLastValues() {
   const res = await chrome.storage.local.get('lastValues')

@@ -88,7 +88,7 @@
 ## §4 排程與擷取流程
 
 - 排程型別(每任務一種,可多筆):
-  - `daily`:`HH:mm` 清單 + 星期勾選(預設每天);alarm `periodInMinutes: 1440`。
+  - `daily`:`HH:mm` 清單 + 星期勾選(預設每天);每次觸發後重算下一次的 `when`(見 §4.1)。
   - `interval`:每 N 分鐘(N ≥ 1,暫定),可限定時段(如 09:00~18:00)與星期;alarm `periodInMinutes: N`。
   - alarm 名稱 `<taskId>:<index>`;任務修改/停用時整批重建。
   - `daily` **不用** `periodInMinutes: 1440`:每次觸發後重新計算下一次的 `when`(用本地時間算),否則日光節約或時區變更會漂移。
@@ -122,7 +122,7 @@
   3. 解析選擇器(§3),確認唯一命中;失敗即 `selector_lost`。
   4. 執行擷取策略鏈(§11)但不存 record;解析不出即 `parse_error`。
   5. 結果寫 `health[taskId] = {at, status, reason, detail}`,並更新燈號(§12);失敗立即通知「○○ 將於 HH:mm 抓取,預檢失敗:無法登入」,
-     點通知開 Report 任務頁定位到該任務。
+     (**目前只有告警通知點得動**,預檢/站台檢查/找不到元素的通知點擊還沒接,見 BACKLOG。)
 - 每日一次的**站台健康檢查**(`background/sitecheck.js`,`__sitecheck` alarm,
   時間取 `settings.siteCheckTime`,預設 08:00):對每個**啟用中**的站台開分頁走一次登入流程,
   結果寫 `health['site:<origin>']`,失敗即通知,提早發現密碼過期、驗證碼新增。
@@ -136,7 +136,8 @@
 - 補抓:Chrome 未開時錯過的排程,啟動時整理成「錯過清單」(任務、應抓時間),以 `notifications`
   按鈕「立即補抓 / 略過」詢問使用者,Report 頁同時顯示橫幅可逐筆勾選;補抓的紀錄標 `status: "late"`。
   未處理的錯過清單保留到使用者處理或超過 7 天(暫定)自動略過。
-- 重試:`not_found` 或逾時 → 2 分鐘後重試一次,仍失敗才寫失敗紀錄並發 `notifications`。
+- 重試:`not_found` 或逾時 → 2 分鐘後、10 分鐘後各重試一次(共兩次),仍失敗才寫失敗紀錄並發通知。
+  `login_failed` 與 `parse_error` **不重試**(重試幾次結果都一樣)。
 - 同一時刻多任務同站台 → 串行,共用分頁。
 - 前景 vs 背景:`chrome.tabs.create({active:false})` 開的分頁 JS 照常執行,但 `document.visibilityState` 為 `hidden`,
   IntersectionObserver 式的 lazy-load、依可見性才啟動的圖表/輪詢**可能不觸發**。
@@ -192,8 +193,7 @@
 - **舊格式遷移**(`schemaVersion` 1 → 2,`storage.init` 做一次):
   `loginPageUrlPrefix` → `loginCheck`;明文 `password` → 加密成 `passwordEnc` 並刪除原欄位。
 - 抓取流程(`background/login.js`,在等待載入之後、注入擷取之前):
-  1. 讀**分頁被轉址之後的實際網址**判斷是不是停在登入頁。
-     (不能用任務設定的網址——那是 AF-3 之前的 bug,`login_failed` 因此從未真的出現過。)
+  1. 讀**分頁被轉址之後的實際網址**判斷是不是停在登入頁(不是任務設定的網址)。
   2. 站台已被停用 → 直接回 `login_failed`,不再嘗試(避免一直用錯密碼撞帳號鎖定)。
   3. 解密密碼 → 送 `FILL_LOGIN` 給 content:填值並派發 `input`/`change` 事件
      (只設 `value` 對 React 之類的表單無效),再點送出鈕。
@@ -295,7 +295,7 @@
 - **複製任務**:新 id、名稱加「(副本)」、**預設停用**、不自動加入儀表板。
 - **刪除保護**:對話框顯示「將一併刪除 N 筆紀錄」,並提供「先匯出再刪除」(先下載 CSV 成功才刪)。
 - **錯過清單橫幅**:列在清單上方,可逐筆勾選補抓或略過(`CATCH_UP_ONE` / `SKIP_ONE`)。
-- **重新選取**:開啟目標頁並送 `REPICK`;content 目前不支援選取模式,會提示改用右鍵選單重選。
+- **重新選取**:開啟該任務的目標頁、等載入完成、注入後直接進入選取模式(§2);啟動失敗才提示改用右鍵選單。
 - 下次執行時間一律向 background 詢問(`GET_NEXT_RUNS`),UI 不自行解析 alarm 名稱
   (預檢與重試 alarm 必須排除)。
 
@@ -374,12 +374,14 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
 
 - 狀態由 background 的 `health` 匯總;任何 run / 預檢 / 看門狗結束都重算並 `setBadgeText` / `setBadgeBackgroundColor` / `setIcon`。
 - 使用者在 popup 或 Report 看過該項(點開)即標已讀,黃/紅計數減少;問題真正解決(下次成功)才回綠。
+- **現況**:紅燈來自預檢失敗與站台登入失敗(`health['site:<origin>']`);黃燈來自 `partial` 與錯過清單。
+  正式抓取失敗目前不寫 health,`setIcon` 的圖示變體也還沒接(見 BACKLOG)。
 - 圖示 `title`(滑鼠停留)顯示一行摘要:「2 個任務異常:A 無法登入、B 找不到元素」。
 
 ### §12.2 popup
 
-- 點擊圖示:上方燈號摘要;任務清單(名稱、最後值、狀態圖示、下次執行、下次預檢);
-  異常項目有「立即重試」「開啟頁面」(開目標 URL 讓使用者自己處理,例如手動登入或看網站改版)「暫停」按鈕;
+- 點擊圖示:上方燈號摘要;任務清單(名稱、最後值、狀態圖示、下次執行);
+  異常項目有「立即重試」「開啟頁面」(開目標 URL 讓使用者自己處理,例如手動登入或看網站改版);
   底部「全部暫停 / 恢復」、「開啟 Report」。
 - popup 只讀 storage 與發訊息,不做抓取。
 

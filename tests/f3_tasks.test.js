@@ -75,11 +75,14 @@ test('duplicateTask 不沿用原本的健康與排程狀態欄位', async () => 
 
 test('renderTasks 每個任務一列，顯示名稱與下次執行', async () => {
   const { ts, doc } = await fresh()
-  ts.renderTasks([task('a'), task('b')], {}, [], { nextRuns: { a: '2026-09-07 09:00' } })
+  // GET_NEXT_RUNS 回的是毫秒 timestamp（alarm 的 scheduledTime），不是格式化過的字串
+  const when = new Date('2026-09-07T09:00:00+08:00').getTime()
+  ts.renderTasks([task('a'), task('b')], {}, [], { nextRuns: { a: when } })
   const rows = doc.querySelectorAll('#task-list [data-task-id]')
   assert.equal(rows.length, 2)
-  assert.ok(doc.querySelector('#task-list').textContent.includes('任務a'))
-  assert.ok(doc.querySelector('#task-list').textContent.includes('2026-09-07 09:00'))
+  const text = doc.querySelector('#task-list').textContent
+  assert.ok(text.includes('任務a'))
+  assert.ok(text.includes(new Date(when).toLocaleString()), `要顯示成看得懂的時間，實得：${text}`)
 })
 
 test('renderTasks 顯示連續失敗數，最後錯誤放 title 不用 innerHTML', async () => {
