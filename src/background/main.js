@@ -224,7 +224,7 @@ export async function handleMessage(msg, sender) {
         return { ok: true }
       }
 
-      if (msg.purpose === 'preaction') {
+      if (msg.purpose === 'preaction' || (typeof msg.purpose === 'string' && msg.purpose.startsWith('login-'))) {
         try {
           await chrome.runtime.sendMessage(msg)
         } catch {}
@@ -385,11 +385,30 @@ export async function handleContextMenu(info, tab) {
       return
     }
 
-    if (info.menuItemId === 'af-pick' || info.menuItemId === 'af-site-login') {
+    if (info.menuItemId === 'af-site-login') {
+      if (!tab?.id) return
+      let origin = ''
+      try {
+        origin = tab.url ? new URL(tab.url).origin : ''
+      } catch {}
+      const base = typeof chrome.runtime?.getURL === 'function'
+        ? await chrome.runtime.getURL('ui/site/site.html')
+        : 'ui/site/site.html'
+      await chrome.windows.create({
+        url: `${base}?origin=${encodeURIComponent(origin)}&tabId=${tab.id}`,
+        type: 'popup',
+        width: 480,
+        height: 760
+      })
+      await injectContent(tab.id)
+      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'login-user' })
+      return
+    }
+
+    if (info.menuItemId === 'af-pick') {
       if (!tab?.id) return
       await injectContent(tab.id)
-      const purpose = info.menuItemId === 'af-pick' ? 'task' : 'login-user'
-      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose })
+      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'task' })
       return
     }
   } catch {}

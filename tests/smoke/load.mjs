@@ -50,7 +50,7 @@ try {
   //    所有檢查一律從擴充功能頁面做(頁面同樣有完整的 chrome API)。
 
   // 2. 三個 UI 頁面都打得開,而且沒有 console 錯誤
-  for (const page of ['ui/report/report.html', 'ui/popup/popup.html', 'ui/picker/picker.html']) {
+  for (const page of ['ui/report/report.html', 'ui/popup/popup.html', 'ui/picker/picker.html', 'ui/site/site.html']) {
     const p = await browser.newPage()
     const pageErrors = []
     p.on('console', m => { if (m.type() === 'error') pageErrors.push(m.text()) })
