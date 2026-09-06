@@ -429,6 +429,11 @@ function collectPatch() {
     } else {
       delete options.bucketMinutes
     }
+
+    const showDeltaBox = document.getElementById('drawer-show-delta')
+    if (showDeltaBox) {
+      options.showDelta = showDeltaBox.checked
+    }
   }
 
   // 狀態卡片分組（fieldStatus）
@@ -585,9 +590,38 @@ function populateFields(card) {
     bucketSelect.value = card.options?.bucketMinutes != null ? String(card.options.bucketMinutes) : '0'
   }
 
+  ensureTableDeltaField()
+  const showDeltaBox = document.getElementById('drawer-show-delta')
+  if (showDeltaBox) {
+    showDeltaBox.checked = Boolean(card.options?.showDelta)
+  }
+
   renderSources(cachedTasks, card.source, card.type)
   renderStatusTasks(cachedTasks, card.options?.taskIds)
   updateFieldVisibility(card.type)
+}
+
+/**
+ * 確保表格卡片抽屜中的差異欄勾選框存在
+ */
+function ensureTableDeltaField() {
+  let box = document.getElementById('drawer-show-delta')
+  if (!box) {
+    const fieldTable = document.getElementById('drawer-field-table')
+    if (fieldTable) {
+      const row = document.createElement('div')
+      row.className = 'drawer-row'
+      const label = document.createElement('label')
+      box = document.createElement('input')
+      box.type = 'checkbox'
+      box.id = 'drawer-show-delta'
+      label.appendChild(box)
+      label.appendChild(document.createTextNode(' 顯示與上一列的差'))
+      row.appendChild(label)
+      fieldTable.appendChild(row)
+    }
+  }
+  return box
 }
 
 /**

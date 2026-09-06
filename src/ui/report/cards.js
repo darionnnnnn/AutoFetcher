@@ -7,6 +7,7 @@ const DEFAULT_PIVOT_ROWS = 50;
 import { lineChart, barChart, gauge, sparkline } from './charts.js';
 import { isSuccess, isRed, isWarn } from '../../shared/record-status.js';
 import { parentIdOf } from '../../shared/series-index.js';
+import { openTrendPopover } from './trend-popover.js';
 
 const SUPPORTED_TYPES = new Set(['number', 'line', 'bar', 'table', 'gauge', 'text', 'status']);
 
@@ -179,6 +180,13 @@ function renderNumberCard(card, ctx, { cardEl, bodyEl }) {
     displayEl.appendChild(valEl);
   }
 
+  if (!ctx?.editing && taskId) {
+    valEl.classList.add('clickable');
+    valEl.addEventListener('click', () => {
+      openTrendPopover(taskId, ctx, valEl);
+    });
+  }
+
   bodyEl.appendChild(displayEl);
 
   // 差異比較
@@ -327,7 +335,7 @@ function renderChartCard(card, ctx, { bodyEl }) {
 /**
  * 渲染表格卡片（樞紐模式或最近紀錄模式）
  */
-function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
+function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
   const isPivot = card.options?.mode === 'pivot';
   const periodRange = resolveCardRange(card, ctx);
 
@@ -391,12 +399,23 @@ function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
 
       th.appendChild(makeRemoveHandle(id, Boolean(ctx?.editing)));
 
+      if (!ctx?.editing) {
+        th.classList.add('clickable');
+        th.addEventListener('click', (e) => {
+          if (e.target?.closest?.('[data-remove-source]')) return;
+          openTrendPopover(id, ctx, th);
+        });
+      }
+
       headTr.appendChild(th);
     }
     thead.appendChild(headTr);
 
+    const showDelta = Boolean(card.options?.showDelta);
+
     // 表身各列
-    for (const r of rows) {
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+      const r = rows[rowIndex];
       const tr = document.createElement('tr');
       const timeTd = document.createElement('td');
       timeTd.textContent = r.t ?? '';
@@ -416,6 +435,27 @@ function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
           const formatted = formatNumber(val, card.options?.decimals);
           td.textContent = formatted;
           rowTsv.push(formatted);
+
+          if (showDelta && rowIndex > 0) {
+            const prevRow = rows[rowIndex - 1];
+            const prevVal = prevRow?.values?.[col];
+            if (prevVal != null && typeof prevVal === 'number' && Number.isFinite(prevVal)) {
+              const diff = val - prevVal;
+              const roundedDiff = Math.round(diff * 1e8) / 1e8;
+              if (roundedDiff !== 0) {
+                const deltaEl = document.createElement('span');
+                deltaEl.setAttribute('data-delta', '');
+                deltaEl.className = roundedDiff > 0 ? 'delta-up' : 'delta-down';
+                const formattedDelta = typeof card.options?.decimals === 'number' && Number.isFinite(card.options.decimals)
+                  ? Math.abs(diff).toFixed(card.options.decimals)
+                  : String(Math.abs(roundedDiff));
+                deltaEl.textContent = `${roundedDiff > 0 ? '↑' : '↓'} ${formattedDelta}`;
+                deltaEl.title = `前值 ${formatNumber(prevVal, card.options?.decimals)}`;
+                td.appendChild(document.createTextNode(' '));
+                td.appendChild(deltaEl);
+              }
+            }
+          }
         } else if (val != null) {
           td.textContent = String(val);
           rowTsv.push(String(val));
@@ -486,6 +526,12 @@ function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
 
   bodyEl.appendChild(table);
 
+  const fullData = [tsvHeaders, ...tsvRows];
+  const tsvContent = buildTsv(fullData);
+  if (cardEl) {
+    cardEl.dataset.tsv = tsvContent;
+  }
+
   // 複製 TSV 按鈕
   const copyBtn = document.createElement('button');
   copyBtn.type = 'button';
@@ -502,8 +548,6 @@ function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
   copyBtn.addEventListener('click', () => {
     const currentNav = typeof navigator !== 'undefined' ? navigator : (typeof window !== 'undefined' ? window.navigator : null);
     if (currentNav?.clipboard?.writeText) {
-      const fullData = [tsvHeaders, ...tsvRows];
-      const tsvContent = buildTsv(fullData);
       currentNav.clipboard.writeText(tsvContent).catch(() => {});
     }
   });
