@@ -1,5 +1,6 @@
 // AutoFetcher 健康狀態彙總與工具列燈號 (SPEC §12.1)
 import { getTasks } from '../shared/storage.js'
+import { RED_STATUSES, WARN_STATUSES } from '../shared/record-status.js'
 
 // 狀態代碼對應繁體中文詞對照表
 const STATUS_TEXT = {
@@ -11,10 +12,6 @@ const STATUS_TEXT = {
   late: '遲到',
   partial: '只抓到部分'
 }
-
-// 異常紅燈與注意事項黃燈狀態集合
-const RED_STATUSES = new Set(['login_failed', 'selector_lost', 'parse_error', 'failed'])
-const YELLOW_STATUSES = new Set(['fallback', 'late', 'partial'])
 
 // 健康紀錄裡站台項目的鍵前綴（sitecheck.js 寫入）
 const SITE_PREFIX = 'site:'
@@ -48,11 +45,11 @@ export function computeHealth(tasks = [], healthMap = {}, missed = []) {
 
     const isUnread = record.read !== true
 
-    if (RED_STATUSES.has(record.status)) {
+    if (RED_STATUSES.includes(record.status)) {
       if (isUnread) {
         unreadRedTasks.push({ task, record })
       }
-    } else if (YELLOW_STATUSES.has(record.status)) {
+    } else if (WARN_STATUSES.includes(record.status)) {
       if (isUnread) {
         unreadYellowTasks.push({ task, record })
       }
@@ -65,9 +62,9 @@ export function computeHealth(tasks = [], healthMap = {}, missed = []) {
     if (!key.startsWith(SITE_PREFIX)) continue
     if (!record || !record.status || record.read === true) continue
     const site = { name: key.slice(SITE_PREFIX.length) }
-    if (RED_STATUSES.has(record.status)) {
+    if (RED_STATUSES.includes(record.status)) {
       unreadRedTasks.push({ task: site, record })
-    } else if (YELLOW_STATUSES.has(record.status)) {
+    } else if (WARN_STATUSES.includes(record.status)) {
       unreadYellowTasks.push({ task: site, record })
     }
   }
