@@ -116,6 +116,70 @@ function handleCheckElement(msg, sendResponse) {
   sendResponse({ ok: true, found })
 }
 
+// 處理 RUN_PRE_ACTIONS 訊息：依序執行前置動作
+async function handlePreActions(msg, sendResponse) {
+  const actions = Array.isArray(msg?.actions) ? msg.actions : []
+
+  try {
+    for (const action of actions) {
+      if (!action || typeof action !== 'object') continue
+
+      if (action.type === 'wait') {
+        const ms = typeof action.ms === 'number' ? action.ms : 0
+        if (ms > 0) {
+          await new Promise((r) => setTimeout(r, ms))
+        }
+      } else if (action.type === 'click') {
+        const res = resolve(document, action.locator)
+        if (res?.error || !res?.el) {
+          throw new Error('preaction_not_found')
+        }
+        if (typeof res.el.click === 'function') {
+          res.el.click()
+        }
+      } else if (action.type === 'waitFor') {
+        const initial = resolve(document, action.locator)
+        if (initial?.error || !initial?.el) {
+          await new Promise((resolvePromise, rejectPromise) => {
+            const timeout = typeof action.timeoutMs === 'number' ? action.timeoutMs : 20000
+            let timer = null
+            let observer = null
+
+            const cleanup = () => {
+              if (timer) {
+                clearTimeout(timer)
+                timer = null
+              }
+              if (observer) {
+                observer.disconnect()
+                observer = null
+              }
+            }
+
+            timer = setTimeout(() => {
+              cleanup()
+              rejectPromise(new Error('preaction_timeout'))
+            }, timeout)
+
+            observer = new MutationObserver(() => {
+              const res = resolve(document, action.locator)
+              if (!res.error && res.el) {
+                cleanup()
+                resolvePromise()
+              }
+            })
+
+            observer.observe(document, { childList: true, subtree: true })
+          })
+        }
+      }
+    }
+    sendResponse({ ok: true })
+  } catch (err) {
+    sendResponse({ ok: false, error: err.message || 'preaction_failed' })
+  }
+}
+
 // 冪等守衛：同一個分頁可能被右鍵與排程各注入一次，不得重複註冊監聽
 if (!globalThis.__afContentLoaded) {
   globalThis.__afContentLoaded = true
@@ -167,6 +231,11 @@ if (!globalThis.__afContentLoaded) {
 
     if (msg.type === MSG.CHECK_ELEMENT) {
       handleCheckElement(msg, sendResponse)
+      return true
+    }
+
+    if (msg.type === MSG.RUN_PRE_ACTIONS) {
+      handlePreActions(msg, sendResponse)
       return true
     }
   })

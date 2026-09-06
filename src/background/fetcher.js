@@ -192,10 +192,19 @@ export async function runTask(task, opts = {}) {
     attempt = 1,
     pollMs = 250,
     loadTimeoutMs = 30000,
-    extraDelayMs = 3000,
     extractTimeoutMs = 15000,
     dryRun = false
   } = opts
+
+  let extraDelayMs
+  if (opts.extraDelayMs !== undefined) {
+    extraDelayMs = opts.extraDelayMs
+  } else if (typeof task?.extraDelaySec === 'number') {
+    extraDelayMs = task.extraDelaySec * 1000
+  } else {
+    const settings = await getSettings()
+    extraDelayMs = typeof settings?.extraDelaySec === 'number' ? settings.extraDelaySec * 1000 : 3000
+  }
 
   // 1. 冪等檢查：已在帳本中則直接返回 null（dryRun 略過）
   if (!dryRun) {
@@ -223,6 +232,7 @@ export async function runTask(task, opts = {}) {
     await setInflight(inflightKey, { state: 'running', startedAt: new Date().toISOString() })
     await chrome.runtime.getPlatformInfo()
 
+    let originalTabId = null
     try {
       // 4. 視窗檢查：若目前無視窗則建立最小化視窗
       const windows = await chrome.windows.getAll()
@@ -231,13 +241,32 @@ export async function runTask(task, opts = {}) {
         if (win?.id) queueCtx.createdWindows.add(win.id)
       }
 
-      // 5. 分頁檢查：已存在則沿用，無則建立背景分頁
+      // 若為前景抓取，先記住目前作用中的分頁
+      if (task.foreground === true) {
+        try {
+          const currentActive = await chrome.tabs.query({ active: true, currentWindow: true })
+          if (Array.isArray(currentActive) && currentActive[0]?.id != null) {
+            originalTabId = currentActive[0].id
+          }
+        } catch {}
+      }
+
+      // 5. 分頁檢查：已存在則沿用，無則建立分頁
       const tabs = await chrome.tabs.query({ url: task.url })
       let tabId
       if (tabs.length > 0) {
         tabId = tabs[0].id
+        if (task.foreground === true) {
+          try {
+            await chrome.tabs.update(tabId, { active: true })
+          } catch {}
+        }
       } else {
-        const newTab = await chrome.tabs.create({ url: task.url, active: false, autoDiscardable: false })
+        const newTab = await chrome.tabs.create({
+          url: task.url,
+          active: task.foreground === true,
+          autoDiscardable: false
+        })
         tabId = newTab.id
         queueCtx.createdTabs.add(tabId)
       }
@@ -273,7 +302,18 @@ export async function runTask(task, opts = {}) {
       // 9. 注入 content script（必須在送訊息之前）
       await injectContent(tabId)
 
-      // 9. 擷取：先 SCROLL_INTO_VIEW，再 EXTRACT
+      // 執行前置動作（若有指定）
+      if (Array.isArray(task.preActions) && task.preActions.length > 0) {
+        const preRes = await chrome.tabs.sendMessage(tabId, {
+          type: MSG.RUN_PRE_ACTIONS,
+          actions: task.preActions
+        })
+        if (preRes?.ok !== true) {
+          throw new Error(`前置動作失敗：${preRes?.error || '未知錯誤'}`)
+        }
+      }
+
+      // 10. 擷取：先 SCROLL_INTO_VIEW，再 EXTRACT
       await chrome.tabs.sendMessage(tabId, { type: MSG.SCROLL_INTO_VIEW, locator: task.locator })
 
       const res = await Promise.race([
@@ -287,8 +327,9 @@ export async function runTask(task, opts = {}) {
       // 結果處理：成功路徑
       if (res?.ok === true) {
         const currentTask = await getTask(task.id)
-        if (currentTask && (currentTask.notFoundStreak || 0) > 0) {
+        if (currentTask && ((currentTask.notFoundStreak || 0) > 0 || currentTask.suggestForeground)) {
           currentTask.notFoundStreak = 0
+          delete currentTask.suggestForeground
           await saveTask(currentTask)
         }
 
@@ -385,6 +426,12 @@ export async function runTask(task, opts = {}) {
         error: String(err?.message || err)
       })
     } finally {
+      // 若有記錄前景抓取前作用中的分頁，將焦點還原
+      if (originalTabId != null) {
+        try {
+          await chrome.tabs.update(originalTabId, { active: true })
+        } catch {}
+      }
       // 清除 inflight 狀態
       await removeInflight(inflightKey)
     }

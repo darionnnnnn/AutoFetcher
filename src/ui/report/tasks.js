@@ -194,6 +194,33 @@ function createTaskRow(t) {
     row.appendChild(streakEl)
   }
 
+  if (t.suggestForeground === true && !t.foreground) {
+    const suggestEl = document.createElement('span')
+    suggestEl.className = 'task-suggest-foreground'
+    suggestEl.textContent = '連續抓不到，建議改用前景抓取'
+
+    const useFgBtn = document.createElement('button')
+    useFgBtn.type = 'button'
+    useFgBtn.dataset.action = 'use-foreground'
+    useFgBtn.textContent = '改用前景抓取'
+    useFgBtn.addEventListener('click', async () => {
+      const current = await getTask(t.id)
+      if (current) {
+        current.foreground = true
+        await saveTask(current)
+        const idx = currentTasks.findIndex((taskItem) => taskItem.id === t.id)
+        if (idx !== -1) {
+          currentTasks[idx] = current
+        }
+        const updated = await getTask(t.id)
+        const newRow = createTaskRow(updated || current)
+        row.replaceWith(newRow)
+      }
+    })
+    suggestEl.appendChild(useFgBtn)
+    row.appendChild(suggestEl)
+  }
+
   const actionsEl = document.createElement('div')
   actionsEl.className = 'task-actions'
 
