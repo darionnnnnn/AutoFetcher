@@ -1,8 +1,8 @@
 // AutoFetcher 區塊型別偵測（選取模式面板與 §7 區塊聚合共用同一份判定）
 import { parseNumber } from './extract.js'
+import { columnHeaders } from './table.js'
 
 const CELL_SELECTOR = 'td, th, [role="cell"], [role="gridcell"], [role="columnheader"]'
-const HEADER_SELECTOR = 'th, [role="columnheader"]'
 
 // 判定元素是否為表格（HTML table 或 ARIA 表格角色）
 function isTableLike(el) {
@@ -25,18 +25,14 @@ function getRows(el) {
 function describeTable(el) {
   const rows = getRows(el)
   let cols = 0
-  const headers = []
 
   for (const row of rows) {
     if (typeof row.querySelectorAll !== 'function') continue
     const cells = row.querySelectorAll(CELL_SELECTOR)
     if (cells.length > cols) cols = cells.length
-    for (const cell of row.querySelectorAll(HEADER_SELECTOR)) {
-      headers.push((cell.textContent || '').trim())
-    }
   }
 
-  return { kind: 'table', rows: rows.length, cols, headers }
+  return { kind: 'table', rows: rows.length, cols, headers: columnHeaders(el) }
 }
 
 /**

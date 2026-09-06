@@ -49,8 +49,10 @@
 | 名詞 | 定義 |
 |---|---|
 | 任務(Task) | 一個「目標頁 URL + 選擇器 + 抓取模式 + 一組時間」的設定單位,使用者命名 |
-| 抓取模式 | `text`(單一元素文字)、`number`(文字解析成數值)、`block`(區塊聚合) |
-| 紀錄(Record) | 一次抓取結果:`{taskId, scheduledAt, capturedAt, value, raw, status, error?}` |
+| 抓取模式 | `text`(單一元素文字)、`number`(文字解析成數值)、`block`(表格:儲存格 / 欄列聚合 / 一次多個值,§7) |
+| 值(Field) | 多值任務裡的一個值(`task.fields[]`),有自己的名稱與 `key`;單值任務沒有這一層 |
+| 序列(Series) | 報表看到的一條資料線。單值任務就是任務本身,多值任務是「任務 · 值」;id 見 §7 |
+| 紀錄(Record) | 一次抓取結果:`{taskId, slot, capturedAt, value, raw, status, strategyUsed, layer, error?, partial?, used?, skipped?, alert?, alertHits?, snippet?}`。**`taskId` 對多值任務是序列 id**(§7) |
 | 站台設定(Site) | 以 origin 為 key 的登入設定:帳號、密碼、登入頁 URL、欄位選擇器、成功判定 |
 
 ## §2 右鍵選單與頁面內選取模式
@@ -63,11 +65,33 @@
     進入選取模式時**它就是預選**,立刻高亮。
   - 滑鼠移動改選;`↑` 擴大到父層、`↓` 沿原路縮回(到 `body` 停住);
     `Enter` 或點擊確認(點擊會被攔截,不會傳給頁面);`Esc` 取消。
+  - **一次挑多個值**(只有 `purpose === 'task'` 支援):
+    `Shift` + 點擊 加選/取消該格、按住拖過多格框選矩形範圍(**累加,第二次框選不清掉第一次**)、
+    `Shift` + 方向鍵沿軸延伸。上限 `maxPicks`(預設 20)。
+    `Tab` 切換欄/列軸時清空已選。已選的格子帶 `data-af-picked`。
+    **選取狀態只存索引與表頭字串,不存元素參照**——即時報價的表格會整個重畫,
+    存參照會讓標記留在被丟掉的節點上;每次滑鼠移動重貼一次標記。
+  - **右鍵選單**(攔截頁面原生選單):表格內是「選這一格 / 選這一欄 / 選這一列 / 完成 / 取消」,
+    非表格是「選取此元素 / 取消」;項目帶 `data-af-menu-item`,容器帶 `data-af-menu`,同時只存在一個。
+    **值的預設單位是儲存格**(匯率表的「美金買入」是那一格,不是整欄加總);
+    選整欄/整列才是聚合。
+  - 拖曳放開後瀏覽器補的那個 `click` 要吃掉,否則會被當成「單擊確認」直接送出。
+    選取期間 `body` 的文字選取停用,離開時還原。
+  - `PICKED` 新增 `picks`(已選清單,順序 = 選取順序;單選時長度 1),
+    既有欄位(`locator`、`blockInfo`、`preview`、`nameHint`…)一個都不變。
+    `repick` / `preaction` / `login-*` 一律選一個就送出。
+  - `ENTER_PICK` 可帶 `preselect`(形狀同 `picks`):**以表頭為準**勾回去,
+    位置與帶進來的索引不同時在面板提示「位置已變」;表頭找不到就略過那一項。
   - 右下角面板即時顯示:元素描述、文字預覽前 80 字、偵測到的型別
     (數值 / 文字 / 表格 N 列 × M 欄 / 清單 N 項),判定來自 `shared/block-detect.js`。
   - 選到表格或 CSS 假表格時,滑鼠移到某一格會標示**整欄**(`Tab` 切換成整列),
     點擊即選定該欄/列;此時 locator 仍指向表格容器本身,欄列資訊另外帶回。
-  - **一個任務只抓一個元素**:同一頁要抓四張表格的最大值,就是四個任務(各自命名),不是一個任務抓四個值。
+  - **一個任務只抓一個元素,但那個元素裡可以挑多個值**(§7):
+    同一張匯率表要抓美金買入與賣出,是一個任務兩個值;
+    同一頁要抓四張**不同的表格**,才是四個任務(各自命名)。
+- 選到表格類元素時,content 一併算出 **`nameHint`**(表格的 `<caption>` → 目標之前最近的
+  `h1`~`h6` → 頁面 `title`,截 60 字)帶進 `PICKED`,Picker 拿它當任務名稱的預設值;
+  非表格不帶,由 Picker 退回文字錨定或預覽前 20 字。
 - 確認後 content 送 `PICKED` 給 background,由它決定去處(`purpose`):
   `task` 開 Picker 設定視窗、`repick` 直接更新既有任務的 locator、
   `login-*` 轉發給站台登入設定視窗、`preaction` 轉發給 Picker 的前置動作那一列。
@@ -75,6 +99,22 @@
 - overlay 的樣式以 `element.style` 逐項設定(頁面 CSS 會污染 class),
   且 `content/picker-mode.js` 是**全專案唯一允許寫色碼字面值**的檔案——
   網頁沒有載入 `ui/theme.css`。
+
+### §2.1 Picker 表單的預設值
+
+- `settings.pickerDefaults = { last, pinned }`,優先序 **`pinned` → `last` → 內建**。
+  內建值寫在 `picker.js`(`BUILTIN_DEFAULTS`),**不放進 `DEFAULT_SETTINGS`**——
+  `getSettings` 不與預設合併,放進去對舊使用者仍是 `undefined`。
+  內建排程是**每天 09:30**(銀行牌告之類的頁面多在九點過後才更新)。
+- 每次儲存新任務都更新 `last`;勾了「將此次設定固定為預設值」才另外寫 `pinned`。
+  `saveSettings` 是淺層合併,寫 `pickerDefaults` 一律 read-modify-write,否則會把另一半洗掉。
+  設定頁的「清除固定的預設值」只刪 `pinned`,保留 `last`。
+- **編輯既有任務不套用任何預設值**,也不更新 `last` / `pinned`。
+- **進階設定**(策略、正規表達式、生效時段、告警條件、前置動作)收在 `<details id="advanced-section">`,
+  預設收合;編輯既有任務且其中有非預設值時自動展開。所有欄位 id 不變,只是換了外層容器。
+- 「立即測試」與正式抓取共用同一份規格組裝 `buildSpec(values)`,不得各組一份
+  (否則區塊模式的預覽會落回數值策略鏈,測到整張表的第一個數字)。
+  編輯既有任務時沒有目標分頁,「立即測試」維持隱藏。
 
 ## §3 選擇器(穩定性)
 
@@ -111,13 +151,20 @@
     會滑出時段末端,把本來排定合法的最後一格丟掉。
   - 補建 alarm 的地方只有兩處(`scheduler.rebuildAlarms` 與看門狗),兩者共用同一個 `nextIntervalRun`。
   - interval 任務**不進錯過清單**(一個週末可累積上百槽,補抓沒有意義);睡醒後從下一個對齊槽繼續。
+- **手動抓取(`reason: 'manual'`,來自任務頁與 popup 的「立即抓取」)**與排程觸發走同一個 `runTask`,但四點不同:
+  ①**不查也不寫冪等帳本**——手動的 slot 是「當下這一分鐘」,寫進帳本會讓同一分鐘真正排定的 alarm 被擋掉,
+  錯過清單也會誤判那一槽跑過;代價是同一分鐘按兩次會有兩筆紀錄(樞紐表同列取最新的成功值)。
+  ②**不重試**,任何結果都立刻寫紀錄,使用者才看得到失敗。
+  ③**不累加 `notFoundStreak`、不發通知**(使用者正看著畫面)。
+  ④`res.status` 照原樣寫入,手動抓到欄位漂移仍是 `fallback`。
+  `RUN_TASK` 回傳 `{ok, outcome: 'done'|'failed', status, value, error}`,UI 在按鈕旁就地顯示。
 - 時區:一律用瀏覽器本地時間;紀錄同時存 ISO 字串(含 offset)與「排程槽」`slot`(`YYYY-MM-DDTHH:mm` 本地)。
 
 ### §4.1 排程穩定性(MV3 的坑與對策)
 
 | 風險 | 現象 | 對策 |
 |---|---|---|
-| service worker 被殺 | 閒置 30 秒或執行 5 分鐘就被回收,抓到一半消失 | 抓取期間每 20 秒呼叫一個輕量 API(`runtime.getPlatformInfo`)延壽;流程狀態機(`queued → loading → extracting → done`)寫 `storage.session`,worker 重啟時把卡在中途超過 3 分鐘的 run 標 `interrupted` 並重新排入 |
+| service worker 被殺 | 閒置 30 秒或執行 5 分鐘就被回收,抓到一半消失 | 抓取開始時呼叫一次輕量 API(`runtime.getPlatformInfo`)延壽(**現況只呼叫一次,不是週期性續命**,見 BACKLOG);流程狀態機(`queued → loading → extracting → done`)寫 `storage.session`,worker 重啟時把卡在中途超過 3 分鐘的 run 標 `interrupted` 並重新排入 |
 | alarms 在擴充功能更新 / 重新載入後消失 | 更新後所有任務靜默停擺 | `runtime.onInstalled`、`runtime.onStartup` 一律 `rebuildAlarms()`;另有看門狗(下) |
 | alarm 觸發不準或重複 | 可能晚 0~60 秒、極少數重複觸發;補抓與正常觸發撞在同一槽 | **執行帳本** `runs[taskId][slot] = status`:同一 `slot` 只執行一次,重複觸發直接略過(冪等) |
 | 電腦睡眠 | alarm 在喚醒時才響,可能已晚數小時 | 觸發時算 `late = now - slot`;≤ 任務的 `lateTolerance`(預設 30 分鐘)照抓並標 `late`;超過則進錯過清單交使用者決定(§4 補抓) |
@@ -190,6 +237,18 @@
   - 匯入:同 `taskId` 覆蓋、新 id 新增;匯入後重建所有 alarms;若含加密密碼則要求輸入密語。
   - 歷史匯入:Report 頁可選多個日檔 JSON 併回 `records`(同 taskId + capturedAt 去重,既有紀錄不被覆蓋);
     也接受打包格式 `{days: [...]}`;回報 `{added, skipped}`;任一日檔形狀不合則整批不寫入。
+- **紀錄的 `taskId` 對多值任務是序列 id**(`<任務id>#<值key>`,§7):
+  CSV 的 `taskId` 欄、日檔的 `tasks` 鍵、歷史匯入的去重鍵(`taskId` + `capturedAt`)都跟著變成序列 id,
+  **檔案格式與 schema 版本不變**。單值任務完全維持原樣(舊資料零遷移)。
+- **寫入 API**:`appendRecord(date, record)` 與 `appendRecords(date, records)`——
+  多值任務一次抓完的那幾筆一定走後者(每筆各讀寫一次整天的陣列會讓 N 個值變成 N 倍成本)。
+- **`saveTask` 的守門**:`task.id` 不得含保留字元;`task.fields[].key` 必須是非空字串、
+  不得含保留字元、同任務內不得重複——違反就丟例外拒絕存檔。設定匯入逐筆 try/catch,
+  單一壞任務被跳過並回報 `{skippedTasks}`,不拖垮整批。
+- **變更訂閱**:`subscribe(handler)` 是 UI 監看資料變動的唯一入口(UI 不得自己碰 `chrome.storage.onChanged`)。
+  只看 `local` 這個 area,只有 `tasks` / `health` / `layout` / `missed` / `lastValues` 與 `rec:` 開頭的鍵會通知;
+  **`runs` 與 `diag` 一律排除**(每次抓取都在變,拿來重繪會讓畫面不停重畫)。
+  同一批連續變更去抖 50 毫秒只通知一次;回傳的函式可取消訂閱。
 - 紀錄欄位(除既有的 `taskId`/`slot`/`capturedAt`/`value`/`raw`/`status`/`strategyUsed`/`layer` 外):
   `alert` 與 `alertHits`(§10 命中告警時才有)、`used` / `skipped`(§7 區塊聚合用了幾格、跳過幾格)、
   `partial`(§7 只抓到部分,**只有為真時才寫**)、`error`(失敗原因)、`snippet`(找不到元素時的 DOM 片段)。
@@ -220,9 +279,62 @@
 - 有 2FA / 驗證碼的站台不支援自動登入;連續 3 次登入失敗即停用該站台並通知一次。
 - `login_failed` 是紀錄狀態之一,**不算成功**,而且**不重試**(密碼錯了重試幾次都一樣)。
 
-## §7 區塊聚合(block 模式)
+## §7 區塊模式:儲存格、欄列聚合、一個任務多個值
 
-- `task.mode = 'block'`,`task.spec.block = { axis: 'col'|'row', index, headerText, aggregate }`。
+- `task.mode = 'block'`;`task.spec` 有三種形狀,擇一:
+  - `spec.block = { axis: 'col'|'row', index, headerText, aggregate }` —— 整欄或整列聚合(原有)。
+  - `spec.block = { cell: { row: {index, header}, col: {index, header} } }` —— **單一儲存格**
+    (列 × 欄交會的那一格,匯率表「美金 × 即期買入」就是這種)。不聚合。
+  - `spec.fields = [{ key, cell? , block? }]` —— **一個任務抓多個值**,每個值各自是儲存格或欄列聚合。
+- **表頭解析只有一份**:`shared/table.js` 的 `columnHeaders(el)`(與資料欄一一對齊)與
+  `rowHeader(row)`(該列第一個非空文字格,跳過國旗圖之類的空格子)。
+  `extract.js`、`content/picker-mode.js`、`shared/block-detect.js` 一律用它們,不得各自數表頭。
+  **多層表頭**:最後一層決定欄名,上層有 `colspan` 的視為群組,組成「群組 · 欄」——
+  匯率表的四個「買入/賣出」因此變成「現金匯率 · 買入」「即期匯率 · 買入」…,
+  漂移偵測才分得出是哪一組(舊版把所有表頭列攤平,`indexOf('買入')` 永遠找到第一個,會抓到錯的欄)。
+- **定位與漂移**(欄與列同一套規則,`extract.js` 的 `locateByHeader`):
+  表頭對得上原索引 → 用它、`ok`;搬家了 → 跟著表頭走、`fallback`;
+  **同名表頭有多個時取離原索引最近的那一個**;表頭整個不見 → `not_found`。
+  儲存格的欄或列任一為 `fallback`,整格就是 `fallback`。
+- **多值的成敗分界**:表格本身解析不出來 → `{ok:false, error:'not_found'}`,這才走重試;
+  表格解析得出來就是 `{ok:true, fields:{...}}`,**即使每個值都失敗**——
+  欄位漂移不是暫時性問題,重試沒有意義。
+- **多值的寫入**(`fetcher.js`):一次載入、一次擷取,每個值各寫一筆紀錄,
+  `taskId` 是**子序列 id**、`slot` 全部相同;整組只呼叫一次 `appendRecords` 與一次
+  `getRecordsInRange`(每個值各讀寫一遍會讓 N 個值變成 N 倍成本)。
+  帳本與 health 寫在**父任務 id** 上,`lastValues` 寫在子序列上。
+  health:全成功 `ok` / 有備援或遲到取該狀態 / 部分值失敗 `partial` 並註明幾個 /
+  全部值失敗取第一個失敗狀態(紅)。
+- **序列 id**:多值任務的每個值在紀錄、卡片來源、告警紀錄、歷史篩選裡都是
+  `<任務id>#<值key>`。組合、拆解、名稱解析**只有一份** `shared/series-index.js`
+  (`seriesIdOf` / `parentIdOf` / `fieldKeyOf` / `buildSeriesIndex` / `nameOf`),
+  任何模組都不得自己切字串。`buildSeriesIndex(tasks)` 回傳
+  `{ byId, parents, childrenOf, seriesIds }`,每筆序列是
+  `{ id, parentId, name(「任務 · 值」), shortName(值名), fieldKey, mode }`;
+  `seriesIds` 的順序是任務順序 × 值的順序。
+- **父任務 id 與序列 id 的分工**(記錯會讓冪等失效或畫面永遠空白):
+
+  | 用父任務 id | 用序列 id |
+  |---|---|
+  | 排程 alarm、執行帳本 `runs`、`inflight` | 紀錄的 `taskId` |
+  | `health`、`missed`、`GET_NEXT_RUNS`、`MARK_READ` | `lastValues`、`alertLog`、通知 id |
+  | 預檢、診斷、`notFoundStreak` | 卡片 `source`、歷史頁篩選、匯出的任務鍵 |
+
+- **共用的表格工具**(`shared/table.js`):`columnHeaders(el)`(與資料欄一一對齊的完整表頭)、
+  `rowHeader(row)`(該列第一個非空文字格)、`getDataRows(el)`(排除表頭的資料列元素)。
+  表頭列只認 `thead` 內的列,或表格**開頭連續**的表頭列——表格中段整列 `th` 的分組標題
+  (「亞洲貨幣」那種)是資料的一部分,把它當表頭會讓整份表頭被那一列洗掉。
+- `task.fields = [{ key, name }]` 是**顯示用**的值清單(名稱、順序),
+  `task.spec.fields = [{ key, cell?|block? }]` 是**擷取規格**,兩者以 `key` 一一對應;
+  `key` 建立後不變、同任務內唯一、不得含保留字元。改名不改 `key`。
+- **Picker 的值清單**(`#field-list`,每列 `data-field-row`):挑了 2 個以上的值才出現。
+  任務名稱只填一次(用 `nameHint`),每個值各自命名,預設 `cell` 型用「列標題 · 欄標題」、
+  `block` 型用表頭;同名自動加序號。可上下移動改順序、可移除。
+  聚合方式全任務一份(每個值各自聚合列在「明確不做」)。
+  移除一個值只影響之後的抓取,**舊紀錄保留**(它的子序列 id 還在)。
+  儲存前 `#save-summary` 顯示「將建立 1 個任務、N 個值」。
+  告警列在多值任務多一個「套用到」下拉(空值 = 全部值),寫進 `alert.field`。
+  「立即測試」對多值任務逐值顯示預覽。
 - 解析(`shared/table.js` 的 `parseTable`)→ 聚合(`shared/aggregate.js` 的 `aggregateCells`),
   兩層都是純函式;`extract.js` 的 block 分支串起來,**不走數值策略鏈**。
 - **欄位漂移偵測**:`axis: 'col'` 且有 `headerText` 時,先在表頭找它——
@@ -266,7 +378,7 @@
 | `number` | 最新值 + 與前一筆/前一日差異(箭頭、百分比) | 小數位、單位、比較基準、閾值色 |
 | `line` | 折線(單任務或多任務) | 期間 1/7/30/90 天、聚合(原始/每日最後/最大/最小/平均)、Y 軸範圍 |
 | `bar` | 長條(每日聚合) | 同上 |
-| `table` | 最近 N 筆(`mode: recent`)或樞紐表(`mode: pivot`,列=時間、欄=任務) | `limit`(兩種模式都吃;最近 N 筆未設預設 10、樞紐表預設 50)、`rowHeader`(樞紐表第一欄標頭,預設「時間」)、`bucketMinutes`(時間容差,見下) |
+| `table` | 最近 N 筆(`mode: recent`)或樞紐表(`mode: pivot`,列=時間、欄=序列;`showDelta` 為真時每格附與**表格上緊鄰前一列**同欄的差,箭頭 + 絕對值,缺值不補不內插,複製 TSV 不含差值) | `limit`(兩種模式都吃;最近 N 筆未設預設 10、樞紐表預設 50)、`rowHeader`(樞紐表第一欄標頭,預設「時間」)、`bucketMinutes`(時間容差,見下) |
 | `gauge` | 目前值在區間內的位置 | 下限/上限、警戒線 |
 | `text` | 標題、說明文字(支援粗體/清單) | 內容 |
 | `status` | 每個任務的最後抓取狀態、下次排程時間 | 任務篩選 |
@@ -288,10 +400,21 @@
 - `limit` 對樞紐表是「保留最新 N 列」,顯示順序仍由舊到新;**未設定時預設 50 列**
   (長區間的 interval 資料會有上千列)。
 
+**資料變動時自動重繪**
+
+- Report 開著的時候,抓取寫進紀錄會自動更新畫面(經 `shared/storage` 的 `subscribe`,§5)。
+- **只重繪目前所在的頁籤**;儀表板在**編輯模式中不重繪**(會把拖曳打斷),離開編輯模式補繪一次。
+- 設定頁不重繪(它沒有會被抓取改變的內容)。
+
 **編輯體驗(讓使用者設定時好用)**
 
-1. **在 Picker 就排好**:建立任務的最後一步「加入儀表板」——選儀表板、卡片型別(依模式給預設:number 模式→`number`+`line`,
-   text 模式→`table`),存檔後卡片自動排到版面末端,使用者不必再去 Report 找。
+1. **在 Picker 就排好**:建立任務的最後一步「加入儀表板」——選儀表板、卡片型別(依模式給預設:
+   `text` 模式→`table`,其餘→**只有 `number`**;一個值同時長出數值卡與折線卡會被當成重複)。
+   存檔後卡片自動排到版面末端,使用者不必再去 Report 找。
+   **`addCard` 會去重**:同一個儀表板內型別相同、來源集合相同(只比 `taskId`,與順序無關)的卡片
+   不重複新增,直接回傳既有那張;`source` 為空的卡片(文字卡)不受限。所有呼叫端(Picker、拖曳、範本)同一規則。
+   **標題可分辨**:沒有自訂標題時用來源名;同一儀表板內若前面已有同名但不同型別的卡片,
+   顯示時補型別後綴(`數值`/`趨勢`/`長條`/`明細`/`量表`/`狀態`),但不寫回 `card.title`。
 2. **編輯模式開關**:Report 右上「編輯版面」切換;開啟後卡片可拖曳移動、右下角拉大縮小、拖曳時顯示吸附格線與佔位陰影;
    關閉即瀏覽模式,不會誤動。
 3. **卡片設定抽屜**:點卡片右上齒輪,右側滑出抽屜即時預覽:型別切換、來源任務(多選)、期間、聚合、標題、顏色、單位、小數位、閾值色。
@@ -322,7 +445,13 @@
    | 空白格線 | 建新卡:`text` 模式的任務建 `table`(`mode: recent`),其餘建 `number`;**建在放開的格子**,該處被佔才由 `addCard` 找空位 |
    | 指標壓在不肯收的卡片上 | 什麼都不做,**不可在它底下偷偷長出新卡片** |
 
-10. **拖出移除**:編輯模式下,樞紐表的欄標與折線/長條的圖例各有一個移除把手(`data-remove-source`),
+10. **趨勢浮層**(`ui/report/trend-popover.js`,**只在非編輯模式**):
+    點樞紐表欄標或數值卡的值 → 浮層畫該序列在目前範圍的折線,附三個動作:
+    「加入為折線卡」(經 `addCard`,去重規則同上)、「到歷史頁」(帶該序列的篩選)、
+    「比較其他任務的同名值」(把其他父任務中 `shortName` 相同的序列加進同一張折線,總數上限 8)。
+    再點一次、`Esc`、或點浮層以外的地方關閉;同時只存在一個。
+    編輯模式下這兩處不得有點擊行為(留給拖曳與移除把手)。
+11. **拖出移除**:編輯模式下,樞紐表的欄標與折線/長條的圖例各有一個移除把手(`data-remove-source`),
     拖到來源卡片矩形之外放開即移除該來源(放在別張卡片上也算);`status` 清單每一項也有;
     `number`/`gauge` 沒有把手(至少留一個來源)。把手的建法只有一份(`cards.js` 的 `makeRemoveHandle`)。
     樞紐表移除到零欄時**卡片保留**並顯示「拖進來」的空狀態(最近 N 筆模式的表頭是固定四欄,零來源時列出範圍內全部紀錄)。
@@ -333,9 +462,13 @@
   月曆上方可切月、跳到任意年月。
 - 右側依所選日期(或範圍)顯示紀錄;兩種表格模式切換:
   - **紀錄列表**:時間 / 任務 / 值 / 狀態 / 策略,欄位可排序、可隱藏,順序可拖曳;失敗列展開錯誤與 DOM 片段。
-  - **樞紐表**:列 = 時間、欄 = 任務,一眼比對同一時刻的所有值;欄順序沿用「任務」頁的排序。
+  - **樞紐表**:列 = 時間、欄 = **序列**(單值任務一欄,多值任務每個值一欄),一眼比對同一時刻的所有值;欄順序沿用「任務」頁的排序 × 值的順序。
     與儀表板表格卡片共用同一個 `pivot()`,但**不吃卡片選項**(列軸標頭、容差、列數上限是卡片層的設定)。
-- 篩選:任務多選、狀態(成功/失敗/late/fallback)、只看告警、值範圍(≥ / ≤)、關鍵字(text 模式的內容)。
+- 篩選:任務多選(**兩層**:父任務勾選 = 底下所有值一起勾,部分勾時父呈現 indeterminate;
+  寫進狀態的一律是序列 id)、狀態(成功/失敗/late/fallback)、只看告警、值範圍(≥ / ≤)、關鍵字。
+  網址狀態裡的序列 id 含保留字元,**必須逐一編碼**,否則網址會從那裡被截斷。
+- 樞紐表與「與另一天比較」的欄集合是 `buildSeriesIndex` 的 `seriesIds`(不是任務 id),
+  多值任務的紀錄才對得上欄。
 - 範圍內摘要列:每任務的筆數、最大/最小/平均、首末值差;點任務名跳到只含該任務的折線(期間 = 目前範圍)。
 - 單筆紀錄可展開:原文 `raw`、所用策略、錯誤與 DOM 片段、對應的排程時間 vs 實際時間。
 - 「與另一天比較」:選第二個日期,樞紐表並排顯示兩天同時刻的值與差異。
@@ -395,7 +528,8 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
 
 ## §10 告警
 
-- 任務可設多條條件(`task.alerts`,每條 `{id, type, value, enabled}`):
+- 任務可設多條條件(`task.alerts`,每條 `{id, type, value, enabled, field?}`;
+  `field` 是值的 `key`,只對該值評估,缺省則對每個值各自評估):
   `gt` / `lt` / `eq`(值大於 / 小於 / 等於)、`deltaPct`(相較**前一筆成功紀錄**變動超過 X%,
   漲跌都算)、`failStreak`(連續 N 次非成功)。判定是純函式 `shared/alerts.js`。
 - 評估時機在**寫入紀錄之前**,命中就把 `alert: true` 與 `alertHits: [alertId…]` 一起寫進同一筆紀錄
@@ -405,8 +539,13 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
 - Report:月曆對有告警的日期上色(與失敗分開)、歷史列標記並可展開看到命中哪一條、
   「只看告警」可篩選;number 卡片沿用既有的閾值色機制,不另加一套顏色規則。
 - `deltaPct` 找不到前一筆成功紀錄、或前一筆是 0 時不命中(除以 0 沒有意義)。
+- **多值任務**:去重紀錄(`alertLog`)與通知 id 都用**子序列 id**,兩個值才不會互相把通知吃掉;
+  `prevRecords` 也用子序列精確比對——用父任務比對會讓「買入」拿「賣出」的舊值算變動比例。
+  通知與訊息裡的名稱用序列名(「臺銀匯率 · 美金賣出」)。
 
 ## §11 數值擷取策略與後處理(number 模式)
+
+> `strategyUsed` 記的是這一筆值是怎麼來的:數值策略鏈的四種、區塊聚合的 `block`、單一儲存格的 `cell`。
 
 - 擷取來源(策略鏈,使用者在 Picker 選主策略,其餘為自動備援;紀錄寫入 `strategy_used`):
   1. `auto`:取元素 `innerText` 中第一個數字(預設)。
@@ -434,8 +573,22 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
 
 - 狀態由 background 的 `health` 匯總;任何 run / 預檢 / 看門狗結束都重算並 `setBadgeText` / `setBadgeBackgroundColor` / `setIcon`。
 - 使用者在 popup 或 Report 看過該項(點開)即標已讀,黃/紅計數減少;問題真正解決(下次成功)才回綠。
-- **現況**:紅燈來自預檢失敗與站台登入失敗(`health['site:<origin>']`);黃燈來自 `partial` 與錯過清單。
-  正式抓取失敗目前不寫 health,`setIcon` 的圖示變體也還沒接(見 BACKLOG)。
+- **每抓一次就寫一次 health**(單值在 `writeRecord`、多值在整組寫完之後,兩處都呼叫同一個純函式
+  `fetcher.js` 的 `healthFromRecords`——**狀態的算法只有那一份**),對應表由
+  `shared/record-status.js` 的 `healthStatusOf` 提供,`background/health.js` 的紅/黃集合也引用同一份,
+  不得各自維護:
+
+  | 紀錄 status | health status | 燈號 |
+  |---|---|---|
+  | `ok` | `ok` | 綠 |
+  | `fallback` / `late` / `partial` | 同名 | 黃 |
+  | `not_found` | `selector_lost` | 紅 |
+  | `parse_error` / `login_failed` | 同名 | 紅 |
+  | `error` | `failed` | 紅 |
+
+  **抓取成功會把 health 寫回 `ok`**:曾經失敗過的任務不會再永遠停在紅燈(舊行為只有預檢會清)。
+  health 寫在**父任務 id** 上,卡片以子序列 id 當來源時要先取父 id 才查得到。
+- `setIcon` 的圖示變體還沒接(見 BACKLOG)。
 - 圖示 `title`(滑鼠停留)顯示一行摘要:「2 個任務異常:A 無法登入、B 找不到元素」。
 
 ### §12.2 popup

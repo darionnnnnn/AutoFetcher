@@ -134,9 +134,14 @@ export async function importSettings(json, { passphrase } = {}) {
   }
 
   // 3. 驗證與解密完全成功後寫入儲存層
+  let skippedTasks = 0
   if (Array.isArray(data.tasks)) {
     for (const t of data.tasks) {
-      if (t) await saveTask(t)
+      try {
+        await saveTask(t)
+      } catch {
+        skippedTasks++
+      }
     }
   }
 
@@ -165,4 +170,6 @@ export async function importSettings(json, { passphrase } = {}) {
 
   // 4. 重建所有 alarms
   await rebuildAlarms()
+
+  return { skippedTasks }
 }

@@ -1,6 +1,7 @@
 // AutoFetcher 儲存層：所有 chrome.storage 存取的唯一入口
 import { pruneCardsForTask } from './layout-store.js'
 import { encryptSecret } from './crypto.js'
+import { parentIdOf, SERIES_SEP } from './series-index.js'
 
 const DEFAULT_SETTINGS = {
   retentionDays: 365,
@@ -118,6 +119,26 @@ export async function saveTask(task) {
     throw new Error('任務格式錯誤：id、name 與 url 必須皆為非空字串')
   }
 
+  if (task.id.includes(SERIES_SEP)) {
+    throw new Error(`任務 id 不得包含保留字元 ${SERIES_SEP}`)
+  }
+
+  if (Array.isArray(task.fields)) {
+    const seenKeys = new Set()
+    for (const f of task.fields) {
+      if (!f || typeof f.key !== 'string' || f.key.trim() === '') {
+        throw new Error('任務欄位 key 必須為非空字串')
+      }
+      if (f.key.includes(SERIES_SEP)) {
+        throw new Error(`任務欄位 key 不得包含保留字元 ${SERIES_SEP}`)
+      }
+      if (seenKeys.has(f.key)) {
+        throw new Error(`任務欄位 key 重複：${f.key}`)
+      }
+      seenKeys.add(f.key)
+    }
+  }
+
   const res = await chrome.storage.local.get('tasks')
   const tasks = Array.isArray(res.tasks) ? [...res.tasks] : []
 
@@ -148,7 +169,7 @@ export async function deleteTask(id) {
   for (const [key, value] of Object.entries(all)) {
     if (isRecordKey(key)) {
       const records = Array.isArray(value) ? value : []
-      const remaining = records.filter(r => r.taskId !== id)
+      const remaining = records.filter(r => parentIdOf(r.taskId) !== id)
       if (remaining.length === 0) {
         toRemove.push(key)
       } else if (remaining.length !== records.length) {
@@ -202,13 +223,19 @@ export async function deleteHealthEntry(key) {
   await chrome.storage.local.set({ health })
 }
 
-// 追加紀錄至指定日期的 storage 鍵（rec:<date>）
-export async function appendRecord(date, record) {
+// 追加多筆紀錄至指定日期的 storage 鍵（rec:<date>）
+export async function appendRecords(date, records) {
+  if (!Array.isArray(records) || records.length === 0) return
   const key = dateToKey(date)
   const res = await chrome.storage.local.get(key)
   const list = Array.isArray(res[key]) ? res[key] : []
-  list.push(record)
+  list.push(...records)
   await chrome.storage.local.set({ [key]: list })
+}
+
+// 追加紀錄至指定日期的 storage 鍵（rec:<date>）
+export async function appendRecord(date, record) {
+  return appendRecords(date, [record])
 }
 
 // 取得指定日期的所有紀錄（無資料回傳空陣列）
@@ -472,11 +499,61 @@ export async function countRecordsForTask(taskId) {
   for (const d of dates) {
     const records = await getRecordsByDate(d)
     for (const r of records) {
-      if (r && r.taskId === taskId) {
+      if (r && parentIdOf(r.taskId) === taskId) {
         count++
       }
     }
   }
   return count
+}
+
+// 訂閱 storage 變更（去抖 50ms，僅監聽 local 且指定鍵值與 rec: 紀錄鍵）
+const subscribers = new Set()
+let isListening = false
+let debounceTimer = null
+
+const NOTIFY_KEYS = new Set(['tasks', 'health', 'layout', 'missed', 'lastValues'])
+
+function shouldNotify(changes) {
+  if (!changes || typeof changes !== 'object') return false
+  for (const key of Object.keys(changes)) {
+    if (NOTIFY_KEYS.has(key) || isRecordKey(key)) {
+      return true
+    }
+  }
+  return false
+}
+
+export function subscribe(handler) {
+  if (typeof handler !== 'function') {
+    return () => {}
+  }
+  const onChanged = (typeof chrome !== 'undefined' && chrome.storage) ? chrome.storage.onChanged : null
+  if (!onChanged || typeof onChanged.addListener !== 'function') {
+    return () => {}
+  }
+  if (!isListening) {
+    onChanged.addListener((changes, areaName) => {
+      if (areaName !== 'local') return
+      if (!shouldNotify(changes)) return
+      if (debounceTimer) {
+        clearTimeout(debounceTimer)
+      }
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null
+        for (const fn of [...subscribers]) {
+          if (!subscribers.has(fn)) continue
+          try {
+            fn()
+          } catch {}
+        }
+      }, 50)
+    })
+    isListening = true
+  }
+  subscribers.add(handler)
+  return () => {
+    subscribers.delete(handler)
+  }
 }
 

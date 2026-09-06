@@ -11,7 +11,9 @@ import { openDrawer } from './drawer.js'
 import { applyTemplate } from './templates.js'
 import { MSG } from '../../shared/messages.js'
 import { createDragSource, registerDropTarget, resetDnd, isPointInside } from './dnd.js'
-import { applyDrop, cardTypeForTask } from './drop-rules.js'
+import { closeTrendPopover } from './trend-popover.js'
+import { applyDrop, applyDropMany, cardTypeForTask } from './drop-rules.js'
+import { buildSeriesIndex, parentIdOf } from '../../shared/series-index.js'
 
 // 編輯模式狀態與復原歷史
 let editing = false
@@ -339,6 +341,7 @@ function setupEvents(grid) {
       if (!editing) {
         undoStack.length = 0
         redoStack.length = 0
+        renderDashboard(currentDashId).catch(() => {})
       }
       updateEditingUI()
     })
@@ -503,13 +506,7 @@ function setupEvents(grid) {
   if (search && !search._paletteSearchAttached) {
     search._paletteSearchAttached = true
     search.addEventListener('input', () => {
-      const q = (search.value || '').toLowerCase()
-      const items = document.querySelectorAll('[data-palette-task]')
-      for (const item of items) {
-        const nameEl = item.querySelector('.palette-task-name')
-        const name = ((nameEl ? nameEl.textContent : item.textContent) || '').toLowerCase()
-        item.hidden = Boolean(q && !name.includes(q))
-      }
+      filterPaletteItems(search.value)
     })
   }
 }
@@ -543,10 +540,9 @@ async function buildDashboardContext(dash) {
 
   const records = (fetchFrom && fetchTo) ? await getRecordsInRange(fetchFrom, fetchTo) : []
   const tasks = await getTasks()
-  const tasksById = {}
-  for (const t of tasks) {
-    if (t && t.id) tasksById[t.id] = t
-  }
+  const index = buildSeriesIndex(tasks)
+  const tasksById = index.byId
+  const parentTasksById = index.parents
 
   let health = {}
   let missed = []
@@ -578,12 +574,17 @@ async function buildDashboardContext(dash) {
   return {
     records,
     tasksById,
+    // 趨勢浮層要把卡片加到「目前這個」儀表板，不是第一個
+    dashId: dash?.id,
+    parentTasksById,
+    index,
     health,
     missed,
     nextRuns,
     today,
     range: { from: defaultFrom, to: defaultTo },
-    editing
+    editing,
+    cards: dash.cards
   }
 }
 
@@ -629,18 +630,48 @@ function prepareCardElement(card, ctx, dashId) {
 const MODE_LABELS = { number: '數值', text: '文字', block: '區塊' }
 
 /**
+ * 過濾資料來源側欄清單（支援多值任務與子序列兩層搜尋）
+ */
+function filterPaletteItems(q) {
+  const query = (q || '').trim().toLowerCase()
+  const parentItems = document.querySelectorAll('[data-palette-task]')
+  for (const parent of parentItems) {
+    const parentId = parent.getAttribute('data-task-id')
+    const parentNameEl = parent.querySelector('.palette-task-name')
+    const parentName = (parentNameEl ? parentNameEl.textContent : parent.textContent) || ''
+    const parentMatches = !query || parentName.toLowerCase().includes(query)
+
+    const childItems = document.querySelectorAll(`[data-palette-series][data-parent-id="${parentId}"]`)
+    let anyChildMatches = false
+
+    for (const child of childItems) {
+      const childName = child.textContent || ''
+      const childMatches = !query || childName.toLowerCase().includes(query)
+      if (!query || childMatches) {
+        anyChildMatches = true
+      }
+      child.hidden = Boolean(query && !childMatches && !parentMatches)
+    }
+
+    parent.hidden = Boolean(query && !parentMatches && !anyChildMatches)
+  }
+}
+
+/**
  * 渲染資料來源側欄清單
  */
 async function renderPalette() {
   const listEl = document.getElementById('palette-list')
   if (!listEl) return
   const tasks = await getTasks()
+  const index = buildSeriesIndex(tasks)
   listEl.textContent = ''
-  const searchInput = document.getElementById('palette-search')
-  const q = (searchInput?.value || '').toLowerCase()
 
   for (const t of tasks) {
     if (t.enabled === false) continue
+    const isMulti = Array.isArray(t.fields) && t.fields.length > 0
+    const seriesIds = index.childrenOf[t.id] || [t.id]
+
     const item = document.createElement('div')
     item.setAttribute('data-palette-task', '')
     item.setAttribute('data-task-id', t.id)
@@ -653,11 +684,40 @@ async function renderPalette() {
     modeEl.className = 'palette-task-mode'
     modeEl.textContent = MODE_LABELS[t.mode] || MODE_LABELS.number
     item.appendChild(modeEl)
-    if (q && !item.textContent.toLowerCase().includes(q)) {
-      item.hidden = true
-    }
-    createDragSource(item, () => ({ taskId: t.id, label: t.name }))
+
+    createDragSource(item, () => ({
+      taskId: t.id,
+      seriesIds,
+      label: t.name || ''
+    }))
     listEl.appendChild(item)
+
+    if (isMulti) {
+      for (const sid of seriesIds) {
+        const seriesInfo = index.byId[sid]
+        const childItem = document.createElement('div')
+        childItem.setAttribute('data-palette-series', sid)
+        childItem.setAttribute('data-parent-id', t.id)
+        childItem.className = 'palette-series-item'
+        childItem.style.paddingLeft = '1.2rem'
+
+        const childNameEl = document.createElement('span')
+        childNameEl.className = 'palette-series-name'
+        childNameEl.textContent = seriesInfo?.shortName || seriesInfo?.name || sid
+        childItem.appendChild(childNameEl)
+
+        createDragSource(childItem, () => ({
+          taskId: sid,
+          label: seriesInfo?.name || sid
+        }))
+        listEl.appendChild(childItem)
+      }
+    }
+  }
+
+  const searchInput = document.getElementById('palette-search')
+  if (searchInput && searchInput.value) {
+    filterPaletteItems(searchInput.value)
   }
 }
 
@@ -672,10 +732,33 @@ function registerCardDropTarget(cardEl, card, ctx) {
       // 表格永遠收:落點才決定插到第幾欄,已經在最後一欄的任務也要能拖到前面。
       // 用空 opts 問 applyDrop 等於問「搬到最後有沒有變化」,會讓最後一欄拖不動。
       if (card.type === 'table') return true
+      if (card.type === 'line' || card.type === 'bar') {
+        const existingIds = new Set((card.source || []).map(s => s.taskId))
+        const idsToAdd = Array.isArray(payload.seriesIds)
+          ? payload.seriesIds.filter(id => !existingIds.has(id))
+          : (!existingIds.has(payload.taskId) ? [payload.taskId] : [])
+        if (idsToAdd.length > 0 && (card.source || []).length + idsToAdd.length > 8) {
+          return true
+        }
+      }
+      if (Array.isArray(payload.seriesIds) && payload.seriesIds.length > 0) {
+        return applyDropMany(card, payload.seriesIds, {}) !== null
+      }
       return applyDrop(card, payload.taskId, {}) !== null
     },
     async onDrop(payload, pos) {
       if (!payload || !payload.taskId) return
+
+      if (card.type === 'line' || card.type === 'bar') {
+        const existingIds = new Set((card.source || []).map(s => s.taskId))
+        const idsToAdd = Array.isArray(payload.seriesIds)
+          ? payload.seriesIds.filter(id => !existingIds.has(id))
+          : (!existingIds.has(payload.taskId) ? [payload.taskId] : [])
+        if (idsToAdd.length > 0 && (card.source || []).length + idsToAdd.length > 8) {
+          showToast('圖表最多支援 8 個資料數列')
+          return
+        }
+      }
 
       let index
       if (card.type === 'table' && card.options?.mode === 'pivot') {
@@ -717,7 +800,9 @@ function registerCardDropTarget(cardEl, card, ctx) {
         opts.prevTaskName = prevTaskName
       }
 
-      const patch = applyDrop(card, payload.taskId, opts)
+      const patch = (Array.isArray(payload.seriesIds) && payload.seriesIds.length > 0)
+        ? applyDropMany(card, payload.seriesIds, opts)
+        : applyDrop(card, payload.taskId, opts)
       if (!patch) return
       if (patch.rejected) {
         showToast(patch.reason)
@@ -787,7 +872,7 @@ function registerGridDropTarget(grid) {
 
         // status 卡片的來源存在 options.taskIds,不是 source
         const patch = card.type === 'status'
-          ? { options: { ...(card.options || {}), taskIds: (card.options?.taskIds || []).filter(id => id !== taskId) } }
+          ? { options: { ...(card.options || {}), taskIds: (card.options?.taskIds || []).filter(id => parentIdOf(id) !== parentIdOf(taskId)) } }
           : { source: (card.source || []).filter(s => s.taskId !== taskId) }
         await pushHistory()
         await updateCard(currentDash.id, cardId, patch)
@@ -796,18 +881,34 @@ function registerGridDropTarget(grid) {
       }
 
       if (payload.taskId) {
-        const tasks = await getTasks()
-        const task = tasks.find(t => t.id === payload.taskId)
-        const type = cardTypeForTask(task)
-
+        const isMultiDrop = Array.isArray(payload.seriesIds) && payload.seriesIds.length > 1
+        let type
         let w = 6
         let h = 2
-        if (type === 'number') {
-          w = 3
-          h = 2
-        } else if (type === 'table') {
+        let source
+        let options
+
+        if (isMultiDrop) {
+          type = 'table'
           w = 12
           h = 4
+          source = payload.seriesIds.map(sid => ({ taskId: sid, aggregation: 'raw' }))
+          options = { mode: 'pivot' }
+        } else {
+          const tasks = await getTasks()
+          const index = buildSeriesIndex(tasks)
+          const task = tasks.find(t => t.id === payload.taskId) || index.byId[payload.taskId]
+          type = cardTypeForTask(task)
+
+          if (type === 'number') {
+            w = 3
+            h = 2
+          } else if (type === 'table') {
+            w = 12
+            h = 4
+          }
+          source = [{ taskId: payload.taskId, aggregation: 'raw' }]
+          options = type === 'table' ? { mode: 'recent' } : {}
         }
 
         const layout = await getLayout()
@@ -822,8 +923,8 @@ function registerGridDropTarget(grid) {
           h,
           x: wanted.x,
           y: wanted.y,
-          source: [{ taskId: payload.taskId, aggregation: 'raw' }],
-          options: type === 'table' ? { mode: 'recent' } : {}
+          source,
+          options
         }
 
         await pushHistory()
@@ -1010,6 +1111,9 @@ export async function renderDashboard(dashId) {
   if (emptyEl) {
     emptyEl.hidden = cards.length > 0
   }
+
+  // 重畫會換掉浮層的錨點元素，先收掉舊的，否則會留一個孤兒浮層與兩個監聽在 body 上
+  closeTrendPopover()
 
   resetDnd()
 

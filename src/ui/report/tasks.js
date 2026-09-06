@@ -167,6 +167,20 @@ function createTaskRow(t) {
   nameEl.textContent = t.name || t.id
   row.appendChild(nameEl)
 
+  if (Array.isArray(t.fields) && t.fields.length > 0) {
+    const fieldsEl = document.createElement('span')
+    fieldsEl.className = 'task-fields'
+    const fieldNames = t.fields.map(f => (f && f.name) ? f.name : (f?.key || '')).filter(Boolean)
+    let text = ''
+    if (t.fields.length > 3) {
+      text = `${fieldNames.slice(0, 3).join('、')} 等 ${t.fields.length} 個值`
+    } else {
+      text = fieldNames.join('、')
+    }
+    fieldsEl.textContent = text
+    row.appendChild(fieldsEl)
+  }
+
   const urlEl = document.createElement('span')
   urlEl.className = 'task-url'
   urlEl.textContent = t.url || ''
@@ -264,7 +278,29 @@ function createTaskRow(t) {
   runBtn.dataset.action = 'run'
   runBtn.textContent = '立即抓取'
   runBtn.addEventListener('click', async () => {
-    await chrome.runtime.sendMessage({ type: MSG.RUN_TASK, taskId: t.id })
+    // 每一列只有一個結果位置，重複按就地更新
+    const showResult = (msg) => {
+      let el = row.querySelector('.task-run-result')
+      if (!el) {
+        el = document.createElement('span')
+        el.className = 'task-run-result'
+        runBtn.after(el)
+      }
+      el.textContent = msg
+    }
+    runBtn.disabled = true
+    try {
+      const res = await chrome.runtime.sendMessage({ type: MSG.RUN_TASK, taskId: t.id })
+      if (res && res.outcome === 'done') {
+        showResult(res.value !== null && res.value !== undefined ? `抓到 ${res.value}` : '抓到值')
+      } else {
+        showResult(`失敗：${res?.error || res?.status || ''}`.trim())
+      }
+    } catch (err) {
+      showResult(`失敗：${err?.message || String(err)}`)
+    } finally {
+      runBtn.disabled = false
+    }
   })
   actionsEl.appendChild(runBtn)
 

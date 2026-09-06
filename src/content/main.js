@@ -34,21 +34,12 @@ function handleExtract(msg, sendResponse) {
   }
 
   const extracted = extractValue(resolved.el, msg.spec)
+  // 整包轉發：白名單會把 used / skipped / partial / fields 這些欄位丟掉，
+  // background 的 partial 黃燈與多值分支都靠它們（AF-5 X3）
   if (extracted.ok) {
-    sendResponse({
-      ok: true,
-      value: extracted.value,
-      raw: extracted.raw,
-      status: extracted.status,
-      strategyUsed: extracted.strategyUsed,
-      layer: resolved.layer
-    })
+    sendResponse({ ...extracted, ok: true, layer: resolved.layer })
   } else {
-    sendResponse({
-      ok: false,
-      error: extracted.error,
-      raw: extracted.raw
-    })
+    sendResponse({ ...extracted, ok: false })
   }
 }
 
@@ -209,10 +200,17 @@ if (!globalThis.__afContentLoaded) {
     }
 
     if (msg.type === MSG.ENTER_PICK) {
+      // 重選是在新分頁開的，沒有「上次右鍵的元素」；先用任務自己的 locator 找回目標
+      let target = lastTarget
+      if (msg.locator) {
+        const resolved = resolve(document, msg.locator)
+        if (!resolved.error && resolved.el) target = resolved.el
+      }
       enterPickMode({
         purpose: msg.purpose,
         taskId: msg.taskId,
-        initialTarget: lastTarget
+        initialTarget: target,
+        preselect: msg.preselect
       })
       sendResponse({ ok: true })
       return true

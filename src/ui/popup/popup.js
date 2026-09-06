@@ -1,6 +1,7 @@
 // AutoFetcher 工具列 popup 控制器 (SPEC §12.2)
 import { getTasks, saveTask, getHealthMap, getMissedList, getLastValues } from '../../shared/storage.js'
 import { MSG } from '../../shared/messages.js'
+import { seriesIdOf } from '../../shared/series-index.js'
 import { computeHealth } from '../../background/health.js'
 
 let currentCtx = null
@@ -36,7 +37,15 @@ function renderTaskRow(task, { lastValues, nextRuns, healthMap }) {
 
   const valueSpan = document.createElement('span')
   valueSpan.className = 'task-value'
-  valueSpan.textContent = formatValue(lastValues?.[task.id]?.value)
+  // 多值任務的最後值記在子序列 id 底下，查父任務永遠是空的；最多列三個，其餘用 +N 帶過
+  const fields = Array.isArray(task.fields) ? task.fields : []
+  if (fields.length > 0) {
+    const shown = fields.slice(0, 3)
+      .map(f => `${f.name || f.key}: ${formatValue(lastValues?.[seriesIdOf(task.id, f.key)]?.value)}`)
+    valueSpan.textContent = shown.join('  ') + (fields.length > 3 ? `  +${fields.length - 3}` : '')
+  } else {
+    valueSpan.textContent = formatValue(lastValues?.[task.id]?.value)
+  }
   mainDiv.appendChild(valueSpan)
   row.appendChild(mainDiv)
 
@@ -76,8 +85,30 @@ function renderTaskRow(task, { lastValues, nextRuns, healthMap }) {
     retryBtn.type = 'button'
     retryBtn.className = 'retry'
     retryBtn.textContent = '立即重試'
-    retryBtn.addEventListener('click', () => {
-      chrome.runtime.sendMessage({ type: MSG.RUN_TASK, taskId: task.id })
+    retryBtn.addEventListener('click', async () => {
+      // 每一列只有一個結果位置，重複按就地更新
+      const showResult = (text) => {
+        let el = row.querySelector('.task-run-result')
+        if (!el) {
+          el = document.createElement('span')
+          el.className = 'task-run-result'
+          retryBtn.after(el)
+        }
+        el.textContent = text
+      }
+      retryBtn.disabled = true
+      try {
+        const res = await chrome.runtime.sendMessage({ type: MSG.RUN_TASK, taskId: task.id })
+        if (res && res.outcome === 'done') {
+          showResult(res.value !== null && res.value !== undefined ? `抓到 ${res.value}` : '抓到值')
+        } else {
+          showResult(`失敗：${res?.error || res?.status || ''}`.trim())
+        }
+      } catch (err) {
+        showResult(`失敗：${err?.message || String(err)}`)
+      } finally {
+        retryBtn.disabled = false
+      }
     })
     actionsDiv.appendChild(retryBtn)
 

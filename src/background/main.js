@@ -22,7 +22,20 @@ import {
 } from './precheck.js'
 import { injectContent } from './inject.js'
 import { scheduleSiteCheck, runSiteCheck } from './sitecheck.js'
+import { isSuccess } from '../shared/record-status.js'
 
+
+// 由任務的擷取規格推出選取模式要預先勾回去的值（多值走 spec.fields，單值走 spec.block）
+function preselectOf(task) {
+  if (!task || !task.spec) return undefined
+  if (Array.isArray(task.spec.fields) && task.spec.fields.length > 0) {
+    return task.spec.fields
+      .map(f => (f?.cell ? { cell: f.cell } : (f?.block ? { block: f.block } : null)))
+      .filter(Boolean)
+  }
+  if (task.spec.block) return [{ block: task.spec.block }]
+  return undefined
+}
 
 // 取任務並檢查存在與啟用狀態（共用小函式）
 async function getValidTask(taskId) {
@@ -214,10 +227,21 @@ export async function handleMessage(msg, sender) {
 
     if (msg.type === MSG.RUN_TASK) {
       const { task } = await getValidTask(msg.taskId)
-      if (task) {
-        await runTask(task, { slot: slotOf(Date.now()), ...(msg.__testOpts || {}) })
+      if (!task) {
+        return { ok: false, outcome: 'failed', error: '找不到任務' }
       }
-      return { ok: true }
+      const record = await runTask(task, {
+        slot: slotOf(Date.now()),
+        ...(msg.__testOpts || {}),
+        reason: 'manual'
+      })
+      if (!record) {
+        return { ok: true, outcome: 'failed', status: 'error', error: '沒有結果' }
+      }
+      if (isSuccess(record)) {
+        return { ok: true, outcome: 'done', status: record.status, value: record.value }
+      }
+      return { ok: true, outcome: 'failed', status: record.status, error: record.error || '' }
     }
 
     if (msg.type === MSG.REBUILD_ALARMS) {
@@ -259,7 +283,10 @@ export async function handleMessage(msg, sender) {
           previewValue: msg.previewValue,
           blockInfo: msg.blockInfo,
           tabId: sender?.tab?.id,
-          url: sender?.tab?.url
+          url: sender?.tab?.url,
+          nameHint: msg.nameHint,
+          // 使用者一次挑的那幾個值；漏掉這一個欄位，多值任務就會退化成單值
+          picks: msg.picks
         }
         const ctx = encodeURIComponent(JSON.stringify(payload))
         const base = typeof chrome.runtime?.getURL === 'function'
@@ -291,10 +318,15 @@ export async function handleMessage(msg, sender) {
     if (msg.type === MSG.ENTER_PICK) {
       if (msg.tabId) {
         await injectContent(msg.tabId)
+        const known = msg.taskId ? await getTask(msg.taskId) : null
         await chrome.tabs.sendMessage(msg.tabId, {
           type: MSG.ENTER_PICK,
           purpose: msg.purpose,
-          taskId: msg.taskId
+          taskId: msg.taskId,
+          // 重選開的是新分頁，那裡沒有「上次右鍵的元素」可用；
+          // 要靠任務自己的 locator 才找得到目標，也才勾得回既有的值
+          locator: msg.locator || known?.locator,
+          preselect: msg.preselect || preselectOf(known)
         })
         return { ok: true }
       }

@@ -1,11 +1,12 @@
 // AutoFetcher 擷取流程：開分頁、注入、擷取、寫紀錄、重試
-import { getTask, saveTask, appendRecord, getRecordsInRange, getSettings, getAlertLog, setAlertLog, setLastValue } from '../shared/storage.js'
+import { getTask, saveTask, appendRecord, appendRecords, getRecordsInRange, getSettings, getAlertLog, setAlertLog, setLastValue } from '../shared/storage.js'
+import { seriesIdOf, parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
 import { MSG } from '../shared/messages.js'
 import { slotOf } from './scheduler.js'
 import { notify } from './notify.js'
 import { injectContent } from './inject.js'
 import { evaluateAlerts } from '../shared/alerts.js'
-import { isSuccess } from '../shared/record-status.js'
+import { isSuccess, healthStatusOf } from '../shared/record-status.js'
 import { setTaskHealth, refreshBadge } from './health.js'
 import { ensureLoggedIn } from './login.js'
 
@@ -76,32 +77,38 @@ function getLocalDateStr(d) {
 }
 
 // 評估告警並發送通知
-async function processAlerts(record) {
+async function processAlerts(record, cachedRecordsInRange) {
   if (!record || !record.taskId) return
 
   // 1. 取任務：沒有 alerts 或空陣列直接返回
-  const task = await getTask(record.taskId)
+  const task = await getTask(parentIdOf(record.taskId))
   if (!task || !Array.isArray(task.alerts) || task.alerts.length === 0) {
     return
   }
+
+  const sIndex = buildSeriesIndex([task])
+  const displayName = nameOf(sIndex, record.taskId)
 
   // 2. 取先前紀錄當 prevRecords：今天與前 6 天（共 7 天）
   const today = (typeof record.slot === 'string' && record.slot.length >= 10)
     ? record.slot.slice(0, 10)
     : getLocalDateStr(new Date())
 
-  const [y, m, d] = today.split('-').map(Number)
-  const pastDate = new Date(y, m - 1, d - 6, 12, 0, 0)
-  const fromDate = getLocalDateStr(pastDate)
+  let recordsInRange = cachedRecordsInRange
+  if (!recordsInRange) {
+    const [y, m, d] = today.split('-').map(Number)
+    const pastDate = new Date(y, m - 1, d - 6, 12, 0, 0)
+    const fromDate = getLocalDateStr(pastDate)
+    recordsInRange = await getRecordsInRange(fromDate, today)
+  }
 
-  const recordsInRange = await getRecordsInRange(fromDate, today)
   // 本筆還沒寫入，所以範圍查詢不會包含它；只要挑出同一任務、由舊到新即可
   const prevRecords = recordsInRange
     .filter(r => r.taskId === record.taskId)
     .sort((a, b) => (a.capturedAt || '').localeCompare(b.capturedAt || ''))
 
   // 3. 評估告警
-  const { hits } = evaluateAlerts(task, record, prevRecords)
+  const { hits } = evaluateAlerts(task, record, prevRecords, displayName)
   if (!Array.isArray(hits) || hits.length === 0) {
     return
   }
@@ -117,7 +124,7 @@ async function processAlerts(record) {
   const cooldownMs = cooldownMin * 60 * 1000
   const now = Date.now()
 
-  const taskAlerts = alertLog[task.id] ? { ...alertLog[task.id] } : {}
+  const taskAlerts = alertLog[record.taskId] ? { ...alertLog[record.taskId] } : {}
   let logChanged = false
 
   for (const hit of hits) {
@@ -126,8 +133,8 @@ async function processAlerts(record) {
       continue
     }
 
-    const notificationId = `${task.id}:alert:${hit.alertId}:${today}`
-    const title = `AutoFetcher: ${task.name}`
+    const notificationId = `${record.taskId}:alert:${hit.alertId}:${today}`
+    const title = `AutoFetcher: ${displayName}`
     await notify(notificationId, { title, message: hit.message })
 
     taskAlerts[hit.alertId] = now
@@ -135,16 +142,49 @@ async function processAlerts(record) {
   }
 
   if (logChanged) {
-    alertLog[task.id] = taskAlerts
+    alertLog[record.taskId] = taskAlerts
     await setAlertLog(alertLog)
   }
 }
 
-// 寫入抓取紀錄並更新帳本
-async function writeRecord(record) {
+// 由這一次抓到的紀錄們決定任務的健康狀態（單值就是一筆，多值是整組）。
+// 紀錄狀態轉 health 狀態的對應只算這一次，散在多處就會各自漂。
+export function healthFromRecords(records, partial) {
+  const list = Array.isArray(records) ? records : []
+  const failed = list.filter(r => !isSuccess(r))
+  if (list.length > 0 && failed.length === list.length) {
+    const first = failed[0]
+    return {
+      status: healthStatusOf(first.status),
+      reason: list.length > 1 ? `${failed.length} 個值抓不到` : undefined,
+      detail: first.error || first.raw || ''
+    }
+  }
+  if (failed.length > 0) {
+    return { status: 'partial', reason: `${failed.length} 個值抓不到`, detail: undefined }
+  }
+  if (partial === true || list.some(r => r.partial === true)) {
+    return { status: 'partial', reason: undefined, detail: undefined }
+  }
+  const warned = list.find(r => r.status === 'fallback') || list.find(r => r.status === 'late')
+  return { status: warned ? warned.status : 'ok', reason: undefined, detail: undefined }
+}
+
+// 更新任務健康狀態並重整圖示
+async function updateHealth(taskId, healthObj) {
+  await setTaskHealth(taskId, healthObj)
+  await refreshBadge()
+}
+
+// 寫入抓取紀錄並更新帳本與 health
+async function writeRecord(record, opts = {}) {
+  const { parentId, skipLedger } = opts
   await processAlerts(record)
   await appendRecord(record.slot.slice(0, 10), record)
-  await recordLedger(record.taskId, record.slot, record.status)
+  if (!skipLedger) {
+    await recordLedger(parentId, record.slot, record.status)
+  }
+  await updateHealth(parentId, healthFromRecords([record], record.partial))
   // popup 顯示「最後值」讀的是 lastValues；失敗的紀錄不覆蓋上一次成功的值
   if (isSuccess(record)) {
     await setLastValue(record.taskId, { value: record.value, capturedAt: record.capturedAt })
@@ -202,6 +242,7 @@ export async function runTask(task, opts = {}) {
     extractTimeoutMs = 15000,
     dryRun = false
   } = opts
+  const isManual = reason === 'manual'
 
   let extraDelayMs
   if (opts.extraDelayMs !== undefined) {
@@ -213,23 +254,34 @@ export async function runTask(task, opts = {}) {
     extraDelayMs = typeof settings?.extraDelaySec === 'number' ? settings.extraDelaySec * 1000 : 3000
   }
 
-  // 1. 冪等檢查：已在帳本中則直接返回 null（dryRun 略過）
-  if (!dryRun) {
+  // 1. 冪等檢查：已在帳本中則直接返回 null（dryRun 與手動抓取略過）
+  if (!dryRun && !isManual) {
     const ledger = await getLedger()
     if (ledger[task.id]?.[slot]) return null
   }
 
   // 2. 離線檢查：若離線則排 10 分鐘後重試，不得開分頁
   if (globalThis.navigator?.onLine === false) {
-    if (!dryRun) await scheduleRetry(task.id, attempt, true, slot)
-    return dryRun ? { ok: false, error: 'offline' } : null
+    if (dryRun) return { ok: false, error: 'offline' }
+    // 手動抓取一律不重試，但要留一筆看得到的紀錄，否則使用者按了沒有任何反應
+    if (isManual) {
+      return await writeRecord({
+        taskId: task.id,
+        slot,
+        capturedAt: new Date().toISOString(),
+        status: 'error',
+        error: '目前離線'
+      }, { parentId: task.id, skipLedger: true })
+    }
+    await scheduleRetry(task.id, attempt, true, slot)
+    return null
   }
 
   // 同站台串行佇列執行
   const origin = getOrigin(task.url)
   return enqueueForOrigin(origin, async (queueCtx) => {
-    // 佇列中再次確認冪等，防止併發重複執行（dryRun 略過）
-    if (!dryRun) {
+    // 佇列中再次確認冪等，防止併發重複執行（dryRun 與手動抓取略過）
+    if (!dryRun && !isManual) {
       const currentLedger = await getLedger()
       if (currentLedger[task.id]?.[slot]) return null
     }
@@ -303,7 +355,7 @@ export async function runTask(task, opts = {}) {
           capturedAt: new Date().toISOString(),
           status: 'login_failed',
           error: login?.reason || '無法登入'
-        })
+        }, { parentId: task.id, skipLedger: isManual })
       }
 
       // 9. 注入 content script（必須在送訊息之前）
@@ -333,6 +385,91 @@ export async function runTask(task, opts = {}) {
 
       // 結果處理：成功路徑
       if (res?.ok === true) {
+        if (res.fields && typeof res.fields === 'object' && Object.keys(res.fields).length === 0) {
+          // 任務宣告了多值卻一個值都沒有：不寫紀錄、不動帳本與燈號，當成設定沒做完
+          return null
+        }
+
+        if (res.fields && typeof res.fields === 'object') {
+          const date = (typeof slot === 'string' && slot.length >= 10)
+            ? slot.slice(0, 10)
+            : getLocalDateStr(new Date())
+          const capturedAt = new Date().toISOString()
+          const records = []
+
+          for (const [key, r] of Object.entries(res.fields)) {
+            const rec = {
+              taskId: seriesIdOf(task.id, key),
+              slot,
+              capturedAt
+            }
+            if (r?.ok) {
+              rec.value = r.value
+              rec.raw = r.raw
+              rec.status = reason === 'late' ? 'late' : (r.status || 'ok')
+              if (r.used !== undefined) {
+                rec.used = r.used
+              }
+              if (r.skipped !== undefined) {
+                rec.skipped = r.skipped
+              }
+            } else {
+              rec.status = r?.error || 'error'
+              if (r?.raw !== undefined) {
+                rec.raw = r.raw
+              }
+            }
+            if (res.partial === true) {
+              rec.partial = true
+            }
+            records.push(rec)
+          }
+
+          // 告警評估：整組只讀一次 getRecordsInRange
+          const [y, m, d] = date.split('-').map(Number)
+          const pastDate = new Date(y, m - 1, d - 6, 12, 0, 0)
+          const fromDate = getLocalDateStr(pastDate)
+          const recordsInRange = await getRecordsInRange(fromDate, date)
+
+          for (const rec of records) {
+            await processAlerts(rec, recordsInRange)
+          }
+
+          // 批次寫入：整組紀錄只呼叫一次 appendRecords
+          await appendRecords(date, records)
+
+          // 帳本：整組只寫一次，用父任務 id（手動抓取不寫帳本）
+          if (!isManual) {
+            const hasSuccess = records.some(r => isSuccess(r))
+            const firstFail = records.find(r => !isSuccess(r))
+            const ledgerStatus = hasSuccess ? 'ok' : (firstFail ? firstFail.status : 'error')
+            await recordLedger(task.id, slot, ledgerStatus)
+          }
+
+          // lastValues：成功的值各自以子序列 id 寫入
+          for (const rec of records) {
+            if (isSuccess(rec)) {
+              await setLastValue(rec.taskId, { value: rec.value, capturedAt: rec.capturedAt })
+            }
+          }
+
+          // health：整個任務只寫一次，寫在父任務 id 上；狀態的算法與單值共用同一份
+          const failCount = records.filter(r => !isSuccess(r)).length
+          await updateHealth(task.id, healthFromRecords(records, res.partial))
+
+          if (failCount === 0) {
+            const currentTask = await getTask(task.id)
+            if (currentTask && ((currentTask.notFoundStreak || 0) > 0 || currentTask.suggestForeground)) {
+              currentTask.notFoundStreak = 0
+              delete currentTask.suggestForeground
+              await saveTask(currentTask)
+            }
+          }
+
+          const firstSuccess = records.find(r => isSuccess(r))
+          return firstSuccess || records[0] || null
+        }
+
         const currentTask = await getTask(task.id)
         if (currentTask && ((currentTask.notFoundStreak || 0) > 0 || currentTask.suggestForeground)) {
           currentTask.notFoundStreak = 0
@@ -360,31 +497,31 @@ export async function runTask(task, opts = {}) {
         }
         if (res.partial === true) {
           record.partial = true
-          await setTaskHealth(task.id, { status: 'partial', reason: '只抓到部分', detail: '' })
-          await refreshBadge()
         }
 
-        return await writeRecord(record)
+        return await writeRecord(record, { parentId: task.id, skipLedger: isManual })
       }
 
       // 結果處理：元素未找到（可重試）
       if (res?.error === 'not_found') {
-        if (attempt < 3) {
+        if (!isManual && attempt < 3) {
           await scheduleRetry(task.id, attempt, false, slot)
           return null
         }
 
-        // 重試用盡：更新 notFoundStreak，連兩次建議前台擷取
-        const currentTask = (await getTask(task.id)) || { ...task }
-        const streak = (currentTask.notFoundStreak || 0) + 1
-        currentTask.notFoundStreak = streak
-        if (streak >= 2) currentTask.suggestForeground = true
-        await saveTask(currentTask)
+        if (!isManual) {
+          // 重試用盡：更新 notFoundStreak，連兩次建議前台擷取
+          const currentTask = (await getTask(task.id)) || { ...task }
+          const streak = (currentTask.notFoundStreak || 0) + 1
+          currentTask.notFoundStreak = streak
+          if (streak >= 2) currentTask.suggestForeground = true
+          await saveTask(currentTask)
 
-        await notify(`${task.id}:not_found`, {
-          title: `AutoFetcher: ${task.name}`,
-          message: '擷取失敗：找不到目標元素'
-        })
+          await notify(`${task.id}:not_found`, {
+            title: `AutoFetcher: ${task.name}`,
+            message: '擷取失敗：找不到目標元素'
+          })
+        }
 
         return await writeRecord({
           taskId: task.id,
@@ -392,7 +529,7 @@ export async function runTask(task, opts = {}) {
           capturedAt: new Date().toISOString(),
           status: 'not_found',
           snippet: res.snippet
-        })
+        }, { parentId: task.id, skipLedger: isManual })
       }
 
       // 結果處理：解析錯誤（不重試，不得含 value 欄位）
@@ -403,11 +540,11 @@ export async function runTask(task, opts = {}) {
           capturedAt: new Date().toISOString(),
           status: 'parse_error',
           raw: res.raw
-        })
+        }, { parentId: task.id, skipLedger: isManual })
       }
 
       // 其他未知錯誤
-      if (attempt < 3) {
+      if (!isManual && attempt < 3) {
         await scheduleRetry(task.id, attempt, false, slot)
         return null
       }
@@ -417,11 +554,11 @@ export async function runTask(task, opts = {}) {
         capturedAt: new Date().toISOString(),
         status: 'error',
         error: String(res?.error || '擷取失敗')
-      })
+      }, { parentId: task.id, skipLedger: isManual })
 
     } catch (err) {
       if (dryRun) return { ok: false, error: String(err?.message || err) }
-      if (attempt < 3) {
+      if (!isManual && attempt < 3) {
         await scheduleRetry(task.id, attempt, false, slot)
         return null
       }
@@ -431,7 +568,7 @@ export async function runTask(task, opts = {}) {
         capturedAt: new Date().toISOString(),
         status: 'error',
         error: String(err?.message || err)
-      })
+      }, { parentId: task.id, skipLedger: isManual })
     } finally {
       // 若有記錄前景抓取前作用中的分頁，將焦點還原
       if (originalTabId != null) {

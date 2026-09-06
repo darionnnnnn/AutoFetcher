@@ -230,7 +230,7 @@ test('抽屜開著時不重畫其他卡片', async () => {
   const l = await ls.getLayout()
   const did = l.dashboards[0].id
   const c1 = await ls.addCard(did, card())
-  const c2 = await ls.addCard(did, card({ x: 6 }))
+  const c2 = await ls.addCard(did, card({ x: 6, source: [{ taskId: 't2', aggregation: 'raw' }] }))
   await db.renderDashboard(did)
   const other = doc.querySelector(`[data-card-id="${c2.id}"]`)
   await dw.openDrawer(did, c1.id)

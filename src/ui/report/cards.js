@@ -5,7 +5,9 @@ import { buildSeries, resolvePeriod, latest, pivot, effectiveTimeOf } from './se
 // 樞紐表未指定列數上限時的預設(避免長時間區間渲染上千列)
 const DEFAULT_PIVOT_ROWS = 50;
 import { lineChart, barChart, gauge, sparkline } from './charts.js';
-import { isSuccess } from '../../shared/record-status.js';
+import { isSuccess, isRed, isWarn } from '../../shared/record-status.js';
+import { parentIdOf } from '../../shared/series-index.js';
+import { openTrendPopover } from './trend-popover.js';
 
 const SUPPORTED_TYPES = new Set(['number', 'line', 'bar', 'table', 'gauge', 'text', 'status']);
 
@@ -19,24 +21,66 @@ function formatNumber(val, decimals) {
   if (typeof decimals === 'number' && Number.isFinite(decimals)) {
     return val.toFixed(decimals);
   }
-  return String(val);
+  // 沒指定小數位時去掉浮點運算的尾巴（31.400000000000002 要顯示成 31.4）。
+  // 只處理有小數的值，整數原樣輸出——對大整數做有效位數截斷會改到真正的數字
+  if (Number.isInteger(val)) return String(val);
+  return String(Number(val.toPrecision(12)));
+}
+
+const CARD_TYPE_SUFFIXES = {
+  number: '數值',
+  line: '趨勢',
+  bar: '長條',
+  table: '明細',
+  gauge: '量表',
+  status: '狀態'
+};
+
+/**
+ * 依卡片 source 算出來源名稱（多來源以頓號串接）
+ */
+function getCardSourceName(card, ctx) {
+  const sources = card?.source || [];
+  const names = sources
+    .map(s => (s && s.taskId ? (ctx?.tasksById?.[s.taskId]?.name || s.taskId) : ''))
+    .filter(Boolean);
+  return names.length > 0 ? names.join('、') : '';
 }
 
 /**
- * 取得卡片標題（自訂標題優先，否則以頓號串接來源任務名稱）
+ * 取得卡片標題（自訂標題優先；否則以來源名稱為主，
+ * 若同一儀表板內排在前面已有同名但不同型別的卡片，就補上型別後綴以便分辨）
  */
 function getCardTitle(card, ctx) {
   if (card.title != null && String(card.title).trim() !== '') {
     return String(card.title);
   }
-  const sources = card.source || [];
-  const names = sources
-    .map(s => (s && s.taskId ? (ctx?.tasksById?.[s.taskId]?.name || s.taskId) : ''))
-    .filter(Boolean);
-  if (names.length > 0) {
-    return names.join('、');
+  const baseName = getCardSourceName(card, ctx);
+  if (!baseName) {
+    return '';
   }
-  return '';
+
+  if (Array.isArray(ctx?.cards)) {
+    let cardIndex = ctx.cards.indexOf(card);
+    if (cardIndex === -1 && card?.id) {
+      cardIndex = ctx.cards.findIndex(c => c && c.id === card.id);
+    }
+    if (cardIndex > 0) {
+      const hasConflict = ctx.cards.slice(0, cardIndex).some(c =>
+        c &&
+        c.type !== card.type &&
+        getCardSourceName(c, ctx) === baseName
+      );
+      if (hasConflict) {
+        const suffix = CARD_TYPE_SUFFIXES[card.type];
+        if (suffix) {
+          return `${baseName} · ${suffix}`;
+        }
+      }
+    }
+  }
+
+  return baseName;
 }
 
 /**
@@ -103,9 +147,12 @@ function createCardShell(card, ctx) {
 function renderNumberCard(card, ctx, { cardEl, bodyEl }) {
   const taskId = card.source?.[0]?.taskId;
   const { current, prev, prevDay } = taskId ? latest(ctx.records, taskId, ctx.today) : { current: null, prev: null, prevDay: null };
-  const health = taskId ? ctx.health?.[taskId] : null;
+  // health 掛在父任務上（一個任務可以有多個值，卡片來源可能是子序列 id）
+  const health = taskId ? ctx.health?.[parentIdOf(taskId)] : null;
 
-  const isFailed = (current && !isSuccess(current)) || (health && health.status && !isSuccess(health));
+  // 只有「最新一筆不成功」或「health 是紅燈」才蓋掉值；
+  // 黃燈（備援、遲到、只抓到部分）照樣顯示抓到的值，原因放 title
+  const isFailed = (current && !isSuccess(current)) || isRed(health);
   const hasValidValue = !isFailed && current != null && typeof current.value === 'number' && Number.isFinite(current.value);
 
   const displayEl = document.createElement('div');
@@ -116,6 +163,10 @@ function renderNumberCard(card, ctx, { cardEl, bodyEl }) {
 
   if (hasValidValue) {
     valEl.textContent = formatNumber(current.value, card.options?.decimals);
+    // 黃燈仍顯示值，但要讓使用者看得到這個值是怎麼來的
+    if (isWarn(health) && health?.reason) {
+      valEl.setAttribute('title', health.reason);
+    }
     displayEl.appendChild(valEl);
 
     if (card.options?.unit) {
@@ -130,6 +181,13 @@ function renderNumberCard(card, ctx, { cardEl, bodyEl }) {
       valEl.setAttribute('title', health.reason);
     }
     displayEl.appendChild(valEl);
+  }
+
+  if (!ctx?.editing && taskId) {
+    valEl.classList.add('clickable');
+    valEl.addEventListener('click', () => {
+      openTrendPopover(taskId, ctx, valEl);
+    });
   }
 
   bodyEl.appendChild(displayEl);
@@ -224,7 +282,12 @@ function renderChartCard(card, ctx, { bodyEl }) {
     normalize: card.options?.normalize
   });
 
+  // viewBox 的長寬比要貼近卡片實際的格子比例，否則等比縮放後會在左右留一大片空白
+  const cols = Number.isFinite(Number(card.w)) ? Number(card.w) : 6;
+  const rows = Number.isFinite(Number(card.h)) ? Number(card.h) : 3;
   const chartOpts = {
+    width: Math.max(320, cols * 110),
+    height: Math.max(140, rows * 70),
     yMin: card.options?.yMin,
     yMax: card.options?.yMax,
     unit: card.options?.unit
@@ -280,7 +343,7 @@ function renderChartCard(card, ctx, { bodyEl }) {
 /**
  * 渲染表格卡片（樞紐模式或最近紀錄模式）
  */
-function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
+function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
   const isPivot = card.options?.mode === 'pivot';
   const periodRange = resolveCardRange(card, ctx);
 
@@ -344,12 +407,23 @@ function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
 
       th.appendChild(makeRemoveHandle(id, Boolean(ctx?.editing)));
 
+      if (!ctx?.editing) {
+        th.classList.add('clickable');
+        th.addEventListener('click', (e) => {
+          if (e.target?.closest?.('[data-remove-source]')) return;
+          openTrendPopover(id, ctx, th);
+        });
+      }
+
       headTr.appendChild(th);
     }
     thead.appendChild(headTr);
 
+    const showDelta = Boolean(card.options?.showDelta);
+
     // 表身各列
-    for (const r of rows) {
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+      const r = rows[rowIndex];
       const tr = document.createElement('tr');
       const timeTd = document.createElement('td');
       timeTd.textContent = r.t ?? '';
@@ -369,6 +443,27 @@ function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
           const formatted = formatNumber(val, card.options?.decimals);
           td.textContent = formatted;
           rowTsv.push(formatted);
+
+          if (showDelta && rowIndex > 0) {
+            const prevRow = rows[rowIndex - 1];
+            const prevVal = prevRow?.values?.[col];
+            if (prevVal != null && typeof prevVal === 'number' && Number.isFinite(prevVal)) {
+              const diff = val - prevVal;
+              const roundedDiff = Math.round(diff * 1e8) / 1e8;
+              if (roundedDiff !== 0) {
+                const deltaEl = document.createElement('span');
+                deltaEl.setAttribute('data-delta', '');
+                deltaEl.className = roundedDiff > 0 ? 'delta-up' : 'delta-down';
+                const formattedDelta = typeof card.options?.decimals === 'number' && Number.isFinite(card.options.decimals)
+                  ? Math.abs(diff).toFixed(card.options.decimals)
+                  : String(Math.abs(roundedDiff));
+                deltaEl.textContent = `${roundedDiff > 0 ? '↑' : '↓'} ${formattedDelta}`;
+                deltaEl.title = `前值 ${formatNumber(prevVal, card.options?.decimals)}`;
+                td.appendChild(document.createTextNode(' '));
+                td.appendChild(deltaEl);
+              }
+            }
+          }
         } else if (val != null) {
           td.textContent = String(val);
           rowTsv.push(String(val));
@@ -439,6 +534,12 @@ function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
 
   bodyEl.appendChild(table);
 
+  const fullData = [tsvHeaders, ...tsvRows];
+  const tsvContent = buildTsv(fullData);
+  if (cardEl) {
+    cardEl.dataset.tsv = tsvContent;
+  }
+
   // 複製 TSV 按鈕
   const copyBtn = document.createElement('button');
   copyBtn.type = 'button';
@@ -455,8 +556,6 @@ function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
   copyBtn.addEventListener('click', () => {
     const currentNav = typeof navigator !== 'undefined' ? navigator : (typeof window !== 'undefined' ? window.navigator : null);
     if (currentNav?.clipboard?.writeText) {
-      const fullData = [tsvHeaders, ...tsvRows];
-      const tsvContent = buildTsv(fullData);
       currentNav.clipboard.writeText(tsvContent).catch(() => {});
     }
   });
@@ -535,15 +634,16 @@ function renderTextCard(card, ctx, { bodyEl }) {
  * 渲染狀態清單卡片
  */
 function renderStatusCard(card, ctx, { bodyEl }) {
+  const parents = ctx?.parentTasksById || {};
   const taskIds = Array.isArray(card.options?.taskIds)
-    ? card.options.taskIds
-    : Object.keys(ctx?.tasksById || {});
+    ? [...new Set(card.options.taskIds.map(id => parentIdOf(id)))]
+    : Object.keys(ctx?.parentTasksById || {});
 
   const list = document.createElement('div');
   list.className = 'status-list';
 
   for (const id of taskIds) {
-    const task = ctx?.tasksById?.[id] || { id, name: id };
+    const task = parents[id] || { id, name: id };
     const taskName = task.name || id;
     const healthStatus = ctx?.health?.[id]?.status || '—';
     const nextRun = ctx?.nextRuns?.[id] || '—';

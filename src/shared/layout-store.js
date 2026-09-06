@@ -1,6 +1,7 @@
 // 儀表板與卡片版面儲存層（layout-store）
 import { getRawLayout, setRawLayout } from './storage.js'
 import { clampCard, findFreeSlot, collides } from '../ui/report/layout.js'
+import { parentIdOf } from './series-index.js'
 
 // 目前支援的版面架構版本
 const CURRENT_VERSION = 1
@@ -235,6 +236,25 @@ function isFreeAt(cards, card) {
 }
 
 /**
+ * 檢查兩張卡片的來源任務集合是否相同（順序無關，只比對 taskId）
+ */
+function sameSourceTaskIds(sourceA, sourceB) {
+  const setA = new Set()
+  for (const s of sourceA) {
+    if (s && s.taskId != null) setA.add(String(s.taskId))
+  }
+  const setB = new Set()
+  for (const s of sourceB) {
+    if (s && s.taskId != null) setB.add(String(s.taskId))
+  }
+  if (setA.size !== setB.size) return false
+  for (const id of setA) {
+    if (!setB.has(id)) return false
+  }
+  return true
+}
+
+/**
  * 新增卡片至指定儀表板，自動配置 id、夾住寬高並尋找不重疊空位
  */
 export async function addCard(dashId, card) {
@@ -243,6 +263,24 @@ export async function addCard(dashId, card) {
   if (!dash) return null
 
   const normalized = normalizeCard(card)
+
+  // 檢查同儀表板內是否已存在型別相同、來源集合相同的卡片
+  // source 為空陣列或缺少的卡片（例如文字卡）一律不去重
+  if (Array.isArray(card?.source) && card.source.length > 0) {
+    const existing = dash.cards.find(c =>
+      c &&
+      c.type === normalized.type &&
+      Array.isArray(c.source) &&
+      c.source.length > 0 &&
+      // 樞紐表與「最近 N 筆」型別同樣是 table，但呈現的是兩件事，不能互相去重
+      (c.options?.mode || '') === (normalized.options?.mode || '') &&
+      sameSourceTaskIds(normalized.source, c.source)
+    )
+    if (existing) {
+      return existing
+    }
+  }
+
   const newCard = {
     ...normalized,
     id: crypto.randomUUID()
@@ -300,7 +338,7 @@ export async function pruneCardsForTask(taskId) {
       // 處理 source
       const hadSource = Array.isArray(card.source) && card.source.length > 0
       if (hadSource) {
-        card.source = card.source.filter(s => s.taskId !== taskId)
+        card.source = card.source.filter(s => parentIdOf(s.taskId) !== taskId)
         if (card.source.length === 0) {
           return false
         }
@@ -310,7 +348,7 @@ export async function pruneCardsForTask(taskId) {
       if (card.options && Array.isArray(card.options.taskIds)) {
         const hadTaskIds = card.options.taskIds.length > 0
         if (hadTaskIds) {
-          card.options.taskIds = card.options.taskIds.filter(id => id !== taskId)
+          card.options.taskIds = card.options.taskIds.filter(id => parentIdOf(id) !== taskId)
           if (card.options.taskIds.length === 0) {
             return false
           }

@@ -50,6 +50,57 @@ function getChartColor(index) {
 }
 
 /**
+ * 畫背景格線與座標標籤（折線與長條共用；sparkline 不用）
+ * 標籤只放兩端與中線，避免在小卡片上擠成一團
+ */
+function drawAxes(svg, { plotLeft, plotRight, plotTop, plotBottom, yRange, xLabels }) {
+  const TICKS = 4;
+  for (let i = 0; i <= TICKS; i++) {
+    const ratio = i / TICKS;
+    const y = plotBottom - (plotBottom - plotTop) * ratio;
+    svg.appendChild(createSvgElement('line', {
+      x1: String(plotLeft), y1: String(y), x2: String(plotRight), y2: String(y),
+      stroke: 'var(--border)', 'stroke-width': '1', 'data-gridline': ''
+    }));
+    if (i === 0 || i === TICKS || i === TICKS / 2) {
+      const val = yRange.min + (yRange.max - yRange.min) * ratio;
+      const label = createSvgElement('text', {
+        x: String(plotLeft - 6), y: String(y + 3), 'text-anchor': 'end',
+        'font-size': '10', fill: 'var(--text-muted)', 'data-axis-label': 'y'
+      });
+      label.textContent = String(Number(val.toPrecision(6)));
+      svg.appendChild(label);
+    }
+  }
+  // 時間戳當標籤太長會蓋掉圖，只留日期那一段（同一天的資料則留時分）
+  const shorten = (t) => {
+    const str = String(t);
+    if (str.length <= 10) return str;
+    const [date, time] = str.split('T');
+    return time ? (labelsAreSameDay ? time.slice(0, 5) : date) : str.slice(0, 10);
+  };
+  const raw = Array.isArray(xLabels) ? xLabels.filter(Boolean).map(String) : [];
+  const labelsAreSameDay = raw.length > 1 && raw.every(t => t.slice(0, 10) === raw[0].slice(0, 10));
+  const labels = raw.map(shorten);
+  if (labels.length > 0) {
+    const first = createSvgElement('text', {
+      x: String(plotLeft), y: String(plotBottom + 14), 'text-anchor': 'start',
+      'font-size': '10', fill: 'var(--text-muted)', 'data-axis-label': 'x'
+    });
+    first.textContent = labels[0];
+    svg.appendChild(first);
+    if (labels.length > 1) {
+      const last = createSvgElement('text', {
+        x: String(plotRight), y: String(plotBottom + 14), 'text-anchor': 'end',
+        'font-size': '10', fill: 'var(--text-muted)', 'data-axis-label': 'x'
+      });
+      last.textContent = labels[labels.length - 1];
+      svg.appendChild(last);
+    }
+  }
+}
+
+/**
  * 線性座標換算
  */
 function mapLinear(v, inMin, inMax, outMin, outMax) {
@@ -203,13 +254,15 @@ export function lineChart(seriesList, opts = {}) {
   const svg = createSvg(width, height);
   const tIndexMap = new Map(distinctT.map((t, idx) => [t, idx]));
 
-  const padding = { top: 16, right: 16, bottom: 16, left: 16 };
+  const padding = { top: 16, right: 16, bottom: 24, left: 48 };
   const plotLeft = padding.left;
   const plotRight = width - padding.right;
   const plotTop = padding.top;
   const plotBottom = height - padding.bottom;
 
   const yRange = computeYRange(allValues, opts.yMin, opts.yMax);
+
+  drawAxes(svg, { plotLeft, plotRight, plotTop, plotBottom, yRange, xLabels: distinctT });
 
   const getX = pt => mapX(tIndexMap.get(pt.t) ?? pt.originalIndex, distinctT.length, plotLeft, plotRight);
   const getY = pt => mapY(pt.v, yRange.min, yRange.max, plotTop, plotBottom);
@@ -288,7 +341,7 @@ export function barChart(seriesList, opts = {}) {
   const svg = createSvg(width, height);
   const tIndexMap = new Map(distinctT.map((t, idx) => [t, idx]));
 
-  const padding = { top: 16, right: 16, bottom: 16, left: 16 };
+  const padding = { top: 16, right: 16, bottom: 24, left: 48 };
   const plotLeft = padding.left;
   const plotRight = width - padding.right;
   const plotTop = padding.top;
@@ -296,6 +349,8 @@ export function barChart(seriesList, opts = {}) {
   const plotWidth = plotRight - plotLeft;
 
   const yRange = computeYRange(allValues, opts.yMin, opts.yMax);
+
+  drawAxes(svg, { plotLeft, plotRight, plotTop, plotBottom, yRange, xLabels: distinctT });
 
   const numT = distinctT.length;
   const numSeries = seriesList.length;

@@ -298,7 +298,7 @@ export function parseHash(hash) {
 
     const taskIdsStr = params.get('taskIds')
     if (taskIdsStr !== null && taskIdsStr !== '') {
-      result.taskIds = taskIdsStr.split(',').filter(Boolean)
+      result.taskIds = taskIdsStr.split(',').filter(Boolean).map(id => decodeURIComponent(id))
     }
 
     const statusesStr = params.get('statuses')
@@ -351,7 +351,7 @@ export const buildHash = function (state = {}) {
   if (state.from) params.set('from', state.from)
   if (state.to) params.set('to', state.to)
   if (Array.isArray(state.taskIds) && state.taskIds.length > 0) {
-    params.set('taskIds', state.taskIds.join(','))
+    params.set('taskIds', state.taskIds.map(id => encodeURIComponent(id)).join(','))
   }
   if (Array.isArray(state.statuses) && state.statuses.length > 0) {
     params.set('statuses', state.statuses.join(','))

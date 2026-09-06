@@ -151,7 +151,8 @@ test('addCard 自動配 id 與空位', async () => {
   const { ls } = await fresh()
   const did = (await ls.getLayout()).dashboards[0].id
   const c1 = await ls.addCard(did, card())
-  const c2 = await ls.addCard(did, card())
+  // 同型別同來源會被去重（AF-5 批次 C），這裡用不同型別驗證自動配位
+  const c2 = await ls.addCard(did, card({ type: 'line' }))
   assert.ok(c1.id && c2.id && c1.id !== c2.id)
   const cards = (await ls.getLayout()).dashboards[0].cards
   assert.equal(cards.length, 2)
@@ -183,7 +184,8 @@ test('removeCard 移除指定卡片', async () => {
   const { ls } = await fresh()
   const did = (await ls.getLayout()).dashboards[0].id
   const c1 = await ls.addCard(did, card())
-  await ls.addCard(did, card())
+  // 同型別同來源會被去重（AF-5 批次 C），第二張改用別的來源
+  await ls.addCard(did, card({ source: [{ taskId: 't2', aggregation: 'raw' }] }))
   await ls.removeCard(did, c1.id)
   const cards = (await ls.getLayout()).dashboards[0].cards
   assert.equal(cards.length, 1)

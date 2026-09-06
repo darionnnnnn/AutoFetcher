@@ -1,16 +1,23 @@
 import { isSuccess } from './record-status.js';
+import { fieldKeyOf } from './series-index.js';
 
 // AutoFetcher 告警判定（SPEC §10）：純函式，去重與通知由呼叫端負責
-export function evaluateAlerts(task, record, prevRecords) {
+export function evaluateAlerts(task, record, prevRecords, displayName) {
   const hits = [];
   if (!task.alerts || !Array.isArray(task.alerts) || task.alerts.length === 0) {
     return { hits };
   }
 
+  const name = displayName || task.name || '';
   const currentSuccess = isSuccess(record);
 
   for (const alert of task.alerts) {
     if (!alert.enabled) continue;
+
+    // 指定欄位時只對該欄位評估
+    if (alert.field && fieldKeyOf(record.taskId || '') !== alert.field) {
+      continue;
+    }
 
     const { id, type, value } = alert;
 
@@ -29,7 +36,7 @@ export function evaluateAlerts(task, record, prevRecords) {
         hits.push({
           alertId: id,
           type: type,
-          message: `「${task.name}」告警：已連續失敗 ${streak} 次（門檻 ${value} 次）`
+          message: `「${name}」告警：已連續失敗 ${streak} 次（門檻 ${value} 次）`
         });
       }
       continue;
@@ -45,7 +52,7 @@ export function evaluateAlerts(task, record, prevRecords) {
         hits.push({
           alertId: id,
           type: type,
-          message: `「${task.name}」告警：值 ${currentValue} 大於 ${value}`
+          message: `「${name}」告警：值 ${currentValue} 大於 ${value}`
         });
       }
     } else if (type === 'lt') {
@@ -53,7 +60,7 @@ export function evaluateAlerts(task, record, prevRecords) {
         hits.push({
           alertId: id,
           type: type,
-          message: `「${task.name}」告警：值 ${currentValue} 小於 ${value}`
+          message: `「${name}」告警：值 ${currentValue} 小於 ${value}`
         });
       }
     } else if (type === 'eq') {
@@ -70,7 +77,7 @@ export function evaluateAlerts(task, record, prevRecords) {
         hits.push({
           alertId: id,
           type: type,
-          message: `「${task.name}」告警：值 ${currentValue} 等於 ${value}`
+          message: `「${name}」告警：值 ${currentValue} 等於 ${value}`
         });
       }
     } else if (type === 'deltaPct') {
@@ -91,7 +98,7 @@ export function evaluateAlerts(task, record, prevRecords) {
           hits.push({
             alertId: id,
             type: type,
-            message: `「${task.name}」告警：變動幅度 ${pct.toFixed(2)}% 超過門檻 ${value}%`
+            message: `「${name}」告警：變動幅度 ${pct.toFixed(2)}% 超過門檻 ${value}%`
           });
         }
       }

@@ -9,40 +9,116 @@
     body {
       width: 360px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      font-size: 13px;
+      font-size: var(--text-sm, 13px);
       color: var(--text);
       background: var(--bg);
-      padding: 12px;
+      padding: var(--space-3, 12px);
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: var(--space-2, 10px);
     }
-    header { display: flex; align-items: center; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
-    #status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+    :focus-visible {
+      outline: 2px solid var(--focus-ring);
+      outline-offset: 1px;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2, 8px);
+      padding-bottom: var(--space-2, 8px);
+      border-bottom: 1px solid var(--border);
+    }
+    #status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      display: inline-block;
+    }
     #status-dot.ok { background-color: var(--ok); }
     #status-dot.warn { background-color: var(--warn); }
     #status-dot.bad { background-color: var(--danger); }
     #status-dot.off { background-color: var(--text-muted); }
-    #status-summary { font-weight: 600; font-size: 13px; line-height: 1.4; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #task-list { display: flex; flex-direction: column; gap: 8px; max-height: 380px; overflow-y: auto; }
-    .empty-hint { color: var(--text-muted); font-size: 12px; line-height: 1.6; padding: 16px 8px; text-align: center; }
-    .task-row { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; background: var(--surface); }
+    #status-summary {
+      font-weight: 600;
+      font-size: var(--text-sm, 13px);
+      line-height: 1.4;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #task-list {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2, 8px);
+      max-height: 380px;
+      overflow-y: auto;
+    }
+    .empty-hint {
+      color: var(--text-muted);
+      font-size: var(--text-xs, 12px);
+      line-height: 1.6;
+      padding: var(--space-4, 16px) var(--space-2, 8px);
+      text-align: center;
+    }
+    .task-row {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: var(--space-2, 8px) var(--space-2, 10px);
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1, 4px);
+      background: var(--surface);
+      box-shadow: var(--shadow-1);
+      transition: box-shadow 0.15s ease;
+    }
+    .task-row:hover { box-shadow: var(--shadow-2); }
     .task-row.disabled { opacity: 0.65; }
     .task-main { display: flex; justify-content: space-between; align-items: center; }
-    .task-name { font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; margin-right: 8px; }
-    .task-value { font-weight: 600; color: var(--primary); white-space: nowrap; }
-    .task-sub { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text-muted); gap: 6px; }
+    .task-name { font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; margin-right: var(--space-2, 8px); }
+    .task-value { font-weight: 600; color: var(--primary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .task-sub { display: flex; justify-content: space-between; align-items: center; font-size: var(--text-xs, 11px); color: var(--text-muted); gap: var(--space-1, 6px); }
     .task-next { font-variant-numeric: tabular-nums; }
     .task-paused { color: var(--text-muted); font-weight: 500; }
     .task-reason { color: var(--danger); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .task-actions { display: flex; gap: 6px; margin-top: 4px; }
-    button { cursor: pointer; font-size: 12px; border-radius: 4px; border: 1px solid var(--border); background: var(--surface); padding: 4px 8px; color: var(--text); line-height: 1.2; }
+    .task-actions { display: flex; gap: var(--space-1, 6px); margin-top: var(--space-1, 4px); }
+    /* 按鈕分三級 */
+    button {
+      cursor: pointer;
+      font-size: var(--text-xs, 12px);
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      padding: var(--space-1, 4px) var(--space-2, 8px);
+      color: var(--text);
+      line-height: 1.2;
+      transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    }
     button:hover { background: var(--hover); }
-    .retry, .open-page { font-size: 11px; padding: 2px 6px; }
+    .retry, .open-page { font-size: var(--text-xs, 11px); padding: 2px 6px; }
     .retry { color: var(--primary); border-color: var(--primary); }
-    .open-page { color: var(--text-muted); }
-    footer { display: flex; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
-    #toggle-all, #open-report { flex: 1; padding: 6px 10px; }
+    .retry:hover { background: var(--primary-soft); }
+    .open-page { color: var(--text-muted); background: transparent; border: none; }
+    .open-page:hover { background: var(--hover); color: var(--text); }
+    footer {
+      display: flex;
+      justify-content: space-between;
+      gap: var(--space-2, 8px);
+      padding-top: var(--space-2, 8px);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    #toggle-all, #open-report { flex: 1; padding: var(--space-1, 6px) var(--space-2, 10px); }
+    #open-report {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: white;
+      font-weight: 500;
+    }
+    #open-report:hover {
+      filter: brightness(1.08);
+    }
   </style>
 </head>
 <body>

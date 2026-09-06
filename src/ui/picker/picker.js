@@ -1,9 +1,11 @@
-import { saveTask, getTask } from '../../shared/storage.js'
+import { saveTask, getTask, getSettings, saveSettings } from '../../shared/storage.js'
 import { MSG } from '../../shared/messages.js'
 import { getLayout, addCard } from '../../shared/layout-store.js'
+import { seriesIdOf } from '../../shared/series-index.js'
 
 let currentCtx = null
 let currentBlock = null
+const fieldSpecs = new Map()
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
 
 function getFormData() {
@@ -31,13 +33,19 @@ function getFormData() {
   const alertRows = document.querySelectorAll('[data-alert-row]')
   const alerts = Array.from(alertRows).map(row => {
     const id = row.dataset.id || crypto.randomUUID()
-    const type = row.querySelector('select')?.value || 'gt'
+    const type = row.querySelector('select.alert-type')?.value || row.querySelector('select')?.value || 'gt'
     const valInput = row.querySelector('input:not([type="checkbox"])') || row.querySelector('input')
     const valStr = valInput?.value?.trim() ?? ''
     const value = valStr === '' ? NaN : Number(valStr)
     const cb = row.querySelector('input[type="checkbox"]')
     const enabled = cb ? cb.checked : true
-    return { id, type, value, enabled }
+    const alertItem = { id, type, value, enabled }
+    const fieldSel = row.querySelector('select[data-alert-field]')
+    const fieldVal = fieldSel?.value?.trim()
+    if (fieldVal) {
+      alertItem.field = fieldVal
+    }
+    return alertItem
   })
 
   const preActionRows = document.querySelectorAll('[data-preaction-row]')
@@ -70,13 +78,33 @@ function getFormData() {
     return { type, locator }
   })
 
+  const aggregateValue = document.getElementById('block-aggregate')?.value || 'sum'
+  const fieldRows = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
+  let fields = undefined
+  if (fieldRows.length > 0) {
+    fields = fieldRows.map((row, index) => {
+      const key = row.dataset.fieldKey || ''
+      const rawName = row.querySelector('input[data-field-name]')?.value?.trim()
+      const name = rawName || `值 ${index + 1}`
+      const spec = row._spec || fieldSpecs.get(key) || {}
+      const item = { key, name }
+      if (spec.cell) item.cell = spec.cell
+      // 整欄／整列的值要聚合，聚合方式來自表單（全任務一份）；
+      // 少了這一行，抓取端會拿不到設定而預設成加總，下拉等於裝飾品
+      if (spec.block) item.block = { ...spec.block, aggregate: aggregateValue }
+      return item
+    })
+  }
+
   const data = {
     name, url, mode, strategy, regex, scheduleType, times, weekdays, everyMinutes, windowFrom, windowTo,
     alerts,
     preActions
   }
 
-  if (mode === 'block') {
+  if (fields) {
+    data.fields = fields
+  } else if (mode === 'block') {
     const agg = document.getElementById('block-aggregate')?.value || 'sum'
     data.block = {
       axis: currentBlock?.axis,
@@ -136,17 +164,122 @@ export function validateForm(values) {
   return Object.keys(errors).length > 0 ? { ok: false, errors } : { ok: true }
 }
 
-export function buildTask(values, locator, existing) {
-  const id = existing?.id || crypto.randomUUID()
+export const BUILTIN_DEFAULTS = {
+  scheduleType: 'daily',
+  times: ['09:30'],
+  everyMinutes: 15,
+  weekdays: [0, 1, 2, 3, 4, 5, 6],
+  windowFrom: '',
+  windowTo: '',
+  aggregate: 'sum',
+  dashboardId: '',
+  cardTypes: []
+}
+
+export function buildSpec(values) {
   const spec = { strategy: values.strategy }
-  if (values.mode === 'text') spec.mode = 'text'
-  if (values.mode === 'block' && values.block) {
-    // extract.js 是看 spec.mode 分派的，少了這一行會落回數值策略鏈、抓到整張表的第一個數字
+  if (values.fields) {
     spec.mode = 'block'
-    spec.block = values.block
+    spec.fields = values.fields.map(f => {
+      const item = { key: f.key }
+      if (f.cell) item.cell = f.cell
+      if (f.block) item.block = f.block
+      return item
+    })
+  } else {
+    if (values.mode === 'text') spec.mode = 'text'
+    if (values.mode === 'block' && values.block) {
+      // extract.js 是看 spec.mode 分派的，少了這一行會落回數值策略鏈、抓到整張表的第一個數字
+      spec.mode = 'block'
+      spec.block = values.block
+    }
   }
   for (const k of ['regex', 'attr', 'childSel', 'labelText']) {
     if (values[k]) spec[k] = values[k]
+  }
+  return spec
+}
+
+export async function applyPickerDefaults(task) {
+  if (task) return
+
+  const settings = await getSettings()
+  const defaults = settings?.pickerDefaults
+  let target = null
+  if (defaults?.pinned) {
+    target = defaults.pinned
+  } else if (defaults?.last) {
+    target = defaults.last
+  } else {
+    target = BUILTIN_DEFAULTS
+  }
+
+  if (target.scheduleType !== undefined) {
+    const el = document.getElementById('schedule-type')
+    if (el) el.value = target.scheduleType
+  }
+  if (target.times !== undefined) {
+    const el = document.getElementById('times')
+    if (el) {
+      el.value = Array.isArray(target.times) ? target.times.join(', ') : target.times
+    }
+  }
+  if (target.everyMinutes !== undefined) {
+    const el = document.getElementById('every-minutes')
+    if (el) el.value = target.everyMinutes
+  }
+  if (target.weekdays !== undefined && Array.isArray(target.weekdays)) {
+    const wds = new Set(target.weekdays.map(Number))
+    document.querySelectorAll('#weekdays input[type="checkbox"]').forEach(cb => {
+      cb.checked = wds.has(Number(cb.value))
+    })
+  }
+  if (target.windowFrom !== undefined) {
+    const el = document.getElementById('window-from')
+    if (el) el.value = target.windowFrom
+  }
+  if (target.windowTo !== undefined) {
+    const el = document.getElementById('window-to')
+    if (el) el.value = target.windowTo
+  }
+  if (target.aggregate !== undefined) {
+    const el = document.getElementById('block-aggregate')
+    if (el) el.value = target.aggregate
+  }
+  // 目標儀表板與卡片型別也是「上次怎麼設就怎麼帶回來」的一部分；
+  // 只存不還原等於每次都要重選一遍
+  if (target.dashboardId) {
+    const sel = document.getElementById('dashboard-select')
+    if (sel && [...sel.options].some(o => o.value === target.dashboardId)) {
+      sel.value = target.dashboardId
+    }
+  }
+  if (Array.isArray(target.cardTypes) && target.cardTypes.length > 0) {
+    const wanted = new Set(target.cardTypes)
+    for (const cb of document.querySelectorAll('#card-types input[type="checkbox"]')) {
+      cb.checked = wanted.has(cb.value)
+    }
+  }
+
+  syncScheduleFields()
+}
+
+export function buildTask(values, locator, existing) {
+  const id = existing?.id || crypto.randomUUID()
+  const spec = buildSpec(values)
+  if (existing?.spec) {
+    // 表單只提供 auto / regex；舊任務用的是被移除的策略時才沿用原值，
+    // 使用者主動在表單上選了別的就該照做
+    const formHasStrategy = ['auto', 'regex'].includes(values.strategy)
+    const legacyStrategy = existing.spec.strategy && !['auto', 'regex'].includes(existing.spec.strategy)
+    if (legacyStrategy && (!formHasStrategy || values.strategy === existing.spec.strategy || values.strategy === 'auto')) {
+      spec.strategy = existing.spec.strategy
+    }
+    for (const k of ['attr', 'childSel', 'labelText']) {
+      if (existing.spec[k] !== undefined) {
+        spec[k] = existing.spec[k]
+      }
+    }
   }
 
   let schedule
@@ -165,21 +298,30 @@ export function buildTask(values, locator, existing) {
     id,
     name: values.name.trim(),
     url: values.url,
-    mode: values.mode,
+    mode: values.fields ? 'block' : values.mode,
     enabled: true,
     locator,
     spec,
     schedule
   }
+  if (values.fields) {
+    task.fields = values.fields.map(f => ({ key: f.key, name: f.name }))
+  }
   if (Array.isArray(values.alerts)) {
     const validAlerts = values.alerts
       .filter(a => a && typeof a === 'object' && Number.isFinite(a.value))
-      .map(a => ({
-        id: a.id || crypto.randomUUID(),
-        type: a.type,
-        value: Number(a.value),
-        enabled: a.enabled !== false
-      }))
+      .map(a => {
+        const item = {
+          id: a.id || crypto.randomUUID(),
+          type: a.type,
+          value: Number(a.value),
+          enabled: a.enabled !== false
+        }
+        if (a.field) {
+          item.field = a.field
+        }
+        return item
+      })
     if (validAlerts.length > 0) {
       task.alerts = validAlerts
     }
@@ -266,9 +408,37 @@ export function render(ctx) {
       const aggEl = document.getElementById('block-aggregate')
       if (aggEl && t.spec.block.aggregate) aggEl.value = t.spec.block.aggregate
     }
+  } else {
+    const nameEl = document.getElementById('name')
+    if (nameEl && !nameEl.value.trim()) {
+      let defaultName = ''
+      if (ctx?.nameHint && String(ctx.nameHint).trim()) {
+        defaultName = String(ctx.nameHint).trim()
+      } else if (ctx?.locator?.anchor?.text && String(ctx.locator.anchor.text).trim()) {
+        defaultName = String(ctx.locator.anchor.text).trim()
+      } else if (ctx?.preview !== undefined && ctx?.preview !== null && String(ctx.preview).trim()) {
+        defaultName = String(ctx.preview).trim().slice(0, 20)
+      }
+      if (defaultName) {
+        nameEl.value = defaultName
+      }
+    }
   }
 
-  if (ctx?.blockInfo && (ctx.blockInfo.kind === 'table' || ctx.blockInfo.kind === 'grid')) {
+  const isMulti = Boolean((ctx?.picks && Array.isArray(ctx.picks) && ctx.picks.length >= 2) || (ctx?.task && Array.isArray(ctx.task.fields) && ctx.task.fields.length > 0))
+  if (isMulti) {
+    const modeEl = document.getElementById('mode')
+    if (modeEl) modeEl.value = 'block'
+  }
+
+  if (ctx?.picks && Array.isArray(ctx.picks) && ctx.picks.length === 1 && ctx.picks[0].block) {
+    currentBlock = {
+      ...(currentBlock || {}),
+      ...ctx.picks[0].block
+    }
+    const modeEl = document.getElementById('mode')
+    if (modeEl) modeEl.value = 'block'
+  } else if (ctx?.blockInfo && (ctx.blockInfo.kind === 'table' || ctx.blockInfo.kind === 'grid')) {
     const b = ctx.blockInfo
     currentBlock = {
       axis: b.axis,
@@ -280,12 +450,73 @@ export function render(ctx) {
     }
     const modeEl = document.getElementById('mode')
     if (modeEl) modeEl.value = 'block'
-  } else if (!ctx?.task?.spec?.block) {
+  } else if (!ctx?.task?.spec?.block && !isMulti) {
     currentBlock = null
     const modeEl = document.getElementById('mode')
     if (modeEl && !ctx?.task && modeEl.value === 'block') {
       modeEl.value = 'number'
     }
+  }
+
+  if (ctx?.picks && Array.isArray(ctx.picks) && ctx.picks.length >= 2) {
+    const usedKeys = new Set()
+    const nameCounts = new Map()
+    const items = ctx.picks.map((pick, index) => {
+      let key = crypto.randomUUID().slice(0, 8)
+      while (usedKeys.has(key)) {
+        key = crypto.randomUUID().slice(0, 8)
+      }
+      usedKeys.add(key)
+
+      let rawName = ''
+      if (pick.cell) {
+        const rowH = pick.cell.row?.header?.trim() || ''
+        const colH = pick.cell.col?.header?.trim() || ''
+        if (rowH && colH) {
+          rawName = `${rowH} · ${colH}`
+        } else if (rowH || colH) {
+          rawName = rowH || colH
+        } else {
+          rawName = `值 ${index + 1}`
+        }
+      } else if (pick.block) {
+        rawName = pick.block.headerText?.trim() || `值 ${index + 1}`
+      } else {
+        rawName = `值 ${index + 1}`
+      }
+
+      const count = (nameCounts.get(rawName) || 0) + 1
+      nameCounts.set(rawName, count)
+      const name = count === 1 ? rawName : `${rawName} ${count}`
+
+      const spec = {}
+      if (pick.cell) spec.cell = pick.cell
+      if (pick.block) spec.block = pick.block
+
+      return { key, name, spec }
+    })
+    renderFieldList(items)
+    // 值的數量會改變預設要建哪幾張卡，清單建好才算得準
+    applyDefaultCardTypes()
+  } else if (ctx?.task && Array.isArray(ctx.task.fields) && ctx.task.fields.length > 0) {
+    const items = ctx.task.fields.map(field => {
+      const matchingSpec = ctx.task.spec?.fields?.find(f => f.key === field.key)
+      const spec = {}
+      if (matchingSpec?.cell) spec.cell = matchingSpec.cell
+      if (matchingSpec?.block) spec.block = matchingSpec.block
+      return {
+        key: field.key,
+        name: field.name,
+        spec
+      }
+    })
+    renderFieldList(items)
+    // 值的數量會改變預設要建哪幾張卡，清單建好才算得準
+    applyDefaultCardTypes()
+  } else {
+    renderFieldList([])
+    // 值的數量會改變預設要建哪幾張卡，清單建好才算得準
+    applyDefaultCardTypes()
   }
 
   const alertList = document.getElementById('alert-list')
@@ -305,6 +536,26 @@ export function render(ctx) {
   if (Array.isArray(ctx?.task?.preActions)) {
     for (const pa of ctx.task.preActions) {
       addPreActionRow(pa)
+    }
+  }
+
+  const advSection = document.getElementById('advanced-section')
+  if (advSection) {
+    if (ctx?.task) {
+      const t = ctx.task
+      const hasStrategy = t.spec?.strategy && t.spec.strategy !== 'auto'
+      const hasRegex = Boolean(t.spec?.regex)
+      const hasWindow = Boolean(t.schedule?.window)
+      const hasAlerts = Array.isArray(t.alerts) && t.alerts.length > 0
+      const hasPreActions = Array.isArray(t.preActions) && t.preActions.length > 0
+
+      if (hasStrategy || hasRegex || hasWindow || hasAlerts || hasPreActions) {
+        advSection.setAttribute('open', '')
+      } else {
+        advSection.removeAttribute('open')
+      }
+    } else {
+      advSection.removeAttribute('open')
     }
   }
 
@@ -332,12 +583,16 @@ function applyDefaultCardTypes() {
   const modeVal = document.getElementById('mode')?.value || 'number'
   const cardTypes = document.getElementById('card-types')
   if (!cardTypes) return
+  // 多個值用一張樞紐表加一張折線就看得完；一個值長兩張卡會被當成重複
+  const multi = document.querySelectorAll('#field-list [data-field-row]').length >= 2
   const checkboxes = cardTypes.querySelectorAll('input[type="checkbox"]')
   for (const cb of checkboxes) {
-    if (modeVal === 'text') {
+    if (multi) {
+      cb.checked = (cb.value === 'table' || cb.value === 'line')
+    } else if (modeVal === 'text') {
       cb.checked = (cb.value === 'table')
     } else {
-      cb.checked = (cb.value === 'number' || cb.value === 'line')
+      cb.checked = (cb.value === 'number')
     }
   }
 }
@@ -357,6 +612,16 @@ function updateBlockSection() {
   section.hidden = false
   const summaryEl = document.getElementById('block-summary')
   if (!summaryEl) return
+
+  const hasFields = document.querySelectorAll('#field-list [data-field-row]').length > 0
+  if (hasFields) {
+    if (currentBlock && currentBlock.rows !== undefined && currentBlock.cols !== undefined) {
+      summaryEl.textContent = `表格 ${currentBlock.rows} 列 × ${currentBlock.cols} 欄`
+    } else {
+      summaryEl.textContent = ''
+    }
+    return
+  }
 
   // index 為 null 代表使用者只選到表格、還沒點任何一欄或一列，不能當成選了第 0 欄
   if (currentBlock && (currentBlock.headerText || currentBlock.index !== undefined && currentBlock.index !== null)) {
@@ -403,6 +668,164 @@ function bindModeEvents() {
   }
 }
 
+function populateAlertFieldOptions(select, selectedKey) {
+  select.replaceChildren()
+  const allOpt = document.createElement('option')
+  allOpt.value = ''
+  allOpt.textContent = '全部值'
+  select.appendChild(allOpt)
+
+  const fieldRows = document.querySelectorAll('#field-list [data-field-row]')
+  let keyFound = false
+  fieldRows.forEach((row, i) => {
+    const key = row.dataset.fieldKey || ''
+    const inputVal = row.querySelector('input[data-field-name]')?.value?.trim()
+    const name = inputVal || `值 ${i + 1}`
+    const opt = document.createElement('option')
+    opt.value = key
+    opt.textContent = name
+    if (key && key === selectedKey) {
+      opt.selected = true
+      keyFound = true
+    }
+    select.appendChild(opt)
+  })
+
+  if (selectedKey && keyFound) {
+    select.value = selectedKey
+  } else {
+    select.value = ''
+  }
+}
+
+function updateAlertRowsFields() {
+  const fieldRows = document.querySelectorAll('#field-list [data-field-row]')
+  const alertRows = document.querySelectorAll('[data-alert-row]')
+  const hasMulti = fieldRows.length >= 2
+
+  for (const row of alertRows) {
+    let fieldSelect = row.querySelector('select[data-alert-field]')
+    if (hasMulti) {
+      if (!fieldSelect) {
+        fieldSelect = document.createElement('select')
+        fieldSelect.setAttribute('data-alert-field', '')
+        const typeSelect = row.querySelector('select.alert-type') || row.querySelector('select')
+        if (typeSelect) {
+          row.insertBefore(fieldSelect, typeSelect)
+        } else {
+          row.prepend(fieldSelect)
+        }
+      }
+      const currentVal = fieldSelect.value
+      populateAlertFieldOptions(fieldSelect, currentVal)
+    } else {
+      if (fieldSelect) {
+        fieldSelect.remove()
+      }
+    }
+  }
+}
+
+function updateFieldListState() {
+  const rows = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
+  const n = rows.length
+  rows.forEach((r, i) => {
+    const upBtn = r.querySelector('[data-field-up]')
+    const downBtn = r.querySelector('[data-field-down]')
+    if (upBtn) upBtn.disabled = (i === 0)
+    if (downBtn) downBtn.disabled = (i === n - 1)
+  })
+
+  const summaryEl = document.getElementById('save-summary')
+  if (summaryEl) {
+    if (n >= 2) {
+      summaryEl.hidden = false
+      if (currentCtx?.task) {
+        summaryEl.textContent = `這個任務有 ${n} 個值`
+      } else {
+        summaryEl.textContent = `將建立 1 個任務、${n} 個值`
+      }
+    } else {
+      summaryEl.hidden = true
+    }
+  }
+
+  updateAlertRowsFields()
+  updateBlockSection()
+}
+
+function createFieldRow({ key, name, spec }) {
+  const row = document.createElement('div')
+  row.className = 'field-row'
+  row.setAttribute('data-field-row', '')
+  row.dataset.fieldKey = key
+  row._spec = spec
+
+  const input = document.createElement('input')
+  input.type = 'text'
+  input.setAttribute('data-field-name', '')
+  input.value = name
+  input.placeholder = '值名稱'
+  input.addEventListener('input', () => {
+    updateAlertRowsFields()
+  })
+
+  const upBtn = document.createElement('button')
+  upBtn.type = 'button'
+  upBtn.setAttribute('data-field-up', '')
+  upBtn.textContent = '上移'
+  upBtn.addEventListener('click', () => {
+    const prev = row.previousElementSibling
+    if (prev && prev.hasAttribute('data-field-row')) {
+      row.parentNode.insertBefore(row, prev)
+      updateFieldListState()
+    }
+  })
+
+  const downBtn = document.createElement('button')
+  downBtn.type = 'button'
+  downBtn.setAttribute('data-field-down', '')
+  downBtn.textContent = '下移'
+  downBtn.addEventListener('click', () => {
+    const next = row.nextElementSibling
+    if (next && next.hasAttribute('data-field-row')) {
+      row.parentNode.insertBefore(next, row)
+      updateFieldListState()
+    }
+  })
+
+  const removeBtn = document.createElement('button')
+  removeBtn.type = 'button'
+  removeBtn.setAttribute('data-field-remove', '')
+  removeBtn.textContent = '移除'
+  removeBtn.addEventListener('click', () => {
+    row.remove()
+    updateFieldListState()
+  })
+
+  row.appendChild(input)
+  row.appendChild(upBtn)
+  row.appendChild(downBtn)
+  row.appendChild(removeBtn)
+
+  return row
+}
+
+function renderFieldList(items) {
+  const fieldList = document.getElementById('field-list')
+  if (!fieldList) return
+  fieldList.replaceChildren()
+  fieldSpecs.clear()
+
+  for (const item of items) {
+    fieldSpecs.set(item.key, item.spec)
+    const row = createFieldRow(item)
+    fieldList.appendChild(row)
+  }
+
+  updateFieldListState()
+}
+
 /**
  * 在 #alert-list 裡新增一列告警條件
  */
@@ -414,6 +837,14 @@ function addAlertRow(data = {}) {
   row.className = 'alert-row'
   row.setAttribute('data-alert-row', '')
   row.dataset.id = data.id || crypto.randomUUID()
+
+  const fieldRows = document.querySelectorAll('#field-list [data-field-row]')
+  if (fieldRows.length >= 2) {
+    const fieldSelect = document.createElement('select')
+    fieldSelect.setAttribute('data-alert-field', '')
+    populateAlertFieldOptions(fieldSelect, data.field || '')
+    row.appendChild(fieldSelect)
+  }
 
   const select = document.createElement('select')
   select.className = 'alert-type'
@@ -706,6 +1137,29 @@ export async function handleSave() {
     await chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS })
   }
 
+  // 只有新建任務才記住預設值
+  if (!currentCtx?.task) {
+    const currentDefaults = {
+      scheduleType: values.scheduleType || 'daily',
+      times: values.times || [],
+      everyMinutes: Number.isFinite(values.everyMinutes) && values.everyMinutes > 0 ? values.everyMinutes : 15,
+      weekdays: values.weekdays || [],
+      windowFrom: values.windowFrom || '',
+      windowTo: values.windowTo || '',
+      aggregate: document.getElementById('block-aggregate')?.value || 'sum',
+      dashboardId: (document.getElementById('dashboard-select')?.value !== 'none' ? document.getElementById('dashboard-select')?.value : '') || '',
+      cardTypes: Array.from(document.querySelectorAll('#card-types input[type="checkbox"]:checked')).map(cb => cb.value)
+    }
+    const settings = await getSettings()
+    const existingDefaults = settings?.pickerDefaults || {}
+    const newDefaults = { ...existingDefaults, last: currentDefaults }
+    const pinChecked = document.getElementById('pin-defaults')?.checked
+    if (pinChecked) {
+      newDefaults.pinned = currentDefaults
+    }
+    await saveSettings({ pickerDefaults: newDefaults })
+  }
+
   // 只有新建任務才處理加入儀表板卡片
   if (!currentCtx?.task) {
     const dashSelect = document.getElementById('dashboard-select')
@@ -720,13 +1174,24 @@ export async function handleSave() {
           targetDash = dashboards[0]
         }
         if (targetDash) {
+          // 多值任務的紀錄寫在子序列 id 底下，卡片來源指到父任務會永遠顯示破折號
+          const sourceIds = Array.isArray(task.fields) && task.fields.length > 0
+            ? task.fields.map(f => seriesIdOf(task.id, f.key))
+            : [task.id]
           for (const box of checkedBoxes) {
             const type = box.value
             const size = CARD_SIZES[type] ?? { w: 6, h: 3 }
+            // 單一來源的卡片型別只吃第一個值，多來源的型別全部帶上
+            const ids = ['number', 'gauge'].includes(type) ? sourceIds.slice(0, 1) : sourceIds
             await addCard(targetDash.id, {
               type,
-              source: [{ taskId: task.id, aggregation: 'raw' }],
-              options: type === 'table' ? { mode: 'recent' } : {},
+              source: ids.map(id => ({ taskId: id, aggregation: 'raw' })),
+              options: type === 'table'
+                ? (sourceIds.length > 1
+                    // 多個值要看的是「同一時刻各值並排」與「每天差多少」
+                    ? { mode: 'pivot', bucketMinutes: 1440, showDelta: true }
+                    : { mode: 'recent' })
+                : {},
               x: 0,
               y: 0,
               w: size.w,
@@ -749,11 +1214,7 @@ export async function handleTestNow() {
   if (errorsEl) errorsEl.textContent = ''
 
   const values = getFormData()
-  const spec = { strategy: values.strategy }
-  if (values.mode === 'text') spec.mode = 'text'
-  for (const k of ['regex', 'attr', 'childSel', 'labelText']) {
-    if (values[k]) spec[k] = values[k]
-  }
+  const spec = buildSpec(values)
 
   try {
     const res = await chrome.tabs.sendMessage(currentCtx?.tabId, {
@@ -762,7 +1223,21 @@ export async function handleTestNow() {
       spec
     })
     if (res && res.ok) {
-      if (previewEl) previewEl.textContent = res.value !== undefined ? String(res.value) : (res.raw ?? '')
+      if (values.fields) {
+        const lines = values.fields.map(f => {
+          const fieldRes = res.fields?.[f.key]
+          if (fieldRes && fieldRes.ok) {
+            const val = fieldRes.value !== undefined ? String(fieldRes.value) : (fieldRes.raw ?? '')
+            return `${f.name}: ${val}`
+          } else {
+            const err = fieldRes?.error || '抓取失敗'
+            return `${f.name}: ${err}`
+          }
+        })
+        if (previewEl) previewEl.textContent = lines.join('\n')
+      } else {
+        if (previewEl) previewEl.textContent = res.value !== undefined ? String(res.value) : (res.raw ?? '')
+      }
     } else {
       const err = res?.error || '找不到目標元素'
       if (previewEl) previewEl.textContent = err
@@ -807,11 +1282,14 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
     try {
       const parsed = JSON.parse(decodeURIComponent(params.get('ctx')))
       render(parsed)
+      applyPickerDefaults(parsed?.task)
       renderDashboardSection(parsed?.task)
     } catch {
+      applyPickerDefaults(null)
       renderDashboardSection(null)
     }
   } else {
+    applyPickerDefaults(null)
     renderDashboardSection(null)
   }
 }

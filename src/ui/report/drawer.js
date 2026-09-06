@@ -3,6 +3,7 @@
 import { getLayout, updateCard, removeCard } from '../../shared/layout-store.js'
 import { getTasks } from '../../shared/storage.js'
 import { rerenderCard, renderDashboard } from './dashboard.js'
+import { buildSeriesIndex } from '../../shared/series-index.js'
 
 let currentDashId = null
 let currentCardId = null
@@ -32,30 +33,76 @@ function updateFieldVisibility(type) {
 }
 
 /**
+ * 更新多值任務父列全選勾選框之狀態
+ */
+function updateToggleAllState(parentId) {
+  const container = document.getElementById('drawer-sources')
+  if (!container) return
+  const parentBox = container.querySelector(`input[data-action="toggle-all"][data-parent-id="${parentId}"]`)
+  if (!parentBox) return
+  const childBoxes = [...container.querySelectorAll(`input[data-source-checkbox][data-parent-id="${parentId}"]`)]
+  if (childBoxes.length === 0) return
+  const checkedCount = childBoxes.filter(cb => cb.checked).length
+  if (checkedCount === childBoxes.length) {
+    parentBox.checked = true
+    parentBox.indeterminate = false
+  } else if (checkedCount === 0) {
+    parentBox.checked = false
+    parentBox.indeterminate = false
+  } else {
+    parentBox.checked = false
+    parentBox.indeterminate = true
+  }
+}
+
+/**
  * 依型別更新來源任務 checkbox 的停用狀態與說明文字
  */
 function updateSourcesDisabledState(type) {
   const container = document.getElementById('drawer-sources')
   if (!container) return
   const isNumeric = ['number', 'line', 'bar', 'gauge'].includes(type)
+  const index = buildSeriesIndex(cachedTasks)
 
   for (const t of cachedTasks) {
-    const input = container.querySelector(`input[value="${t.id}"]`)
-    if (!input) continue
-    const label = input.closest('label') || input.parentElement
-    if (isNumeric && t.mode === 'text') {
-      input.disabled = true
-      if (label) {
-        label.textContent = ''
-        label.appendChild(input)
-        label.appendChild(document.createTextNode(` ${t.name || t.id}（文字模式不可選）`))
+    const isMulti = Array.isArray(t.fields) && t.fields.length > 0
+    if (isMulti) {
+      const parentBox = container.querySelector(`input[data-action="toggle-all"][data-parent-id="${t.id}"]`)
+      if (parentBox) {
+        parentBox.disabled = isNumeric && t.mode === 'text'
+        const label = parentBox.closest('label') || parentBox.parentElement
+        if (label) {
+          label.textContent = ''
+          label.appendChild(parentBox)
+          label.appendChild(document.createTextNode(isNumeric && t.mode === 'text' ? ` ${t.name || t.id}（文字模式不可選）` : ` ${t.name || t.id}`))
+        }
+      }
+      for (const sid of (index.childrenOf[t.id] || [])) {
+        const seriesInfo = index.byId[sid]
+        const input = container.querySelector(`input[data-source-checkbox][value="${sid}"]`)
+        if (!input) continue
+        const label = input.closest('label') || input.parentElement
+        const disabled = isNumeric && seriesInfo?.mode === 'text'
+        input.disabled = disabled
+        if (label) {
+          label.textContent = ''
+          label.appendChild(input)
+          const displayName = seriesInfo?.shortName || seriesInfo?.name || sid
+          label.appendChild(document.createTextNode(disabled ? ` ${displayName}（文字模式不可選）` : ` ${displayName}`))
+        }
       }
     } else {
-      input.disabled = false
+      const input = container.querySelector(`input[data-source-checkbox][value="${t.id}"]`)
+      if (!input) continue
+      const label = input.closest('label') || input.parentElement
+      const seriesInfo = index.byId[t.id]
+      const disabled = isNumeric && seriesInfo?.mode === 'text'
+      input.disabled = disabled
       if (label) {
         label.textContent = ''
         label.appendChild(input)
-        label.appendChild(document.createTextNode(` ${t.name || t.id}`))
+        const displayName = t.name || t.id
+        label.appendChild(document.createTextNode(disabled ? ` ${displayName}（文字模式不可選）` : ` ${displayName}`))
       }
     }
   }
@@ -73,63 +120,168 @@ function renderSources(tasks, currentSources = [], type = 'number') {
 
   const isNumeric = ['number', 'line', 'bar', 'gauge'].includes(type)
   const selectedIds = (currentSources || []).map(s => s && s.taskId).filter(Boolean)
-  const taskById = new Map(tasks.map(t => [t.id, t]))
-
-  // 已選的照欄序,未選的照任務清單順序接在後面
-  const ordered = []
-  for (const id of selectedIds) {
-    if (taskById.has(id)) ordered.push({ task: taskById.get(id), checked: true })
-  }
   const selectedSet = new Set(selectedIds)
+  const index = buildSeriesIndex(tasks)
+
+  // 組織任務與序列的排序
+  const taskEntries = []
   for (const t of tasks) {
-    if (!selectedSet.has(t.id)) ordered.push({ task: t, checked: false })
+    const isMulti = Array.isArray(t.fields) && t.fields.length > 0
+    const childSeriesIds = isMulti ? (index.childrenOf[t.id] || []) : [t.id]
+    const selectedChildren = childSeriesIds.filter(id => selectedSet.has(id))
+    selectedChildren.sort((a, b) => selectedIds.indexOf(a) - selectedIds.indexOf(b))
+    const unselectedChildren = childSeriesIds.filter(id => !selectedSet.has(id))
+    const orderedChildren = [...selectedChildren, ...unselectedChildren]
+    const earliestIndex = selectedChildren.length > 0
+      ? Math.min(...selectedChildren.map(id => selectedIds.indexOf(id)))
+      : Infinity
+
+    taskEntries.push({
+      task: t,
+      isMulti,
+      childSeriesIds,
+      selectedChildren,
+      orderedChildren,
+      earliestIndex
+    })
   }
 
-  const selectedCount = ordered.filter(o => o.checked).length
-
-  ordered.forEach((entry, idx) => {
-    const t = entry.task
-    const row = document.createElement('div')
-    row.setAttribute('data-source-row', '')
-    row.setAttribute('data-task-id', t.id)
-
-    const label = document.createElement('label')
-    const input = document.createElement('input')
-    input.type = 'checkbox'
-    input.value = t.id
-    input.checked = entry.checked
-
-    if (isNumeric && t.mode === 'text') {
-      input.disabled = true
-      label.appendChild(input)
-      label.appendChild(document.createTextNode(` ${t.name || t.id}（文字模式不可選）`))
-    } else {
-      input.disabled = false
-      label.appendChild(input)
-      label.appendChild(document.createTextNode(` ${t.name || t.id}`))
+  // 有選中項目的任務排在前面(依最早選中索引排序)，未選中的照原本順序排在後面
+  taskEntries.sort((a, b) => {
+    if (a.earliestIndex !== b.earliestIndex) {
+      return a.earliestIndex - b.earliestIndex
     }
-    row.appendChild(label)
-
-    // 只有已選的來源需要調整欄序
-    if (entry.checked) {
-      const up = document.createElement('button')
-      up.type = 'button'
-      up.setAttribute('data-action', 'source-up')
-      up.textContent = '↑'
-      up.title = '往前移一欄'
-      up.disabled = idx === 0
-      const down = document.createElement('button')
-      down.type = 'button'
-      down.setAttribute('data-action', 'source-down')
-      down.textContent = '↓'
-      down.title = '往後移一欄'
-      down.disabled = idx === selectedCount - 1
-      row.appendChild(up)
-      row.appendChild(down)
-    }
-
-    container.appendChild(row)
+    return 0
   })
+
+  for (const entry of taskEntries) {
+    const t = entry.task
+    if (entry.isMulti) {
+      // 父列：任務名稱與全選/全不選勾選框（不寫入 source）
+      const parentRow = document.createElement('div')
+      parentRow.className = 'drawer-task-group'
+      parentRow.setAttribute('data-task-parent', t.id)
+
+      const parentLabel = document.createElement('label')
+      const parentInput = document.createElement('input')
+      parentInput.type = 'checkbox'
+      parentInput.setAttribute('data-action', 'toggle-all')
+      parentInput.setAttribute('data-parent-id', t.id)
+      parentInput.value = t.id
+
+      const isTextMode = isNumeric && t.mode === 'text'
+      parentInput.disabled = isTextMode
+
+      if (entry.selectedChildren.length === entry.childSeriesIds.length && entry.childSeriesIds.length > 0) {
+        parentInput.checked = true
+        parentInput.indeterminate = false
+      } else if (entry.selectedChildren.length === 0) {
+        parentInput.checked = false
+        parentInput.indeterminate = false
+      } else {
+        parentInput.checked = false
+        parentInput.indeterminate = true
+      }
+
+      parentLabel.appendChild(parentInput)
+      parentLabel.appendChild(document.createTextNode(isTextMode ? ` ${t.name || t.id}（文字模式不可選）` : ` ${t.name || t.id}`))
+      parentRow.appendChild(parentLabel)
+      container.appendChild(parentRow)
+
+      // 子列：每個值一列
+      for (const sid of entry.orderedChildren) {
+        const seriesInfo = index.byId[sid]
+        const isChecked = selectedSet.has(sid)
+        const childRow = document.createElement('div')
+        childRow.setAttribute('data-source-row', '')
+        childRow.setAttribute('data-task-id', sid)
+        childRow.className = 'drawer-series-row'
+        childRow.style.paddingLeft = '1.2rem'
+
+        const childLabel = document.createElement('label')
+        const childInput = document.createElement('input')
+        childInput.type = 'checkbox'
+        childInput.setAttribute('data-source-checkbox', '')
+        childInput.setAttribute('data-parent-id', t.id)
+        childInput.value = sid
+        childInput.checked = isChecked
+
+        const isChildTextMode = isNumeric && seriesInfo?.mode === 'text'
+        childInput.disabled = isChildTextMode
+
+        const displayName = seriesInfo?.shortName || seriesInfo?.name || sid
+        childLabel.appendChild(childInput)
+        childLabel.appendChild(document.createTextNode(isChildTextMode ? ` ${displayName}（文字模式不可選）` : ` ${displayName}`))
+        childRow.appendChild(childLabel)
+
+        if (isChecked) {
+          const selectedIdx = selectedIds.indexOf(sid)
+          const up = document.createElement('button')
+          up.type = 'button'
+          up.setAttribute('data-action', 'source-up')
+          up.textContent = '↑'
+          up.title = '往前移一欄'
+          up.disabled = selectedIdx === 0
+
+          const down = document.createElement('button')
+          down.type = 'button'
+          down.setAttribute('data-action', 'source-down')
+          down.textContent = '↓'
+          down.title = '往後移一欄'
+          down.disabled = selectedIdx === selectedIds.length - 1
+
+          childRow.appendChild(up)
+          childRow.appendChild(down)
+        }
+
+        container.appendChild(childRow)
+      }
+    } else {
+      // 單值任務：任務自身一列
+      const sid = t.id
+      const seriesInfo = index.byId[sid]
+      const isChecked = selectedSet.has(sid)
+      const row = document.createElement('div')
+      row.setAttribute('data-source-row', '')
+      row.setAttribute('data-task-id', sid)
+
+      const label = document.createElement('label')
+      const input = document.createElement('input')
+      input.type = 'checkbox'
+      input.setAttribute('data-source-checkbox', '')
+      input.value = sid
+      input.checked = isChecked
+
+      const isTextMode = isNumeric && seriesInfo?.mode === 'text'
+      input.disabled = isTextMode
+
+      label.appendChild(input)
+      label.appendChild(document.createTextNode(isTextMode ? ` ${t.name || t.id}（文字模式不可選）` : ` ${t.name || t.id}`))
+      row.appendChild(label)
+
+      if (isChecked) {
+        const selectedIdx = selectedIds.indexOf(sid)
+        const up = document.createElement('button')
+        up.type = 'button'
+        up.setAttribute('data-action', 'source-up')
+        up.textContent = '↑'
+        up.title = '往前移一欄'
+        up.disabled = selectedIdx === 0
+
+        const down = document.createElement('button')
+        down.type = 'button'
+        down.setAttribute('data-action', 'source-down')
+        down.textContent = '↓'
+        down.title = '往後移一欄'
+        down.disabled = selectedIdx === selectedIds.length - 1
+
+        row.appendChild(up)
+        row.appendChild(down)
+      }
+
+      container.appendChild(row)
+    }
+  }
 }
 
 /**
@@ -172,18 +324,33 @@ function collectPatch() {
   let source = currentCard?.source ? [...currentCard.source] : []
   if (fieldSources && !fieldSources.hidden) {
     const sourcesContainer = document.getElementById('drawer-sources')
-    const checkedBoxes = sourcesContainer ? sourcesContainer.querySelectorAll('input[type="checkbox"]:checked') : []
+    const allSelectableBoxes = sourcesContainer ? [...sourcesContainer.querySelectorAll('input[data-source-checkbox]')] : []
+    const allSelectableIds = new Set(allSelectableBoxes.map(b => b.value))
+
+    // 清單上找不到的既有來源必須原樣保留
+    const preserved = (currentCard?.source || []).filter(s => s && s.taskId && !allSelectableIds.has(s.taskId))
+
+    const checkedBoxes = sourcesContainer ? sourcesContainer.querySelectorAll('input[data-source-checkbox]:checked') : []
     const aggSelect = document.getElementById('drawer-aggregation')
     const aggVal = (aggSelect && aggSelect.value) ? aggSelect.value : 'raw'
 
-    source = []
+    const checkedSource = []
     for (const box of checkedBoxes) {
       const tid = box.value
       const existing = currentCard?.source?.find(s => s.taskId === tid)
-      source.push({
+      checkedSource.push({
         taskId: tid,
         aggregation: existing?.aggregation || aggVal
       })
+    }
+    // 保留的來源要放回它原本的位置：source 的順序就是樞紐表的欄序，
+    // 一律排到最前面等於偷偷把使用者的欄位重排了
+    source = [...checkedSource]
+    const originalOrder = (currentCard?.source || []).map(s => s?.taskId)
+    for (const item of preserved) {
+      const at = originalOrder.indexOf(item.taskId)
+      const before = originalOrder.slice(0, at).filter(id => source.some(s => s.taskId === id)).length
+      source.splice(Math.min(before, source.length), 0, item)
     }
     options.aggregation = aggVal
   }
@@ -269,6 +436,11 @@ function collectPatch() {
       options.bucketMinutes = Number(bucketSelect.value)
     } else {
       delete options.bucketMinutes
+    }
+
+    const showDeltaBox = document.getElementById('drawer-show-delta')
+    if (showDeltaBox) {
+      options.showDelta = showDeltaBox.checked
     }
   }
 
@@ -426,9 +598,38 @@ function populateFields(card) {
     bucketSelect.value = card.options?.bucketMinutes != null ? String(card.options.bucketMinutes) : '0'
   }
 
+  ensureTableDeltaField()
+  const showDeltaBox = document.getElementById('drawer-show-delta')
+  if (showDeltaBox) {
+    showDeltaBox.checked = Boolean(card.options?.showDelta)
+  }
+
   renderSources(cachedTasks, card.source, card.type)
   renderStatusTasks(cachedTasks, card.options?.taskIds)
   updateFieldVisibility(card.type)
+}
+
+/**
+ * 確保表格卡片抽屜中的差異欄勾選框存在
+ */
+function ensureTableDeltaField() {
+  let box = document.getElementById('drawer-show-delta')
+  if (!box) {
+    const fieldTable = document.getElementById('drawer-field-table')
+    if (fieldTable) {
+      const row = document.createElement('div')
+      row.className = 'drawer-row'
+      const label = document.createElement('label')
+      box = document.createElement('input')
+      box.type = 'checkbox'
+      box.id = 'drawer-show-delta'
+      label.appendChild(box)
+      label.appendChild(document.createTextNode(' 顯示與上一列的差'))
+      row.appendChild(label)
+      fieldTable.appendChild(row)
+    }
+  }
+  return box
 }
 
 /**
@@ -512,6 +713,19 @@ function setupDrawerEvents() {
   }
 
   drawer.addEventListener('change', (e) => {
+    if (e.target?.matches?.('input[data-action="toggle-all"]')) {
+      const parentId = e.target.getAttribute('data-parent-id')
+      const checked = e.target.checked
+      const childBoxes = drawer.querySelectorAll(`input[data-source-checkbox][data-parent-id="${parentId}"]:not(:disabled)`)
+      for (const cb of childBoxes) {
+        cb.checked = checked
+      }
+    } else if (e.target?.matches?.('input[data-source-checkbox]')) {
+      const parentId = e.target.getAttribute('data-parent-id')
+      if (parentId) {
+        updateToggleAllState(parentId)
+      }
+    }
     applyChanges(e)
   })
 

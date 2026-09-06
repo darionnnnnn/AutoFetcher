@@ -1,6 +1,8 @@
 // AutoFetcher 報表卡片投放規則純函式模組
 // 負責計算將任務拖放至儀表板卡片後的變更 patch（無 DOM、無相依）
 
+import { parentIdOf } from '../../shared/series-index.js';
+
 // 折線圖與長條圖的調色盤上限
 export const MAX_CHART_SERIES = 8;
 
@@ -105,10 +107,121 @@ export function applyDrop(card, taskId, opts = {}) {
   }
 }
 
+/**
+ * 依據卡片型別計算一次投放多個來源的更新 patch
+ * @param {Object} card
+ * @param {string[]} ids
+ * @param {Object} [opts]
+ * @returns {Object|null}
+ */
+export function applyDropMany(card, ids, opts = {}) {
+  if (!card || typeof card !== 'object' || !Array.isArray(ids) || ids.length === 0) {
+    return null;
+  }
+
+  const validIds = ids.filter(id => typeof id === 'string' && id !== '');
+  if (validIds.length === 0) {
+    return null;
+  }
+
+  switch (card.type) {
+    case 'table': {
+      const currentSource = card.source ? [...card.source] : [];
+      const initialOrder = currentSource.map(s => s.taskId);
+      let insertIndex = typeof opts.index === 'number' && !Number.isNaN(opts.index)
+        ? Math.max(0, Math.min(opts.index, currentSource.length))
+        : currentSource.length;
+
+      for (const id of validIds) {
+        const existingIndex = currentSource.findIndex(s => s.taskId === id);
+        let item;
+        if (existingIndex !== -1) {
+          item = currentSource[existingIndex];
+          currentSource.splice(existingIndex, 1);
+          if (existingIndex < insertIndex) {
+            insertIndex--;
+          }
+        } else {
+          const aggregation = card.options?.aggregation || 'raw';
+          item = { taskId: id, aggregation };
+        }
+        const targetIndex = Math.max(0, Math.min(insertIndex, currentSource.length));
+        currentSource.splice(targetIndex, 0, item);
+        insertIndex = targetIndex + 1;
+      }
+
+      const isSameOrder = currentSource.length === initialOrder.length &&
+        currentSource.every((item, i) => item.taskId === initialOrder[i]);
+      if (isSameOrder) {
+        return null;
+      }
+      return { source: currentSource };
+    }
+
+    case 'line':
+    case 'bar': {
+      const source = card.source || [];
+      const existingIds = new Set(source.map(s => s.taskId));
+      const newIds = [];
+      for (const id of validIds) {
+        if (!existingIds.has(id) && !newIds.includes(id)) {
+          newIds.push(id);
+        }
+      }
+      if (newIds.length === 0) {
+        return null;
+      }
+      if (source.length + newIds.length > MAX_CHART_SERIES) {
+        return null;
+      }
+      const aggregation = card.options?.aggregation || 'raw';
+      return {
+        source: [...source, ...newIds.map(taskId => ({ taskId, aggregation }))]
+      };
+    }
+
+    case 'number':
+    case 'gauge': {
+      return applyDrop(card, validIds[0], opts);
+    }
+
+    case 'status': {
+      const currentTaskIds = Array.isArray(card.options?.taskIds) ? [...card.options.taskIds] : [];
+      const newParentIds = [];
+      for (const id of validIds) {
+        const pid = parentIdOf(id);
+        if (pid && !currentTaskIds.includes(pid) && !newParentIds.includes(pid)) {
+          newParentIds.push(pid);
+        }
+      }
+      if (newParentIds.length === 0) {
+        return null;
+      }
+      return {
+        options: {
+          ...(card.options || {}),
+          taskIds: [...currentTaskIds, ...newParentIds]
+        }
+      };
+    }
+
+    case 'text':
+    default:
+      return null;
+  }
+}
+
 // 依任務模式決定拖放至空白格時建立的卡片型別
 export function cardTypeForTask(task) {
-  if (task && task.mode === 'text') {
+  if (!task) {
+    return 'number';
+  }
+  if (Array.isArray(task.fields) && task.fields.length > 0) {
+    return 'table';
+  }
+  if (task.mode === 'text') {
     return 'table';
   }
   return 'number';
 }
+
