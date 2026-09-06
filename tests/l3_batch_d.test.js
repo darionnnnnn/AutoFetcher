@@ -230,3 +230,54 @@ test('設定頁提供清除固定預設值的按鈕', () => {
   const html = readFileSync(new URL('../src/ui/report/report.html', import.meta.url), 'utf8')
   assert.ok(/id="clear-pinned-defaults"/.test(html), '固定值必須有地方可以清掉')
 })
+
+// ---- D2：選取時算出名稱提示 ----
+
+async function setupPage(html) {
+  resetChromeMock()
+  const c = installChromeMock()
+  const jd = new JSDOM(`<!doctype html><html><head><title>臺灣銀行牌告匯率</title></head><body>${html}</body></html>`)
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  globalThis.Event = jd.window.Event
+  globalThis.MouseEvent = jd.window.MouseEvent
+  globalThis.KeyboardEvent = jd.window.KeyboardEvent
+  const pm = await import('../src/content/picker-mode.js?t=' + Math.random())
+  return { c, pm, doc: jd.window.document }
+}
+
+const sentPick = (c) => c.__calls.filter(x => x.api === 'runtime.sendMessage').map(x => x.args[0]).pop()
+
+test('選到有 caption 的表格時，名稱提示用 caption', async () => {
+  const { c, pm, doc } = await setupPage(
+    '<h2>其他標題</h2><table id="t"><caption>牌告匯率</caption><thead><tr><th>幣別</th><th>買入</th></tr></thead><tbody><tr><td>美金</td><td>31.2</td></tr></tbody></table>'
+  )
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('t') })
+  doc.dispatchEvent(new globalThis.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  assert.equal(sentPick(c).nameHint, '牌告匯率')
+})
+
+test('沒有 caption 時用表格前面最近的標題元素', async () => {
+  const { c, pm, doc } = await setupPage(
+    '<h2>今日牌告</h2><table id="t"><thead><tr><th>幣別</th></tr></thead><tbody><tr><td>美金</td></tr></tbody></table>'
+  )
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('t') })
+  doc.dispatchEvent(new globalThis.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  assert.equal(sentPick(c).nameHint, '今日牌告')
+})
+
+test('都沒有時退回頁面標題', async () => {
+  const { c, pm, doc } = await setupPage(
+    '<table id="t"><thead><tr><th>幣別</th></tr></thead><tbody><tr><td>美金</td></tr></tbody></table>'
+  )
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('t') })
+  doc.dispatchEvent(new globalThis.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  assert.equal(sentPick(c).nameHint, '臺灣銀行牌告匯率')
+})
+
+test('選單一元素時不給名稱提示（交給文字錨定或預覽）', async () => {
+  const { c, pm, doc } = await setupPage('<div id="box"><span id="v">1234</span></div>')
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('v') })
+  doc.dispatchEvent(new globalThis.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  assert.equal(sentPick(c).nameHint, undefined)
+})

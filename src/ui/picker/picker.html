@@ -90,6 +90,31 @@
     [data-preaction-row] button { flex-shrink: 0; padding: 4px 8px; font-size: 12px; }
     .preaction-target { font-size: 12px; color: var(--text-muted); font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 90px; }
     #preaction-add { align-self: flex-start; }
+    details#advanced-section {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 8px;
+    }
+    details#advanced-section summary {
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      color: var(--text);
+    }
+    details#advanced-section[open] {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .checkbox-label {
+      display: inline-flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      color: var(--text);
+      font-size: 12px;
+    }
     footer {
       display: flex;
       justify-content: flex-end;
@@ -138,16 +163,6 @@
           </select>
         </label>
       </fieldset>
-      <label>抓取策略
-        <select id="strategy">
-          <option value="auto" selected>自動</option>
-          <option value="regex">正規表達式</option>
-          <option value="attr">屬性</option>
-          <option value="child">子元素</option>
-          <option value="label">標籤</option>
-        </select>
-      </label>
-      <label>正規表達式<input type="text" id="regex" placeholder="策略為正規表達式時必填"></label>
       <fieldset>
         <legend>排程設定</legend>
         <label>排程類型
@@ -168,24 +183,34 @@
           <label><input type="checkbox" value="6">六</label>
           <label><input type="checkbox" value="0">日</label>
         </div>
-        <label data-schedule-only="interval">生效時段起（HH:mm）<input type="text" id="window-from" placeholder="09:00"></label>
-        <label data-schedule-only="interval">生效時段訖（HH:mm）<input type="text" id="window-to" placeholder="18:00"></label>
       </fieldset>
       <label>即時預覽</label>
       <div id="preview"></div>
       <div id="errors"></div>
-      <fieldset id="alert-section">
-        <legend>告警條件</legend>
-        <div class="alert-desc">命中時會發通知，並在報表標記。同一條件 60 分鐘內只通知一次。</div>
-        <div id="alert-list"></div>
-        <button type="button" id="alert-add">新增條件</button>
-      </fieldset>
-      <div id="preaction-section">
-        <div class="preaction-title">前置動作</div>
-        <div class="preaction-desc">抓取前依序執行，例如先關掉彈窗、或等圖表載入完成。</div>
-        <div id="preaction-list"></div>
-        <button type="button" id="preaction-add">新增動作</button>
-      </div>
+      <details id="advanced-section">
+        <summary>進階設定</summary>
+        <label>抓取策略
+          <select id="strategy">
+            <option value="auto" selected>自動</option>
+            <option value="regex">正規表達式</option>
+          </select>
+        </label>
+        <label>正規表達式<input type="text" id="regex" placeholder="策略為正規表達式時必填"></label>
+        <label data-schedule-only="interval">生效時段起（HH:mm）<input type="text" id="window-from" placeholder="09:00"></label>
+        <label data-schedule-only="interval">生效時段訖（HH:mm）<input type="text" id="window-to" placeholder="18:00"></label>
+        <fieldset id="alert-section">
+          <legend>告警條件</legend>
+          <div class="alert-desc">命中時會發通知，並在報表標記。同一條件 60 分鐘內只通知一次。</div>
+          <div id="alert-list"></div>
+          <button type="button" id="alert-add">新增條件</button>
+        </fieldset>
+        <div id="preaction-section">
+          <div class="preaction-title">前置動作</div>
+          <div class="preaction-desc">抓取前依序執行，例如先關掉彈窗、或等圖表載入完成。</div>
+          <div id="preaction-list"></div>
+          <button type="button" id="preaction-add">新增動作</button>
+        </div>
+      </details>
       <fieldset id="add-to-dashboard">
         <legend>加入儀表板</legend>
         <label>目標儀表板
@@ -201,6 +226,9 @@
           <label><input type="checkbox" value="table">表格</label>
         </div>
       </fieldset>
+      <label class="checkbox-label">
+        <input type="checkbox" id="pin-defaults">將此次設定固定為預設值
+      </label>
     </div>
     <footer>
       <button type="button" id="test-now">立即測試</button>

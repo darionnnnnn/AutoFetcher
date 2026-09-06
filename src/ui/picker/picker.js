@@ -1,4 +1,4 @@
-import { saveTask, getTask } from '../../shared/storage.js'
+import { saveTask, getTask, getSettings, saveSettings } from '../../shared/storage.js'
 import { MSG } from '../../shared/messages.js'
 import { getLayout, addCard } from '../../shared/layout-store.js'
 
@@ -136,8 +136,19 @@ export function validateForm(values) {
   return Object.keys(errors).length > 0 ? { ok: false, errors } : { ok: true }
 }
 
-export function buildTask(values, locator, existing) {
-  const id = existing?.id || crypto.randomUUID()
+export const BUILTIN_DEFAULTS = {
+  scheduleType: 'daily',
+  times: ['09:30'],
+  everyMinutes: 15,
+  weekdays: [0, 1, 2, 3, 4, 5, 6],
+  windowFrom: '',
+  windowTo: '',
+  aggregate: 'sum',
+  dashboardId: '',
+  cardTypes: []
+}
+
+export function buildSpec(values) {
   const spec = { strategy: values.strategy }
   if (values.mode === 'text') spec.mode = 'text'
   if (values.mode === 'block' && values.block) {
@@ -147,6 +158,72 @@ export function buildTask(values, locator, existing) {
   }
   for (const k of ['regex', 'attr', 'childSel', 'labelText']) {
     if (values[k]) spec[k] = values[k]
+  }
+  return spec
+}
+
+export async function applyPickerDefaults(task) {
+  if (task) return
+
+  const settings = await getSettings()
+  const defaults = settings?.pickerDefaults
+  let target = null
+  if (defaults?.pinned) {
+    target = defaults.pinned
+  } else if (defaults?.last) {
+    target = defaults.last
+  } else {
+    target = BUILTIN_DEFAULTS
+  }
+
+  if (target.scheduleType !== undefined) {
+    const el = document.getElementById('schedule-type')
+    if (el) el.value = target.scheduleType
+  }
+  if (target.times !== undefined) {
+    const el = document.getElementById('times')
+    if (el) {
+      el.value = Array.isArray(target.times) ? target.times.join(', ') : target.times
+    }
+  }
+  if (target.everyMinutes !== undefined) {
+    const el = document.getElementById('every-minutes')
+    if (el) el.value = target.everyMinutes
+  }
+  if (target.weekdays !== undefined && Array.isArray(target.weekdays)) {
+    const wds = new Set(target.weekdays.map(Number))
+    document.querySelectorAll('#weekdays input[type="checkbox"]').forEach(cb => {
+      cb.checked = wds.has(Number(cb.value))
+    })
+  }
+  if (target.windowFrom !== undefined) {
+    const el = document.getElementById('window-from')
+    if (el) el.value = target.windowFrom
+  }
+  if (target.windowTo !== undefined) {
+    const el = document.getElementById('window-to')
+    if (el) el.value = target.windowTo
+  }
+  if (target.aggregate !== undefined) {
+    const el = document.getElementById('block-aggregate')
+    if (el) el.value = target.aggregate
+  }
+
+  syncScheduleFields()
+}
+
+export function buildTask(values, locator, existing) {
+  const id = existing?.id || crypto.randomUUID()
+  const spec = buildSpec(values)
+  if (existing?.spec) {
+    if (existing.spec.strategy && !['auto', 'regex'].includes(existing.spec.strategy)) {
+      spec.strategy = existing.spec.strategy
+    }
+    for (const k of ['attr', 'childSel', 'labelText']) {
+      if (existing.spec[k] !== undefined) {
+        spec[k] = existing.spec[k]
+      }
+    }
   }
 
   let schedule
@@ -266,6 +343,21 @@ export function render(ctx) {
       const aggEl = document.getElementById('block-aggregate')
       if (aggEl && t.spec.block.aggregate) aggEl.value = t.spec.block.aggregate
     }
+  } else {
+    const nameEl = document.getElementById('name')
+    if (nameEl && !nameEl.value.trim()) {
+      let defaultName = ''
+      if (ctx?.nameHint && String(ctx.nameHint).trim()) {
+        defaultName = String(ctx.nameHint).trim()
+      } else if (ctx?.locator?.anchor?.text && String(ctx.locator.anchor.text).trim()) {
+        defaultName = String(ctx.locator.anchor.text).trim()
+      } else if (ctx?.preview !== undefined && ctx?.preview !== null && String(ctx.preview).trim()) {
+        defaultName = String(ctx.preview).trim().slice(0, 20)
+      }
+      if (defaultName) {
+        nameEl.value = defaultName
+      }
+    }
   }
 
   if (ctx?.blockInfo && (ctx.blockInfo.kind === 'table' || ctx.blockInfo.kind === 'grid')) {
@@ -305,6 +397,26 @@ export function render(ctx) {
   if (Array.isArray(ctx?.task?.preActions)) {
     for (const pa of ctx.task.preActions) {
       addPreActionRow(pa)
+    }
+  }
+
+  const advSection = document.getElementById('advanced-section')
+  if (advSection) {
+    if (ctx?.task) {
+      const t = ctx.task
+      const hasStrategy = t.spec?.strategy && t.spec.strategy !== 'auto'
+      const hasRegex = Boolean(t.spec?.regex)
+      const hasWindow = Boolean(t.schedule?.window)
+      const hasAlerts = Array.isArray(t.alerts) && t.alerts.length > 0
+      const hasPreActions = Array.isArray(t.preActions) && t.preActions.length > 0
+
+      if (hasStrategy || hasRegex || hasWindow || hasAlerts || hasPreActions) {
+        advSection.setAttribute('open', '')
+      } else {
+        advSection.removeAttribute('open')
+      }
+    } else {
+      advSection.removeAttribute('open')
     }
   }
 
@@ -706,6 +818,29 @@ export async function handleSave() {
     await chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS })
   }
 
+  // 只有新建任務才記住預設值
+  if (!currentCtx?.task) {
+    const currentDefaults = {
+      scheduleType: values.scheduleType || 'daily',
+      times: values.times || [],
+      everyMinutes: Number.isFinite(values.everyMinutes) && values.everyMinutes > 0 ? values.everyMinutes : 15,
+      weekdays: values.weekdays || [],
+      windowFrom: values.windowFrom || '',
+      windowTo: values.windowTo || '',
+      aggregate: document.getElementById('block-aggregate')?.value || 'sum',
+      dashboardId: (document.getElementById('dashboard-select')?.value !== 'none' ? document.getElementById('dashboard-select')?.value : '') || '',
+      cardTypes: Array.from(document.querySelectorAll('#card-types input[type="checkbox"]:checked')).map(cb => cb.value)
+    }
+    const settings = await getSettings()
+    const existingDefaults = settings?.pickerDefaults || {}
+    const newDefaults = { ...existingDefaults, last: currentDefaults }
+    const pinChecked = document.getElementById('pin-defaults')?.checked
+    if (pinChecked) {
+      newDefaults.pinned = currentDefaults
+    }
+    await saveSettings({ pickerDefaults: newDefaults })
+  }
+
   // 只有新建任務才處理加入儀表板卡片
   if (!currentCtx?.task) {
     const dashSelect = document.getElementById('dashboard-select')
@@ -748,12 +883,7 @@ export async function handleTestNow() {
   const errorsEl = document.getElementById('errors')
   if (errorsEl) errorsEl.textContent = ''
 
-  const values = getFormData()
-  const spec = { strategy: values.strategy }
-  if (values.mode === 'text') spec.mode = 'text'
-  for (const k of ['regex', 'attr', 'childSel', 'labelText']) {
-    if (values[k]) spec[k] = values[k]
-  }
+  const spec = buildSpec(getFormData())
 
   try {
     const res = await chrome.tabs.sendMessage(currentCtx?.tabId, {
@@ -807,11 +937,14 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
     try {
       const parsed = JSON.parse(decodeURIComponent(params.get('ctx')))
       render(parsed)
+      applyPickerDefaults(parsed?.task)
       renderDashboardSection(parsed?.task)
     } catch {
+      applyPickerDefaults(null)
       renderDashboardSection(null)
     }
   } else {
+    applyPickerDefaults(null)
     renderDashboardSection(null)
   }
 }
