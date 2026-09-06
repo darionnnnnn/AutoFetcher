@@ -355,3 +355,64 @@ test('series-index 組合與拆解', async () => {
   assert.equal(si.fieldKeyOf('abc#buy'), 'buy')
   assert.equal(si.fieldKeyOf('abc'), '')
 })
+
+// ---- A7：立即抓取的就地回饋 ----
+
+const TASKS_HTML = readFileSync(new URL('../src/ui/report/report.html', import.meta.url), 'utf8')
+
+async function freshTasks() {
+  resetChromeMock()
+  const c = installChromeMock()
+  const st = await import('../src/shared/storage.js?t=' + Math.random())
+  await st.init()
+  const jd = new JSDOM(TASKS_HTML, { url: 'chrome-extension://abc/ui/report/report.html' })
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  const ts = await import('../src/ui/report/tasks.js?t=' + Math.random())
+  return { c, st, ts, doc: jd.window.document }
+}
+
+const uiTask = (id, over = {}) => ({
+  id, name: `任務${id}`, url: `https://x.test/${id}`, mode: 'number', enabled: true,
+  spec: { strategy: 'text' }, schedule: { type: 'daily', times: ['09:00'] }, ...over
+})
+
+test('立即抓取成功後就地顯示抓到的值', async () => {
+  const { c, ts, doc } = await freshTasks()
+  c.__setRuntimeResponder(m => m.type === 'RUN_TASK' ? { ok: true, outcome: 'done', status: 'ok', value: 31.2 } : undefined)
+  ts.renderTasks([uiTask('a')], {}, [])
+  doc.querySelector('[data-task-id="a"] [data-action="run"]').click()
+  await new Promise(r => setTimeout(r, 30))
+  const box = doc.querySelector('[data-task-id="a"] .task-run-result')
+  assert.ok(box, '要有一個顯示結果的位置')
+  assert.ok(box.textContent.includes('31.2'), `應顯示抓到的值：${box.textContent}`)
+})
+
+test('立即抓取失敗後就地顯示原因', async () => {
+  const { c, ts, doc } = await freshTasks()
+  c.__setRuntimeResponder(m => m.type === 'RUN_TASK' ? { ok: true, outcome: 'failed', status: 'not_found', error: '找不到目標元素' } : undefined)
+  ts.renderTasks([uiTask('a')], {}, [])
+  doc.querySelector('[data-task-id="a"] [data-action="run"]').click()
+  await new Promise(r => setTimeout(r, 30))
+  const box = doc.querySelector('[data-task-id="a"] .task-run-result')
+  assert.ok(box.textContent.includes('找不到目標元素'), `應顯示失敗原因：${box.textContent}`)
+})
+
+test('立即抓取執行中按鈕停用，結束後恢復', async () => {
+  const { c, ts, doc } = await freshTasks()
+  let release
+  const gate = new Promise(r => { release = r })
+  c.__setRuntimeResponder(async m => {
+    if (m.type !== 'RUN_TASK') return undefined
+    await gate
+    return { ok: true, outcome: 'done', status: 'ok', value: 1 }
+  })
+  ts.renderTasks([uiTask('a')], {}, [])
+  const btn = doc.querySelector('[data-task-id="a"] [data-action="run"]')
+  btn.click()
+  await new Promise(r => setTimeout(r, 10))
+  assert.equal(btn.disabled, true, '執行中要停用，避免連按')
+  release()
+  await new Promise(r => setTimeout(r, 30))
+  assert.equal(btn.disabled, false)
+})
