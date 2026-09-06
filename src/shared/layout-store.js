@@ -1,6 +1,7 @@
 // 儀表板與卡片版面儲存層（layout-store）
 import { getRawLayout, setRawLayout } from './storage.js'
 import { clampCard, findFreeSlot, collides } from '../ui/report/layout.js'
+import { parentIdOf } from './series-index.js'
 
 // 目前支援的版面架構版本
 const CURRENT_VERSION = 1
@@ -335,7 +336,7 @@ export async function pruneCardsForTask(taskId) {
       // 處理 source
       const hadSource = Array.isArray(card.source) && card.source.length > 0
       if (hadSource) {
-        card.source = card.source.filter(s => s.taskId !== taskId)
+        card.source = card.source.filter(s => parentIdOf(s.taskId) !== taskId)
         if (card.source.length === 0) {
           return false
         }
@@ -345,7 +346,7 @@ export async function pruneCardsForTask(taskId) {
       if (card.options && Array.isArray(card.options.taskIds)) {
         const hadTaskIds = card.options.taskIds.length > 0
         if (hadTaskIds) {
-          card.options.taskIds = card.options.taskIds.filter(id => id !== taskId)
+          card.options.taskIds = card.options.taskIds.filter(id => parentIdOf(id) !== taskId)
           if (card.options.taskIds.length === 0) {
             return false
           }

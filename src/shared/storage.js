@@ -1,6 +1,7 @@
 // AutoFetcher 儲存層：所有 chrome.storage 存取的唯一入口
 import { pruneCardsForTask } from './layout-store.js'
 import { encryptSecret } from './crypto.js'
+import { parentIdOf, SERIES_SEP } from './series-index.js'
 
 const DEFAULT_SETTINGS = {
   retentionDays: 365,
@@ -118,6 +119,26 @@ export async function saveTask(task) {
     throw new Error('任務格式錯誤：id、name 與 url 必須皆為非空字串')
   }
 
+  if (task.id.includes(SERIES_SEP)) {
+    throw new Error(`任務 id 不得包含保留字元 ${SERIES_SEP}`)
+  }
+
+  if (Array.isArray(task.fields)) {
+    const seenKeys = new Set()
+    for (const f of task.fields) {
+      if (!f || typeof f.key !== 'string' || f.key.trim() === '') {
+        throw new Error('任務欄位 key 必須為非空字串')
+      }
+      if (f.key.includes(SERIES_SEP)) {
+        throw new Error(`任務欄位 key 不得包含保留字元 ${SERIES_SEP}`)
+      }
+      if (seenKeys.has(f.key)) {
+        throw new Error(`任務欄位 key 重複：${f.key}`)
+      }
+      seenKeys.add(f.key)
+    }
+  }
+
   const res = await chrome.storage.local.get('tasks')
   const tasks = Array.isArray(res.tasks) ? [...res.tasks] : []
 
@@ -148,7 +169,7 @@ export async function deleteTask(id) {
   for (const [key, value] of Object.entries(all)) {
     if (isRecordKey(key)) {
       const records = Array.isArray(value) ? value : []
-      const remaining = records.filter(r => r.taskId !== id)
+      const remaining = records.filter(r => parentIdOf(r.taskId) !== id)
       if (remaining.length === 0) {
         toRemove.push(key)
       } else if (remaining.length !== records.length) {
@@ -472,7 +493,7 @@ export async function countRecordsForTask(taskId) {
   for (const d of dates) {
     const records = await getRecordsByDate(d)
     for (const r of records) {
-      if (r && r.taskId === taskId) {
+      if (r && parentIdOf(r.taskId) === taskId) {
         count++
       }
     }

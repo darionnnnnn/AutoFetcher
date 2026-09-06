@@ -42,3 +42,79 @@ export function fieldKeyOf(id) {
   const at = id.indexOf(SERIES_SEP)
   return at === -1 ? '' : id.slice(at + SERIES_SEP.length)
 }
+
+/**
+ * 建立任務序列索引（純函式，不得修改傳入物件）
+ * @param {Array} tasks
+ * @returns {{ byId: Object, parents: Object, childrenOf: Object, seriesIds: string[] }}
+ */
+export function buildSeriesIndex(tasks) {
+  const byId = {}
+  const parents = {}
+  const childrenOf = {}
+  const seriesIds = []
+
+  if (!Array.isArray(tasks)) {
+    return { byId, parents, childrenOf, seriesIds }
+  }
+
+  for (const task of tasks) {
+    if (!task || typeof task.id !== 'string' || task.id === '') {
+      continue
+    }
+
+    const hasFields = Array.isArray(task.fields) && task.fields.length > 0
+    const children = []
+    parents[task.id] = task
+
+    if (hasFields) {
+      for (const field of task.fields) {
+        if (!field || typeof field.key !== 'string' || field.key === '') {
+          continue
+        }
+        const sid = seriesIdOf(task.id, field.key)
+        const fieldName = typeof field.name === 'string' ? field.name : ''
+        const taskName = typeof task.name === 'string' ? task.name : ''
+        byId[sid] = {
+          id: sid,
+          parentId: task.id,
+          name: `${taskName} · ${fieldName}`,
+          shortName: fieldName,
+          fieldKey: field.key,
+          mode: task.mode
+        }
+        seriesIds.push(sid)
+        children.push(sid)
+      }
+    } else {
+      const taskName = typeof task.name === 'string' ? task.name : ''
+      byId[task.id] = {
+        id: task.id,
+        parentId: task.id,
+        name: taskName,
+        shortName: taskName,
+        fieldKey: '',
+        mode: task.mode
+      }
+      seriesIds.push(task.id)
+      children.push(task.id)
+    }
+
+    childrenOf[task.id] = children
+  }
+
+  return { byId, parents, childrenOf, seriesIds }
+}
+
+/**
+ * 依序列 id 查詢顯示名稱；找不到時回傳 id 本身
+ * @param {Object} index
+ * @param {string} id
+ * @returns {string}
+ */
+export function nameOf(index, id) {
+  if (index && index.byId && index.byId[id] && typeof index.byId[id].name === 'string') {
+    return index.byId[id].name
+  }
+  return id
+}
