@@ -366,6 +366,11 @@
     /* hidden 屬性要壓得過各區塊自己的 display，否則空的橫幅會露出一條空殼 */
     [hidden] { display: none !important; }
 
+    /* 樞紐表的差值：漲跌用狀態色，一眼分得出方向 */
+    [data-delta] { font-size: var(--text-xs); margin-left: var(--space-1); }
+    .delta-up { color: var(--ok); }
+    .delta-down { color: var(--danger); }
+
     /* 圖表要填滿卡片，否則會縮在角落 */
     .report-card .card-body > svg { width: 100%; flex: 1 1 auto; min-height: 0; display: block; }
 

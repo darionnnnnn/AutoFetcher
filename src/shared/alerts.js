@@ -15,7 +15,7 @@ export function evaluateAlerts(task, record, prevRecords, displayName) {
     if (!alert.enabled) continue;
 
     // 指定欄位時只對該欄位評估
-    if (alert.field && (record.field || fieldKeyOf(record.taskId || '')) !== alert.field) {
+    if (alert.field && fieldKeyOf(record.taskId || '') !== alert.field) {
       continue;
     }
 

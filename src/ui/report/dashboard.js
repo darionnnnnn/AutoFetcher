@@ -11,6 +11,7 @@ import { openDrawer } from './drawer.js'
 import { applyTemplate } from './templates.js'
 import { MSG } from '../../shared/messages.js'
 import { createDragSource, registerDropTarget, resetDnd, isPointInside } from './dnd.js'
+import { closeTrendPopover } from './trend-popover.js'
 import { applyDrop, applyDropMany, cardTypeForTask } from './drop-rules.js'
 import { buildSeriesIndex, parentIdOf } from '../../shared/series-index.js'
 
@@ -573,6 +574,8 @@ async function buildDashboardContext(dash) {
   return {
     records,
     tasksById,
+    // 趨勢浮層要把卡片加到「目前這個」儀表板，不是第一個
+    dashId: dash?.id,
     parentTasksById,
     index,
     health,
@@ -1108,6 +1111,9 @@ export async function renderDashboard(dashId) {
   if (emptyEl) {
     emptyEl.hidden = cards.length > 0
   }
+
+  // 重畫會換掉浮層的錨點元素，先收掉舊的，否則會留一個孤兒浮層與兩個監聽在 body 上
+  closeTrendPopover()
 
   resetDnd()
 

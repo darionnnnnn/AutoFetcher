@@ -15,9 +15,13 @@ const rec = (taskId, slot, value, status = 'ok', over = {}) => ({
   date: slot.slice(0, 10), ...over
 })
 
+const TASKS_BY_ID = { t1: { id: 't1', name: '電費', mode: 'number' }, t2: { id: 't2', name: '水費', mode: 'number' } }
+
 const baseCtx = (over = {}) => ({
   records: [],
-  tasksById: { t1: { id: 't1', name: '電費', mode: 'number' }, t2: { id: 't2', name: '水費', mode: 'number' } },
+  tasksById: TASKS_BY_ID,
+  // 狀態卡列的是任務不是值，所以另有一份只含父任務的對照
+  parentTasksById: TASKS_BY_ID,
   health: {},
   nextRuns: {},
   missed: [],

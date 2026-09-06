@@ -214,3 +214,51 @@ test('表頭解析不得在別的檔案各寫一份', () => {
   const bd = readFileSync(new URL('../src/shared/block-detect.js', import.meta.url), 'utf8')
   assert.ok(/from '\.\/table\.js'/.test(bd), 'block-detect 要用 table.js 的表頭解析')
 })
+
+// ---- 終檢抓到的表格解析缺陷 ----
+
+const SEPARATOR_TABLE = `
+<table id="sep">
+  <thead><tr><th>幣別</th><th>買入</th><th>賣出</th></tr></thead>
+  <tbody>
+    <tr><th colspan="3">亞洲貨幣</th></tr>
+    <tr><td>日圓</td><td>0.208</td><td>0.216</td></tr>
+    <tr><th colspan="3">歐美貨幣</th></tr>
+    <tr><td>美金</td><td>31.2</td><td>31.3</td></tr>
+  </tbody>
+</table>`
+
+test('表格中間的分組標題列不得把表頭洗掉', () => {
+  const doc = domOf(SEPARATOR_TABLE)
+  const headers = TB.columnHeaders(doc.getElementById('sep'))
+  assert.deepEqual(headers, ['幣別', '買入', '賣出'],
+    '只有開頭那幾列是表頭，中間的分組列是資料的一部分')
+})
+
+const SPAN_TABLE = `
+<table id="span">
+  <thead><tr><th>項目</th><th>甲</th><th>乙</th><th>丙</th></tr></thead>
+  <tbody>
+    <tr><td>第一列</td><td colspan="2">合併</td><td>7</td></tr>
+    <tr><td>第二列</td><td>3</td><td>4</td><td>9</td></tr>
+  </tbody>
+</table>`
+
+test('資料列有合併儲存格時，欄位索引仍然對得上表頭', () => {
+  const doc = domOf(SPAN_TABLE)
+  const r = TB.parseTable(doc.getElementById('span'))
+  assert.equal(r.headers[3], '丙')
+  // 第一列的「丙」欄應該是 7（合併格佔了甲乙兩欄）
+  assert.equal(r.cells[0][3], '7')
+  assert.equal(r.cells[1][3], '9')
+})
+
+test('選取合併儲存格右邊那一欄時，抓到的是同一欄的值', () => {
+  const doc = domOf(SPAN_TABLE)
+  const res = EX.extractValue(doc.getElementById('span'), {
+    mode: 'block',
+    block: { cell: { row: { index: 1, header: '第二列' }, col: { index: 3, header: '丙' } } }
+  })
+  assert.equal(res.ok, true)
+  assert.equal(res.value, 9)
+})

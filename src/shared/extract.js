@@ -117,11 +117,13 @@ export function parseNumber(text) {
 
 // 尋找陣列中最接近 preferredIndex 的符合項目索引
 function findClosestIndex(array, target, preferredIndex) {
+  // 沒帶索引時（只靠表頭定位）從 0 起算距離，否則 NaN 會讓每一次比較都不成立、永遠找不到
+  const from = Number.isFinite(Number(preferredIndex)) ? Number(preferredIndex) : 0
   let bestIndex = -1
   let bestDist = Infinity
   for (let i = 0; i < array.length; i++) {
     if (array[i] === target) {
-      const dist = Math.abs(i - preferredIndex)
+      const dist = Math.abs(i - from)
       if (dist < bestDist) {
         bestDist = dist
         bestIndex = i

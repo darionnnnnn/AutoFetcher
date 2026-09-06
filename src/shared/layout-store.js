@@ -272,6 +272,8 @@ export async function addCard(dashId, card) {
       c.type === normalized.type &&
       Array.isArray(c.source) &&
       c.source.length > 0 &&
+      // 樞紐表與「最近 N 筆」型別同樣是 table，但呈現的是兩件事，不能互相去重
+      (c.options?.mode || '') === (normalized.options?.mode || '') &&
       sameSourceTaskIds(normalized.source, c.source)
     )
     if (existing) {

@@ -78,9 +78,18 @@ export function columnHeaders(el) {
       table = inner
     }
     const rows = getTableRows(table)
-    for (const row of rows) {
-      const cells = getRowCells(row)
-      if (isHeaderRow(row, cells)) {
+    // 只認 thead 裡的列，或表格開頭連續的表頭列。
+    // 表格中段常有整列 th 的分組標題（「亞洲貨幣」那種），
+    // 把它也當表頭會讓整份 headers 被那一列洗掉。
+    const inThead = (row) => (typeof row.closest === 'function' && Boolean(row.closest('thead'))) ||
+      row.parentElement?.tagName === 'THEAD'
+    const theadRows = rows.filter(inThead)
+    if (theadRows.length > 0) {
+      for (const row of theadRows) headerRows.push({ row, cells: getRowCells(row) })
+    } else {
+      for (const row of rows) {
+        const cells = getRowCells(row)
+        if (!isHeaderRow(row, cells)) break
         headerRows.push({ row, cells })
       }
     }

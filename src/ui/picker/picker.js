@@ -246,6 +246,20 @@ export async function applyPickerDefaults(task) {
     const el = document.getElementById('block-aggregate')
     if (el) el.value = target.aggregate
   }
+  // 目標儀表板與卡片型別也是「上次怎麼設就怎麼帶回來」的一部分；
+  // 只存不還原等於每次都要重選一遍
+  if (target.dashboardId) {
+    const sel = document.getElementById('dashboard-select')
+    if (sel && [...sel.options].some(o => o.value === target.dashboardId)) {
+      sel.value = target.dashboardId
+    }
+  }
+  if (Array.isArray(target.cardTypes) && target.cardTypes.length > 0) {
+    const wanted = new Set(target.cardTypes)
+    for (const cb of document.querySelectorAll('#card-types input[type="checkbox"]')) {
+      cb.checked = wanted.has(cb.value)
+    }
+  }
 
   syncScheduleFields()
 }
@@ -254,7 +268,11 @@ export function buildTask(values, locator, existing) {
   const id = existing?.id || crypto.randomUUID()
   const spec = buildSpec(values)
   if (existing?.spec) {
-    if (existing.spec.strategy && !['auto', 'regex'].includes(existing.spec.strategy)) {
+    // 表單只提供 auto / regex；舊任務用的是被移除的策略時才沿用原值，
+    // 使用者主動在表單上選了別的就該照做
+    const formHasStrategy = ['auto', 'regex'].includes(values.strategy)
+    const legacyStrategy = existing.spec.strategy && !['auto', 'regex'].includes(existing.spec.strategy)
+    if (legacyStrategy && (!formHasStrategy || values.strategy === existing.spec.strategy || values.strategy === 'auto')) {
       spec.strategy = existing.spec.strategy
     }
     for (const k of ['attr', 'childSel', 'labelText']) {

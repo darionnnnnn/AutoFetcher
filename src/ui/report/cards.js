@@ -21,8 +21,9 @@ function formatNumber(val, decimals) {
   if (typeof decimals === 'number' && Number.isFinite(decimals)) {
     return val.toFixed(decimals);
   }
-  // 沒指定小數位時去掉浮點運算的尾巴（31.400000000000002 要顯示成 31.4）；
-  // 12 位有效數字足以保留真實資料的精度，又能把二進位誤差修掉
+  // 沒指定小數位時去掉浮點運算的尾巴（31.400000000000002 要顯示成 31.4）。
+  // 只處理有小數的值，整數原樣輸出——對大整數做有效位數截斷會改到真正的數字
+  if (Number.isInteger(val)) return String(val);
   return String(Number(val.toPrecision(12)));
 }
 
@@ -633,10 +634,10 @@ function renderTextCard(card, ctx, { bodyEl }) {
  * 渲染狀態清單卡片
  */
 function renderStatusCard(card, ctx, { bodyEl }) {
-  const parents = ctx?.parentTasksById || ctx?.tasksById || {};
+  const parents = ctx?.parentTasksById || {};
   const taskIds = Array.isArray(card.options?.taskIds)
     ? [...new Set(card.options.taskIds.map(id => parentIdOf(id)))]
-    : Object.keys(ctx?.parentTasksById || ctx?.tasksById || {});
+    : Object.keys(ctx?.parentTasksById || {});
 
   const list = document.createElement('div');
   list.className = 'status-list';

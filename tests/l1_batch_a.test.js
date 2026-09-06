@@ -162,8 +162,12 @@ test('只抓到部分寫成 partial 黃燈，且對應只有一份', async () =>
   const health = await he.getHealth()
   assert.equal(health.t1.status, 'partial')
   const src = readFileSync(new URL('../src/background/fetcher.js', import.meta.url), 'utf8')
-  const writes = src.match(/setTaskHealth\(/g) || []
-  assert.equal(writes.length, 1, 'fetcher 只能有一處寫 health（唯一對應）')
+  // 寫 health 的動作只能經過檔內唯一的包裝函式，狀態對應才不會有第二份
+  assert.equal((src.match(/setTaskHealth\(/g) || []).length, 1,
+    'setTaskHealth 只能在唯一的包裝函式裡呼叫')
+  assert.ok(/function updateHealth\(/.test(src), '要有那個唯一的包裝函式')
+  assert.equal((src.match(/healthStatusOf\(/g) || []).length, 1,
+    '紀錄狀態轉 health 狀態的對應只能算一次，散在多處就會各自漂')
 })
 
 test('manual 失敗把 health 寫成紅燈', async () => {

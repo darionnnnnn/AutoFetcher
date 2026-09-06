@@ -147,6 +147,29 @@ async function processAlerts(record, cachedRecordsInRange) {
   }
 }
 
+// 由這一次抓到的紀錄們決定任務的健康狀態（單值就是一筆，多值是整組）。
+// 紀錄狀態轉 health 狀態的對應只算這一次，散在多處就會各自漂。
+export function healthFromRecords(records, partial) {
+  const list = Array.isArray(records) ? records : []
+  const failed = list.filter(r => !isSuccess(r))
+  if (list.length > 0 && failed.length === list.length) {
+    const first = failed[0]
+    return {
+      status: healthStatusOf(first.status),
+      reason: list.length > 1 ? `${failed.length} 個值抓不到` : undefined,
+      detail: first.error || first.raw || ''
+    }
+  }
+  if (failed.length > 0) {
+    return { status: 'partial', reason: `${failed.length} 個值抓不到`, detail: undefined }
+  }
+  if (partial === true || list.some(r => r.partial === true)) {
+    return { status: 'partial', reason: undefined, detail: undefined }
+  }
+  const warned = list.find(r => r.status === 'fallback') || list.find(r => r.status === 'late')
+  return { status: warned ? warned.status : 'ok', reason: undefined, detail: undefined }
+}
+
 // 更新任務健康狀態並重整圖示
 async function updateHealth(taskId, healthObj) {
   await setTaskHealth(taskId, healthObj)
@@ -161,8 +184,7 @@ async function writeRecord(record, opts = {}) {
   if (!skipLedger) {
     await recordLedger(parentId, record.slot, record.status)
   }
-  const healthStatus = record.partial === true ? 'partial' : healthStatusOf(record.status)
-  await updateHealth(parentId, { status: healthStatus, detail: record.error })
+  await updateHealth(parentId, healthFromRecords([record], record.partial))
   // popup 顯示「最後值」讀的是 lastValues；失敗的紀錄不覆蓋上一次成功的值
   if (isSuccess(record)) {
     await setLastValue(record.taskId, { value: record.value, capturedAt: record.capturedAt })
@@ -240,8 +262,19 @@ export async function runTask(task, opts = {}) {
 
   // 2. 離線檢查：若離線則排 10 分鐘後重試，不得開分頁
   if (globalThis.navigator?.onLine === false) {
-    if (!dryRun) await scheduleRetry(task.id, attempt, true, slot)
-    return dryRun ? { ok: false, error: 'offline' } : null
+    if (dryRun) return { ok: false, error: 'offline' }
+    // 手動抓取一律不重試，但要留一筆看得到的紀錄，否則使用者按了沒有任何反應
+    if (isManual) {
+      return await writeRecord({
+        taskId: task.id,
+        slot,
+        capturedAt: new Date().toISOString(),
+        status: 'error',
+        error: '目前離線'
+      }, { parentId: task.id, skipLedger: true })
+    }
+    await scheduleRetry(task.id, attempt, true, slot)
+    return null
   }
 
   // 同站台串行佇列執行
@@ -352,6 +385,11 @@ export async function runTask(task, opts = {}) {
 
       // 結果處理：成功路徑
       if (res?.ok === true) {
+        if (res.fields && typeof res.fields === 'object' && Object.keys(res.fields).length === 0) {
+          // 任務宣告了多值卻一個值都沒有：不寫紀錄、不動帳本與燈號，當成設定沒做完
+          return null
+        }
+
         if (res.fields && typeof res.fields === 'object') {
           const date = (typeof slot === 'string' && slot.length >= 10)
             ? slot.slice(0, 10)
@@ -415,31 +453,9 @@ export async function runTask(task, opts = {}) {
             }
           }
 
-          // health：整個任務只寫一次，寫在父任務 id 上
-          const failRecords = records.filter(r => !isSuccess(r))
-          const failCount = failRecords.length
-          const totalCount = records.length
-
-          let healthStatus = 'ok'
-          let healthReason = undefined
-          let healthDetail = undefined
-
-          if (failCount === totalCount && totalCount > 0) {
-            const firstFail = failRecords[0]
-            healthStatus = healthStatusOf(firstFail.status)
-            healthReason = `${failCount} 個值抓不到`
-            healthDetail = firstFail.raw || firstFail.status || ''
-          } else if (failCount > 0) {
-            healthStatus = 'partial'
-            healthReason = `${failCount} 個值抓不到`
-          } else if (res.partial === true) {
-            healthStatus = 'partial'
-          } else {
-            const warnRecord = records.find(r => r.status === 'fallback') || records.find(r => r.status === 'late')
-            healthStatus = warnRecord ? warnRecord.status : 'ok'
-          }
-
-          await updateHealth(task.id, { status: healthStatus, reason: healthReason, detail: healthDetail })
+          // health：整個任務只寫一次，寫在父任務 id 上；狀態的算法與單值共用同一份
+          const failCount = records.filter(r => !isSuccess(r)).length
+          await updateHealth(task.id, healthFromRecords(records, res.partial))
 
           if (failCount === 0) {
             const currentTask = await getTask(task.id)

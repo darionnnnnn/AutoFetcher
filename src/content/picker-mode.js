@@ -255,6 +255,15 @@ function updatePanel(panel, el) {
 
 // 設定當前目標元素
 function setTarget(el) {
+  // 換到另一張表格（或離開表格）時，先前選的列欄索引就沒有意義了；
+  // 不清掉會把 A 表的索引配上 B 表的定位一起送出去
+  const wasTable = currentTargetEl && isTableMode(currentTargetEl)
+  const nowTable = el && isTableMode(el)
+  if (selectedList.length > 0 && (!nowTable || (wasTable && el !== currentTargetEl))) {
+    clearPickedMarks(document)
+    selectedList = []
+    limitReached = false
+  }
   clearMarkedCells(document)
   currentTargetEl = el; currentDataRows = []; currentRowEl = null; colIndex = null; rowIndex = null; cellIndex = null
   if (!el) {
@@ -752,6 +761,7 @@ function onKeyDown(event) {
     if (currentTargetEl && isTableMode(currentTargetEl)) {
       event.preventDefault()
       tableAxis = tableAxis === 'col' ? 'row' : 'col'
+      limitReached = false
       cellIndex = tableAxis === 'row' ? rowIndex : colIndex
       selectedList = []
       clearPickedMarks(document)

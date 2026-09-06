@@ -44,7 +44,7 @@ export function buildTemplate(kind, tasks) {
     }
     specs.push({
       type: 'line',
-      title: '',
+      title: '趨勢總覽',
       w: 12,
       h: 3,
       source: numericSeriesIds.map(sid => ({ taskId: sid })),
@@ -90,7 +90,7 @@ export function buildTemplate(kind, tasks) {
     const specs = [
       {
         type: 'line',
-        title: '',
+        title: '比較趨勢',
         w: 12,
         h: 3,
         source: numericSeriesIds.map(sid => ({ taskId: sid })),
@@ -98,7 +98,7 @@ export function buildTemplate(kind, tasks) {
       },
       {
         type: 'table',
-        title: '',
+        title: '比較明細',
         w: 12,
         h: 3,
         source: allSeriesIds.map(sid => ({ taskId: sid })),
