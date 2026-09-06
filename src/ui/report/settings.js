@@ -10,8 +10,7 @@ import {
   getSite,
   saveSite,
   deleteSite,
-  getHealthMap
-} from '../../shared/storage.js'
+  getHealthMap, deleteHealthEntry } from '../../shared/storage.js'
 import { buildExport, download } from '../../shared/export.js'
 import { exportSettings, importSettings } from '../../shared/settings-io.js'
 import * as diag from '../../shared/diag.js'
@@ -348,6 +347,9 @@ function setupSitesListListeners() {
       site.enabled = nextEnabled
       if (nextEnabled) {
         site.failStreak = 0
+      } else {
+        // 停用後不再檢查，舊的失敗狀態要一併拿掉，否則燈號永遠紅著
+        await deleteHealthEntry('site:' + origin)
       }
       await saveSite(origin, site)
       await renderSitesList()

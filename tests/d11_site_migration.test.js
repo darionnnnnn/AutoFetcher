@@ -164,3 +164,15 @@ test('已經是新格式的站台不受遷移影響', async () => {
   assert.deepEqual(site.passwordEnc, original.passwordEnc)
   assert.deepEqual(site.loginCheck, original.loginCheck)
 })
+
+test('匯入舊版設定檔時,站台的 loginPageUrlPrefix 也要轉成 loginCheck', async () => {
+  const { st, io } = await fresh()
+  const legacy = JSON.stringify({
+    kind: 'autofetcher-settings', version: 1, exportedAt: '2026-01-01T00:00:00Z',
+    data: { tasks: [], sites: { [ORIGIN]: { loginPageUrlPrefix: `${ORIGIN}/login`, username: 'wayne' } }, settings: {}, layout: { dashboards: [] } }
+  })
+  await io.importSettings(legacy)
+  const s = await st.getSite(ORIGIN)
+  assert.deepEqual(s.loginCheck, { type: 'urlPrefix', value: `${ORIGIN}/login` }, '匯入要走與 init 相同的搬移')
+  assert.equal(s.loginPageUrlPrefix, undefined)
+})

@@ -262,3 +262,27 @@ test('沒有任何任務時,站台異常也不該讓燈號亮(整體已暫停)',
   const res = computeHealth([], { 'site:https://a.test': { status: 'login_failed' } }, [])
   assert.equal(res.level, 'off')
 })
+
+// ---- 站台停用或刪除後,燈號不能永遠紅著 ----
+
+test('停用站台會清掉它的健康項目(否則燈號永遠紅、沒有途徑清除)', async () => {
+  const { st, cr, se, doc } = await settings()
+  await site(st, cr)
+  await chrome.storage.local.set({ health: { [`site:${ORIGIN}`]: { status: 'login_failed', reason: '無法登入' } } })
+  await se.renderSettings()
+  doc.querySelector('#sites-list [data-action="site-toggle"]').click()
+  await new Promise(r => setTimeout(r, 30))
+  assert.equal((await st.getSite(ORIGIN)).enabled, false)
+  const health = await st.getHealthMap()
+  assert.equal(health[`site:${ORIGIN}`], undefined, '停用的站台不再檢查,舊的失敗狀態要一併拿掉')
+})
+
+test('刪除站台會清掉它的健康項目', async () => {
+  const { st, cr } = await fresh()
+  await site(st, cr)
+  await chrome.storage.local.set({ health: { [`site:${ORIGIN}`]: { status: 'login_failed' }, t1: { status: 'ok' } } })
+  await st.deleteSite(ORIGIN)
+  const health = await st.getHealthMap()
+  assert.equal(health[`site:${ORIGIN}`], undefined)
+  assert.deepEqual(health.t1, { status: 'ok' }, '別的項目不能被連帶清掉')
+})

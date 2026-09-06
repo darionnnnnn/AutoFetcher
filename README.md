@@ -40,7 +40,7 @@ Chrome 擴充功能:在網頁上直接點選要追蹤的數值或表格欄位,�
 
 ```bash
 npm install
-npm test          # 單元測試,基線 931 綠
+npm test          # 單元測試,基線 947 綠
 ./run_smoke.sh    # 真實瀏覽器端到端(需 Chrome for Testing)
 ```
 

@@ -28,34 +28,49 @@ const task = (over = {}) => ({
 
 // ---- 保留天數的偏好過去存了沒人讀 ----
 
-test('抓取後會清掉超過保留天數的舊紀錄', async () => {
+test('看門狗會清掉超過保留天數的舊紀錄', async () => {
   const { st } = await fresh()
-  const fe = await import('../src/background/fetcher.js?t=' + Math.random())
+  const wd = await import('../src/background/watchdog.js?t=' + Math.random())
   await st.saveSettings({ retentionDays: 7 })
-  await st.saveTask(task())
   await st.appendRecord('2020-01-01', { taskId: 't1', slot: '2020-01-01T09:00', capturedAt: '2020-01-01T09:00:00Z', value: 1, status: 'ok' })
-  assert.equal((await st.getRecordsByDate('2020-01-01')).length, 1)
-
-  const c = globalThis.chrome
-  c.__setTabResponder(() => ({ ok: true, value: 12, raw: '12', status: 'ok', strategyUsed: 'auto', layer: 'css' }))
-  await fe.runTask(task(), { slot: '2026-09-06T09:00', ...FAST })
-
+  await wd.runWatchdog()
   assert.equal((await st.getRecordsByDate('2020-01-01')).length, 0,
     '保留天數是設定頁的偏好,過去 trimOldRecords 定義了卻沒有任何呼叫端')
 })
 
-test('保留天數內的紀錄不得被清掉', async () => {
+test('清理一天只做一次(它要掃整個 storage,不能每 15 分鐘或每筆寫入都跑)', async () => {
+  const { c, st } = await fresh()
+  const wd = await import('../src/background/watchdog.js?t=' + Math.random())
+  await st.saveSettings({ retentionDays: 7 })
+  await wd.runWatchdog()
+  const before = c.__calls.filter(x => x.api === 'storage.local.get' && x.args[0] === null).length
+  await wd.runWatchdog()
+  await wd.runWatchdog()
+  const after = c.__calls.filter(x => x.api === 'storage.local.get' && x.args[0] === null).length
+  assert.equal(after, before, '同一天再跑不該再掃一次整個 storage')
+})
+
+test('抓取寫入紀錄時不得掃整個 storage', async () => {
   const { c, st } = await fresh()
   const fe = await import('../src/background/fetcher.js?t=' + Math.random())
-  await st.saveSettings({ retentionDays: 365 })
   await st.saveTask(task())
+  c.__setTabResponder(() => ({ ok: true, value: 12, raw: '12', status: 'ok', strategyUsed: 'auto', layer: 'css' }))
+  c.__calls.length = 0
+  await fe.runTask(task(), { slot: '2026-09-06T09:00', ...FAST })
+  const fullScans = c.__calls.filter(x => x.api === 'storage.local.get' && x.args[0] === null).length
+  assert.equal(fullScans, 0, '每筆抓取都把全部歷史載進記憶體是效能回歸')
+})
+
+test('保留天數內的紀錄不得被清掉', async () => {
+  const { st } = await fresh()
+  const wd = await import('../src/background/watchdog.js?t=' + Math.random())
+  await st.saveSettings({ retentionDays: 365 })
   const today = new Date()
   const pad = (n) => String(n).padStart(2, '0')
   const recent = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
   await st.appendRecord(recent, { taskId: 't1', slot: recent + 'T08:00', capturedAt: recent + 'T08:00:00Z', value: 1, status: 'ok' })
-  c.__setTabResponder(() => ({ ok: true, value: 12, raw: '12', status: 'ok', strategyUsed: 'auto', layer: 'css' }))
-  await fe.runTask(task(), { slot: recent + 'T09:00', ...FAST })
-  assert.ok((await st.getRecordsByDate(recent)).length >= 2)
+  await wd.runWatchdog()
+  assert.equal((await st.getRecordsByDate(recent)).length, 1)
 })
 
 // ---- popup 的「最後值」過去永遠是破折號 ----

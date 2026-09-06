@@ -34,6 +34,8 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 
 - **唯一排程入口**:background 的 alarm handler;content script 不得自己排程。
 - **唯一寫入入口**:`shared/storage`;JSON 匯出也從這裡走。UI 不得直接呼叫 `chrome.storage`。
+  例外只有 `shared/diag.js`(診斷環形緩衝)與 `shared/crypto.js`(`cryptoKey`),各自只管自己那一個鍵。
+- **不要把會掃整個 storage 的操作(`get(null)`)放在抓取寫入路徑上**:紀錄會累積到 MB 級;這類清理放看門狗並自帶一天一次的守衛。
 - **版面的唯一入口**:`shared/layout-store`(儀表板與卡片的增刪改),它自己只經 `shared/storage`。
 
 ## 文件地圖
@@ -45,7 +47,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 931 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 947 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅)。
   AF-2 靠突變抓到多處同義反覆的測試;併回前另做兩份獨立終檢(程式碼 + 文件),抓到 14 類真實缺陷。

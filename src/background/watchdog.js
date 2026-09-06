@@ -6,7 +6,7 @@ import {
   parseAlarmName,
   nextDailyRun
 } from './scheduler.js'
-import { getTasks } from '../shared/storage.js'
+import { getTasks, trimOldRecords } from '../shared/storage.js'
 import { ensureSiteCheck } from './sitecheck.js'
 import * as diag from '../shared/diag.js'
 
@@ -118,6 +118,13 @@ export async function runWatchdog() {
 
   try {
     await ensureSiteCheck()
+  } catch {}
+
+  // 保留天數的清理：會掃整個 storage，所以放在這裡且 trimOldRecords 自己保證一天只做一次
+  try {
+    const d = new Date()
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    await trimOldRecords(today)
   } catch {}
 
   try {

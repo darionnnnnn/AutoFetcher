@@ -155,8 +155,8 @@
 
 - 主資料:`chrome.storage.local`,`schemaVersion` 目前為 **2**
   - `tasks: Task[]`、`sites: Record<origin, Site>`、紀錄以 `rec:<YYYY-MM-DD>` 為鍵
-  - 其他鍵:`runs`(冪等帳本)、`missed`、`health`、`diag`、`layout`、`alertLog`、`cryptoKey`、`settings`;`storage.session.inflight`
-  - 保留天數預設 365,超過自動刪最舊(設定可調)。
+  - 其他鍵:`runs`(冪等帳本)、`missed`、`health`、`diag`、`layout`、`alertLog`、`cryptoKey`、`lastValues`、`lastTrimDate`、`settings`;`storage.session.inflight`
+  - 保留天數預設 365,超過自動刪最舊(設定可調);由看門狗執行,一天最多掃一次(`lastTrimDate`),不放在抓取寫入路徑。
 - 檔案匯出(**只在使用者手動觸發**,不自動下載):
   - Report 設定頁「匯出」區:選日期範圍(單日 / 本月 / 全部)與格式(JSON 日檔、CSV、獨立 HTML 報表 §8.5),
     按下才呼叫 `chrome.downloads.download`(`saveAs:true` 讓使用者選位置;預設檔名 `AutoFetcher/<YYYY-MM-DD>.json`)。

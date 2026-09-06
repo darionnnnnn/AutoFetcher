@@ -27,16 +27,22 @@ function keyToDate(key) {
 
 const SCHEMA_VERSION = 2
 
+// 站台的舊欄位 loginPageUrlPrefix 轉成 loginCheck（不碰密碼；init 遷移與設定匯入共用）
+export function normalizeSiteShape(site) {
+  const next = { ...site }
+  if (next.loginCheck === undefined && typeof next.loginPageUrlPrefix === 'string') {
+    next.loginCheck = { type: 'urlPrefix', value: next.loginPageUrlPrefix }
+  }
+  delete next.loginPageUrlPrefix
+  return next
+}
+
 // v1 → v2：站台從「登入頁前綴 + 明文密碼」改為「loginCheck + AES-GCM 密文」
 async function migrateSitesToV2(sites) {
   const migrated = {}
   for (const [origin, site] of Object.entries(sites)) {
     if (!site || typeof site !== 'object') continue
-    const next = { ...site }
-    if (next.loginCheck === undefined && typeof next.loginPageUrlPrefix === 'string') {
-      next.loginCheck = { type: 'urlPrefix', value: next.loginPageUrlPrefix }
-    }
-    delete next.loginPageUrlPrefix
+    const next = normalizeSiteShape(site)
     if (next.password !== undefined) {
       if (next.passwordEnc === undefined && typeof next.password === 'string' && next.password !== '') {
         next.passwordEnc = await encryptSecret(next.password)
@@ -183,6 +189,17 @@ export async function deleteSite(origin) {
   const sites = await getSites()
   delete sites[origin]
   await chrome.storage.local.set({ sites })
+  // 站台不在了，它的健康項目也要拿掉，否則燈號永遠紅著且沒有途徑清除
+  await deleteHealthEntry('site:' + origin)
+}
+
+// 移除一筆健康項目（任務 id 或 site:<origin>）
+export async function deleteHealthEntry(key) {
+  const res = await chrome.storage.local.get('health')
+  const health = res.health && typeof res.health === 'object' ? { ...res.health } : {}
+  if (!(key in health)) return
+  delete health[key]
+  await chrome.storage.local.set({ health })
 }
 
 // 追加紀錄至指定日期的 storage 鍵（rec:<date>）
@@ -249,6 +266,9 @@ export async function getRecordsInRange(from, to) {
 
 // 依 retentionDays 清理過期紀錄（retentionDays <= 0 時不刪除）
 export async function trimOldRecords(today) {
+  // 要掃整個 storage（含全部歷史紀錄），一天只做一次；由看門狗呼叫，不放在寫入路徑上
+  const stamp = await chrome.storage.local.get('lastTrimDate')
+  if (stamp.lastTrimDate === today) return
   const settings = await getSettings()
   const retentionDays = settings.retentionDays
   if (typeof retentionDays !== 'number' || retentionDays <= 0) return
@@ -262,6 +282,7 @@ export async function trimOldRecords(today) {
   if (toRemove.length > 0) {
     await chrome.storage.local.remove(toRemove)
   }
+  await chrome.storage.local.set({ lastTrimDate: today })
 }
 
 // 取得原始版面資料（無資料回傳 null）

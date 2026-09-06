@@ -1,5 +1,5 @@
 // AutoFetcher 擷取流程：開分頁、注入、擷取、寫紀錄、重試
-import { getTask, saveTask, appendRecord, getRecordsInRange, getSettings, getAlertLog, setAlertLog, setLastValue, trimOldRecords } from '../shared/storage.js'
+import { getTask, saveTask, appendRecord, getRecordsInRange, getSettings, getAlertLog, setAlertLog, setLastValue } from '../shared/storage.js'
 import { MSG } from '../shared/messages.js'
 import { slotOf } from './scheduler.js'
 import { notify } from './notify.js'
@@ -147,10 +147,6 @@ async function writeRecord(record) {
   if (isSuccess(record)) {
     await setLastValue(record.taskId, { value: record.value, capturedAt: record.capturedAt })
   }
-  // 保留天數是設定頁的偏好，總得有人真的去清
-  try {
-    await trimOldRecords(getLocalDateStr(new Date()))
-  } catch {}
   return record
 }
 
