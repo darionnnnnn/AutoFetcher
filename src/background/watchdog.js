@@ -7,6 +7,7 @@ import {
   nextDailyRun
 } from './scheduler.js'
 import { getTasks } from '../shared/storage.js'
+import { ensureSiteCheck } from './sitecheck.js'
 import * as diag from '../shared/diag.js'
 
 
@@ -113,6 +114,10 @@ async function cleanStuckInflight() {
 export async function runWatchdog() {
   try {
     await checkWatchdogAlarm()
+  } catch {}
+
+  try {
+    await ensureSiteCheck()
   } catch {}
 
   try {

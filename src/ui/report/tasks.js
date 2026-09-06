@@ -123,6 +123,23 @@ async function openDeleteDialog(taskId) {
 }
 
 // 建立單一任務列元素
+const AGGREGATE_TEXT = { max: '最大值', min: '最小值', avg: '平均', sum: '加總', count: '筆數' }
+
+// 描述抓取模式；區塊任務要看得出取哪一欄／列與聚合方式
+function describeMode(t) {
+  const mode = t.mode || 'number'
+  const block = t.spec?.block
+  if (mode !== 'block' || !block) return mode
+
+  const axisText = block.axis === 'row' ? '列' : '欄'
+  // index 是 0 起算，顯示給人看用 1 起算
+  const target = block.headerText
+    ? `「${block.headerText}」`
+    : (Number.isFinite(Number(block.index)) ? `第 ${Number(block.index) + 1} ${axisText}` : `某一${axisText}`)
+  const agg = AGGREGATE_TEXT[block.aggregate] || block.aggregate || '加總'
+  return `區塊 ${target}${block.headerText ? `這一${axisText}` : ''} ${agg}`
+}
+
 function createTaskRow(t) {
   const row = document.createElement('div')
   row.className = 'task-row'
@@ -157,8 +174,26 @@ function createTaskRow(t) {
 
   const modeEl = document.createElement('span')
   modeEl.className = 'task-mode'
-  modeEl.textContent = t.mode || 'number'
+  modeEl.textContent = describeMode(t)
   row.appendChild(modeEl)
+
+  // 有設告警 / 前置動作的任務要一眼看得出來，否則只能逐一點進去看
+  const activeAlerts = Array.isArray(t.alerts) ? t.alerts.filter((a) => a && a.enabled !== false) : []
+  if (activeAlerts.length > 0) {
+    const alertEl = document.createElement('span')
+    alertEl.className = 'task-alerts'
+    alertEl.textContent = `🔔 ${activeAlerts.length}`
+    alertEl.title = `${activeAlerts.length} 條告警條件`
+    row.appendChild(alertEl)
+  }
+
+  if (Array.isArray(t.preActions) && t.preActions.length > 0) {
+    const preEl = document.createElement('span')
+    preEl.className = 'task-preactions'
+    preEl.textContent = `前置 ${t.preActions.length}`
+    preEl.title = `抓取前會先執行 ${t.preActions.length} 個動作`
+    row.appendChild(preEl)
+  }
 
   const scheduleEl = document.createElement('span')
   scheduleEl.className = 'task-schedule'

@@ -20,6 +20,13 @@ export async function scheduleSiteCheck() {
   }
 }
 
+// 確認每日站台檢查的 alarm 還在；不在才補建（看門狗每 15 分鐘呼叫，不能每次都把時間往後推）
+export async function ensureSiteCheck() {
+  const existing = await chrome.alarms.get('__sitecheck')
+  if (existing) return
+  await scheduleSiteCheck()
+}
+
 // 執行每日站台健康檢查
 export async function runSiteCheck(opts = {}) {
   const pollMs = opts?.pollMs ?? 250
