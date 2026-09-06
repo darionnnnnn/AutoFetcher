@@ -102,6 +102,7 @@
 
 **B2(地端)cards + drawer**
 - 契約:table 卡片讀 `rowHeader`/`bucketMinutes`/`limit`,TSV 複製第一欄跟著 `rowHeader`;抽屜多三個欄位,來源清單可上下移動並即時寫回 `card.source` 順序;`layout-store.normalizeCard` 對三個新選項給預設。
+  (**實作時未照做**:`cards.js` 的渲染端已處理 undefined,再補一份等於兩個事實來源;預設值只留渲染端。)
 - 驗收:h3 新增(標頭、欄序跟 source、pivot 上限、bucket 生效)、i1 新增(順序按鈕改 source 順序)、g2 新增(預設值)。
 
 ---
@@ -118,7 +119,10 @@
 ### 定案
 
 1. 編輯模式下,儀表板左側(視窗 < 900px 時改為底部可收合)顯示**資料來源側欄**:列出全部啟用中任務(名稱、模式圖示、可搜尋),每項是拖曳來源;瀏覽模式不顯示。
-2. 拖曳協定抽成共用純邏輯 + 接線模組(`ui/report/dnd.js` 暫定):來源端提供 payload `{taskId}`,移動中畫跟隨的幽靈標籤,以 `document.elementFromPoint` 找目前落點的卡片或格線位置,合法目標高亮,放開時呼叫目標的 `onDrop(payload, position)`。
+2. 拖曳協定抽成共用純邏輯 + 接線模組(`ui/report/dnd.js`):來源端提供 payload `{taskId}`,移動中畫跟隨的幽靈標籤,找到目前落點的卡片或格線位置,合法目標高亮,放開時呼叫目標的 `onDrop(payload, position)`。
+   **實作時推翻初稿的 `document.elementFromPoint` 與 `data-drop-target` 屬性尋址**:jsdom 沒有
+   `elementFromPoint`(整組測試會掛),改成走訪已註冊目標比對矩形;這個做法額外讓「上層目標拒收就往下找」
+   成立,而那正是拖出移除放在別張卡片上能運作的前提。
 3. **投放規則(全部型別)**:
 
 | 目標 | 行為 |
@@ -131,7 +135,8 @@
 | 空白格線 | 建新卡:任務 `number`/`block` 模式 → `number` 卡;`text` 模式 → `table`(recent);放在最近的可放位置(`findFreeSlot` 從落點格子起找) |
 | 側欄或版面外 | 取消 |
 
-4. 新來源的 `aggregation` 取該卡片 `options.aggregation`,沒有則 `last`(沿用現有預設)。
+4. 新來源的 `aggregation` 取該卡片 `options.aggregation`,沒有則 `raw`。
+   (規劃初稿寫 `last` 是筆誤:`shared/aggregate.js` 沒有這個聚合,專案各處的既有預設是 `raw`。)
 5. **拖出移除**:table 卡片的欄標、line/bar 的圖例項可拖到卡片外放開即移除該來源(number/gauge 不可拖出,至少保留一個來源;table 拖到剩零欄允許,卡片顯示「拖任務進來」空狀態)。
 6. 所有投放都進 undo 堆疊(與現有 ⌘Z 同一機制),並經 `layout-store.updateCard`/`addCard` 寫入,不得另闢寫入口。
 7. 鍵盤替代仍列 BACKLOG(既有項目);抽屜勾選方式保留,兩條路徑寫同一個 `card.source`。
@@ -144,11 +149,11 @@
 
 **C2 側欄 + 投放到卡片**
 - 契約:編輯模式渲染側欄(任務來自 `shared/storage`,不直接讀 chrome.storage);七種型別的投放規則逐條照定案 3;經 `updateCard` 寫入並進 undo。
-- 驗收:`tests/j2_drop_cards.test.js`:每型別至少一條(含 table 插入位置、line 第 9 條拒絕、number 取代且自動標題更新/自訂標題不動、text 不高亮),undo 一次還原。
+- 驗收(實際切成三檔:`j2_drop_rules` 純規則、`j3_palette_drop` 側欄與接線、`j4_drop_create_remove` 建卡與移除):每型別至少一條(含 table 插入位置、line 第 9 條拒絕、number 取代且自動標題更新/自訂標題不動、text 不高亮),undo 一次還原。
 
 **C3 空白格建卡 + 拖出移除**
 - 契約:定案 3 最後兩列與定案 5;新卡位置經 `findFreeSlot`;table 零欄空狀態。
-- 驗收:`tests/j3_drop_create_remove.test.js`:number 模式建 number 卡、text 模式建 table 卡、位置不重疊、拖出移除、number 不可拖出、table 零欄顯示空狀態。
+- 驗收:`tests/j4_drop_create_remove.test.js`:number 模式建 number 卡、text 模式建 table 卡、位置不重疊、拖出移除、number 不可拖出、table 零欄顯示空狀態。
 
 ---
 
@@ -225,3 +230,20 @@ status 卡片加得進拿不出(且移除路徑寫死 `source`)、`pointercancel
 一項揭露 `pivot` 裡的排序其實是多餘的(取最新是逐筆比較,與順序無關),已刪。
 
 **收官**:`npm test` **1125 綠**(基線 947 → +178),真實瀏覽器煙霧測試 13 項全過。
+
+
+## 定案落實核對(最後一次,實作全部完成後)
+
+再開一份獨立 Explore 逐條比對「定案 → 程式碼」,結果:
+
+- 作業 A 全 11 條、作業 B 全 9 條、作業 C 全 16 條,除下列四處字面差異外**全部落實**;
+  「明確不做」六項逐一查證,確實都沒有被偷偷實作。
+- **核對過程自己另外抓到兩項真落差並已修**(commit `6582812`):
+  1. 「有效時刻只有一份」其實還有三份:`buildSeries` 的每日聚合、`latest` 的排序與前一日比較都還在只看 `slot`。
+     後果是沒有 slot 的紀錄在數值卡片被當成最舊、在每日聚合整筆消失,與表格給出不同答案。
+  2. 側欄的窄視窗規則**根本不存在**,而我原本的驗證測試是跨整份檔案的鬆散比對,
+     任何一條 `@media` 都能讓它通過(同義反覆)。已補規則與收合鈕,並把測試改成逐個 media 區塊解析。
+- **與定案字面不同但刻意如此的四處**(文件已就地更正):
+  `normalizeCard` 不補預設(避免兩個事實來源)、拖曳尋址不用 `elementFromPoint`(jsdom 沒有,
+  且改法讓「上層拒收往下找」成立)、`aggregation` fallback 是 `raw`(初稿的 `last` 是筆誤)、
+  C2/C3 的測試檔切成三檔。
