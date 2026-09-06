@@ -186,9 +186,21 @@ export function latest(records, taskId, today) {
 /**
  * 將多任務紀錄依排程槽轉置為表格形狀
  */
-export function pivot(records, taskIds, taskOrder) {
+export function pivot(records, taskIds, taskOrderOrOptions) {
   if (!records || records.length === 0 || !taskIds || taskIds.length === 0) {
     return { columns: [], rows: [] };
+  }
+
+  let taskOrder = [];
+  let bucketMinutes = 0;
+  let limit = 0;
+
+  if (Array.isArray(taskOrderOrOptions)) {
+    taskOrder = taskOrderOrOptions;
+  } else if (taskOrderOrOptions && typeof taskOrderOrOptions === 'object') {
+    taskOrder = taskOrderOrOptions.taskOrder || [];
+    bucketMinutes = taskOrderOrOptions.bucketMinutes || 0;
+    limit = taskOrderOrOptions.limit || 0;
   }
 
   const targetIds = new Set(taskIds);
@@ -214,36 +226,125 @@ export function pivot(records, taskIds, taskOrder) {
     return { columns: [], rows: [] };
   }
 
-  const relevant = records.filter(r => r && targetIds.has(r.taskId) && r.slot);
-  if (relevant.length === 0) {
+  // 1. 找出所有有效紀錄並計算有效時刻
+  const processedRecords = [];
+  for (const r of records) {
+    if (!r || !targetIds.has(r.taskId)) continue;
+
+    let timeStr = '';
+    if (r.slot) {
+      timeStr = r.slot;
+    } else if (r.capturedAt) {
+      timeStr = r.capturedAt.slice(0, 16);
+    }
+
+    if (!timeStr) continue;
+
+    // 解析時間字串 (YYYY-MM-DDTHH:mm)
+    const y = parseInt(timeStr.substring(0, 4));
+    const m = parseInt(timeStr.substring(5, 7)) - 1;
+    const d = parseInt(timeStr.substring(8, 10));
+    const hh = parseInt(timeStr.substring(11, 13));
+    const mm = parseInt(timeStr.substring(14, 16));
+
+    let bucketKey = timeStr.slice(0, 16);
+
+    // 2. 處理 bucketMinutes
+    if (Number.isInteger(bucketMinutes) && bucketMinutes > 0) {
+      const totalMinutesSinceStartOfDay = hh * 60 + mm;
+      const bucketMinutesSinceStartOfDay = Math.floor(totalMinutesSinceStartOfDay / bucketMinutes) * bucketMinutes;
+      const bH = Math.floor(bucketMinutesSinceStartOfDay / 60);
+      const bM = bucketMinutesSinceStartOfDay % 60;
+      
+      // 格式化回 YYYY-MM-DDTHH:mm
+      const pad = (n) => String(n).padStart(2, '0');
+      bucketKey = `${y}-${pad(m + 1)}-${pad(d)}T${pad(bH)}:${pad(bM)}`;
+    }
+
+    // slot 與 capturedAt 都是本地時間字串,一律用字串比較排序,
+    // 不用 new Date(字串) 解析(會被當成 UTC 或依實作而異)
+    processedRecords.push({
+      ...r,
+      effectiveTime: timeStr,
+      bucketKey: bucketKey
+    });
+  }
+
+  if (processedRecords.length === 0) {
     return { columns, rows: [] };
   }
 
-  const sortedRelevant = [...relevant].sort((a, b) => {
-    const cmp = (a.slot || '').localeCompare(b.slot || '');
-    if (cmp !== 0) return cmp;
-    return (a.capturedAt || '').localeCompare(b.capturedAt || '');
+  // 3. 分組與計算
+  // 使用 Map 儲存每一列的資料
+  // key: bucketKey, value: { taskMap: Map<taskId, {value, capturedAt}>, merged: Map<taskId, count> }
+  const bucketMap = new Map();
+
+  // 排序 processedRecords 以確保處理順序（雖然主要靠 bucketKey 分組，但為了正確取最新值，需按 capturedAt 排序）
+  const sortedRecords = [...processedRecords].sort((a, b) => {
+    const timeA = a.capturedAt || a.slot || '';
+    const timeB = b.capturedAt || b.slot || '';
+    return timeA.localeCompare(timeB);
   });
 
-  const slots = Array.from(new Set(sortedRelevant.map(r => r.slot))).sort();
-  const slotMap = new Map();
-
-  for (const r of sortedRelevant) {
-    if (!slotMap.has(r.slot)) {
-      slotMap.set(r.slot, new Map());
+  for (const r of sortedRecords) {
+    if (!bucketMap.has(r.bucketKey)) {
+      bucketMap.set(r.bucketKey, {
+        taskMap: new Map(), // taskId -> { value, capturedAt }
+        merged: new Map()   // taskId -> count
+      });
     }
-    const val = isSuccess(r) ? (r.value ?? null) : null;
-    slotMap.get(r.slot).set(r.taskId, val);
+    const bucket = bucketMap.get(r.bucketKey);
+
+    // 更新 merged 計數
+    const currentCount = bucket.merged.get(r.taskId) || 0;
+    bucket.merged.set(r.taskId, currentCount + 1);
+
+    // 更新值 (取 capturedAt 最大且成功的)
+    const existing = bucket.taskMap.get(r.taskId);
+    const rCapturedAt = r.capturedAt || r.slot || '';
+    
+    // 判斷是否要覆蓋：如果目前這筆是成功的，且 (目前沒紀錄 或 這筆比舊的更晚)
+    // 這裡的「最新」定義是 capturedAt 最大
+    if (isSuccess(r)) {
+      if (!existing || rCapturedAt > existing.capturedAt) {
+        bucket.taskMap.set(r.taskId, {
+          value: r.value,
+          capturedAt: rCapturedAt
+        });
+      }
+    }
+    // 失敗的紀錄只算進 merged,不寫入 taskMap:
+    // 該任務在這一桶一筆成功都沒有時,下面就會取到 null
   }
 
-  const rows = slots.map(t => {
-    const taskVals = slotMap.get(t);
+  // 4. 產生 Rows
+  // 取得所有出現過的 bucketKey 並排序 (由舊到新)
+  const sortedBucketKeys = Array.from(bucketMap.keys()).sort();
+
+  let rows = sortedBucketKeys.map(t => {
+    const bucket = bucketMap.get(t);
     const values = {};
     for (const col of columns) {
-      values[col] = taskVals && taskVals.has(col) ? taskVals.get(col) : null;
+      const taskData = bucket.taskMap.get(col);
+      values[col] = taskData ? (taskData.value ?? null) : null;
     }
-    return { t, values };
+    
+    const merged = {};
+    for (const [taskId, count] of bucket.merged.entries()) {
+      merged[taskId] = count;
+    }
+
+    return { t, values, merged };
   });
+
+  // 5. 處理 Limit (保留時間最新的 N 列)
+  if (Number.isInteger(limit) && limit > 0) {
+    if (rows.length > limit) {
+      // 找出最後 N 個，但維持原本的順序 (由舊到新)
+      // 這裡的「最新」是指 bucketKey 的時間順序
+      rows = rows.slice(rows.length - limit);
+    }
+  }
 
   return { columns, rows };
 }
