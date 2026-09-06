@@ -5,6 +5,7 @@ import { slotOf } from './scheduler.js'
 import { notify } from './notify.js'
 import { injectContent } from './inject.js'
 import { evaluateAlerts } from '../shared/alerts.js'
+import { setTaskHealth, refreshBadge } from './health.js'
 
 // 短暫等待輔助函式（非排程）
 function sleep(ms) {
@@ -278,7 +279,7 @@ export async function runTask(task, opts = {}) {
         }
 
         const status = reason === 'late' ? 'late' : (res.status || 'ok')
-        return await writeRecord({
+        const record = {
           taskId: task.id,
           slot,
           capturedAt: new Date().toISOString(),
@@ -287,7 +288,21 @@ export async function runTask(task, opts = {}) {
           status,
           strategyUsed: res.strategyUsed,
           layer: res.layer
-        })
+        }
+
+        if (res.used !== undefined) {
+          record.used = res.used
+        }
+        if (res.skipped !== undefined) {
+          record.skipped = res.skipped
+        }
+        if (res.partial === true) {
+          record.partial = true
+          await setTaskHealth(task.id, { status: 'partial', reason: '只抓到部分', detail: '' })
+          await refreshBadge()
+        }
+
+        return await writeRecord(record)
       }
 
       // 結果處理：元素未找到（可重試）

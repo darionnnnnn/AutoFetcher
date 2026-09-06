@@ -1,4 +1,6 @@
 // AutoFetcher 數值擷取策略鏈與後處理
+import { parseTable } from './table.js'
+import { aggregateCells } from './aggregate.js'
 
 const STRATEGY_ORDER = ['auto', 'regex', 'attr', 'child', 'label']
 
@@ -94,6 +96,11 @@ export function parseNumber(text) {
   // 去除數字之間的空白
   str = str.replace(/(\d)\s+(?=\d)/g, '$1')
 
+  // 日期格式（如 09-02、2026-09-02）不視為數值
+  if (/^\d{1,4}[-/]\d{1,2}(?:[-/]\d{1,4})?$/.test(str.trim())) {
+    return null
+  }
+
   // 抓取第一個數值片段
   const match = str.match(/-?\d+(?:\.\d+)?/)
   if (!match) return null
@@ -120,6 +127,74 @@ export function extractValue(el, spec = {}) {
   }
 
   const opts = spec || {}
+
+  // 區塊（block）模式：解析表格並聚合指定欄或列，不走數值策略鏈
+  if (opts.mode === 'block') {
+    const block = opts.block || {}
+    const table = parseTable(el)
+    if (!table.cells || table.cells.length === 0) {
+      return { ok: false, error: 'not_found' }
+    }
+
+    let targetIndex = block.index
+    let status = 'ok'
+    let values = []
+
+    if (block.axis === 'row') {
+      // 列模式：直接依 index 取整列
+      if (typeof targetIndex !== 'number' || targetIndex < 0 || targetIndex >= table.cells.length) {
+        return { ok: false, error: 'not_found' }
+      }
+      values = table.cells[targetIndex]
+    } else {
+      // 欄模式（col）
+      const headerText = typeof block.headerText === 'string' ? block.headerText.trim() : ''
+      if (headerText) {
+        const foundIndex = (table.headers || []).indexOf(headerText)
+        if (foundIndex === -1) {
+          return { ok: false, error: 'not_found' }
+        }
+        if (foundIndex !== targetIndex) {
+          targetIndex = foundIndex
+          status = 'fallback'
+        }
+      }
+
+      // 取值：每一列的第 targetIndex 格
+      // 超出範圍：若所有列都沒有那一格，回 not_found
+      values = []
+      for (const row of table.cells) {
+        if (targetIndex >= 0 && targetIndex < row.length) {
+          values.push(row[targetIndex])
+        }
+      }
+      if (values.length === 0) {
+        return { ok: false, error: 'not_found' }
+      }
+    }
+
+    const agg = aggregateCells(values, block.aggregate)
+    const raw = values.join(', ')
+
+    if (agg.value === null) {
+      return {
+        ok: false,
+        error: 'parse_error',
+        raw
+      }
+    }
+
+    return {
+      ok: true,
+      value: agg.value,
+      raw,
+      status,
+      strategyUsed: 'block',
+      used: agg.used,
+      skipped: agg.skipped,
+      partial: Boolean(table.partial)
+    }
+  }
 
   // 文字模式不執行策略鏈
   if (opts.mode === 'text') {

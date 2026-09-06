@@ -272,6 +272,7 @@ export async function renderFilters() {
     { key: 'fallback', label: '備援 (fallback)' },
     { key: 'late', label: '逾時 (late)' },
     { key: 'not_found', label: '未找到 (not_found)' },
+    { key: 'parse_error', label: '抓不到數值 (parse_error)' },
     { key: 'error', label: '錯誤 (error)' }
   ]
   for (const item of allStatuses) {
@@ -524,6 +525,13 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
         ['排定時間 (slot)', record.slot ?? '—'], ['擷取時間 (capturedAt)', record.capturedAt ?? '—'],
         ['時間差 (diff)', diffText]
       ]
+      if (record.strategyUsed === 'block') {
+        detailItems.push(['聚合格數 (used)', record.used ?? '—'])
+        detailItems.push(['略過格數 (skipped)', record.skipped ?? 0])
+        if (record.partial === true) {
+          detailItems.push(['只抓到部分 (partial)', '是（表格可能有未載入的列）'])
+        }
+      }
       if (record.alert === true) {
         detailItems.push(['告警 (alert)', (Array.isArray(record.alertHits) && record.alertHits.length > 0) ? record.alertHits.join(', ') : '是'])
       }

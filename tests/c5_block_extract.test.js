@@ -153,3 +153,48 @@ test('沒有 partial 時紀錄不得多出這些鍵', async () => {
   assert.equal(rec.partial, undefined)
   assert.equal(rec.used, 3)
 })
+
+// ---- 報表顯示 ----
+
+test('歷史頁的狀態篩選要涵蓋所有真的會產生的狀態', async () => {
+  resetChromeMock()
+  installChromeMock()
+  const { readFileSync } = await import('node:fs')
+  const st = await import('../src/shared/storage.js?t=' + Math.random())
+  await st.init()
+  const html = readFileSync(new URL('../src/ui/report/report.html', import.meta.url), 'utf8')
+  const jd = new JSDOM(html, { url: 'https://x/report.html' })
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  const rp = await import('../src/ui/report/report.js?t=' + Math.random())
+  await rp.renderFilters()
+  const keys = [...jd.window.document.querySelectorAll('#filter-statuses input[type="checkbox"]')].map(cb => cb.value)
+  for (const k of ['ok', 'fallback', 'late', 'not_found', 'parse_error', 'error']) {
+    assert.ok(keys.includes(k), `狀態篩選缺少 ${k}(實際會寫出這個狀態卻篩不到),實得 ${keys.join(',')}`)
+  }
+})
+
+test('歷史列的策略欄對 block 模式要說明取了哪一欄與聚合方式', async () => {
+  resetChromeMock()
+  installChromeMock()
+  const { readFileSync } = await import('node:fs')
+  const st = await import('../src/shared/storage.js?t=' + Math.random())
+  await st.init()
+  const html = readFileSync(new URL('../src/ui/report/report.html', import.meta.url), 'utf8')
+  const jd = new JSDOM(html, { url: 'https://x/report.html' })
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  const rp = await import('../src/ui/report/report.js?t=' + Math.random())
+  rp.renderTable([{
+    taskId: 't1', slot: '2026-09-06T09:00', capturedAt: '2026-09-06T09:00:05+08:00',
+    value: 49, status: 'ok', strategyUsed: 'block', used: 3, skipped: 1, partial: true
+  }])
+  const row = jd.window.document.querySelector('#record-table tbody tr:not(.detail)')
+  row.click()
+  const detail = jd.window.document.querySelector('#record-table tbody tr.detail')
+  assert.ok(detail, '要能展開細節')
+  const text = detail.textContent
+  assert.ok(text.includes('3'), `要看得到用了幾格,實得:${text}`)
+  assert.ok(/略過|skipped/.test(text), `要看得到跳過幾格,實得:${text}`)
+  assert.ok(/部分|partial/.test(text), `partial 要讓使用者知道只抓到一部分,實得:${text}`)
+})

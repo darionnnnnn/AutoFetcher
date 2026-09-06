@@ -197,6 +197,23 @@ try {
     console.log(`${browserName}:通知送出正常`)
   }
 
+  // 5c. 區塊聚合:對 fixture 的表格取「數量」欄加總（10 + 32 = 42）
+  const blockResult = await ext2.evaluate(async () => {
+    const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/*' })
+    return chrome.tabs.sendMessage(tabs[0].id, {
+      type: 'EXTRACT',
+      locator: { css: '#t', path: '', anchor: null, xpath: '' },
+      spec: { mode: 'block', block: { axis: 'col', index: 1, headerText: '數量', aggregate: 'sum' } }
+    })
+  })
+  if (blockResult?.ok !== true) {
+    errors.push(`區塊聚合失敗:${JSON.stringify(blockResult)}`)
+  } else if (blockResult.value !== 42) {
+    errors.push(`區塊聚合應得 42,實得 ${blockResult.value}`)
+  } else {
+    console.log(`${browserName}:區塊聚合正常 (數量欄加總 = ${blockResult.value})`)
+  }
+
   // 5b. 選取模式:真的在網頁上畫出 overlay,離開時收乾淨
   const pickResult = await ext2.evaluate(async () => {
     const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/*' })
