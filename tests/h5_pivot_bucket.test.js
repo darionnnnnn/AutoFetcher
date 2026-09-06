@@ -25,10 +25,10 @@ test('bucketMinutes 0(或未給)時逐筆比對,行為與舊版一致', async ()
   assert.deepEqual(out.rows.map(r => r.t), ['2026-09-07T09:00', '2026-09-07T09:01'])
 })
 
-test('沿用舊呼叫方式(第三參數是 taskOrder 陣列)仍然可用', async () => {
+test('第三參數只接受 options 物件;誤傳陣列時視為沒給選項(不可炸)', async () => {
   const recs = [rec('a', '2026-09-07T09:00', 1), rec('b', '2026-09-07T09:00', 2)]
   const out = pivot(recs, IDS, ['b', 'a'])
-  assert.deepEqual(out.columns, ['b', 'a'], '舊的位置參數不可失效')
+  assert.deepEqual(out.columns, ['a', 'b'], '陣列簽章已收斂,欄序退回 taskIds 順序')
 })
 
 test('bucketMinutes 5:09:01 與 09:03 併進 09:00 這一列', async () => {

@@ -734,7 +734,7 @@ function registerCardDropTarget(cardEl, card, ctx) {
 /**
  * 把落點座標換算成格線上的欄列(夾在合法範圍內)
  */
-function gridCellAt(grid, pos, w, h) {
+function gridCellAt(grid, pos, w) {
   if (!grid || !pos || typeof grid.getBoundingClientRect !== 'function') return { x: 0, y: 0 }
   const rect = grid.getBoundingClientRect()
   if (!rect || !rect.width) return { x: 0, y: 0 }
@@ -742,7 +742,6 @@ function gridCellAt(grid, pos, w, h) {
   const rowHeight = 80
   const x = Math.max(0, Math.min(12 - w, Math.floor((pos.x - rect.left) / colWidth)))
   const y = Math.max(0, Math.floor((pos.y - rect.top) / rowHeight))
-  void h
   return { x, y }
 }
 
@@ -816,7 +815,7 @@ function registerGridDropTarget(grid) {
         if (!currentDash) return
 
         // 落點所在的格子當作希望的位置;放不下時交給 addCard 自己找空位
-        const wanted = gridCellAt(grid, pos, w, h)
+        const wanted = gridCellAt(grid, pos, w)
         const newCard = {
           type,
           w,
@@ -1004,8 +1003,6 @@ export async function renderDashboard(dashId) {
     grid.classList.remove('single-column')
   }
 
-  updateEditingUI()
-
   const ctx = await buildDashboardContext(dash)
   const cards = Array.isArray(dash.cards) ? dash.cards : []
 
@@ -1027,6 +1024,9 @@ export async function renderDashboard(dashId) {
     registerCardDropTarget(cardEl, card, ctx)
     grid.appendChild(cardEl)
   }
+
+  // 放在卡片都掛上之後:它會逐個把手設顯示/隱藏,放前面只會打在即將丟棄的舊 DOM 上
+  updateEditingUI()
 }
 
 /**

@@ -388,11 +388,7 @@ function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
     const matched = filteredRecords.filter(r => sourceTaskIds.size === 0 || sourceTaskIds.has(r.taskId));
 
     // 由新到舊排序
-    const sorted = [...matched].sort((a, b) => {
-      const ta = a.slot || a.capturedAt || '';
-      const tb = b.slot || b.capturedAt || '';
-      return tb.localeCompare(ta);
-    });
+    const sorted = [...matched].sort((a, b) => effectiveTimeOf(b).localeCompare(effectiveTimeOf(a)));
 
     const limit = typeof card.options?.limit === 'number' && card.options.limit > 0 ? card.options.limit : 10;
     const sliced = sorted.slice(0, limit);
@@ -410,7 +406,7 @@ function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
       const tr = document.createElement('tr');
 
       const timeTd = document.createElement('td');
-      timeTd.textContent = r.slot || r.capturedAt || '';
+      timeTd.textContent = effectiveTimeOf(r);
       tr.appendChild(timeTd);
 
       const taskTd = document.createElement('td');
@@ -437,7 +433,7 @@ function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
       tr.appendChild(statusTd);
 
       tbody.appendChild(tr);
-      tsvRows.push([r.slot || r.capturedAt || '', taskName, valRaw, r.status || '']);
+      tsvRows.push([effectiveTimeOf(r), taskName, valRaw, r.status || '']);
     }
   }
 

@@ -4,6 +4,7 @@ import { getTasks, getRecordsByDate, getRecordsInRange, getHealthMap, getMissedL
 import { getLayout } from './layout-store.js'
 import { renderCard } from '../ui/report/cards.js'
 import { isSuccess } from './record-status.js'
+import { effectiveTimeOf } from '../ui/report/series.js'
 
 // 跳脫 HTML 特殊字元
 function escapeHtml(str) {
@@ -177,14 +178,12 @@ export async function buildHtmlReport({ from, to, dashId }) {
   if (!records || records.length === 0) {
     recordsTableHtml = '<p class="empty-state">所選範圍內沒有紀錄資料</p>'
   } else {
-    const sortedRecords = [...records].sort((a, b) => {
-      const timeA = a.slot || a.capturedAt || a.date || ''
-      const timeB = b.slot || b.capturedAt || b.date || ''
-      return timeA.localeCompare(timeB)
-    })
+    // 時間一律用有效時刻(slot 是本地、capturedAt 是 UTC,不可混著比字串)
+    const sortedRecords = [...records].sort((a, b) =>
+      (effectiveTimeOf(a) || a.date || '').localeCompare(effectiveTimeOf(b) || b.date || ''))
 
     const rows = sortedRecords.map(r => {
-      const time = r.slot || r.capturedAt || r.date || ''
+      const time = effectiveTimeOf(r) || r.date || ''
       const taskName = taskMap.get(r.taskId) ?? r.taskId ?? ''
       const val = r.value !== undefined && r.value !== null
         ? String(r.value)

@@ -894,7 +894,7 @@ export function renderPivot(records = [], tasks = []) {
   const taskIds = sortedTasks.map(t => t.id)
   const taskNamesById = new Map(sortedTasks.map(t => [t.id, t.name || t.id]))
 
-  const { columns, rows } = pivot(records, taskIds, taskIds)
+  const { columns, rows } = pivot(records, taskIds, { taskOrder: taskIds })
 
   const headerCells = ['時間', ...columns.map(id => taskNamesById.get(id) || id)]
   thead.appendChild(createTableRow(headerCells, true))

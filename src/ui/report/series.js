@@ -79,9 +79,9 @@ export function buildSeries(records, source, options = {}) {
     let points = [];
 
     if (agg === 'raw') {
-      const sorted = [...matched].sort((a, b) => (a.slot || '').localeCompare(b.slot || ''));
+      const sorted = [...matched].sort((a, b) => sortKeyOf(a) - sortKeyOf(b));
       points = sorted.map(r => ({
-        t: r.slot,
+        t: effectiveTimeOf(r),
         v: isSuccess(r) && typeof r.value === 'number' && Number.isFinite(r.value) ? r.value : null
       }));
     } else {
@@ -107,8 +107,7 @@ export function buildSeries(records, source, options = {}) {
         let v = null;
         switch (agg) {
           case 'dailyLast': {
-            const sorted = [...valids].sort((a, b) =>
-              (effectiveTimeOf(a) || '').localeCompare(effectiveTimeOf(b) || ''));
+            const sorted = [...valids].sort((a, b) => sortKeyOf(a) - sortKeyOf(b));
             v = sorted[sorted.length - 1].value;
             break;
           }
@@ -173,8 +172,7 @@ export function latest(records, taskId, today) {
 
   // 排序用有效時刻:只看 slot 的話,手動觸發/補抓(沒有 slot)會被當成最舊,
   // 數值卡片就會顯示舊值,而表格顯示新值
-  const sorted = [...matched].sort((a, b) =>
-    (effectiveTimeOf(a) || '').localeCompare(effectiveTimeOf(b) || ''));
+  const sorted = [...matched].sort((a, b) => sortKeyOf(a) - sortKeyOf(b));
   const current = sorted[sorted.length - 1];
   const prev = sorted.length >= 2 ? sorted[sorted.length - 2] : null;
 
@@ -194,8 +192,8 @@ export function latest(records, taskId, today) {
  */
 function sortKeyOf(record) {
   if (record?.capturedAt) {
-    const ms = Date.parse(record.capturedAt)
-    if (Number.isFinite(ms)) return ms
+    const ms = Date.parse(record.capturedAt);
+    if (Number.isFinite(ms)) return ms;
   }
   const eff = effectiveTimeOf(record);
   if (!eff) return -Infinity;
@@ -209,29 +207,36 @@ function sortKeyOf(record) {
  */
 export function effectiveTimeOf(record) {
   if (!record) return '';
-  // slot 本來就是本地時間字串,原樣採用
+  // slot 本來就是本地時間字串,原樣採用;格式不合(髒資料)就退到 capturedAt,不可整筆丟掉
   if (record.slot) {
     const slot = String(record.slot).slice(0, 16);
-    return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(slot) ? slot : '';
+    if (LOCAL_MINUTE_RE.test(slot)) return slot;
   }
   // capturedAt 是 new Date().toISOString() 的產物(UTC,帶 Z),
   // 直接切字串會和本地時間的 slot 差好幾個時區,必須換算回本地時刻
-  if (record.capturedAt) return toLocalMinute(record.capturedAt);
+  if (record.capturedAt != null) return toLocalMinute(record.capturedAt);
   return '';
 }
+
+const LOCAL_MINUTE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 
 /**
  * 把時間字串換算成本地時間的 YYYY-MM-DDTHH:mm;無法解析時回空字串。
  * 不帶 Z 也不帶 offset 的字串視為本地時間(舊資料)。
  */
 function toLocalMinute(value) {
-  const raw = String(value);
-  const hasZone = /[Zz]$|[+-]\d{2}:?\d{2}$/.test(raw);
-  if (!hasZone) {
-    const plain = raw.slice(0, 16);
-    return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(plain) ? plain : '';
+  let ms;
+  if (value instanceof Date || typeof value === 'number') {
+    ms = Number(value);
+  } else {
+    const raw = String(value);
+    const hasZone = /[Zz]$|[+-]\d{2}:?\d{2}$/.test(raw);
+    if (!hasZone) {
+      const plain = raw.slice(0, 16);
+      if (LOCAL_MINUTE_RE.test(plain)) return plain;
+    }
+    ms = Date.parse(raw);
   }
-  const ms = Date.parse(raw);
   if (!Number.isFinite(ms)) return '';
   const d = new Date(ms);
   const pad = (n) => String(n).padStart(2, '0');
@@ -241,22 +246,14 @@ function toLocalMinute(value) {
 /**
  * 將多任務紀錄依排程槽轉置為表格形狀
  */
-export function pivot(records, taskIds, taskOrderOrOptions) {
+export function pivot(records, taskIds, options = {}) {
   if (!records || records.length === 0 || !taskIds || taskIds.length === 0) {
     return { columns: [], rows: [] };
   }
 
-  let taskOrder = [];
-  let bucketMinutes = 0;
-  let limit = 0;
-
-  if (Array.isArray(taskOrderOrOptions)) {
-    taskOrder = taskOrderOrOptions;
-  } else if (taskOrderOrOptions && typeof taskOrderOrOptions === 'object') {
-    taskOrder = taskOrderOrOptions.taskOrder || [];
-    bucketMinutes = taskOrderOrOptions.bucketMinutes || 0;
-    limit = taskOrderOrOptions.limit || 0;
-  }
+  const taskOrder = options?.taskOrder || [];
+  const bucketMinutes = options?.bucketMinutes || 0;
+  const limit = options?.limit || 0;
 
   const targetIds = new Set(taskIds);
   const columns = [];
@@ -330,7 +327,7 @@ export function pivot(records, taskIds, taskOrderOrOptions) {
     // 更新值 (取 capturedAt 最大且成功的)
     const existing = bucket.taskMap.get(r.taskId);
     const rCapturedAt = sortKeyOf(r);
-    
+
     // 判斷是否要覆蓋：如果目前這筆是成功的，且 (目前沒紀錄 或 這筆比舊的更晚)
     // 這裡的「最新」定義是 capturedAt 最大
     if (isSuccess(r)) {
@@ -356,7 +353,7 @@ export function pivot(records, taskIds, taskOrderOrOptions) {
       const taskData = bucket.taskMap.get(col);
       values[col] = taskData ? (taskData.value ?? null) : null;
     }
-    
+
     const merged = {};
     for (const [taskId, count] of bucket.merged.entries()) {
       merged[taskId] = count;

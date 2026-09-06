@@ -1,6 +1,7 @@
 // 共用拖曳協定模組（Pointer Events 原生實作，無框架、無第三方相依）
 
-export const DRAG_THRESHOLD_PX = 4;
+// 移動超過這個距離才算拖曳(否則一般點擊會被誤判)
+const DRAG_THRESHOLD_PX = 4;
 
 let dragging = false;
 let pendingDrag = null;
@@ -219,8 +220,19 @@ function onPointerUp(e) {
 /**
  * 指標取消事件處理（等同取消拖曳）
  */
-function onPointerCancel() {
+function onPointerCancel(e) {
   if (!pendingDrag) return;
+  // 與 move/up 同一條防護:別根手指的取消不可打斷這次拖曳
+  if (e && e.pointerId !== undefined && pendingDrag.pointerId !== undefined && e.pointerId !== pendingDrag.pointerId) {
+    return;
+  }
+  abortDrag();
+}
+
+/**
+ * 中止拖曳(取消鍵、pointercancel 共用):通知目前目標離開,再清乾淨
+ */
+function abortDrag() {
   if (currentActiveTarget && typeof currentActiveTarget.handlers.onLeave === 'function') {
     try {
       currentActiveTarget.handlers.onLeave();
@@ -233,14 +245,7 @@ function onPointerCancel() {
  * 鍵盤事件處理（Escape 取消）
  */
 function onKeyDown(e) {
-  if (e.key === 'Escape') {
-    if (currentActiveTarget && typeof currentActiveTarget.handlers.onLeave === 'function') {
-      try {
-        currentActiveTarget.handlers.onLeave();
-      } catch {}
-    }
-    cleanup();
-  }
+  if (e.key === 'Escape' && pendingDrag) abortDrag();
 }
 
 /**

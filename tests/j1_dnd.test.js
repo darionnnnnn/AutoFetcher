@@ -278,3 +278,17 @@ test('第二根手指移動不可改變第一根手指的投放目標', () => {
   up(250, 250)
   assert.deepEqual(hit, ['a'], '別根手指的座標不可劫持目標')
 })
+
+test('別根手指的 pointercancel 不可打斷正在進行的拖曳', () => {
+  const src = setup()
+  const tgt = makeTarget('t', [200, 200, 300, 300])
+  let dropped = 0
+  DND.createDragSource(src, () => ({ taskId: 't1' }))
+  DND.registerDropTarget(tgt, { accepts: () => true, onDrop: () => dropped++ })
+  down(src, 0, 0)
+  move(250, 250)
+  document.dispatchEvent(pointer('pointercancel', 250, 250, { pointerId: 2 }))
+  assert.equal(DND.isDragging(), true, '第二根手指被瀏覽器判成捲動時,食指的拖曳不該被無辜取消')
+  up(250, 250)
+  assert.equal(dropped, 1)
+})

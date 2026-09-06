@@ -1,6 +1,6 @@
 # AF-4 第 4 輪規劃:排程對齊、表格報表補齊、拖曳資料來源
 
-> 狀態:實作與終檢完成,待使用者實測後併 dev
+> 狀態:全案完成已併 dev(體檢:Claude Fable 5.1;實作:Claude Opus 5 + gemma-4 + agy)
 > 基準:dev@31eb2ed(947 綠,manifest 0.2.0)
 > 來源:使用者新需求(一~五分時段抓多站多值 → 自訂表格報表 → 拖曳規劃版面)
 
@@ -144,7 +144,7 @@
 ### 階段(agy;每段 1~2 檔)
 
 **C1 共用拖曳協定 `dnd.js`**
-- 契約:`createDragSource(el, getPayload)`、`registerDropTarget(el, {accepts(payload), onDragOver(payload, pos), onDrop(payload, pos), onLeave})`、`attachDropTargets` 純以 DOM 屬性 `data-drop-target` 尋找;移動門檻 4px 才算開始拖(避免與點擊衝突);幽靈元素樣式走 theme.css 變數;jsdom 無 PointerEvent 時能以 `MouseEvent` 派發測試(沿用 g3 的做法)。
+- 契約:`createDragSource(el, getPayload)`、`registerDropTarget(el, {accepts(payload), onDragOver(payload, pos), onDrop(payload, pos), onLeave})`、~~`attachDropTargets` 純以 DOM 屬性 `data-drop-target` 尋找~~(已推翻,見定案 2 註記);移動門檻 4px 才算開始拖(避免與點擊衝突);幽靈元素樣式走 theme.css 變數;jsdom 無 PointerEvent 時能以 `MouseEvent` 派發測試(沿用 g3 的做法)。
 - 驗收:新測試檔 `tests/j1_dnd.test.js`:門檻、目標高亮/離開、放開呼叫 `onDrop` 且帶 payload、版面外取消、`setPointerCapture` 不存在不炸。
 
 **C2 側欄 + 投放到卡片**
@@ -190,6 +190,9 @@
 | C2b(側欄+接線) | agy | pass,1 輪 | 15 條測試 + 8 項突變 | 落點插入欄位**原本沒有測到**(jsdom 表頭矩形為 0,一律走追加),Claude 補三條 stub 矩形的測試才驗到;瀏覽模式那條原本沒真的拖曳,改成從隱藏側欄實際拖一次 |
 | C3 | agy | pass,1 輪 + Claude 修正 | 15 條測試 + 5 項突變(1 項等價:把手是 button,既有判斷已擋)| **抓到真缺陷**:`dnd.js` 命中判定沒跳過「不接受」的目標,拖出移除放在別張卡片上會整個落空,卡片內的防護變成死碼。修法:命中改成往下找第一個接受的目標,並讓格線在指標壓在卡片上時拒收 taskId(否則變成在拒收的卡片底下偷長新卡)。另刪掉 dashboard 重複的 `findFreeSlot`(`addCard` 自己會找空位)|
 | D | Claude | 完成 | SPEC §2/§4/§8.2、CLAUDE.md、BACKLOG 皆更新 | — |
+| 終檢 14 項 | Claude(Opus 5) | 完成 | 見〈併回前終檢〉 | commit `2421e87` |
+| 定案落實核對 2 項 | Claude(Opus 5) | 完成 | 見〈定案落實核對〉 | commit `6582812` |
+| 體檢輪 | Claude(Fable 5.1) | 完成 | 見〈體檢輪修正〉 | 換模型後獨立掃描 |
 
 ## 規劃完成後複檢
 
@@ -229,7 +232,7 @@ status 卡片加得進拿不出(且移除路徑寫死 `source`)、`pointercancel
 兩項是等價突變(測試幾何剛好使結果相同、放開座標會覆蓋最終目標),補強測試後紅;
 一項揭露 `pivot` 裡的排序其實是多餘的(取最新是逐筆比較,與順序無關),已刪。
 
-**收官**:`npm test` **1125 綠**(基線 947 → +178),真實瀏覽器煙霧測試 13 項全過。
+**收官**:`npm test` 1125 綠(其後兩批修正與體檢輪見下,最終 **1138 綠**,基線 947 → +191),真實瀏覽器煙霧測試 13 項全過。
 
 
 ## 定案落實核對(最後一次,實作全部完成後)
@@ -247,3 +250,30 @@ status 卡片加得進拿不出(且移除路徑寫死 `source`)、`pointercancel
   `normalizeCard` 不補預設(避免兩個事實來源)、拖曳尋址不用 `elementFromPoint`(jsdom 沒有,
   且改法讓「上層拒收往下找」成立)、`aggregation` fallback 是 `raw`(初稿的 `last` 是筆誤)、
   C2/C3 的測試檔切成三檔。
+
+
+## 體檢交接與體檢輪修正(換模型:實作 Opus 5 → 體檢 Fable 5.1)
+
+兩份獨立 Explore(獵 bug 針對最後兩個手改 commit;架構契合與文件普查)各掃一次,抓到並修掉:
+
+| 哪裡 | 症狀 | 怎麼修 | 迴歸測試 |
+|---|---|---|---|
+| `series.js` raw 序列 | `t` 仍是裸 `slot`,無 slot 的紀錄進了篩選卻在 X 軸印出 `undefined`、全塌成同一格、排到最前 | 排序與 `t` 都改用 `sortKeyOf`/`effectiveTimeOf` | `k1` 第 1、2 條 |
+| `cards.js` 最近 N 筆 | 時間欄與排序仍是 `slot \|\| capturedAt` 原字串,UTC 直接顯示且排錯 | 改用 `effectiveTimeOf` | `k1` 第 3 條 |
+| `export.js` 紀錄表 | 終檢宣稱修掉的 UTC/本地混用,在匯出報表原封不動 | 改用 `effectiveTimeOf` | `k1` 第 4 條 |
+| `effectiveTimeOf` | slot 格式不合就回空、不退到 capturedAt(整筆消失);Date/數字輸入回空但 `sortKeyOf` 卻算得出來,分組與排序不一致 | 格式不合退路到 capturedAt;非字串走 `Date.parse` | `k1` 第 5、6 條 |
+| `latest` | 同一有效分鐘內靠陣列原始順序決定新舊,與 `pivot` 是第二套規則 | 改用 `sortKeyOf` | `k1` 第 7 條 |
+| `dnd.js` `onPointerCancel` | 沒比對 `pointerId`,第二根手指被判成捲動會無辜取消食指的拖曳 | 補檢查;與 Escape 合併成 `abortDrag` | `j1` 新增 1 條 |
+| `pivot` 雙簽章 | 陣列分支只剩 `report.js` 一個呼叫端 | 呼叫端改 options,刪陣列分支 | `h5` 改守新契約 |
+| `dashboard.js` | `gridCellAt` 的 `h` 只有 `void h`;`updateEditingUI` 在清空 grid 前呼叫,把手迴圈打在舊 DOM | 刪參數;呼叫移到卡片掛完之後 | 既有 g3/j3/j4 |
+| `dnd.js` | `DRAG_THRESHOLD_PX` 匯出但無外部消費者 | 改模組內常數 | — |
+
+架構掃描確認**已收斂只剩一份**:矩形命中、有效時刻、移除把手、成功判定、重疊判定、找空位。
+判定保留不動:`isFreeAt`(三行、語意清楚)、`MAX_CHART_SERIES` 匯出(測試硬斷言用)、`isDragging` 匯出(測試觀察用)、
+五處空 `catch {}`(全是 API 缺失或 handler 例外不該中斷清理)、歷史頁的第二份樞紐表渲染(定位不同,已共用 `pivot()`,SPEC §8.3 補說明)。
+三項既有缺口記進 BACKLOG(歷史頁分組略過無 slot、匯出夾帶隱藏把手、刪任務後重試 alarm 殘留)。
+
+文件普查:SPEC 去掉輪次敘事與變更史句、補 recent 預設 10、零欄空狀態限定樞紐表、`addCard` 位置通則、改名 trim;
+CLAUDE.md 合併兩條 `periodInMinutes`、三條規則改為指向 SPEC、基線 1138;README 補本輪功能與基線;BACKLOG「本輪」改 AF-4。
+
+體檢後 `npm test` **1138 綠**,煙霧測試 13 項全過,9 項突變全紅(1 項補測試後紅)。
