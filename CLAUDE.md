@@ -24,7 +24,9 @@ src/
 │   │   templates.js 儀表板範本 / drop-rules.js 拖曳投放規則 / charts.js SVG 圖表(只碰 document 建元素)
 │   └── DOM 層:report.js 路由與歷史頁 / dashboard.js 儀表板與拖曳 / cards.js 卡片
 │       dnd.js 共用拖曳協定(唯一入口)/ drawer.js 卡片設定抽屜 / tasks.js 任務頁 / settings.js 設定頁
+│       trend-popover.js 趨勢浮層(點欄標或數值卡開啟)
 └── shared/              ← storage(唯一寫入口)、messages(訊息型別)、selector(四層定位)
+                           series-index(序列 id 的唯一入口:組合/拆解/名稱)
                            extract(策略鏈)、export(三種匯出)、settings-io(設定匯出入)、diag(診斷)
                            layout-store(版面唯一入口)、record-status(成功狀態唯一來源)、crypto(站台密碼)
                            純函式:block-detect / table / aggregate / alerts
@@ -37,6 +39,12 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   例外只有 `shared/diag.js`(診斷環形緩衝)與 `shared/crypto.js`(`cryptoKey`),各自只管自己那一個鍵。
 - **不要把會掃整個 storage 的操作(`get(null)`)放在抓取寫入路徑上**:紀錄會累積到 MB 級;這類清理放看門狗並自帶一天一次的守衛。
 - **版面的唯一入口**:`shared/layout-store`(儀表板與卡片的增刪改),它自己只經 `shared/storage`。
+- **序列 id 的唯一入口**:`shared/series-index`。一個任務可以抓多個值,紀錄的 `taskId` 會是
+  `<任務id>#<值key>`;任何地方都不得自己 split 字串。
+  **父任務 id 用在**排程 alarm、帳本、health、missed、預檢、診斷;
+  **序列 id 用在**紀錄、`lastValues`、`alertLog`、卡片 `source`、歷史篩選。記錯會讓冪等失效或畫面永遠空白。
+- **UI 監看資料變動的唯一入口**:`shared/storage` 的 `subscribe`(UI 不得自己碰 `chrome.storage.onChanged`)。
+- **health 只在 `background/fetcher.js` 寫**,而且狀態的算法只有 `healthFromRecords` 那一份。
 
 ## 文件地圖
 
@@ -47,7 +55,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1338 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1361 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅)。
   AF-2 靠突變抓到多處同義反覆的測試;併回前另做兩份獨立終檢(程式碼 + 文件),抓到 14 類真實缺陷。
@@ -62,6 +70,13 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   (`series.js` 的 `effectiveTimeOf`/`sortKeyOf`,規則見 SPEC §8.2)。
 - **卡片來源的順序就是表格欄序**:抽屜的上下移動與拖曳插入都只改 `card.source` 一份資料,不要另存欄序。
 - **新增卡片不要自己算位置**:`layout-store.addCard` 已經呼叫 `findFreeSlot`,再算一次就是兩份邏輯。
+- **新增卡片一律走 `layout-store.addCard`**,它自己會去重(同型別 + 同來源集合 + 同呈現模式)。
+- **每個 UI 頁的樣式表都要有 `[hidden] { display: none !important; }`**:
+  區塊自己的 `display: flex/grid` 會壓過 `hidden` 屬性,空的橫幅會露出一條空殼。
+- **圖表 SVG 只設 `viewBox`**,外層用 `width: 100%` 縮放;`viewBox` 的長寬比要跟著卡片的格數走,
+  否則等比縮放後會縮在角落。`padding.left` 48 / `bottom` 24 是座標軸標籤的保留區。
+- **`theme.css` 的亮色變數全部要留在檔案最前面那個 `:root` 區塊**:
+  匯出的獨立 HTML 用正規表示式只抓第一個 `:root`,新增變數還要同步進 `export.js` 的硬編碼退路。
 
 ## 不要做
 

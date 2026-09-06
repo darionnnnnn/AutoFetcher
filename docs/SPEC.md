@@ -49,8 +49,10 @@
 | 名詞 | 定義 |
 |---|---|
 | 任務(Task) | 一個「目標頁 URL + 選擇器 + 抓取模式 + 一組時間」的設定單位,使用者命名 |
-| 抓取模式 | `text`(單一元素文字)、`number`(文字解析成數值)、`block`(區塊聚合) |
-| 紀錄(Record) | 一次抓取結果:`{taskId, scheduledAt, capturedAt, value, raw, status, error?}` |
+| 抓取模式 | `text`(單一元素文字)、`number`(文字解析成數值)、`block`(表格:儲存格 / 欄列聚合 / 一次多個值,§7) |
+| 值(Field) | 多值任務裡的一個值(`task.fields[]`),有自己的名稱與 `key`;單值任務沒有這一層 |
+| 序列(Series) | 報表看到的一條資料線。單值任務就是任務本身,多值任務是「任務 · 值」;id 見 §7 |
+| 紀錄(Record) | 一次抓取結果:`{taskId, slot, capturedAt, value, raw, status, strategyUsed, layer, error?, partial?, used?, skipped?, alert?, alertHits?, snippet?}`。**`taskId` 對多值任務是序列 id**(§7) |
 | 站台設定(Site) | 以 origin 為 key 的登入設定:帳號、密碼、登入頁 URL、欄位選擇器、成功判定 |
 
 ## §2 右鍵選單與頁面內選取模式
@@ -84,7 +86,9 @@
     (數值 / 文字 / 表格 N 列 × M 欄 / 清單 N 項),判定來自 `shared/block-detect.js`。
   - 選到表格或 CSS 假表格時,滑鼠移到某一格會標示**整欄**(`Tab` 切換成整列),
     點擊即選定該欄/列;此時 locator 仍指向表格容器本身,欄列資訊另外帶回。
-  - **一個任務只抓一個元素**:同一頁要抓四張表格的最大值,就是四個任務(各自命名),不是一個任務抓四個值。
+  - **一個任務只抓一個元素,但那個元素裡可以挑多個值**(§7):
+    同一張匯率表要抓美金買入與賣出,是一個任務兩個值;
+    同一頁要抓四張**不同的表格**,才是四個任務(各自命名)。
 - 選到表格類元素時,content 一併算出 **`nameHint`**(表格的 `<caption>` → 目標之前最近的
   `h1`~`h6` → 頁面 `title`,截 60 字)帶進 `PICKED`,Picker 拿它當任務名稱的預設值;
   非表格不帶,由 Picker 退回文字錨定或預覽前 20 字。
@@ -95,6 +99,22 @@
 - overlay 的樣式以 `element.style` 逐項設定(頁面 CSS 會污染 class),
   且 `content/picker-mode.js` 是**全專案唯一允許寫色碼字面值**的檔案——
   網頁沒有載入 `ui/theme.css`。
+
+### §2.1 Picker 表單的預設值
+
+- `settings.pickerDefaults = { last, pinned }`,優先序 **`pinned` → `last` → 內建**。
+  內建值寫在 `picker.js`(`BUILTIN_DEFAULTS`),**不放進 `DEFAULT_SETTINGS`**——
+  `getSettings` 不與預設合併,放進去對舊使用者仍是 `undefined`。
+  內建排程是**每天 09:30**(銀行牌告之類的頁面多在九點過後才更新)。
+- 每次儲存新任務都更新 `last`;勾了「將此次設定固定為預設值」才另外寫 `pinned`。
+  `saveSettings` 是淺層合併,寫 `pickerDefaults` 一律 read-modify-write,否則會把另一半洗掉。
+  設定頁的「清除固定的預設值」只刪 `pinned`,保留 `last`。
+- **編輯既有任務不套用任何預設值**,也不更新 `last` / `pinned`。
+- **進階設定**(策略、正規表達式、生效時段、告警條件、前置動作)收在 `<details id="advanced-section">`,
+  預設收合;編輯既有任務且其中有非預設值時自動展開。所有欄位 id 不變,只是換了外層容器。
+- 「立即測試」與正式抓取共用同一份規格組裝 `buildSpec(values)`,不得各組一份
+  (否則區塊模式的預覽會落回數值策略鏈,測到整張表的第一個數字)。
+  編輯既有任務時沒有目標分頁,「立即測試」維持隱藏。
 
 ## §3 選擇器(穩定性)
 
@@ -217,6 +237,18 @@
   - 匯入:同 `taskId` 覆蓋、新 id 新增;匯入後重建所有 alarms;若含加密密碼則要求輸入密語。
   - 歷史匯入:Report 頁可選多個日檔 JSON 併回 `records`(同 taskId + capturedAt 去重,既有紀錄不被覆蓋);
     也接受打包格式 `{days: [...]}`;回報 `{added, skipped}`;任一日檔形狀不合則整批不寫入。
+- **紀錄的 `taskId` 對多值任務是序列 id**(`<任務id>#<值key>`,§7):
+  CSV 的 `taskId` 欄、日檔的 `tasks` 鍵、歷史匯入的去重鍵(`taskId` + `capturedAt`)都跟著變成序列 id,
+  **檔案格式與 schema 版本不變**。單值任務完全維持原樣(舊資料零遷移)。
+- **寫入 API**:`appendRecord(date, record)` 與 `appendRecords(date, records)`——
+  多值任務一次抓完的那幾筆一定走後者(每筆各讀寫一次整天的陣列會讓 N 個值變成 N 倍成本)。
+- **`saveTask` 的守門**:`task.id` 不得含保留字元;`task.fields[].key` 必須是非空字串、
+  不得含保留字元、同任務內不得重複——違反就丟例外拒絕存檔。設定匯入逐筆 try/catch,
+  單一壞任務被跳過並回報 `{skippedTasks}`,不拖垮整批。
+- **變更訂閱**:`subscribe(handler)` 是 UI 監看資料變動的唯一入口(UI 不得自己碰 `chrome.storage.onChanged`)。
+  只看 `local` 這個 area,只有 `tasks` / `health` / `layout` / `missed` / `lastValues` 與 `rec:` 開頭的鍵會通知;
+  **`runs` 與 `diag` 一律排除**(每次抓取都在變,拿來重繪會讓畫面不停重畫)。
+  同一批連續變更去抖 50 毫秒只通知一次;回傳的函式可取消訂閱。
 - 紀錄欄位(除既有的 `taskId`/`slot`/`capturedAt`/`value`/`raw`/`status`/`strategyUsed`/`layer` 外):
   `alert` 與 `alertHits`(§10 命中告警時才有)、`used` / `skipped`(§7 區塊聚合用了幾格、跳過幾格)、
   `partial`(§7 只抓到部分,**只有為真時才寫**)、`error`(失敗原因)、`snippet`(找不到元素時的 DOM 片段)。
@@ -273,6 +305,25 @@
   帳本與 health 寫在**父任務 id** 上,`lastValues` 寫在子序列上。
   health:全成功 `ok` / 有備援或遲到取該狀態 / 部分值失敗 `partial` 並註明幾個 /
   全部值失敗取第一個失敗狀態(紅)。
+- **序列 id**:多值任務的每個值在紀錄、卡片來源、告警紀錄、歷史篩選裡都是
+  `<任務id>#<值key>`。組合、拆解、名稱解析**只有一份** `shared/series-index.js`
+  (`seriesIdOf` / `parentIdOf` / `fieldKeyOf` / `buildSeriesIndex` / `nameOf`),
+  任何模組都不得自己切字串。`buildSeriesIndex(tasks)` 回傳
+  `{ byId, parents, childrenOf, seriesIds }`,每筆序列是
+  `{ id, parentId, name(「任務 · 值」), shortName(值名), fieldKey, mode }`;
+  `seriesIds` 的順序是任務順序 × 值的順序。
+- **父任務 id 與序列 id 的分工**(記錯會讓冪等失效或畫面永遠空白):
+
+  | 用父任務 id | 用序列 id |
+  |---|---|
+  | 排程 alarm、執行帳本 `runs`、`inflight` | 紀錄的 `taskId` |
+  | `health`、`missed`、`GET_NEXT_RUNS`、`MARK_READ` | `lastValues`、`alertLog`、通知 id |
+  | 預檢、診斷、`notFoundStreak` | 卡片 `source`、歷史頁篩選、匯出的任務鍵 |
+
+- **共用的表格工具**(`shared/table.js`):`columnHeaders(el)`(與資料欄一一對齊的完整表頭)、
+  `rowHeader(row)`(該列第一個非空文字格)、`getDataRows(el)`(排除表頭的資料列元素)。
+  表頭列只認 `thead` 內的列,或表格**開頭連續**的表頭列——表格中段整列 `th` 的分組標題
+  (「亞洲貨幣」那種)是資料的一部分,把它當表頭會讓整份表頭被那一列洗掉。
 - `task.fields = [{ key, name }]` 是**顯示用**的值清單(名稱、順序),
   `task.spec.fields = [{ key, cell?|block? }]` 是**擷取規格**,兩者以 `key` 一一對應;
   `key` 建立後不變、同任務內唯一、不得含保留字元。改名不改 `key`。
@@ -349,6 +400,12 @@
 - `limit` 對樞紐表是「保留最新 N 列」,顯示順序仍由舊到新;**未設定時預設 50 列**
   (長區間的 interval 資料會有上千列)。
 
+**資料變動時自動重繪**
+
+- Report 開著的時候,抓取寫進紀錄會自動更新畫面(經 `shared/storage` 的 `subscribe`,§5)。
+- **只重繪目前所在的頁籤**;儀表板在**編輯模式中不重繪**(會把拖曳打斷),離開編輯模式補繪一次。
+- 設定頁不重繪(它沒有會被抓取改變的內容)。
+
 **編輯體驗(讓使用者設定時好用)**
 
 1. **在 Picker 就排好**:建立任務的最後一步「加入儀表板」——選儀表板、卡片型別(依模式給預設:
@@ -405,7 +462,7 @@
   月曆上方可切月、跳到任意年月。
 - 右側依所選日期(或範圍)顯示紀錄;兩種表格模式切換:
   - **紀錄列表**:時間 / 任務 / 值 / 狀態 / 策略,欄位可排序、可隱藏,順序可拖曳;失敗列展開錯誤與 DOM 片段。
-  - **樞紐表**:列 = 時間、欄 = 任務,一眼比對同一時刻的所有值;欄順序沿用「任務」頁的排序。
+  - **樞紐表**:列 = 時間、欄 = **序列**(單值任務一欄,多值任務每個值一欄),一眼比對同一時刻的所有值;欄順序沿用「任務」頁的排序 × 值的順序。
     與儀表板表格卡片共用同一個 `pivot()`,但**不吃卡片選項**(列軸標頭、容差、列數上限是卡片層的設定)。
 - 篩選:任務多選(**兩層**:父任務勾選 = 底下所有值一起勾,部分勾時父呈現 indeterminate;
   寫進狀態的一律是序列 id)、狀態(成功/失敗/late/fallback)、只看告警、值範圍(≥ / ≤)、關鍵字。
@@ -486,23 +543,9 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
   `prevRecords` 也用子序列精確比對——用父任務比對會讓「買入」拿「賣出」的舊值算變動比例。
   通知與訊息裡的名稱用序列名(「臺銀匯率 · 美金賣出」)。
 
-### §2.1 Picker 表單的預設值
-
-- `settings.pickerDefaults = { last, pinned }`,優先序 **`pinned` → `last` → 內建**。
-  內建值寫在 `picker.js`(`BUILTIN_DEFAULTS`),**不放進 `DEFAULT_SETTINGS`**——
-  `getSettings` 不與預設合併,放進去對舊使用者仍是 `undefined`。
-  內建排程是**每天 09:30**(銀行牌告之類的頁面多在九點過後才更新)。
-- 每次儲存新任務都更新 `last`;勾了「將此次設定固定為預設值」才另外寫 `pinned`。
-  `saveSettings` 是淺層合併,寫 `pickerDefaults` 一律 read-modify-write,否則會把另一半洗掉。
-  設定頁的「清除固定的預設值」只刪 `pinned`,保留 `last`。
-- **編輯既有任務不套用任何預設值**,也不更新 `last` / `pinned`。
-- **進階設定**(策略、正規表達式、生效時段、告警條件、前置動作)收在 `<details id="advanced-section">`,
-  預設收合;編輯既有任務且其中有非預設值時自動展開。所有欄位 id 不變,只是換了外層容器。
-- 「立即測試」與正式抓取共用同一份規格組裝 `buildSpec(values)`,不得各組一份
-  (否則區塊模式的預覽會落回數值策略鏈,測到整張表的第一個數字)。
-  編輯既有任務時沒有目標分頁,「立即測試」維持隱藏。
-
 ## §11 數值擷取策略與後處理(number 模式)
+
+> `strategyUsed` 記的是這一筆值是怎麼來的:數值策略鏈的四種、區塊聚合的 `block`、單一儲存格的 `cell`。
 
 - 擷取來源(策略鏈,使用者在 Picker 選主策略,其餘為自動備援;紀錄寫入 `strategy_used`):
   1. `auto`:取元素 `innerText` 中第一個數字(預設)。
@@ -530,7 +573,8 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
 
 - 狀態由 background 的 `health` 匯總;任何 run / 預檢 / 看門狗結束都重算並 `setBadgeText` / `setBadgeBackgroundColor` / `setIcon`。
 - 使用者在 popup 或 Report 看過該項(點開)即標已讀,黃/紅計數減少;問題真正解決(下次成功)才回綠。
-- **每寫一筆紀錄就寫一次 health**(`fetcher.js` 的 `writeRecord`,全檔唯一一處),對應表由
+- **每抓一次就寫一次 health**(單值在 `writeRecord`、多值在整組寫完之後,兩處都呼叫同一個純函式
+  `fetcher.js` 的 `healthFromRecords`——**狀態的算法只有那一份**),對應表由
   `shared/record-status.js` 的 `healthStatusOf` 提供,`background/health.js` 的紅/黃集合也引用同一份,
   不得各自維護:
 
