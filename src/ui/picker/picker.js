@@ -28,7 +28,22 @@ function getFormData() {
   const windowFrom = document.getElementById('window-from')?.value ?? ''
   const windowTo = document.getElementById('window-to')?.value ?? ''
 
-  const data = { name, url, mode, strategy, regex, scheduleType, times, weekdays, everyMinutes, windowFrom, windowTo }
+  const alertRows = document.querySelectorAll('[data-alert-row]')
+  const alerts = Array.from(alertRows).map(row => {
+    const id = row.dataset.id || crypto.randomUUID()
+    const type = row.querySelector('select')?.value || 'gt'
+    const valInput = row.querySelector('input:not([type="checkbox"])') || row.querySelector('input')
+    const valStr = valInput?.value?.trim() ?? ''
+    const value = valStr === '' ? NaN : Number(valStr)
+    const cb = row.querySelector('input[type="checkbox"]')
+    const enabled = cb ? cb.checked : true
+    return { id, type, value, enabled }
+  })
+
+  const data = {
+    name, url, mode, strategy, regex, scheduleType, times, weekdays, everyMinutes, windowFrom, windowTo,
+    alerts
+  }
 
   if (mode === 'block') {
     const agg = document.getElementById('block-aggregate')?.value || 'sum'
@@ -122,6 +137,19 @@ export function buildTask(values, locator, existing) {
     spec,
     schedule
   }
+  if (Array.isArray(values.alerts)) {
+    const validAlerts = values.alerts
+      .filter(a => a && typeof a === 'object' && Number.isFinite(a.value))
+      .map(a => ({
+        id: a.id || crypto.randomUUID(),
+        type: a.type,
+        value: Number(a.value),
+        enabled: a.enabled !== false
+      }))
+    if (validAlerts.length > 0) {
+      task.alerts = validAlerts
+    }
+  }
   if (existing?.order !== undefined) task.order = existing.order
   return task
 }
@@ -197,7 +225,18 @@ export function render(ctx) {
     }
   }
 
+  const alertList = document.getElementById('alert-list')
+  if (alertList) {
+    alertList.replaceChildren()
+  }
+  if (Array.isArray(ctx?.task?.alerts)) {
+    for (const a of ctx.task.alerts) {
+      addAlertRow(a)
+    }
+  }
+
   bindModeEvents()
+  bindAlertEvents()
   updateBlockSection()
 }
 
@@ -270,6 +309,86 @@ function bindModeEvents() {
       updateBlockSection()
     })
     modeEl._modeEventsBound = true
+  }
+}
+
+/**
+ * 在 #alert-list 裡新增一列告警條件
+ */
+function addAlertRow(data = {}) {
+  const list = document.getElementById('alert-list')
+  if (!list) return null
+
+  const row = document.createElement('div')
+  row.className = 'alert-row'
+  row.setAttribute('data-alert-row', '')
+  row.dataset.id = data.id || crypto.randomUUID()
+
+  const select = document.createElement('select')
+  select.className = 'alert-type'
+  const options = [
+    { value: 'gt', text: '值大於' },
+    { value: 'lt', text: '值小於' },
+    { value: 'eq', text: '值等於' },
+    { value: 'deltaPct', text: '變動幅度(%)超過' },
+    { value: 'failStreak', text: '連續失敗次數達到' }
+  ]
+  for (const opt of options) {
+    const el = document.createElement('option')
+    el.value = opt.value
+    el.textContent = opt.text
+    if (opt.value === (data.type || 'gt')) {
+      el.selected = true
+    }
+    select.appendChild(el)
+  }
+  select.value = data.type || 'gt'
+
+  const input = document.createElement('input')
+  input.type = 'number'
+  input.className = 'alert-value'
+  input.placeholder = '數值'
+  input.step = 'any'
+  if (data.value !== undefined && data.value !== null && !Number.isNaN(data.value) && String(data.value).trim() !== '') {
+    input.value = String(data.value)
+  }
+
+  const label = document.createElement('label')
+  label.className = 'alert-enable'
+  const checkbox = document.createElement('input')
+  checkbox.type = 'checkbox'
+  checkbox.className = 'alert-enabled'
+  checkbox.checked = data.enabled !== false
+  label.appendChild(checkbox)
+  label.appendChild(document.createTextNode('啟用'))
+
+  const removeBtn = document.createElement('button')
+  removeBtn.type = 'button'
+  removeBtn.setAttribute('data-action', 'alert-remove')
+  removeBtn.textContent = '刪除'
+  removeBtn.addEventListener('click', () => {
+    row.remove()
+  })
+
+  row.appendChild(select)
+  row.appendChild(input)
+  row.appendChild(label)
+  row.appendChild(removeBtn)
+
+  list.appendChild(row)
+  return row
+}
+
+/**
+ * 綁定告警條件新增按鈕事件（僅綁定一次）
+ */
+function bindAlertEvents() {
+  const addBtn = document.getElementById('alert-add')
+  if (addBtn && !addBtn._alertEventsBound) {
+    addBtn.addEventListener('click', () => {
+      addAlertRow()
+    })
+    addBtn._alertEventsBound = true
   }
 }
 
@@ -419,6 +538,7 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
   document.getElementById('cancel')?.addEventListener('click', () => window.close())
   document.getElementById('test-now')?.addEventListener('click', () => handleTestNow())
   bindModeEvents()
+  bindAlertEvents()
 
   const search = typeof window !== 'undefined' ? window.location?.search : ''
   const params = new URLSearchParams(search || '')

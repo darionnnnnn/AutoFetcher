@@ -64,6 +64,14 @@
     }
     #errors { color: var(--danger); font-size: 12px; white-space: pre-line; }
     #block-summary { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+    .alert-desc { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+    #alert-list { display: flex; flex-direction: column; gap: 6px; }
+    [data-alert-row] { display: flex; align-items: center; gap: 6px; }
+    [data-alert-row] select { flex: 2; }
+    [data-alert-row] input[type="number"] { flex: 1.5; min-width: 0; }
+    [data-alert-row] label { display: inline-flex; flex-direction: row; align-items: center; gap: 2px; white-space: nowrap; color: var(--text); font-size: 12px; cursor: pointer; }
+    [data-alert-row] button { flex-shrink: 0; padding: 4px 8px; font-size: 12px; }
+    #alert-add { align-self: flex-start; }
     footer {
       display: flex;
       justify-content: flex-end;
@@ -148,6 +156,12 @@
       <label>即時預覽</label>
       <div id="preview"></div>
       <div id="errors"></div>
+      <fieldset id="alert-section">
+        <legend>告警條件</legend>
+        <div class="alert-desc">命中時會發通知，並在報表標記。同一條件 60 分鐘內只通知一次。</div>
+        <div id="alert-list"></div>
+        <button type="button" id="alert-add">新增條件</button>
+      </fieldset>
       <fieldset id="add-to-dashboard">
         <legend>加入儀表板</legend>
         <label>目標儀表板

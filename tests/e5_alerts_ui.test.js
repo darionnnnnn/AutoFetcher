@@ -141,13 +141,63 @@ test('月曆:告警日期帶得出 hasAlert(過去只看失敗)', async () => {
   assert.equal(days.find(d => d.date === '2026-09-08').hasAlert, false, '沒有紀錄的日期不得是 undefined')
 })
 
-test('報表把命中告警的日子算進月曆統計', async () => {
-  const src = readFileSync(new URL('../src/ui/report/report.js', import.meta.url), 'utf8')
-  assert.ok(/hasAlert/.test(src), 'report.js 必須把 alert 併進月曆統計')
-  assert.ok(/has-alert/.test(src), '月曆格子要有可以上色的標記')
+test('月曆統計:命中告警的日子要算進 hasAlert', async () => {
+  const lg = await import('../src/ui/report/logic.js?t=' + Math.random())
+  const { isSuccess } = await import('../src/shared/record-status.js?t=' + Math.random())
+  const stats = lg.buildDateStats([
+    { date: '2026-09-06', status: 'ok', value: 1234, alert: true },
+    { date: '2026-09-06', status: 'ok', value: 5 },
+    { date: '2026-09-07', status: 'ok', value: 5 },
+    { date: '2026-09-08', status: 'not_found' }
+  ], isSuccess)
+  assert.equal(stats['2026-09-06'].hasAlert, true, '同一天只要有一筆告警就算')
+  assert.equal(stats['2026-09-06'].count, 2)
+  assert.equal(stats['2026-09-07'].hasAlert, false)
+  assert.equal(stats['2026-09-08'].hasFail, true, '失敗的判定不能被改壞')
 })
 
-test('歷史列:命中告警的紀錄要看得出來', async () => {
-  const src = readFileSync(new URL('../src/ui/report/report.js', import.meta.url), 'utf8')
-  assert.ok(/alertHits|\.alert\b/.test(src), 'report.js 必須處理紀錄上的 alert 標記')
+test('月曆格子:hasAlert 的日期要上得了色', async () => {
+  const { doc } = await report()
+  const rp = await import('../src/ui/report/report.js?t=' + Math.random())
+  rp.renderCalendar(2026, 9, { '2026-09-06': { count: 1, hasFail: false, hasAlert: true } })
+  const cells = [...doc.querySelectorAll('#calendar td')]
+  const target = cells.find(td => td.className.includes('has-alert'))
+  assert.ok(target, '告警日期的格子要有 has-alert')
+  const failCells = cells.filter(td => td.className.includes('has-fail'))
+  assert.equal(failCells.length, 0, '沒有失敗就不該標成失敗')
+})
+
+test('歷史列:命中告警的紀錄看得出來,展開後看得到是哪一條', async () => {
+  const { doc } = await report()
+  const rp = await import('../src/ui/report/report.js?t=' + Math.random())
+  rp.renderTable([
+    { taskId: 't1', slot: '2026-09-06T09:00', capturedAt: '2026-09-06T09:00:05+08:00',
+      value: 1234, status: 'ok', alert: true, alertHits: ['a1'] }
+  ])
+  const row = doc.querySelector('#record-table tbody tr:not(.detail)')
+  assert.ok(row, '要有一列')
+  assert.ok(row.className.includes('has-alert') || row.textContent.includes('🔔'),
+    `告警列要看得出來,實得 class=${row.className} 文字=${row.textContent}`)
+  row.click()
+  const detail = doc.querySelector('#record-table tbody tr.detail')
+  assert.ok(detail && detail.textContent.includes('a1'), `展開要看得到命中的條件,實得:${detail?.textContent}`)
+})
+
+test('每一列告警條件都有自己的 id(去重帳本靠它分辨)', async () => {
+  const { pk, st, doc } = await picker()
+  pk.render({ locator: { css: '#v' }, url: 'https://a.test/p', preview: '1' })
+  doc.getElementById('name').value = '電費'
+  doc.getElementById('alert-add').click()
+  doc.getElementById('alert-add').click()
+  const rows = doc.querySelectorAll('[data-alert-row]')
+  rows[0].querySelector('select').value = 'gt'
+  rows[0].querySelector('input').value = '1000'
+  rows[1].querySelector('select').value = 'lt'
+  rows[1].querySelector('input').value = '10'
+  await pk.handleSave()
+  const saved = (await st.getTasks())[0]
+  assert.ok(saved, '任務要存得起來')
+  assert.equal(saved.alerts.length, 2)
+  assert.ok(saved.alerts[0].id && saved.alerts[1].id, '兩條都要有 id')
+  assert.notEqual(saved.alerts[0].id, saved.alerts[1].id, '兩條的 id 不能相同')
 })
