@@ -2,31 +2,9 @@
 import { runTask } from './fetcher.js'
 import { setTaskHealth, refreshBadge } from './health.js'
 import { nextDailyRun } from './scheduler.js'
-import { getTasks, getSites } from '../shared/storage.js'
+import { getTasks } from '../shared/storage.js'
 import { log as diagLog } from '../shared/diag.js'
 import { notify } from './notify.js'
-
-// 解析 URL 取得 origin
-function getOrigin(url) {
-  try {
-    return new URL(url).origin
-  } catch {
-    return ''
-  }
-}
-
-// 判定網址是否停留在登入頁
-async function isAtLoginPage(url) {
-  if (typeof url !== 'string' || !url) return false
-  const origin = getOrigin(url)
-  if (!origin) return false
-  const sites = await getSites()
-  const site = sites[origin]
-  if (site && typeof site.loginPageUrlPrefix === 'string' && site.loginPageUrlPrefix.trim() !== '') {
-    return url.startsWith(site.loginPageUrlPrefix)
-  }
-  return false
-}
 
 // 計算任務下一次抓取時間字串（HH:mm）
 function getNextCaptureTime(task) {
@@ -117,23 +95,20 @@ export async function runPrecheck(task, opts = {}) {
 
     if (res?.ok === true) {
       status = 'ok'
+    } else if (res?.error === 'login_failed') {
+      status = 'login_failed'
+      reason = '無法登入'
+    } else if (res?.error === 'not_found') {
+      status = 'selector_lost'
+      reason = '找不到元素'
+    } else if (res?.error === 'parse_error') {
+      status = 'parse_error'
+      reason = '抓不到數值'
     } else {
-      const atLogin = await isAtLoginPage(task?.url)
-      if (atLogin) {
-        status = 'login_failed'
-        reason = '無法登入'
-      } else if (res?.error === 'not_found') {
-        status = 'selector_lost'
-        reason = '找不到元素'
-      } else if (res?.error === 'parse_error') {
-        status = 'parse_error'
-        reason = '抓不到數值'
-      } else {
-        status = 'failed'
-        reason = '抓取失敗'
-      }
-      detail = res?.snippet || res?.raw || res?.error || ''
+      status = 'failed'
+      reason = '抓取失敗'
     }
+    detail = res?.snippet || res?.raw || res?.error || ''
 
     if (status === 'ok') {
       await setTaskHealth(task.id, { status: 'ok' })

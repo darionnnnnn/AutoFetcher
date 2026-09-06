@@ -6,6 +6,7 @@ import { notify } from './notify.js'
 import { injectContent } from './inject.js'
 import { evaluateAlerts } from '../shared/alerts.js'
 import { setTaskHealth, refreshBadge } from './health.js'
+import { ensureLoggedIn } from './login.js'
 
 // 短暫等待輔助函式（非排程）
 function sleep(ms) {
@@ -256,7 +257,20 @@ export async function runTask(task, opts = {}) {
       }
       if (extraDelayMs > 0) await sleep(extraDelayMs)
 
-      // 8. 注入 content script（必須在送訊息之前）
+      // 8. 確認登入狀態（若停留在登入頁則執行自動登入）
+      const login = await ensureLoggedIn(tabId, task, { pollMs, loadTimeoutMs, extraDelayMs })
+      if (login?.ok !== true) {
+        if (dryRun) return { ok: false, error: 'login_failed' }
+        return await writeRecord({
+          taskId: task.id,
+          slot,
+          capturedAt: new Date().toISOString(),
+          status: 'login_failed',
+          error: login?.reason || '無法登入'
+        })
+      }
+
+      // 9. 注入 content script（必須在送訊息之前）
       await injectContent(tabId)
 
       // 9. 擷取：先 SCROLL_INTO_VIEW，再 EXTRACT

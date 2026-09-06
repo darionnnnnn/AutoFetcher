@@ -180,6 +180,9 @@ test('content 說找不到欄位時當登入失敗,不當成功', async () => {
   const rec = await fe.runTask(task(), { slot: '2026-09-06T09:00', ...FAST })
   assert.equal(rec.status, 'login_failed')
   assert.equal((await st.getSite(ORIGIN)).failStreak, 1)
+  // 欄位都找不到就沒必要再等頁面重載、再判成功條件——直接認賠
+  const order = c.__calls.filter(x => x.api === 'tabs.sendMessage').map(x => x.args[1].type)
+  assert.deepEqual(order, ['FILL_LOGIN'], `填不進去就不該再往下試,實得 ${order.join(',')}`)
 })
 
 test('成功判定用「某元素存在」時也要能過', async () => {

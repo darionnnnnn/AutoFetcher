@@ -67,6 +67,55 @@ function handleScrollIntoView(msg, sendResponse) {
   sendResponse({ ok: true })
 }
 
+// 處理 FILL_LOGIN 訊息：填入帳號密碼並點擊送出按鈕
+function handleFillLogin(msg, sendResponse) {
+  const selectors = msg?.selectors || {}
+  const userRes = resolve(document, selectors.user)
+  if (userRes?.error || !userRes?.el) {
+    sendResponse({ ok: false, missing: 'user' })
+    return
+  }
+
+  const passRes = resolve(document, selectors.pass)
+  if (passRes?.error || !passRes?.el) {
+    sendResponse({ ok: false, missing: 'pass' })
+    return
+  }
+
+  const submitRes = resolve(document, selectors.submit)
+  if (submitRes?.error || !submitRes?.el) {
+    sendResponse({ ok: false, missing: 'submit' })
+    return
+  }
+
+  userRes.el.value = msg?.username ?? ''
+  userRes.el.dispatchEvent(new Event('input', { bubbles: true }))
+  userRes.el.dispatchEvent(new Event('change', { bubbles: true }))
+
+  passRes.el.value = msg?.password ?? ''
+  passRes.el.dispatchEvent(new Event('input', { bubbles: true }))
+  passRes.el.dispatchEvent(new Event('change', { bubbles: true }))
+
+  if (typeof submitRes.el.click === 'function') {
+    submitRes.el.click()
+  }
+
+  sendResponse({ ok: true })
+}
+
+// 處理 CHECK_ELEMENT 訊息：檢查頁面上是否存在指定選擇器的元素
+function handleCheckElement(msg, sendResponse) {
+  let found = false
+  if (typeof msg?.selector === 'string' && msg.selector.trim() !== '') {
+    try {
+      found = !!document.querySelector(msg.selector)
+    } catch {
+      found = false
+    }
+  }
+  sendResponse({ ok: true, found })
+}
+
 // 冪等守衛：同一個分頁可能被右鍵與排程各注入一次，不得重複註冊監聽
 if (!globalThis.__afContentLoaded) {
   globalThis.__afContentLoaded = true
@@ -108,6 +157,16 @@ if (!globalThis.__afContentLoaded) {
     if (msg.type === MSG.EXIT_PICK) {
       exitPickMode()
       sendResponse({ ok: true })
+      return true
+    }
+
+    if (msg.type === MSG.FILL_LOGIN) {
+      handleFillLogin(msg, sendResponse)
+      return true
+    }
+
+    if (msg.type === MSG.CHECK_ELEMENT) {
+      handleCheckElement(msg, sendResponse)
       return true
     }
   })
