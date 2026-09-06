@@ -37,6 +37,19 @@ const CARD_TYPE_SUFFIXES = {
 };
 
 /**
+ * 卡片內部顯示序列時的標籤：全部來源同一個父任務就用值名，
+ * 混了不同任務才用完整名（三家銀行的值都叫「美金買入」，短名會撞在一起）
+ */
+function seriesLabel(ids, id, ctx) {
+  const info = ctx?.tasksById?.[id];
+  if (!info) return id;
+  const parents = new Set(
+    (ids || []).map(x => ctx?.tasksById?.[x]?.parentId).filter(Boolean)
+  );
+  return (parents.size === 1 && info.shortName) ? info.shortName : (info.name || id);
+}
+
+/**
  * 依卡片 source 算出來源名稱（多來源以頓號串接）
  */
 function getCardSourceName(card, ctx) {
@@ -327,7 +340,9 @@ function renderChartCard(card, ctx, { bodyEl }) {
 
       const labelEl = document.createElement('span');
       labelEl.className = 'chart-legend-label';
-      labelEl.textContent = ctx?.tasksById?.[s.taskId]?.name || s.taskId;
+      const legendIds = (card.source || []).map(x => x.taskId);
+      labelEl.textContent = seriesLabel(legendIds, s.taskId, ctx);
+      labelEl.setAttribute('title', ctx?.tasksById?.[s.taskId]?.name || s.taskId);
       itemEl.appendChild(labelEl);
 
       itemEl.appendChild(makeRemoveHandle(s.taskId, Boolean(ctx?.editing)));
@@ -402,7 +417,8 @@ function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
     for (const id of columns) {
       const th = document.createElement('th');
       const titleSpan = document.createElement('span');
-      titleSpan.textContent = ctx?.tasksById?.[id]?.name || id;
+      titleSpan.textContent = seriesLabel(columns, id, ctx);
+      th.setAttribute('title', ctx?.tasksById?.[id]?.name || id);
       th.appendChild(titleSpan);
 
       th.appendChild(makeRemoveHandle(id, Boolean(ctx?.editing)));

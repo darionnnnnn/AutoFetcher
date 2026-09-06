@@ -182,7 +182,12 @@ export function applyDropMany(card, ids, opts = {}) {
 
     case 'number':
     case 'gauge': {
-      return applyDrop(card, validIds[0], opts);
+      const patch = applyDrop(card, validIds[0], opts);
+      // 這兩種卡片只有一個值的位置；多丟了幾個要說一聲，否則使用者以為其他值掉了
+      if (patch && validIds.length > 1) {
+        patch.notice = `只用得到一個值，已使用 ${validIds[0]}`;
+      }
+      return patch;
     }
 
     case 'status': {

@@ -117,13 +117,14 @@ export function buildTemplate(kind, tasks) {
 export async function applyTemplate(dashId, kind) {
   const tasks = await getTasks()
   const templateCards = buildTemplate(kind, tasks)
+  // 產不出卡片時保留使用者原本的版面，並且說得出為什麼（靜悄悄什麼都沒發生最難查）
   if (!Array.isArray(templateCards) || templateCards.length === 0) {
-    return
+    return { applied: false, reason: '目前的任務產不出這個範本的卡片（例如沒有數值型的值）' }
   }
 
   const layout = await getLayout()
   const dash = layout.dashboards.find(d => d.id === dashId)
-  if (!dash) return
+  if (!dash) return { applied: false, reason: '找不到這個儀表板' }
 
   dash.cards = []
   await saveLayout(layout)
@@ -131,4 +132,5 @@ export async function applyTemplate(dashId, kind) {
   for (const card of templateCards) {
     await addCard(dashId, card)
   }
+  return { applied: true, count: templateCards.length }
 }

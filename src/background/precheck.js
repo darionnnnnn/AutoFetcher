@@ -120,7 +120,9 @@ export async function runPrecheck(task, opts = {}) {
           status = 'failed'
           reason = '抓取失敗'
         }
-        detail = failedEntries.map(([k]) => k).join(', ')
+        // 使用者看得懂的是值的名稱，不是內部代號
+        const nameOfKey = (k) => (task?.fields || []).find(f => f?.key === k)?.name || k
+        detail = failedEntries.map(([k]) => nameOfKey(k)).join('、')
       }
     } else {
       if (res?.ok === true) {

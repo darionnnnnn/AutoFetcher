@@ -412,7 +412,8 @@ function setupEvents(grid) {
         if (templateKindPending && currentDashId) {
           const kind = templateKindPending
           templateKindPending = null
-          await applyTemplate(currentDashId, kind)
+          const tplRes = await applyTemplate(currentDashId, kind)
+          if (tplRes && tplRes.applied === false && tplRes.reason) showToast(tplRes.reason)
           const select = document.getElementById('apply-template')
           if (select) select.value = ''
           await renderDashboard(currentDashId)
@@ -433,7 +434,8 @@ function setupEvents(grid) {
         templateKindPending = kind
         templateConfirm.hidden = false
       } else {
-        await applyTemplate(currentDashId, kind)
+        const tplRes = await applyTemplate(currentDashId, kind)
+          if (tplRes && tplRes.applied === false && tplRes.reason) showToast(tplRes.reason)
         e.target.value = ''
         await renderDashboard(currentDashId)
       }
@@ -476,7 +478,8 @@ function setupEvents(grid) {
         if (currentDashId) {
           const select = document.getElementById('apply-template')
           const kind = select?.value || 'overview'
-          await applyTemplate(currentDashId, kind)
+          const tplRes = await applyTemplate(currentDashId, kind)
+          if (tplRes && tplRes.applied === false && tplRes.reason) showToast(tplRes.reason)
           if (select) select.value = ''
           await renderDashboard(currentDashId)
         }
@@ -808,9 +811,12 @@ function registerCardDropTarget(cardEl, card, ctx) {
         showToast(patch.reason)
         return
       }
+      // 只吃得下一個值的卡片型別要說一聲，否則使用者以為其他值掉了
+      if (patch.notice) showToast(patch.notice)
 
+      const { notice, ...cardPatch } = patch
       await pushHistory()
-      await updateCard(currentDashId, card.id, patch)
+      await updateCard(currentDashId, card.id, cardPatch)
       await renderDashboard(currentDashId)
     }
   })
