@@ -31,6 +31,7 @@ function cleanup() {
     }
     document.removeEventListener('pointermove', onPointerMove);
     document.removeEventListener('pointerup', onPointerUp);
+    document.removeEventListener('pointercancel', onPointerCancel);
     document.removeEventListener('keydown', onKeyDown);
   }
 
@@ -102,16 +103,22 @@ function targetAccepts(target, payload, pos) {
 }
 
 /**
+ * 座標是否落在某個元素的矩形內（矩形命中判定只有一份，其他模組一律用它）
+ */
+export function isPointInside(el, pos) {
+  if (!el || !pos || typeof el.getBoundingClientRect !== 'function') return false;
+  const rect = el.getBoundingClientRect();
+  if (!rect) return false;
+  return pos.x >= rect.left && pos.x <= rect.right && pos.y >= rect.top && pos.y <= rect.bottom;
+}
+
+/**
  * 根據指標座標尋找命中的目標（走訪所有已註冊目標，多個命中時取最後註冊者）
  */
 function findHitTarget(x, y, payload) {
   for (let i = dropTargets.length - 1; i >= 0; i--) {
     const target = dropTargets[i];
-    if (!target.el || typeof target.el.getBoundingClientRect !== 'function') {
-      continue;
-    }
-    const rect = target.el.getBoundingClientRect();
-    if (!rect || x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+    if (!isPointInside(target.el, { x, y })) {
       continue;
     }
     // 上層目標不接受這個 payload 時要繼續往下找,不能整個落空
@@ -155,6 +162,10 @@ function onPointerMove(e) {
   if (!pendingDrag) {
     return;
   }
+  // 多點觸控:只理會啟動這次拖曳的那一根手指
+  if (e.pointerId !== undefined && pendingDrag.pointerId !== undefined && e.pointerId !== pendingDrag.pointerId) {
+    return;
+  }
 
   const x = e.clientX ?? 0;
   const y = e.clientY ?? 0;
@@ -182,6 +193,9 @@ function onPointerUp(e) {
   if (!pendingDrag) {
     return;
   }
+  if (e.pointerId !== undefined && pendingDrag.pointerId !== undefined && e.pointerId !== pendingDrag.pointerId) {
+    return;
+  }
 
   const x = e.clientX ?? 0;
   const y = e.clientY ?? 0;
@@ -200,6 +214,19 @@ function onPointerUp(e) {
   } else {
     cleanup();
   }
+}
+
+/**
+ * 指標取消事件處理（等同取消拖曳）
+ */
+function onPointerCancel() {
+  if (!pendingDrag) return;
+  if (currentActiveTarget && typeof currentActiveTarget.handlers.onLeave === 'function') {
+    try {
+      currentActiveTarget.handlers.onLeave();
+    } catch {}
+  }
+  cleanup();
 }
 
 /**
@@ -249,6 +276,9 @@ export function createDragSource(el, getPayload) {
 
     document.addEventListener('pointermove', onPointerMove);
     document.addEventListener('pointerup', onPointerUp);
+    // 觸控被瀏覽器接管(捲動、返回手勢)或視窗失焦時只會發 pointercancel,
+    // 不接的話幽靈與高亮會留在畫面上
+    document.addEventListener('pointercancel', onPointerCancel);
     document.addEventListener('keydown', onKeyDown);
   });
 }

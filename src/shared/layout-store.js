@@ -1,6 +1,6 @@
 // 儀表板與卡片版面儲存層（layout-store）
 import { getRawLayout, setRawLayout } from './storage.js'
-import { clampCard, findFreeSlot } from '../ui/report/layout.js'
+import { clampCard, findFreeSlot, collides } from '../ui/report/layout.js'
 
 // 目前支援的版面架構版本
 const CURRENT_VERSION = 1
@@ -138,10 +138,14 @@ export async function addDashboard(name) {
  * 重新命名儀表板
  */
 export async function renameDashboard(id, name) {
+  // 空白名稱一律忽略(存進去會讓頁籤變成看不見的空標籤,只能靠下次正規化補回)
+  if (typeof name !== 'string') return
+  const trimmed = name.trim()
+  if (trimmed === '') return
   const layout = await getLayout()
   const dash = layout.dashboards.find(d => d.id === id)
   if (!dash) return
-  dash.name = name
+  dash.name = trimmed
   await saveLayout(layout)
 }
 
@@ -223,6 +227,14 @@ export async function setLastDashboard(id) {
 }
 
 /**
+ * 指定位置是否沒有和既有卡片重疊(重疊判定只有一份,在 layout.js)
+ */
+function isFreeAt(cards, card) {
+  if (!Array.isArray(cards)) return true
+  return !cards.some(c => c && collides(card, c))
+}
+
+/**
  * 新增卡片至指定儀表板，自動配置 id、夾住寬高並尋找不重疊空位
  */
 export async function addCard(dashId, card) {
@@ -236,9 +248,13 @@ export async function addCard(dashId, card) {
     id: crypto.randomUUID()
   }
   const clamped = clampCard(newCard)
-  const slot = findFreeSlot(dash.cards, clamped.w, clamped.h)
-  clamped.x = slot.x
-  clamped.y = slot.y
+  // 指定的位置若是空的就尊重它(拖曳建卡要落在使用者放開的地方);
+  // 重疊或超出邊界才自己找空位
+  if (!isFreeAt(dash.cards, clamped)) {
+    const slot = findFreeSlot(dash.cards, clamped.w, clamped.h)
+    clamped.x = slot.x
+    clamped.y = slot.y
+  }
 
   dash.cards.push(clamped)
   await saveLayout(layout)

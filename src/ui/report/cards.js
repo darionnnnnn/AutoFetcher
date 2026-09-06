@@ -1,6 +1,9 @@
 // AutoFetcher 卡片渲染模組（將卡片設定與資料渲染為 DOM 元素）
 
-import { buildSeries, resolvePeriod, latest, pivot } from './series.js';
+import { buildSeries, resolvePeriod, latest, pivot, effectiveTimeOf } from './series.js';
+
+// 樞紐表未指定列數上限時的預設(避免長時間區間渲染上千列)
+const DEFAULT_PIVOT_ROWS = 50;
 import { lineChart, barChart, gauge, sparkline } from './charts.js';
 import { isSuccess } from '../../shared/record-status.js';
 
@@ -198,6 +201,20 @@ function renderNumberCard(card, ctx, { cardEl, bodyEl }) {
 /**
  * 渲染折線圖與長條圖卡片
  */
+/**
+ * 建立「拖出移除」把手(只有一份;table 欄標、圖表圖例、狀態清單共用)
+ */
+function makeRemoveHandle(taskId, editing) {
+  const handle = document.createElement('button');
+  handle.type = 'button';
+  handle.setAttribute('data-remove-source', '');
+  handle.setAttribute('data-task-id', taskId);
+  handle.className = 'remove-source-handle';
+  handle.hidden = !editing;
+  handle.textContent = editing ? '×' : '';
+  return handle;
+}
+
 function renderChartCard(card, ctx, { bodyEl }) {
   const periodRange = resolveCardRange(card, ctx);
   const seriesList = buildSeries(ctx.records, card.source, {
@@ -228,12 +245,15 @@ function renderChartCard(card, ctx, { bodyEl }) {
   }
 
   // 圖例列（每條序列一個圖例項目，附帶拖出移除把手）
-  const sources = (card.source || []).filter(s => s && s.taskId);
-  if (sources.length > 0) {
+  // 色號一律用 card.source 的「原始索引」，因為 buildSeries 不過濾，
+  // 過濾後再編號會讓髒資料之後的所有圖例顏色整排位移
+  const sources = card.source || [];
+  if (sources.some(s => s && s.taskId)) {
     const legendEl = document.createElement('div');
     legendEl.className = 'card-chart-legend';
 
     sources.forEach((s, idx) => {
+      if (!s || !s.taskId) return;
       const itemEl = document.createElement('div');
       itemEl.className = 'chart-legend-item';
 
@@ -247,15 +267,7 @@ function renderChartCard(card, ctx, { bodyEl }) {
       labelEl.textContent = ctx?.tasksById?.[s.taskId]?.name || s.taskId;
       itemEl.appendChild(labelEl);
 
-      const handle = document.createElement('button');
-      handle.type = 'button';
-      handle.setAttribute('data-remove-source', '');
-      handle.setAttribute('data-task-id', s.taskId);
-      handle.className = 'remove-source-handle';
-      handle.hidden = !ctx?.editing;
-      handle.textContent = ctx?.editing ? '×' : '';
-      itemEl.appendChild(handle);
-
+      itemEl.appendChild(makeRemoveHandle(s.taskId, Boolean(ctx?.editing)));
       legendEl.appendChild(itemEl);
     });
 
@@ -275,8 +287,8 @@ function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
   // 依期間範圍篩選紀錄
   const filteredRecords = (ctx?.records || []).filter(r => {
     if (!r) return false;
-    // 有效時刻與 pivot 一致:slot 優先,沒有就用 capturedAt;兩者皆無才無從比對
-    const d = r.slot ? r.slot.slice(0, 10) : (r.date || (r.capturedAt ? r.capturedAt.slice(0, 10) : ''));
+    // 有效時刻只有一份,在 series.js
+    const d = effectiveTimeOf(r).slice(0, 10) || r.date || '';
     if (!d) return true;
     if (periodRange.from && d < periodRange.from) return false;
     if (periodRange.to && d > periodRange.to) return false;
@@ -307,7 +319,10 @@ function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
     const { columns, rows } = pivot(filteredRecords, taskIds, {
       taskOrder: taskIds,
       bucketMinutes: card.options?.bucketMinutes,
-      limit: card.options?.limit
+      // 沒設上限時仍要有預設,否則一個月的 interval 資料會渲染上千列
+      limit: (typeof card.options?.limit === 'number' && card.options.limit > 0)
+        ? card.options.limit
+        : DEFAULT_PIVOT_ROWS
     });
 
     // 表頭：第一欄是列軸標頭（可自訂，預設「時間」），後續是各任務名稱
@@ -327,14 +342,7 @@ function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
       titleSpan.textContent = ctx?.tasksById?.[id]?.name || id;
       th.appendChild(titleSpan);
 
-      const handle = document.createElement('button');
-      handle.type = 'button';
-      handle.setAttribute('data-remove-source', '');
-      handle.setAttribute('data-task-id', id);
-      handle.className = 'remove-source-handle';
-      handle.hidden = !ctx?.editing;
-      handle.textContent = ctx?.editing ? '×' : '';
-      th.appendChild(handle);
+      th.appendChild(makeRemoveHandle(id, Boolean(ctx?.editing)));
 
       headTr.appendChild(th);
     }
@@ -570,6 +578,9 @@ function renderStatusCard(card, ctx, { bodyEl }) {
       missedEl.textContent = `錯過 ${missedCount}`;
       item.appendChild(missedEl);
     }
+
+    // 加得進去就要拿得出來
+    item.appendChild(makeRemoveHandle(id, Boolean(ctx?.editing)));
 
     list.appendChild(item);
   }

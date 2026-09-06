@@ -68,7 +68,8 @@ export function buildSeries(records, source, options = {}) {
     // 篩選該任務且在日期範圍內的紀錄
     const matched = (records || []).filter(r => {
       if (!r || r.taskId !== taskId) return false;
-      const dateStr = r.slot ? r.slot.slice(0, 10) : r.date;
+      // 與樞紐表同一套有效時刻,否則同一份資料在折線與表格會有兩種答案
+      const dateStr = effectiveTimeOf(r).slice(0, 10) || r.date;
       if (!dateStr) return false;
       if (from && dateStr < from) return false;
       if (to && dateStr > to) return false;
@@ -184,6 +185,56 @@ export function latest(records, taskId, today) {
 }
 
 /**
+ * 紀錄用於「新舊比較」的毫秒時間:capturedAt 優先(它才是真正抓到的時刻),
+ * 退回有效時刻;兩者都不可解析時視為最舊。
+ */
+function sortKeyOf(record) {
+  if (record?.capturedAt) {
+    const ms = Date.parse(record.capturedAt)
+    if (Number.isFinite(ms)) return ms
+  }
+  const eff = effectiveTimeOf(record);
+  if (!eff) return -Infinity;
+  const ms = Date.parse(eff);
+  return Number.isFinite(ms) ? ms : -Infinity;
+}
+
+/**
+ * 紀錄的「有效時刻」(YYYY-MM-DDTHH:mm):slot 優先,沒有就用 capturedAt 截到分鐘。
+ * 這是全專案唯一一份;cards.js 的期間篩選與 pivot 的分列都用它,不可各寫一份。
+ */
+export function effectiveTimeOf(record) {
+  if (!record) return '';
+  // slot 本來就是本地時間字串,原樣採用
+  if (record.slot) {
+    const slot = String(record.slot).slice(0, 16);
+    return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(slot) ? slot : '';
+  }
+  // capturedAt 是 new Date().toISOString() 的產物(UTC,帶 Z),
+  // 直接切字串會和本地時間的 slot 差好幾個時區,必須換算回本地時刻
+  if (record.capturedAt) return toLocalMinute(record.capturedAt);
+  return '';
+}
+
+/**
+ * 把時間字串換算成本地時間的 YYYY-MM-DDTHH:mm;無法解析時回空字串。
+ * 不帶 Z 也不帶 offset 的字串視為本地時間(舊資料)。
+ */
+function toLocalMinute(value) {
+  const raw = String(value);
+  const hasZone = /[Zz]$|[+-]\d{2}:?\d{2}$/.test(raw);
+  if (!hasZone) {
+    const plain = raw.slice(0, 16);
+    return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(plain) ? plain : '';
+  }
+  const ms = Date.parse(raw);
+  if (!Number.isFinite(ms)) return '';
+  const d = new Date(ms);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/**
  * 將多任務紀錄依排程槽轉置為表格形狀
  */
 export function pivot(records, taskIds, taskOrderOrOptions) {
@@ -231,43 +282,21 @@ export function pivot(records, taskIds, taskOrderOrOptions) {
   for (const r of records) {
     if (!r || !targetIds.has(r.taskId)) continue;
 
-    let timeStr = '';
-    if (r.slot) {
-      timeStr = r.slot;
-    } else if (r.capturedAt) {
-      timeStr = r.capturedAt.slice(0, 16);
-    }
-
+    const timeStr = effectiveTimeOf(r);
     if (!timeStr) continue;
 
-    // 解析時間字串 (YYYY-MM-DDTHH:mm)
-    const y = parseInt(timeStr.substring(0, 4));
-    const m = parseInt(timeStr.substring(5, 7)) - 1;
-    const d = parseInt(timeStr.substring(8, 10));
-    const hh = parseInt(timeStr.substring(11, 13));
-    const mm = parseInt(timeStr.substring(14, 16));
+    let bucketKey = timeStr;
 
-    let bucketKey = timeStr.slice(0, 16);
-
-    // 2. 處理 bucketMinutes
+    // 2. 處理 bucketMinutes:時分向下對齊到當日 00:00 起算的倍數,日期原樣保留
     if (Number.isInteger(bucketMinutes) && bucketMinutes > 0) {
-      const totalMinutesSinceStartOfDay = hh * 60 + mm;
-      const bucketMinutesSinceStartOfDay = Math.floor(totalMinutesSinceStartOfDay / bucketMinutes) * bucketMinutes;
-      const bH = Math.floor(bucketMinutesSinceStartOfDay / 60);
-      const bM = bucketMinutesSinceStartOfDay % 60;
-      
-      // 格式化回 YYYY-MM-DDTHH:mm
+      const hh = Number(timeStr.slice(11, 13));
+      const mm = Number(timeStr.slice(14, 16));
+      const alignedMinutes = Math.floor((hh * 60 + mm) / bucketMinutes) * bucketMinutes;
       const pad = (n) => String(n).padStart(2, '0');
-      bucketKey = `${y}-${pad(m + 1)}-${pad(d)}T${pad(bH)}:${pad(bM)}`;
+      bucketKey = `${timeStr.slice(0, 10)}T${pad(Math.floor(alignedMinutes / 60))}:${pad(alignedMinutes % 60)}`;
     }
 
-    // slot 與 capturedAt 都是本地時間字串,一律用字串比較排序,
-    // 不用 new Date(字串) 解析(會被當成 UTC 或依實作而異)
-    processedRecords.push({
-      ...r,
-      effectiveTime: timeStr,
-      bucketKey: bucketKey
-    });
+    processedRecords.push({ ...r, bucketKey });
   }
 
   if (processedRecords.length === 0) {
@@ -280,13 +309,8 @@ export function pivot(records, taskIds, taskOrderOrOptions) {
   const bucketMap = new Map();
 
   // 排序 processedRecords 以確保處理順序（雖然主要靠 bucketKey 分組，但為了正確取最新值，需按 capturedAt 排序）
-  const sortedRecords = [...processedRecords].sort((a, b) => {
-    const timeA = a.capturedAt || a.slot || '';
-    const timeB = b.capturedAt || b.slot || '';
-    return timeA.localeCompare(timeB);
-  });
-
-  for (const r of sortedRecords) {
+  // 取最新是逐筆比較 sortKeyOf,與處理順序無關,所以這裡不需要先排序
+  for (const r of processedRecords) {
     if (!bucketMap.has(r.bucketKey)) {
       bucketMap.set(r.bucketKey, {
         taskMap: new Map(), // taskId -> { value, capturedAt }
@@ -301,7 +325,7 @@ export function pivot(records, taskIds, taskOrderOrOptions) {
 
     // 更新值 (取 capturedAt 最大且成功的)
     const existing = bucket.taskMap.get(r.taskId);
-    const rCapturedAt = r.capturedAt || r.slot || '';
+    const rCapturedAt = sortKeyOf(r);
     
     // 判斷是否要覆蓋：如果目前這筆是成功的，且 (目前沒紀錄 或 這筆比舊的更晚)
     // 這裡的「最新」定義是 capturedAt 最大

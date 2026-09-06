@@ -10,7 +10,7 @@ import { placeCard, resizeCard, compact, autoArrange } from './layout.js'
 import { openDrawer } from './drawer.js'
 import { applyTemplate } from './templates.js'
 import { MSG } from '../../shared/messages.js'
-import { createDragSource, registerDropTarget, resetDnd } from './dnd.js'
+import { createDragSource, registerDropTarget, resetDnd, isPointInside } from './dnd.js'
 import { applyDrop, cardTypeForTask } from './drop-rules.js'
 
 // 編輯模式狀態與復原歷史
@@ -495,7 +495,8 @@ function setupEvents(grid) {
       const q = (search.value || '').toLowerCase()
       const items = document.querySelectorAll('[data-palette-task]')
       for (const item of items) {
-        const name = (item.textContent || '').toLowerCase()
+        const nameEl = item.querySelector('.palette-task-name')
+        const name = ((nameEl ? nameEl.textContent : item.textContent) || '').toLowerCase()
         item.hidden = Boolean(q && !name.includes(q))
       }
     })
@@ -613,6 +614,9 @@ function prepareCardElement(card, ctx, dashId) {
   return cardEl
 }
 
+// 側欄上的抓取模式標示
+const MODE_LABELS = { number: '數值', text: '文字', block: '區塊' }
+
 /**
  * 渲染資料來源側欄清單
  */
@@ -629,7 +633,15 @@ async function renderPalette() {
     const item = document.createElement('div')
     item.setAttribute('data-palette-task', '')
     item.setAttribute('data-task-id', t.id)
-    item.textContent = t.name || ''
+    item.setAttribute('data-mode', t.mode || 'number')
+    const nameEl = document.createElement('span')
+    nameEl.className = 'palette-task-name'
+    nameEl.textContent = t.name || ''
+    item.appendChild(nameEl)
+    const modeEl = document.createElement('span')
+    modeEl.className = 'palette-task-mode'
+    modeEl.textContent = MODE_LABELS[t.mode] || MODE_LABELS.number
+    item.appendChild(modeEl)
     if (q && !item.textContent.toLowerCase().includes(q)) {
       item.hidden = true
     }
@@ -646,13 +658,16 @@ function registerCardDropTarget(cardEl, card, ctx) {
     accepts(payload) {
       if (!editing) return false
       if (!payload || !payload.taskId || payload.removeFrom) return false
+      // 表格永遠收:落點才決定插到第幾欄,已經在最後一欄的任務也要能拖到前面。
+      // 用空 opts 問 applyDrop 等於問「搬到最後有沒有變化」,會讓最後一欄拖不動。
+      if (card.type === 'table') return true
       return applyDrop(card, payload.taskId, {}) !== null
     },
     async onDrop(payload, pos) {
       if (!payload || !payload.taskId) return
 
       let index
-      if (card.type === 'table') {
+      if (card.type === 'table' && card.options?.mode === 'pivot') {
         const ths = [...cardEl.querySelectorAll('thead th')]
         const hasReadableHeaders = ths.length > 0 && ths.some(th => {
           const r = th.getBoundingClientRect?.()
@@ -706,20 +721,26 @@ function registerCardDropTarget(cardEl, card, ctx) {
 }
 
 /**
- * 指標是否落在某張卡片上
+ * 把落點座標換算成格線上的欄列(夾在合法範圍內)
+ */
+function gridCellAt(grid, pos, w, h) {
+  if (!grid || !pos || typeof grid.getBoundingClientRect !== 'function') return { x: 0, y: 0 }
+  const rect = grid.getBoundingClientRect()
+  if (!rect || !rect.width) return { x: 0, y: 0 }
+  const colWidth = rect.width / 12
+  const rowHeight = 80
+  const x = Math.max(0, Math.min(12 - w, Math.floor((pos.x - rect.left) / colWidth)))
+  const y = Math.max(0, Math.floor((pos.y - rect.top) / rowHeight))
+  void h
+  return { x, y }
+}
+
+/**
+ * 指標是否落在某張卡片上(矩形判定用 dnd.js 那一份,不要再寫一次)
  */
 function pointerOverAnyCard(grid, pos) {
   if (!grid || !pos) return false
-  const cardEls = grid.querySelectorAll('[data-card-id]')
-  for (const el of cardEls) {
-    if (typeof el.getBoundingClientRect !== 'function') continue
-    const rect = el.getBoundingClientRect()
-    if (!rect) continue
-    if (pos.x >= rect.left && pos.x <= rect.right && pos.y >= rect.top && pos.y <= rect.bottom) {
-      return true
-    }
-  }
-  return false
+  return [...grid.querySelectorAll('[data-card-id]')].some(el => isPointInside(el, pos))
 }
 
 /**
@@ -744,13 +765,9 @@ function registerGridDropTarget(grid) {
         const { cardId, taskId } = payload.removeFrom
         if (!cardId || !taskId) return
 
+        // 放回原本那張卡片上不算移除
         const cardEl = grid.querySelector(`[data-card-id="${cardId}"]`)
-        if (cardEl && pos && typeof cardEl.getBoundingClientRect === 'function') {
-          const rect = cardEl.getBoundingClientRect()
-          if (rect && pos.x >= rect.left && pos.x <= rect.right && pos.y >= rect.top && pos.y <= rect.bottom) {
-            return
-          }
-        }
+        if (isPointInside(cardEl, pos)) return
 
         const layout = await getLayout()
         const currentDash = layout.dashboards.find(d => d.id === currentDashId) || layout.dashboards[0]
@@ -758,9 +775,12 @@ function registerGridDropTarget(grid) {
         const card = currentDash.cards.find(c => c.id === cardId)
         if (!card) return
 
-        const newSource = (card.source || []).filter(s => s.taskId !== taskId)
+        // status 卡片的來源存在 options.taskIds,不是 source
+        const patch = card.type === 'status'
+          ? { options: { ...(card.options || {}), taskIds: (card.options?.taskIds || []).filter(id => id !== taskId) } }
+          : { source: (card.source || []).filter(s => s.taskId !== taskId) }
         await pushHistory()
-        await updateCard(currentDash.id, cardId, { source: newSource })
+        await updateCard(currentDash.id, cardId, patch)
         await renderDashboard(currentDash.id)
         return
       }
@@ -784,15 +804,16 @@ function registerGridDropTarget(grid) {
         const currentDash = layout.dashboards.find(d => d.id === currentDashId) || layout.dashboards[0]
         if (!currentDash) return
 
-        // 位置交給 layout-store 的 addCard 決定(它自己會找空位,不要在這裡再算一次)
+        // 落點所在的格子當作希望的位置;放不下時交給 addCard 自己找空位
+        const wanted = gridCellAt(grid, pos, w, h)
         const newCard = {
           type,
           w,
           h,
-          x: 0,
-          y: 0,
+          x: wanted.x,
+          y: wanted.y,
           source: [{ taskId: payload.taskId, aggregation: 'raw' }],
-          options: type === 'table' ? { mode: 'pivot' } : {}
+          options: type === 'table' ? { mode: 'recent' } : {}
         }
 
         await pushHistory()

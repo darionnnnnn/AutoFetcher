@@ -49,6 +49,13 @@ function parseTaskAlarm(name) {
 // 解析重試 alarm 名稱（格式：<taskId>:retry:<n>）
 function parseRetryName(name) {
   if (typeof name !== 'string') return null
+  // 名稱可能帶原始排程槽:<taskId>:retry:<n>@<slot>
+  let slot = ''
+  const at = name.lastIndexOf('@')
+  if (at !== -1) {
+    slot = name.slice(at + 1)
+    name = name.slice(0, at)
+  }
   const lastColon = name.lastIndexOf(':')
   if (lastColon === -1) return null
   const attemptStr = name.slice(lastColon + 1)
@@ -59,7 +66,7 @@ function parseRetryName(name) {
   if (before.slice(secondColon + 1) !== 'retry') return null
   const taskId = before.slice(0, secondColon)
   if (!taskId) return null
-  return { taskId, attempt: Number(attemptStr) }
+  return { taskId, attempt: Number(attemptStr), slot }
 }
 
 // 計算每日任務當日時間槽（格式：YYYY-MM-DDTHH:mm）
@@ -156,7 +163,9 @@ export async function handleAlarm(alarm, testOpts = {}) {
     if (retry !== null) {
       const { task, active } = await getValidTask(retry.taskId)
       if (!task || !active) return
-      await runTask(task, { slot: slotOf(Date.now()), attempt: retry.attempt + 1, ...testOpts })
+      // 重試補的是原本那一格;舊格式沒帶槽時才退回當下時刻
+      const retrySlot = retry.slot || slotOf(Date.now())
+      await runTask(task, { slot: retrySlot, attempt: retry.attempt + 1, ...testOpts })
       return
     }
 
@@ -173,7 +182,10 @@ export async function handleAlarm(alarm, testOpts = {}) {
       if (task.schedule?.type === 'interval') {
         const nextWhen = nextIntervalRun(task, Date.now())
         if (nextWhen !== null) await chrome.alarms.create(alarm.name, { when: nextWhen })
-        if (!shouldRunInterval(task, Date.now())) return
+        // 用「排定時刻」判斷時段,不是實際觸發時刻:
+        // 晚觸發(休眠喚醒、worker 冷啟動)會滑出時段末端,把本來合法的那一格丟掉
+        const decideAt = alarm.scheduledTime ?? Date.now()
+        if (!shouldRunInterval(task, decideAt)) return
       }
 
       // interval 的槽取 alarm 排定時刻(對齊格線),晚觸發不可自成新槽,冪等帳本靠它

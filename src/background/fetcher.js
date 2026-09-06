@@ -60,9 +60,11 @@ async function removeInflight(key) {
 }
 
 // 排定重試 alarm
-async function scheduleRetry(taskId, attempt, isOffline = false) {
+async function scheduleRetry(taskId, attempt, isOffline = false, slot = '') {
   const delayMs = isOffline ? 10 * 60 * 1000 : (attempt === 1 ? 2 * 60 * 1000 : 10 * 60 * 1000)
-  await chrome.alarms.create(`${taskId}:retry:${attempt}`, { when: Date.now() + delayMs })
+  // 名稱帶上原始排程槽,重試補的才是同一格(冪等帳本與樞紐表都靠 slot)
+  const suffix = slot ? `@${slot}` : ''
+  await chrome.alarms.create(`${taskId}:retry:${attempt}${suffix}`, { when: Date.now() + delayMs })
 }
 
 // 取得本地日期字串（YYYY-MM-DD）
@@ -219,7 +221,7 @@ export async function runTask(task, opts = {}) {
 
   // 2. 離線檢查：若離線則排 10 分鐘後重試，不得開分頁
   if (globalThis.navigator?.onLine === false) {
-    if (!dryRun) await scheduleRetry(task.id, attempt, true)
+    if (!dryRun) await scheduleRetry(task.id, attempt, true, slot)
     return dryRun ? { ok: false, error: 'offline' } : null
   }
 
@@ -368,7 +370,7 @@ export async function runTask(task, opts = {}) {
       // 結果處理：元素未找到（可重試）
       if (res?.error === 'not_found') {
         if (attempt < 3) {
-          await scheduleRetry(task.id, attempt, false)
+          await scheduleRetry(task.id, attempt, false, slot)
           return null
         }
 
@@ -406,7 +408,7 @@ export async function runTask(task, opts = {}) {
 
       // 其他未知錯誤
       if (attempt < 3) {
-        await scheduleRetry(task.id, attempt, false)
+        await scheduleRetry(task.id, attempt, false, slot)
         return null
       }
       return await writeRecord({
@@ -420,7 +422,7 @@ export async function runTask(task, opts = {}) {
     } catch (err) {
       if (dryRun) return { ok: false, error: String(err?.message || err) }
       if (attempt < 3) {
-        await scheduleRetry(task.id, attempt, false)
+        await scheduleRetry(task.id, attempt, false, slot)
         return null
       }
       return await writeRecord({

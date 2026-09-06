@@ -5,9 +5,15 @@ import assert from 'node:assert/strict'
 import { pivot } from '../src/ui/report/series.js'
 
 // 紀錄工廠:預設成功
+// capturedAt 用產品真實格式:new Date().toISOString() 的 UTC(帶 Z)。
+// 測試時區固定 Asia/Taipei,所以本地 09:00 的 UTC 是同日 01:00。
+const utcOf = (localMinute, sec = '05') => {
+  const ms = new Date(`${localMinute}:${sec}`).getTime()
+  return new Date(ms).toISOString()
+}
 const rec = (taskId, slot, value, over = {}) => ({
   taskId, slot, value, status: 'ok',
-  capturedAt: slot ? `${slot}:05` : undefined, ...over
+  capturedAt: slot ? utcOf(slot) : undefined, ...over
 })
 
 const IDS = ['a', 'b']
@@ -41,9 +47,9 @@ test('桶邊界:09:05 屬於下一桶,不與 09:04 同列', async () => {
 
 test('同一任務同一桶多筆:取 capturedAt 最新的成功值,並記合併筆數', async () => {
   const recs = [
-    rec('a', '2026-09-07T09:01', 1, { capturedAt: '2026-09-07T09:01:00' }),
-    rec('a', '2026-09-07T09:04', 9, { capturedAt: '2026-09-07T09:04:00' }),
-    rec('a', '2026-09-07T09:02', 5, { capturedAt: '2026-09-07T09:02:00' })
+    rec('a', '2026-09-07T09:01', 1, { capturedAt: utcOf('2026-09-07T09:01', '00') }),
+    rec('a', '2026-09-07T09:04', 9, { capturedAt: utcOf('2026-09-07T09:04', '00') }),
+    rec('a', '2026-09-07T09:02', 5, { capturedAt: utcOf('2026-09-07T09:02', '00') })
   ]
   const out = pivot(recs, ['a'], { bucketMinutes: 5 })
   assert.equal(out.rows.length, 1)
@@ -78,7 +84,7 @@ test('空桶不成列(沒有紀錄的時間不該出現空白列)', async () => 
 
 test('沒有 slot 的紀錄改用 capturedAt 截到分鐘,不再整筆丟掉', async () => {
   const recs = [
-    { taskId: 'a', value: 3, status: 'ok', capturedAt: '2026-09-07T09:00:41' },
+    { taskId: 'a', value: 3, status: 'ok', capturedAt: utcOf('2026-09-07T09:00', '41') },
     rec('b', '2026-09-07T09:00', 4)
   ]
   const out = pivot(recs, IDS, { bucketMinutes: 0 })

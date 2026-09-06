@@ -236,7 +236,9 @@ test('表格移除到零欄時卡片仍在,並顯示空狀態提示', async () =
   await dragFrom(doc, win, doc.querySelector('[data-remove-source][data-task-id="t1"]'), 900, 700)
   assert.equal((await cardOf(ls, did, ids[0])).source.length, 0, '卡片不該被刪掉')
   const el = doc.querySelector(`[data-card-id="${ids[0]}"]`)
-  assert.ok(/拖|沒有|空/.test(el.textContent), `要有空狀態提示,實得:${el.textContent.slice(0, 40)}`)
+  const emptyEl = el.querySelector('.card-table-empty')
+  assert.ok(emptyEl, '要有空狀態節點,不能只靠卡片文字碰巧含關鍵字')
+  assert.ok(/拖/.test(emptyEl.textContent), `空狀態要告訴使用者可以拖進來,實得:${emptyEl.textContent}`)
 })
 
 test('瀏覽模式看不到拖出把手', async () => {

@@ -11,7 +11,7 @@ globalThis.document = jd.window.document
 const CR = await import('../src/ui/report/cards.js')
 
 const rec = (taskId, slot, value, status = 'ok', over = {}) => ({
-  taskId, slot, capturedAt: slot + ':00+08:00', value, raw: String(value), status,
+  taskId, slot, capturedAt: new Date(slot + ':00').toISOString(), value, raw: String(value), status,
   date: slot.slice(0, 10), ...over
 })
 
@@ -130,7 +130,7 @@ test('複製 TSV 的第一欄標頭跟著自訂的列軸標頭走', () => {
 
 test('沒有 slot 的紀錄用 capturedAt 判斷是否落在期間內,不再一律保留', () => {
   const records = [
-    { taskId: 't1', capturedAt: '2026-08-01T09:00:00+08:00', value: 99, raw: '99', status: 'ok' },
+    { taskId: 't1', capturedAt: new Date('2026-08-01T09:00:00').toISOString(), value: 99, raw: '99', status: 'ok' },
     rec('t1', '2026-09-06T09:00', 1)
   ]
   const el = CR.renderCard(tableCard({ source: [{ taskId: 't1' }] }),
