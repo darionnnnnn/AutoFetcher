@@ -323,6 +323,28 @@ export async function handleNotificationButton(notificationId, buttonIndex) {
   } catch {}
 }
 
+// 處理通知本體點擊事件
+export async function handleNotificationClick(notificationId) {
+  try {
+    if (typeof notificationId !== 'string') return
+
+    // 格式：<taskId>:alert:<alertId>:<YYYY-MM-DD>
+    const match = notificationId.match(/^(.+):alert:(.+):(\d{4}-\d{2}-\d{2})$/)
+    if (!match) return
+
+    const taskId = match[1]
+    const date = match[3]
+
+    const base = typeof chrome.runtime?.getURL === 'function'
+      ? await chrome.runtime.getURL('ui/report/report.html')
+      : 'ui/report/report.html'
+    const url = `${base}#view=history&from=${date}&to=${date}&task=${taskId}`
+
+    await chrome.tabs.create({ url })
+    await chrome.notifications.clear(notificationId)
+  } catch {}
+}
+
 // 處理右鍵選單點擊事件
 export async function handleContextMenu(info, tab) {
   try {
@@ -355,4 +377,5 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true
 })
 chrome.notifications.onButtonClicked.addListener(handleNotificationButton)
+chrome.notifications.onClicked.addListener(handleNotificationClick)
 chrome.contextMenus.onClicked.addListener(handleContextMenu)

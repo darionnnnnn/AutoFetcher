@@ -1,9 +1,10 @@
 // AutoFetcher 擷取流程：開分頁、注入、擷取、寫紀錄、重試
-import { getTask, saveTask, appendRecord } from '../shared/storage.js'
+import { getTask, saveTask, appendRecord, getRecordsInRange, getSettings, getAlertLog, setAlertLog } from '../shared/storage.js'
 import { MSG } from '../shared/messages.js'
 import { slotOf } from './scheduler.js'
 import { notify } from './notify.js'
 import { injectContent } from './inject.js'
+import { evaluateAlerts } from '../shared/alerts.js'
 
 // 短暫等待輔助函式（非排程）
 function sleep(ms) {
@@ -61,8 +62,82 @@ async function scheduleRetry(taskId, attempt, isOffline = false) {
   await chrome.alarms.create(`${taskId}:retry:${attempt}`, { when: Date.now() + delayMs })
 }
 
+// 取得本地日期字串（YYYY-MM-DD）
+function getLocalDateStr(d) {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+// 評估告警並發送通知
+async function processAlerts(record) {
+  if (!record || !record.taskId) return
+
+  // 1. 取任務：沒有 alerts 或空陣列直接返回
+  const task = await getTask(record.taskId)
+  if (!task || !Array.isArray(task.alerts) || task.alerts.length === 0) {
+    return
+  }
+
+  // 2. 取先前紀錄當 prevRecords：今天與前 6 天（共 7 天）
+  const today = (typeof record.slot === 'string' && record.slot.length >= 10)
+    ? record.slot.slice(0, 10)
+    : getLocalDateStr(new Date())
+
+  const [y, m, d] = today.split('-').map(Number)
+  const pastDate = new Date(y, m - 1, d - 6, 12, 0, 0)
+  const fromDate = getLocalDateStr(pastDate)
+
+  const recordsInRange = await getRecordsInRange(fromDate, today)
+  // 本筆還沒寫入，所以範圍查詢不會包含它；只要挑出同一任務、由舊到新即可
+  const prevRecords = recordsInRange
+    .filter(r => r.taskId === record.taskId)
+    .sort((a, b) => (a.capturedAt || '').localeCompare(b.capturedAt || ''))
+
+  // 3. 評估告警
+  const { hits } = evaluateAlerts(task, record, prevRecords)
+  if (!Array.isArray(hits) || hits.length === 0) {
+    return
+  }
+
+  // 4. hits 非空時標記紀錄
+  record.alert = true
+  record.alertHits = hits.map(h => h.alertId)
+
+  // 5. 去重與通知
+  const alertLog = await getAlertLog()
+  const settings = await getSettings()
+  const cooldownMin = typeof settings?.alertCooldownMin === 'number' ? settings.alertCooldownMin : 60
+  const cooldownMs = cooldownMin * 60 * 1000
+  const now = Date.now()
+
+  const taskAlerts = alertLog[task.id] ? { ...alertLog[task.id] } : {}
+  let logChanged = false
+
+  for (const hit of hits) {
+    const lastNotified = taskAlerts[hit.alertId]
+    if (typeof lastNotified === 'number' && (now - lastNotified) < cooldownMs) {
+      continue
+    }
+
+    const notificationId = `${task.id}:alert:${hit.alertId}:${today}`
+    const title = `AutoFetcher: ${task.name}`
+    await notify(notificationId, { title, message: hit.message })
+
+    taskAlerts[hit.alertId] = now
+    logChanged = true
+  }
+
+  if (logChanged) {
+    alertLog[task.id] = taskAlerts
+    await setAlertLog(alertLog)
+  }
+}
+
 // 寫入抓取紀錄並更新帳本
 async function writeRecord(record) {
+  await processAlerts(record)
   await appendRecord(record.slot.slice(0, 10), record)
   await recordLedger(record.taskId, record.slot, record.status)
   return record

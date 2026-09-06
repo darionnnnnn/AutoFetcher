@@ -380,6 +380,17 @@ export async function getDiagList() {
   return Array.isArray(res.diag) ? res.diag : []
 }
 
+// 取得告警通知時間帳本（無資料回傳空物件）
+export async function getAlertLog() {
+  const res = await chrome.storage.local.get('alertLog')
+  return (res.alertLog && typeof res.alertLog === 'object') ? res.alertLog : {}
+}
+
+// 寫入告警通知時間帳本
+export async function setAlertLog(log) {
+  await chrome.storage.local.set({ alertLog: log })
+}
+
 // 查詢單一任務在所有日期的紀錄總數（使用 listDates + 逐日 getRecordsByDate）
 export async function countRecordsForTask(taskId) {
   if (!taskId) return 0
