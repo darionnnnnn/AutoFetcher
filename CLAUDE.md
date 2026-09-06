@@ -47,7 +47,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1087 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1125 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅)。
   AF-2 靠突變抓到多處同義反覆的測試;併回前另做兩份獨立終檢(程式碼 + 文件),抓到 14 類真實缺陷。
@@ -58,6 +58,8 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **顏色一律走 `ui/theme.css` 變數**,任何模組內都不得出現色碼字面值(多序列用 `--chart-1`~`--chart-8`)。
 - **格線數學與資料聚合寫成純函式**(無 DOM、無 `chrome.`),DOM 接線另置,才測得動。
 - **「哪些 status 算成功」只有一份**:`shared/record-status.js`(`ok`/`fallback`/`late`)。
+- **`slot` 是本地時間、`capturedAt` 是 UTC**:兩者絕不可直接比字串或切前 16 碼。
+  換算與「有效時刻」只有一份:`ui/report/series.js` 的 `effectiveTimeOf`。
 - **卡片來源的順序就是表格欄序**:抽屜的上下移動與拖曳插入都只改 `card.source` 一份資料,不要另存欄序。
 - **新增卡片不要自己算位置**:`layout-store.addCard` 已經呼叫 `findFreeSlot`,再算一次就是兩份邏輯。
 
