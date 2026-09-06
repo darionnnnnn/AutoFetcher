@@ -201,3 +201,18 @@ test('同一個來源可以連續拖兩次', () => {
   for (let i = 0; i < 2; i++) { down(src, 0, 0); move(250, 250); up(250, 250) }
   assert.equal(dropped, 2, '第一次拖完狀態沒清乾淨的話第二次會失效')
 })
+
+test('上層目標不接受這個 payload 時,要落到下層願意接受的目標', () => {
+  const src = setup()
+  const outer = makeTarget('outer', [0, 0, 400, 400])
+  const inner = makeTarget('inner', [200, 200, 300, 300])
+  const hit = []
+  DND.createDragSource(src, () => ({ kind: 'remove' }))
+  DND.registerDropTarget(outer, { accepts: () => true, onDrop: () => hit.push('outer') })
+  DND.registerDropTarget(inner, { accepts: (p) => p.kind !== 'remove', onDrop: () => hit.push('inner') })
+  down(src, 0, 0)
+  move(250, 250)
+  assert.equal(outer.hasAttribute('data-drop-active'), true, '該由外層接手並標示')
+  up(250, 250)
+  assert.deepEqual(hit, ['outer'], '上層拒絕就整個落空的話,拖出移除會在別張卡片上失效')
+})

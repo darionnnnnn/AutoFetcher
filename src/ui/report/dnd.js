@@ -94,9 +94,9 @@ function updateGhost(x, y) {
 /**
  * 檢查目標是否接受當前 payload
  */
-function targetAccepts(target, payload) {
+function targetAccepts(target, payload, pos) {
   if (typeof target.handlers.accepts === 'function') {
-    return Boolean(target.handlers.accepts(payload));
+    return Boolean(target.handlers.accepts(payload, pos));
   }
   return true;
 }
@@ -104,14 +104,19 @@ function targetAccepts(target, payload) {
 /**
  * 根據指標座標尋找命中的目標（走訪所有已註冊目標，多個命中時取最後註冊者）
  */
-function findHitTarget(x, y) {
+function findHitTarget(x, y, payload) {
   for (let i = dropTargets.length - 1; i >= 0; i--) {
     const target = dropTargets[i];
     if (!target.el || typeof target.el.getBoundingClientRect !== 'function') {
       continue;
     }
     const rect = target.el.getBoundingClientRect();
-    if (rect && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+    if (!rect || x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+      continue;
+    }
+    // 上層目標不接受這個 payload 時要繼續往下找,不能整個落空
+    // (例:拖著「移除把手」放在別張卡片上,該由底下的格線接手)
+    if (targetAccepts(target, payload, { x, y })) {
       return target;
     }
   }
@@ -123,9 +128,7 @@ function findHitTarget(x, y) {
  */
 function updateDropTarget(x, y) {
   const pos = { x, y };
-  const hitTarget = findHitTarget(x, y);
-  const isAccepted = hitTarget ? targetAccepts(hitTarget, currentPayload) : false;
-  const nextTarget = isAccepted ? hitTarget : null;
+  const nextTarget = findHitTarget(x, y, currentPayload);
 
   if (currentActiveTarget !== nextTarget) {
     if (currentActiveTarget) {

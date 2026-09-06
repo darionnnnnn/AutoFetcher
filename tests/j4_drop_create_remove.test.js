@@ -62,9 +62,10 @@ async function enterEditMode(doc) {
 }
 
 async function dragFrom(doc, win, el, x, y) {
+  // 事件派在元素上,會往上冒泡到格線與 document,與真實瀏覽器一致
   el.dispatchEvent(pointer(win, 'pointerdown', 0, 0))
-  doc.dispatchEvent(pointer(win, 'pointermove', x, y))
-  doc.dispatchEvent(pointer(win, 'pointerup', x, y))
+  el.dispatchEvent(pointer(win, 'pointermove', x, y))
+  el.dispatchEvent(pointer(win, 'pointerup', x, y))
   await settle()
 }
 
@@ -249,4 +250,54 @@ test('瀏覽模式看不到拖出把手', async () => {
   const el = doc.querySelector(`[data-card-id="${ids[0]}"]`)
   const handles = [...el.querySelectorAll('[data-remove-source]')]
   assert.ok(handles.length === 0 || handles.every(h => h.hidden), '瀏覽模式不該出現移除把手')
+})
+
+test('把欄標拖到別張卡片上也算移除(不是落空)', async () => {
+  const { st, ls, db, doc, win } = await fresh()
+  await seedRecords(st, ['t1', 't2'])
+  const { did, ids } = await seed(ls, [
+    CARD('table', {
+      source: [{ taskId: 't1', aggregation: 'raw' }, { taskId: 't2', aggregation: 'raw' }],
+      options: { mode: 'pivot' }
+    }),
+    CARD('number', { source: [{ taskId: 't2', aggregation: 'raw' }] })
+  ])
+  await db.renderDashboard(did)
+  await enterEditMode(doc)
+  const tableEl = doc.querySelector(`[data-card-id="${ids[0]}"]`)
+  const numberEl = doc.querySelector(`[data-card-id="${ids[1]}"]`)
+  stubRect(tableEl, [0, 0, 600, 200])
+  stubRect(numberEl, [700, 0, 900, 200])
+  await dragFrom(doc, win, tableEl.querySelector('[data-remove-source][data-task-id="t1"]'), 800, 100)
+  assert.deepEqual((await cardOf(ls, did, ids[0])).source.map(s => s.taskId), ['t2'])
+  assert.deepEqual((await cardOf(ls, did, ids[1])).source.map(s => s.taskId), ['t2'], '目標卡片不該被改到')
+})
+
+test('拖到不肯收的卡片上,不會在它底下偷偷長出新卡片', async () => {
+  const { ls, db, doc, win } = await fresh()
+  const { did, ids } = await seed(ls, [CARD('line', { source: [{ taskId: 't1', aggregation: 'raw' }] })])
+  await db.renderDashboard(did)
+  await enterEditMode(doc)
+  stubRect(doc.querySelector(`[data-card-id="${ids[0]}"]`), [0, 0, 600, 200])
+  await dragTaskTo(doc, win, 't1', 300, 100)
+  assert.equal((await cardsOf(ls, did)).length, 1, '卡片數不該增加')
+})
+
+test('拖移除把手時卡片本身不可跟著被搬動', async () => {
+  const { st, ls, db, doc, win } = await fresh()
+  await seedRecords(st, ['t1', 't2'])
+  const { did, ids } = await seed(ls, [CARD('table', {
+    x: 0, y: 0, w: 6, h: 2,
+    source: [{ taskId: 't1', aggregation: 'raw' }, { taskId: 't2', aggregation: 'raw' }],
+    options: { mode: 'pivot' }
+  })])
+  await db.renderDashboard(did)
+  await enterEditMode(doc)
+  const el = doc.querySelector(`[data-card-id="${ids[0]}"]`)
+  stubRect(el, [0, 0, 600, 200])
+  const before = await cardOf(ls, did, ids[0])
+  await dragFrom(doc, win, el.querySelector('[data-remove-source][data-task-id="t1"]'), 1000, 700)
+  const after = await cardOf(ls, did, ids[0])
+  assert.deepEqual(after.source.map(s => s.taskId), ['t2'], '該移除欄位')
+  assert.deepEqual([after.x, after.y], [before.x, before.y], '卡片位置不該被一起改掉')
 })

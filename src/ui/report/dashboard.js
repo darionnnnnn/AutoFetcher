@@ -1,7 +1,7 @@
 import {
   getLayout, saveLayout, addDashboard, renameDashboard,
   deleteDashboard, duplicateDashboard, reorderDashboards,
-  setLastDashboard, updateCard
+  setLastDashboard, addCard, updateCard
 } from '../../shared/layout-store.js'
 import { getRecordsInRange, getTasks, getHealthMap, getMissedList } from '../../shared/storage.js'
 import { renderCard } from './cards.js'
@@ -11,7 +11,7 @@ import { openDrawer } from './drawer.js'
 import { applyTemplate } from './templates.js'
 import { MSG } from '../../shared/messages.js'
 import { createDragSource, registerDropTarget, resetDnd } from './dnd.js'
-import { applyDrop } from './drop-rules.js'
+import { applyDrop, cardTypeForTask } from './drop-rules.js'
 
 // 編輯模式狀態與復原歷史
 let editing = false
@@ -152,6 +152,11 @@ function updateEditingUI() {
     for (const handle of handles) {
       handle.hidden = !editing
     }
+    const removeHandles = grid.querySelectorAll('[data-remove-source]')
+    for (const handle of removeHandles) {
+      handle.hidden = !editing
+      handle.textContent = editing ? '×' : ''
+    }
   }
   const editBtn = document.getElementById('edit-layout')
   if (editBtn) {
@@ -190,7 +195,7 @@ function onKeyDown(event) {
 function onPointerDown(e, card) {
   if (!editing) return
   if (e.button !== undefined && e.button !== 0) return
-  if (e.target.closest && e.target.closest('button')) return
+  if (e.target.closest && (e.target.closest('button') || e.target.closest('[data-remove-source]'))) return
 
   const isResize = Boolean(e.target.closest && e.target.closest('[data-role="resize-handle"]'))
 
@@ -565,7 +570,8 @@ async function buildDashboardContext(dash) {
     missed,
     nextRuns,
     today,
-    range: { from: defaultFrom, to: defaultTo }
+    range: { from: defaultFrom, to: defaultTo },
+    editing
   }
 }
 
@@ -587,6 +593,12 @@ function prepareCardElement(card, ctx, dashId) {
     cardEl.appendChild(handle)
   }
   handle.hidden = !editing
+
+  const removeHandles = cardEl.querySelectorAll('[data-remove-source]')
+  for (const h of removeHandles) {
+    const taskId = h.getAttribute('data-task-id')
+    createDragSource(h, () => ({ removeFrom: { cardId: card.id, taskId } }))
+  }
 
   cardEl.addEventListener('pointerdown', (e) => onPointerDown(e, card))
 
@@ -633,7 +645,7 @@ function registerCardDropTarget(cardEl, card, ctx) {
   cardEl._unregisterDropTarget = registerDropTarget(cardEl, {
     accepts(payload) {
       if (!editing) return false
-      if (!payload || !payload.taskId) return false
+      if (!payload || !payload.taskId || payload.removeFrom) return false
       return applyDrop(card, payload.taskId, {}) !== null
     },
     async onDrop(payload, pos) {
@@ -689,6 +701,104 @@ function registerCardDropTarget(cardEl, card, ctx) {
       await pushHistory()
       await updateCard(currentDashId, card.id, patch)
       await renderDashboard(currentDashId)
+    }
+  })
+}
+
+/**
+ * 指標是否落在某張卡片上
+ */
+function pointerOverAnyCard(grid, pos) {
+  if (!grid || !pos) return false
+  const cardEls = grid.querySelectorAll('[data-card-id]')
+  for (const el of cardEls) {
+    if (typeof el.getBoundingClientRect !== 'function') continue
+    const rect = el.getBoundingClientRect()
+    if (!rect) continue
+    if (pos.x >= rect.left && pos.x <= rect.right && pos.y >= rect.top && pos.y <= rect.bottom) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * 將格線註冊為拖曳投放目標（拖到空白格建新卡片、或拖出卡片移除資料來源）
+ */
+function registerGridDropTarget(grid) {
+  grid._unregisterDropTarget = registerDropTarget(grid, {
+    accepts(payload, pos) {
+      if (!editing) return false
+      if (!payload) return false
+      // 拖著移除把手時,放在哪張卡片上都算移除,格線一律接手
+      if (payload.removeFrom) return true
+      // 指標正壓在某張卡片上時交給那張卡片決定;它不收就是不收,
+      // 不可在它底下偷偷長出一張新卡片
+      if (payload.taskId) return !pointerOverAnyCard(grid, pos)
+      return false
+    },
+    async onDrop(payload, pos) {
+      if (!editing || !payload) return
+
+      if (payload.removeFrom) {
+        const { cardId, taskId } = payload.removeFrom
+        if (!cardId || !taskId) return
+
+        const cardEl = grid.querySelector(`[data-card-id="${cardId}"]`)
+        if (cardEl && pos && typeof cardEl.getBoundingClientRect === 'function') {
+          const rect = cardEl.getBoundingClientRect()
+          if (rect && pos.x >= rect.left && pos.x <= rect.right && pos.y >= rect.top && pos.y <= rect.bottom) {
+            return
+          }
+        }
+
+        const layout = await getLayout()
+        const currentDash = layout.dashboards.find(d => d.id === currentDashId) || layout.dashboards[0]
+        if (!currentDash) return
+        const card = currentDash.cards.find(c => c.id === cardId)
+        if (!card) return
+
+        const newSource = (card.source || []).filter(s => s.taskId !== taskId)
+        await pushHistory()
+        await updateCard(currentDash.id, cardId, { source: newSource })
+        await renderDashboard(currentDash.id)
+        return
+      }
+
+      if (payload.taskId) {
+        const tasks = await getTasks()
+        const task = tasks.find(t => t.id === payload.taskId)
+        const type = cardTypeForTask(task)
+
+        let w = 6
+        let h = 2
+        if (type === 'number') {
+          w = 3
+          h = 2
+        } else if (type === 'table') {
+          w = 12
+          h = 4
+        }
+
+        const layout = await getLayout()
+        const currentDash = layout.dashboards.find(d => d.id === currentDashId) || layout.dashboards[0]
+        if (!currentDash) return
+
+        // 位置交給 layout-store 的 addCard 決定(它自己會找空位,不要在這裡再算一次)
+        const newCard = {
+          type,
+          w,
+          h,
+          x: 0,
+          y: 0,
+          source: [{ taskId: payload.taskId, aggregation: 'raw' }],
+          options: type === 'table' ? { mode: 'pivot' } : {}
+        }
+
+        await pushHistory()
+        await addCard(currentDash.id, newCard)
+        await renderDashboard(currentDash.id)
+      }
     }
   })
 }
@@ -877,6 +987,8 @@ export async function renderDashboard(dashId) {
   await renderPalette()
 
   grid.textContent = ''
+
+  registerGridDropTarget(grid)
 
   for (const card of cards) {
     const cardEl = prepareCardElement(card, ctx, dash.id)

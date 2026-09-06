@@ -227,6 +227,41 @@ function renderChartCard(card, ctx, { bodyEl }) {
     }
   }
 
+  // 圖例列（每條序列一個圖例項目，附帶拖出移除把手）
+  const sources = (card.source || []).filter(s => s && s.taskId);
+  if (sources.length > 0) {
+    const legendEl = document.createElement('div');
+    legendEl.className = 'card-chart-legend';
+
+    sources.forEach((s, idx) => {
+      const itemEl = document.createElement('div');
+      itemEl.className = 'chart-legend-item';
+
+      const dotEl = document.createElement('span');
+      dotEl.className = 'chart-legend-dot';
+      dotEl.style.backgroundColor = `var(--chart-${(idx % 8) + 1})`;
+      itemEl.appendChild(dotEl);
+
+      const labelEl = document.createElement('span');
+      labelEl.className = 'chart-legend-label';
+      labelEl.textContent = ctx?.tasksById?.[s.taskId]?.name || s.taskId;
+      itemEl.appendChild(labelEl);
+
+      const handle = document.createElement('button');
+      handle.type = 'button';
+      handle.setAttribute('data-remove-source', '');
+      handle.setAttribute('data-task-id', s.taskId);
+      handle.className = 'remove-source-handle';
+      handle.hidden = !ctx?.editing;
+      handle.textContent = ctx?.editing ? '×' : '';
+      itemEl.appendChild(handle);
+
+      legendEl.appendChild(itemEl);
+    });
+
+    bodyEl.appendChild(legendEl);
+  }
+
   bodyEl.appendChild(svg);
 }
 
@@ -260,6 +295,14 @@ function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
 
   if (isPivot) {
     const taskIds = (card.source || []).map(s => s && s.taskId).filter(Boolean);
+    if (taskIds.length === 0) {
+      const emptyEl = document.createElement('div');
+      emptyEl.className = 'card-table-empty';
+      emptyEl.textContent = '尚無資料來源，請從左側拖曳任務加入';
+      bodyEl.appendChild(emptyEl);
+      return;
+    }
+
     // 欄序就是 card.source 的順序(拖曳插入欄位靠它)
     const { columns, rows } = pivot(filteredRecords, taskIds, {
       taskOrder: taskIds,
@@ -273,9 +316,26 @@ function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
       : '時間';
     tsvHeaders = [rowHeader, ...columns.map(id => ctx?.tasksById?.[id]?.name || id)];
     const headTr = document.createElement('tr');
-    for (const h of tsvHeaders) {
+
+    const rowTh = document.createElement('th');
+    rowTh.textContent = rowHeader;
+    headTr.appendChild(rowTh);
+
+    for (const id of columns) {
       const th = document.createElement('th');
-      th.textContent = h;
+      const titleSpan = document.createElement('span');
+      titleSpan.textContent = ctx?.tasksById?.[id]?.name || id;
+      th.appendChild(titleSpan);
+
+      const handle = document.createElement('button');
+      handle.type = 'button';
+      handle.setAttribute('data-remove-source', '');
+      handle.setAttribute('data-task-id', id);
+      handle.className = 'remove-source-handle';
+      handle.hidden = !ctx?.editing;
+      handle.textContent = ctx?.editing ? '×' : '';
+      th.appendChild(handle);
+
       headTr.appendChild(th);
     }
     thead.appendChild(headTr);
