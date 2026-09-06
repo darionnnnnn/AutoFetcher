@@ -20,10 +20,10 @@ src/
 ├── ui/popup/            ← 工具列 popup(燈號摘要)
 ├── ui/report/           ← AutoFetcher-Report 頁(report.html)
 │   ├── 純函式層(無 DOM、無 chrome.):
-│   │   layout.js 格線數學 / series.js 資料序列與聚合 / logic.js 範圍篩選與 hash
-│   │   templates.js 儀表板範本 / charts.js SVG 圖表(只碰 document 建元素)
+│   │   layout.js 格線數學 / series.js 資料序列與聚合(含樞紐表容差合併)/ logic.js 範圍篩選與 hash
+│   │   templates.js 儀表板範本 / drop-rules.js 拖曳投放規則 / charts.js SVG 圖表(只碰 document 建元素)
 │   └── DOM 層:report.js 路由與歷史頁 / dashboard.js 儀表板與拖曳 / cards.js 卡片
-│       drawer.js 卡片設定抽屜 / tasks.js 任務頁 / settings.js 設定頁
+│       dnd.js 共用拖曳協定(唯一入口)/ drawer.js 卡片設定抽屜 / tasks.js 任務頁 / settings.js 設定頁
 └── shared/              ← storage(唯一寫入口)、messages(訊息型別)、selector(四層定位)
                            extract(策略鏈)、export(三種匯出)、settings-io(設定匯出入)、diag(診斷)
                            layout-store(版面唯一入口)、record-status(成功狀態唯一來源)、crypto(站台密碼)
@@ -42,12 +42,12 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 
 - 改任何行為 → `docs/SPEC.md`(現況規格,§編號會被程式碼註解引用,勿拆檔)
 - 想做但刻意沒做 → `docs/BACKLOG.md`(每項附觸發條件)
-- 本輪規劃 → `docs/AF-<N>-PLAN.md`;完工搬 `docs/archive/`(按需讀,勿全掃)。AF-1、AF-2、AF-3 已歸檔。
+- 本輪規劃 → `docs/AF-<N>-PLAN.md`;完工搬 `docs/archive/`(按需讀,勿全掃)。AF-1~AF-4 已歸檔。
 
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 947 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1087 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅)。
   AF-2 靠突變抓到多處同義反覆的測試;併回前另做兩份獨立終檢(程式碼 + 文件),抓到 14 類真實缺陷。
@@ -58,11 +58,16 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **顏色一律走 `ui/theme.css` 變數**,任何模組內都不得出現色碼字面值(多序列用 `--chart-1`~`--chart-8`)。
 - **格線數學與資料聚合寫成純函式**(無 DOM、無 `chrome.`),DOM 接線另置,才測得動。
 - **「哪些 status 算成功」只有一份**:`shared/record-status.js`(`ok`/`fallback`/`late`)。
+- **卡片來源的順序就是表格欄序**:抽屜的上下移動與拖曳插入都只改 `card.source` 一份資料,不要另存欄序。
+- **新增卡片不要自己算位置**:`layout-store.addCard` 已經呼叫 `findFreeSlot`,再算一次就是兩份邏輯。
 
 ## 不要做
 
 - 不要把帳號密碼存明文於 `storage.sync`(會同步到所有裝置;SPEC §6 規定只放 `storage.local` 並標示風險)。
 - 不要用 `setTimeout`/`setInterval` 做排程(MV3 service worker 會被殺;一律 `chrome.alarms`)。
+- **不要用 `periodInMinutes` 做任務排程**(daily 與 interval 都不行):週期起點是建立當下,相位會漂,
+  而且任何任務改動都會重建全部 alarm、把相位一起重置。interval 一律用 `nextIntervalRun` 算對齊的 `when`
+  (SPEC §4);`__watchdog` 自己那個固定 alarm 是唯一例外。
 - 不要用 `periodInMinutes: 1440` 做每日排程(日光節約會漂移;每次觸發後重算 `when`,SPEC §4)。
 - 不要在帳本之外直接呼叫 `runTask`(同一排程槽會重複抓;冪等靠 `runs[taskId][slot]`,SPEC §4.1)。
 - 不要假設抓取時目標分頁已開啟(排程到點由 background 自己開分頁,SPEC §4)。
@@ -85,6 +90,10 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - 不要用絕對 XPath 當唯一選擇器(頁面小改就失效;SPEC §3 要求多重選擇器 + 文字錨定)。
 - **不要用 HTML5 drag-and-drop**:拖曳一律 Pointer Events,且只讀 `clientX`/`clientY`/`pointerId`,
   `setPointerCapture` 要先檢查存在(jsdom 25 沒有 `PointerEvent` 也沒有這個方法)。
+- **新的拖曳一律走 `ui/report/dnd.js`**,不要再各自內嵌 pointer 監聽(既有三處尚未搬過去,見 BACKLOG)。
+  命中判定用已註冊目標的矩形,**不要用 `document.elementFromPoint`**(jsdom 沒有,測不動)。
+- **不要讓「上層目標拒收」變成整個落空**:`dnd.js` 找目標時會跳過不接受的,繼續往下找;
+  反過來,底層目標要自己判斷「指標是不是壓在上層元素上」,否則會在拒收的卡片底下偷偷長出新卡片。
 - **缺值不補 0、不內插**(SPEC §8.6);抓取失敗一律顯示 `—`,錯誤原因放 `title`。
 - 不要在匯出的獨立 HTML 報表放 `<script>` 或任何外部資源(靜態快照,離線可開)。
 - 不要在 UI 直接讀 `chrome.storage`(一律經 `shared/storage`),也不要自己解析 alarm 名稱
