@@ -72,6 +72,24 @@
     [data-alert-row] label { display: inline-flex; flex-direction: row; align-items: center; gap: 2px; white-space: nowrap; color: var(--text); font-size: 12px; cursor: pointer; }
     [data-alert-row] button { flex-shrink: 0; padding: 4px 8px; font-size: 12px; }
     #alert-add { align-self: flex-start; }
+    #preaction-section {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 8px;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .preaction-title { font-size: 12px; font-weight: 600; padding: 0 4px; color: var(--text); }
+    .preaction-desc { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+    #preaction-list { display: flex; flex-direction: column; gap: 6px; }
+    [data-preaction-row] { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    [data-preaction-row] select { flex: 2; min-width: 90px; }
+    [data-preaction-row] input[type="number"] { flex: 1.5; min-width: 60px; }
+    [data-preaction-row] button { flex-shrink: 0; padding: 4px 8px; font-size: 12px; }
+    .preaction-target { font-size: 12px; color: var(--text-muted); font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 90px; }
+    #preaction-add { align-self: flex-start; }
     footer {
       display: flex;
       justify-content: flex-end;
@@ -162,6 +180,12 @@
         <div id="alert-list"></div>
         <button type="button" id="alert-add">新增條件</button>
       </fieldset>
+      <div id="preaction-section">
+        <div class="preaction-title">前置動作</div>
+        <div class="preaction-desc">抓取前依序執行，例如先關掉彈窗、或等圖表載入完成。</div>
+        <div id="preaction-list"></div>
+        <button type="button" id="preaction-add">新增動作</button>
+      </div>
       <fieldset id="add-to-dashboard">
         <legend>加入儀表板</legend>
         <label>目標儀表板

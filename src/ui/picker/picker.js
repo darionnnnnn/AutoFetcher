@@ -40,9 +40,40 @@ function getFormData() {
     return { id, type, value, enabled }
   })
 
+  const preActionRows = document.querySelectorAll('[data-preaction-row]')
+  const preActions = Array.from(preActionRows).map(row => {
+    const type = row.querySelector('select')?.value || 'waitFor'
+    const locator = row._locator || null
+    const valInput = row.querySelector('input[type="number"]') || row.querySelector('input')
+    const valStr = valInput?.value?.trim() ?? ''
+    const num = valStr === '' ? NaN : Number(valStr)
+
+    if (type === 'waitFor') {
+      return {
+        type,
+        locator,
+        timeoutMs: Number.isFinite(num) ? num : (valStr === '' ? 20000 : NaN)
+      }
+    }
+    if (type === 'click') {
+      return {
+        type,
+        locator
+      }
+    }
+    if (type === 'wait') {
+      return {
+        type,
+        ms: num
+      }
+    }
+    return { type, locator }
+  })
+
   const data = {
     name, url, mode, strategy, regex, scheduleType, times, weekdays, everyMinutes, windowFrom, windowTo,
-    alerts
+    alerts,
+    preActions
   }
 
   if (mode === 'block') {
@@ -150,6 +181,35 @@ export function buildTask(values, locator, existing) {
       task.alerts = validAlerts
     }
   }
+  if (Array.isArray(values.preActions)) {
+    const validPreActions = values.preActions
+      .map(a => {
+        if (!a || typeof a !== 'object') return null
+        if (a.type === 'click') {
+          const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
+          if (!hasLoc) return null
+          return { type: 'click', locator: a.locator }
+        }
+        if (a.type === 'waitFor') {
+          const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
+          if (!hasLoc) return null
+          const timeoutMs = Number.isFinite(Number(a.timeoutMs)) ? Number(a.timeoutMs) : 20000
+          return { type: 'waitFor', locator: a.locator, timeoutMs }
+        }
+        if (a.type === 'wait') {
+          // 空字串經 Number() 會變成 0，看起來合法但其實是使用者沒填
+          if (a.ms === '' || a.ms === null || a.ms === undefined) return null
+          const ms = Number(a.ms)
+          if (!Number.isFinite(ms)) return null
+          return { type: 'wait', ms }
+        }
+        return null
+      })
+      .filter(Boolean)
+    if (validPreActions.length > 0) {
+      task.preActions = validPreActions
+    }
+  }
   if (existing?.order !== undefined) task.order = existing.order
   return task
 }
@@ -235,8 +295,20 @@ export function render(ctx) {
     }
   }
 
+  const preactionList = document.getElementById('preaction-list')
+  if (preactionList) {
+    preactionList.replaceChildren()
+  }
+  if (Array.isArray(ctx?.task?.preActions)) {
+    for (const pa of ctx.task.preActions) {
+      addPreActionRow(pa)
+    }
+  }
+
   bindModeEvents()
   bindAlertEvents()
+  bindPreActionEvents()
+  bindPreActionMessageListener()
   updateBlockSection()
 }
 
@@ -392,6 +464,170 @@ function bindAlertEvents() {
   }
 }
 
+let lastPreActionPickRow = null
+let _preActionMessageBound = false
+
+/**
+ * 更新單列前置動作的定位資訊顯示文字
+ */
+function updatePreActionLocatorText(row) {
+  const targetEl = row.querySelector('.preaction-target')
+  if (!targetEl) return
+  const loc = row._locator
+  targetEl.textContent = (loc?.css || loc?.path || '') || '尚未選取'
+}
+
+/**
+ * 切換單列前置動作欄位的顯示狀態
+ */
+function updatePreActionRowVisibility(row) {
+  const select = row.querySelector('select')
+  const pickBtn = row.querySelector('[data-action="preaction-pick"]')
+  const targetEl = row.querySelector('.preaction-target')
+  const input = row.querySelector('input[type="number"]')
+
+  const type = select?.value || 'waitFor'
+  if (pickBtn) pickBtn.hidden = (type === 'wait')
+  if (targetEl) targetEl.hidden = (type === 'wait')
+  if (input) {
+    input.hidden = (type === 'click')
+    if (type === 'wait') {
+      input.placeholder = '毫秒數'
+    } else if (type === 'waitFor') {
+      input.placeholder = '逾時毫秒'
+      if (!input.value) {
+        input.value = '20000'
+      }
+    }
+  }
+}
+
+/**
+ * 在 #preaction-list 裡新增一列前置動作
+ */
+function addPreActionRow(data = {}) {
+  const list = document.getElementById('preaction-list')
+  if (!list) return null
+
+  const row = document.createElement('div')
+  row.className = 'preaction-row'
+  row.setAttribute('data-preaction-row', '')
+  row._locator = data.locator || null
+
+  const select = document.createElement('select')
+  select.className = 'preaction-type'
+  const options = [
+    { value: 'waitFor', text: '等元素出現' },
+    { value: 'click', text: '點擊元素' },
+    { value: 'wait', text: '等待秒數' }
+  ]
+  for (const opt of options) {
+    const el = document.createElement('option')
+    el.value = opt.value
+    el.textContent = opt.text
+    if (opt.value === (data.type || 'waitFor')) {
+      el.selected = true
+    }
+    select.appendChild(el)
+  }
+  select.value = data.type || 'waitFor'
+  select.addEventListener('change', () => {
+    updatePreActionRowVisibility(row)
+  })
+
+  const pickBtn = document.createElement('button')
+  pickBtn.type = 'button'
+  pickBtn.setAttribute('data-action', 'preaction-pick')
+  pickBtn.textContent = '在頁面上選取'
+  pickBtn.addEventListener('click', () => {
+    lastPreActionPickRow = row
+    if (globalThis.chrome?.runtime?.sendMessage) {
+      chrome.runtime.sendMessage({
+        type: MSG.ENTER_PICK,
+        purpose: 'preaction',
+        tabId: currentCtx?.tabId,
+        taskId: currentCtx?.task?.id
+      })
+    }
+  })
+
+  const targetEl = document.createElement('span')
+  targetEl.className = 'preaction-target'
+
+  const input = document.createElement('input')
+  input.type = 'number'
+  input.className = 'preaction-num'
+  input.min = '0'
+  input.step = '1'
+  if (data.type === 'wait') {
+    if (data.ms !== undefined && data.ms !== null && !Number.isNaN(data.ms) && String(data.ms).trim() !== '') {
+      input.value = String(data.ms)
+    }
+  } else if (data.type === 'click') {
+    input.value = ''
+  } else {
+    if (data.timeoutMs !== undefined && data.timeoutMs !== null && !Number.isNaN(data.timeoutMs) && String(data.timeoutMs).trim() !== '') {
+      input.value = String(data.timeoutMs)
+    } else {
+      input.value = '20000'
+    }
+  }
+
+  const removeBtn = document.createElement('button')
+  removeBtn.type = 'button'
+  removeBtn.setAttribute('data-action', 'preaction-remove')
+  removeBtn.textContent = '刪除'
+  removeBtn.addEventListener('click', () => {
+    if (lastPreActionPickRow === row) {
+      lastPreActionPickRow = null
+    }
+    row.remove()
+  })
+
+  row.appendChild(select)
+  row.appendChild(pickBtn)
+  row.appendChild(targetEl)
+  row.appendChild(input)
+  row.appendChild(removeBtn)
+
+  updatePreActionLocatorText(row)
+  updatePreActionRowVisibility(row)
+
+  list.appendChild(row)
+  return row
+}
+
+/**
+ * 綁定前置動作新增按鈕事件（僅綁定一次）
+ */
+function bindPreActionEvents() {
+  const addBtn = document.getElementById('preaction-add')
+  if (addBtn && !addBtn._preactionEventsBound) {
+    addBtn.addEventListener('click', () => {
+      addPreActionRow()
+    })
+    addBtn._preactionEventsBound = true
+  }
+}
+
+/**
+ * 綁定選取結果接收監聽器（僅綁定一次）
+ */
+function bindPreActionMessageListener() {
+  if (_preActionMessageBound) return
+  if (globalThis.chrome?.runtime?.onMessage?.addListener) {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg?.type === MSG.PICKED && msg.purpose === 'preaction') {
+        if (lastPreActionPickRow && !msg.cancelled) {
+          lastPreActionPickRow._locator = msg.locator || null
+          updatePreActionLocatorText(lastPreActionPickRow)
+        }
+      }
+    })
+    _preActionMessageBound = true
+  }
+}
+
 /**
  * 渲染加入儀表板區塊
  */
@@ -539,6 +775,8 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
   document.getElementById('test-now')?.addEventListener('click', () => handleTestNow())
   bindModeEvents()
   bindAlertEvents()
+  bindPreActionEvents()
+  bindPreActionMessageListener()
 
   const search = typeof window !== 'undefined' ? window.location?.search : ''
   const params = new URLSearchParams(search || '')

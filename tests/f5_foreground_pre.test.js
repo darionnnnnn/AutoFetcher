@@ -309,6 +309,22 @@ test('需要點元素的動作沒指定元素時不得存進去', async () => {
   assert.equal(t.preActions[0].type, 'waitFor')
 })
 
+test('等待秒數沒填數字的動作也不得存進去', async () => {
+  const { pk } = await picker()
+  const t = pk.buildTask(
+    { name: '電費', url: 'https://a.test/p', mode: 'number', strategy: 'auto',
+      scheduleType: 'daily', times: ['09:00'], weekdays: [0, 1, 2, 3, 4, 5, 6],
+      preActions: [
+        { type: 'wait', ms: '' },
+        { type: 'wait', ms: 'abc' },
+        { type: 'wait', ms: 1500 }
+      ] },
+    { css: '#v' }
+  )
+  assert.equal(t.preActions.length, 1, `空白或非數字的等待沒有意義,實得 ${JSON.stringify(t.preActions)}`)
+  assert.equal(t.preActions[0].ms, 1500)
+})
+
 test('編輯既有任務時前置動作要顯示出來', async () => {
   const { pk, doc } = await picker()
   pk.render({

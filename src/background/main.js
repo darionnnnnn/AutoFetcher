@@ -224,6 +224,13 @@ export async function handleMessage(msg, sender) {
         return { ok: true }
       }
 
+      if (msg.purpose === 'preaction') {
+        try {
+          await chrome.runtime.sendMessage(msg)
+        } catch {}
+        return { ok: true }
+      }
+
       if (msg.purpose === 'task') {
         const payload = {
           locator: msg.locator,
@@ -261,6 +268,16 @@ export async function handleMessage(msg, sender) {
     }
 
     if (msg.type === MSG.ENTER_PICK) {
+      if (msg.tabId) {
+        await injectContent(msg.tabId)
+        await chrome.tabs.sendMessage(msg.tabId, {
+          type: MSG.ENTER_PICK,
+          purpose: msg.purpose,
+          taskId: msg.taskId
+        })
+        return { ok: true }
+      }
+
       const task = await getTask(msg.taskId)
       if (!task) {
         return { ok: false }
