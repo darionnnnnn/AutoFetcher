@@ -2,10 +2,8 @@
 
 # AutoFetcher 規格
 
-> 本文是**現況規格**;標示「AF-3」的段落仍是目標規格。
-> 已完成(AF-1 + AF-2):§1~§5、§8 全部(§8.1~§8.6)、§9、§11、§12、§13,以及 §4.1 全部與 §4.2 預檢。
-> 未實作:§6 自動登入的實際填入(只做登入頁判定)、§7 區塊聚合、
-> §8.5 的站台登入管理(設定頁留佔位文字)、§10 告警。
+> 本文是**現況規格**——全部段落都已實作(AF-1 + AF-2 + AF-3)。
+> 刻意沒做的東西一律在 `BACKLOG.md`,附觸發條件。
 
 ## §0 架構總覽
 
@@ -55,13 +53,27 @@
 | 紀錄(Record) | 一次抓取結果:`{taskId, scheduledAt, capturedAt, value, raw, status, error?}` |
 | 站台設定(Site) | 以 origin 為 key 的登入設定:帳號、密碼、登入頁 URL、欄位選擇器、成功判定 |
 
-## §2 右鍵選單
+## §2 右鍵選單與頁面內選取模式
 
-- `contextMenus` 建立父項「AutoFetcher」,子項:「抓取此文字/數值」「抓取此區塊」「設定此站台登入」「開啟 Report」。
-- Chrome 沒有 `getTargetElement`;content script 監聽 `contextmenu` 事件記住最後右鍵的元素,
-  background 收到 `onClicked` 後向該分頁要選擇器與預覽值。
-- 「抓取此區塊」時,content script 以右鍵元素往上找最近的 `table` / `ul` / `ol` / 含多個同構子節點的容器作為區塊,
-  並在頁面上以外框高亮,允許使用者按 ↑/↓ 擴大/縮小範圍後確認。
+- `contextMenus` 建立父項「AutoFetcher」,子項三個:
+  「選取要抓的內容」「設定此站台登入」「開啟 AutoFetcher 報表」。
+  (沒有獨立的「抓取此區塊」——區塊由選取模式自動判定。)
+- 按下前兩項**不會直接開設定視窗**,而是讓目標頁進入**選取模式**(`content/picker-mode.js`):
+  - Chrome 沒有 `getTargetElement`;content script 監聽 `contextmenu` 記住最後右鍵的元素,
+    進入選取模式時**它就是預選**,立刻高亮。
+  - 滑鼠移動改選;`↑` 擴大到父層、`↓` 沿原路縮回(到 `body` 停住);
+    `Enter` 或點擊確認(點擊會被攔截,不會傳給頁面);`Esc` 取消。
+  - 右下角面板即時顯示:元素描述、文字預覽前 80 字、偵測到的型別
+    (數值 / 文字 / 表格 N 列 × M 欄 / 清單 N 項),判定來自 `shared/block-detect.js`。
+  - 選到表格或 CSS 假表格時,滑鼠移到某一格會標示**整欄**(`Tab` 切換成整列),
+    點擊即選定該欄/列;此時 locator 仍指向表格容器本身,欄列資訊另外帶回。
+- 確認後 content 送 `PICKED` 給 background,由它決定去處(`purpose`):
+  `task` 開 Picker 設定視窗、`repick` 直接更新既有任務的 locator、
+  `login-*` 轉發給站台登入設定視窗、`preaction` 轉發給 Picker 的前置動作那一列。
+  **同一套狀態機,只有確認後的去向不同。**
+- overlay 的樣式以 `element.style` 逐項設定(頁面 CSS 會污染 class),
+  且 `content/picker-mode.js` 是**全專案唯一允許寫色碼字面值**的檔案——
+  網頁沒有載入 `ui/theme.css`。
 
 ## §3 選擇器(穩定性)
 
@@ -111,7 +123,10 @@
   4. 執行擷取策略鏈(§11)但不存 record;解析不出即 `parse_error`。
   5. 結果寫 `health[taskId] = {at, status, reason, detail}`,並更新燈號(§12);失敗立即通知「○○ 將於 HH:mm 抓取,預檢失敗:無法登入」,
      點通知開 Report 任務頁定位到該任務。
-- 每日一次的**站台健康檢查**(預設 08:00,可調):對每個有登入設定的站台做步驟 1~2,提早發現密碼過期、驗證碼新增。
+- 每日一次的**站台健康檢查**(`background/sitecheck.js`,`__sitecheck` alarm,
+  時間取 `settings.siteCheckTime`,預設 08:00):對每個**啟用中**的站台開分頁走一次登入流程,
+  結果寫 `health['site:<origin>']`,失敗即通知,提早發現密碼過期、驗證碼新增。
+  用完的分頁一定關掉。與每日排程一樣用 `when` 重算,不用 `periodInMinutes`。
 - 預檢通過但正式抓取仍失敗 → 走 §4 重試;預檢與正式抓取共用同一段流程碼,只差「是否寫紀錄」旗標。
 - interval 任務(每 N 分鐘)不做每槽預檢(太頻繁),只吃每日站台健康檢查與正式失敗回報。
 - 預檢用的分頁與正式抓取相同規則(背景、用完關閉);預檢失敗不重試,交給燈號與通知。
@@ -126,9 +141,14 @@
 - 前景 vs 背景:`chrome.tabs.create({active:false})` 開的分頁 JS 照常執行,但 `document.visibilityState` 為 `hidden`,
   IntersectionObserver 式的 lazy-load、依可見性才啟動的圖表/輪詢**可能不觸發**。
   策略:預設背景;content script 擷取前先 `scrollIntoView` 目標;若同一任務連續 2 次 `not_found`,
-  Report 頁提示「改用前景抓取」,任務可勾選 `foreground: true`(抓取時會短暫切換到該分頁,約 3~5 秒)。
-- 抓取前可選的「前置動作」清單(暫定):等待某元素出現(逾時 20 秒)、點擊某元素(關閉彈窗、切分頁籤)、
-  額外等待 N 秒;動作由使用者在 Picker 內以右鍵點選元素設定。
+  任務頁顯示提示與一鍵切換,任務可設 `foreground: true`(抓取時切到該分頁,結束後把焦點還給原本那個分頁)。
+  成功抓到值一次就把提示清掉。
+- 抓取前可選的**前置動作**(`task.preActions`,依序執行,任一失敗即停止並走錯誤路徑):
+  `waitFor`(等某元素出現,預設逾時 20 秒,用 `MutationObserver` 不用輪詢)、
+  `click`(點某元素:關閉彈窗、切分頁籤)、`wait`(等 N 毫秒)。
+  在 Picker 的「前置動作」區設定,要點的元素直接回頁面上選(走 §2 的選取模式)。
+- **額外等待秒數**的優先序:呼叫端指定 > `task.extraDelaySec` > `settings.extraDelaySec` > 3 秒。
+  `0` 是合法值(代表不等)。
 
 ## §5 儲存
 
@@ -149,6 +169,9 @@
   - 匯入:同 `taskId` 覆蓋、新 id 新增;匯入後重建所有 alarms;若含加密密碼則要求輸入密語。
   - 歷史匯入:Report 頁可選多個日檔 JSON 併回 `records`(同 taskId + capturedAt 去重,既有紀錄不被覆蓋);
     也接受打包格式 `{days: [...]}`;回報 `{added, skipped}`;任一日檔形狀不合則整批不寫入。
+- 紀錄欄位(除既有的 `taskId`/`slot`/`capturedAt`/`value`/`raw`/`status`/`strategyUsed`/`layer` 外):
+  `alert` 與 `alertHits`(§10 命中告警時才有)、`used` / `skipped`(§7 區塊聚合用了幾格、跳過幾格)、
+  `partial`(§7 只抓到部分,**只有為真時才寫**)、`error`(失敗原因)、`snippet`(找不到元素時的 DOM 片段)。
 - 日檔 schema:
   ```json
   { "date": "2026-09-05", "tasks": { "<taskId>": { "name": "...", "records": [ {...} ] } } }
@@ -156,22 +179,41 @@
 
 ## §6 自動登入
 
-- Site 設定:登入頁 URL、帳號欄/密碼欄/送出鈕選擇器(由使用者在登入頁右鍵「設定此站台登入」逐一點選)、
-  登入成功判定(URL 前綴 或 某元素存在)、登入頁判定(URL 前綴 或 密碼欄存在)。
-- 密碼只存 `chrome.storage.local`,以 WebCrypto AES-GCM 加密,金鑰存於同一 storage(**僅防誤讀,不防同機惡意程式**;
-  設定頁明示)。不使用 `storage.sync`。
-- 有 2FA / 驗證碼的站台不支援自動登入;偵測到登入失敗連續 3 次即停用該站台自動登入並通知。
+- Site 設定:登入頁 URL、帳號欄/密碼欄/送出鈕選擇器(在登入頁右鍵「設定此站台登入」開設定視窗,
+  三個欄位各自「在頁面上選取」,走 §2 的選取模式)、登入成功判定(URL 前綴 或 某元素存在)、
+  登入頁判定(URL 前綴 或 密碼欄存在)。三個選擇器沒選齊不給存(存了也只會在抓取時失敗)。
+- 密碼只存 `chrome.storage.local`,以 WebCrypto AES-GCM 加密(`shared/crypto.js`),
+  金鑰自動產生後存於同一 storage(**僅防誤讀,不防同機惡意程式**;設定視窗與設定頁都明示)。
+  不使用 `storage.sync`。設定匯出**一律不含密碼**——本機金鑰的密文換一台機器也解不開。
+- 抓取流程(`background/login.js`,在等待載入之後、注入擷取之前):
+  1. 讀**分頁被轉址之後的實際網址**判斷是不是停在登入頁。
+     (不能用任務設定的網址——那是 AF-3 之前的 bug,`login_failed` 因此從未真的出現過。)
+  2. 站台已被停用 → 直接回 `login_failed`,不再嘗試(避免一直用錯密碼撞帳號鎖定)。
+  3. 解密密碼 → 送 `FILL_LOGIN` 給 content:填值並派發 `input`/`change` 事件
+     (只設 `value` 對 React 之類的表單無效),再點送出鈕。
+  4. 等重新載入完成,依 `successCheck` 判定;成功 `failStreak` 歸零,失敗則累加。
+- 有 2FA / 驗證碼的站台不支援自動登入;連續 3 次登入失敗即停用該站台並通知一次。
+- `login_failed` 是紀錄狀態之一,**不算成功**,而且**不重試**(密碼錯了重試幾次都一樣)。
 
 ## §7 區塊聚合(block 模式)
 
-- 對象是 HTML 表格的各種寫法,解析為二維陣列 `cells[row][col]`:
+- `task.mode = 'block'`,`task.spec.block = { axis: 'col'|'row', index, headerText, aggregate }`。
+- 解析(`shared/table.js` 的 `parseTable`)→ 聚合(`shared/aggregate.js` 的 `aggregateCells`),
+  兩層都是純函式;`extract.js` 的 block 分支串起來,**不走數值策略鏈**。
+- **欄位漂移偵測**:`axis: 'col'` 且有 `headerText` 時,先在表頭找它——
+  位置與 `index` 相同就照用;不同代表欄位搬家了,**跟著表頭走並標 `fallback`**;
+  表頭整個不見則回 `not_found`,不會默默抓到隔壁那一欄。
+  列(`axis: 'row'`)沒有表頭可比對,只用索引。
+- 對象是 HTML 表格的各種寫法,解析為二維陣列 `cells[row][col]`(只含資料列,表頭另外放 `headers`):
   - `<table>`:含 thead/tbody、`rowspan`/`colspan`(展開成實際格子)、巢狀 table 取最內層。
   - `role="grid"/"table"` + `role="row"/"cell"`(ARIA 表格,常見於 React/MUI/AG Grid)。
   - CSS grid / flex 假表格:以「同構子節點」啟發式:容器下重複出現、子節點數相同的元素視為列,其子元素為欄。
   - `<ul>/<ol>`:每 li 一列,以空白/tab 切欄。
   - 虛擬捲動表格(只渲染可視列)只抓當下渲染的部分,並在紀錄註記 `partial: true`。
-- 使用者選:軸(`row` = X 軸,取某一列;`col` = Y 軸,取某一欄)、索引(含表頭預覽讓使用者點選)、
-  聚合(`max` | `min` | `avg` | `sum` | `count`)。
+- 使用者選:軸(`row` 取某一列 / `col` 取某一欄)與索引——**直接在頁面上點那一欄或那一列**
+  (§2 選取模式,`Tab` 切換軸),不是在視窗裡填數字;聚合方式(`max`/`min`/`avg`/`sum`/`count`)在 Picker 選。
+- 抓到值時紀錄帶 `used`(用了幾格)與 `skipped`(跳過幾格);`partial` 為真時紀錄標記,
+  健康燈號轉黃(抓到值仍算成功)。
 - 數值解析:去千分位、貨幣符號、百分號、全形數字、會計負數(半形與**全形**括號);無法解析的格子略過並記 `skipped` 數。
 - **整串看起來像日期或範圍時(`09-02`、`2026-09-02`、`10-20`、`5/8`)一律不當數值**——抓到錯的數字是看不見的錯誤,回 `parse_error` 是看得見、使用者可以改設定的錯誤。夾在文字裡的數值不受影響(`09-02 用電 1,234 度` 仍取得到 9)。
 - Canvas / SVG 圖表**不在範圍**(見 BACKLOG)。
@@ -258,7 +300,9 @@
 - **儲存用量**:目前位元組、紀錄總筆數、最舊日期、上次設定匯出與上次紀錄匯出的時間。
 - **排程健康**:每任務下次觸發時間、看門狗最近一次巡檢(取自診斷紀錄)、最近 20 筆診斷、立即自檢。
 - **隱私與權限說明**:固定說明不連任何伺服器、資料只在本機,並逐一說明每個權限的用途。
-- 站台登入管理(§6):**AF-3**,目前為佔位文字。
+- 站台登入管理(§6):列出每個站台的 origin、帳號、啟用狀態、連續失敗次數、最近一次檢查結果;
+  可停用 / 重新啟用(重新啟用會把 `failStreak` 歸零)/ 刪除。頂部固定顯示密碼保護的限度。
+  **新增站台**走右鍵「設定此站台登入」開的獨立視窗(`ui/site/site.html`)。
 - 偏好:保留天數、通知開關、預設額外等待秒數、深色模式(跟隨系統 / 亮 / 暗)。
 
 ### §8.6 圖表
@@ -285,9 +329,16 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
 
 ## §10 告警
 
-- 任務可設條件:值 > / < / = 閾值、相較前一筆變動超過 X%、連續 N 次抓取失敗。
-- 觸發時 `notifications` 通知,並在紀錄標 `alert: true`;Report 每日檢視與 number 卡片以顏色標示。
-- 同一條件在 60 分鐘內(暫定)只通知一次。
+- 任務可設多條條件(`task.alerts`,每條 `{id, type, value, enabled}`):
+  `gt` / `lt` / `eq`(值大於 / 小於 / 等於)、`deltaPct`(相較**前一筆成功紀錄**變動超過 X%,
+  漲跌都算)、`failStreak`(連續 N 次非成功)。判定是純函式 `shared/alerts.js`。
+- 評估時機在**寫入紀錄之前**,命中就把 `alert: true` 與 `alertHits: [alertId…]` 一起寫進同一筆紀錄
+  (避免報表讀到「紀錄有了、旗標還沒有」的中間態);演練(dryRun)不評估。
+- 觸發時發通知;**同一條件 60 分鐘內只通知一次**(`settings.alertCooldownMin` 可調),
+  但紀錄一律標記——去重只針對通知。點通知會開報表並定位到該任務那一天。
+- Report:月曆對有告警的日期上色(與失敗分開)、歷史列標記並可展開看到命中哪一條、
+  「只看告警」可篩選;number 卡片沿用既有的閾值色機制,不另加一套顏色規則。
+- `deltaPct` 找不到前一筆成功紀錄、或前一筆是 0 時不命中(除以 0 沒有意義)。
 
 ## §11 數值擷取策略與後處理(number 模式)
 

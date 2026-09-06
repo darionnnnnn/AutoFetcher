@@ -10,9 +10,11 @@ Chrome 擴充功能(Manifest V3):在指定網頁上以右鍵選取元素/區塊,
 src/
 ├── manifest.json        ← MV3;permissions 只加有消費端的
 ├── background/          ← service worker:排程(chrome.alarms)、開分頁抓取、寫入儲存
-├── content/             ← 注入頁面:記錄右鍵目標、產生選擇器、實際擷取、自動登入
+├── content/             ← 注入頁面:main.js 訊息路由/擷取/填登入/前置動作
+│                          picker-mode.js 選取模式(高亮 overlay、↑↓、表格點欄列)
 ├── ui/theme.css         ← **顏色的唯一來源**(亮/暗雙軌 + --chart-1~8 圖表調色盤)
-├── ui/picker/           ← 右鍵後跳出的設定視窗(命名、時間、抓取模式、加入儀表板)
+├── ui/picker/           ← 選取完成後的設定視窗(命名、時間、模式、區塊、告警、前置動作、儀表板)
+├── ui/site/             ← 站台登入設定視窗(右鍵「設定此站台登入」)
 ├── ui/popup/            ← 工具列 popup(燈號摘要)
 ├── ui/report/           ← AutoFetcher-Report 頁(report.html)
 │   ├── 純函式層(無 DOM、無 chrome.):
@@ -21,7 +23,8 @@ src/
 │   └── DOM 層:report.js 路由與歷史頁 / dashboard.js 儀表板與拖曳 / cards.js 卡片
 │       drawer.js 卡片設定抽屜 / tasks.js 任務頁 / settings.js 設定頁
 └── shared/              ← 型別、儲存 schema、選擇器工具、layout-store.js(版面唯一入口)
-                           record-status.js(成功狀態判定唯一來源)
+                           record-status.js(成功狀態判定唯一來源)、crypto.js(站台密碼)
+                           純函式:block-detect / table / aggregate / alerts
 docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ```
 
@@ -39,7 +42,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 690 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 905 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅)。
   AF-2 靠突變抓到多處同義反覆的測試;併回前另做兩份獨立終檢(程式碼 + 文件),抓到 14 類真實缺陷。
@@ -65,6 +68,15 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   `iconUrl` 必須是 `chrome.runtime.getURL()` 的絕對網址,相對路徑會 404 而讓整則通知不顯示。
 - **不要為了讓測試好寫去改寫內建原型**(`String.prototype`/`RegExp.prototype` 都犯過):改測試,不要改實作。
   `tests/a4_conventions.test.js` 會擋住這三類再犯。
+- **不要在 background 直接呼叫 `chrome.notifications.create`**:一律走 `background/notify.js`
+  (唯一入口、統一圖示、遵守通知偏好)。`iconUrl` 必須是 `chrome.runtime.getURL()` 的絕對網址。
+- **不要用 `executeScript({files})` 注入 content script**:它是 ES module,一律走 `background/inject.js`。
+- **不要為了讓測試好寫去改寫內建原型**:改測試,不要改實作(`tests/a4_conventions.test.js` 會擋)。
+- **不要在 `src/` 寫色碼字面值**:唯一豁免是 `content/picker-mode.js`(網頁沒有載入 theme.css)。
+- **不要用任務設定的網址判斷「現在在哪一頁」**:要讀 `chrome.tabs.get(tabId).url`(轉址後的實際位置)。
+- **不要把每日排程算出來的時間直接當 alarm**:算出來若已經過去(例如現在剛好在預檢與抓取之間),
+  Chrome 會立刻觸發、alarm 隨即消失,要跳過這一輪排到下一次。
+- **content script 的擷取/填入不要只設 `value`**:要派發 `input`/`change` 事件,否則 React 表單收不到。
 - 不要用一般 Chrome 跑煙霧測試:152 起已封鎖 `--load-extension`,必須用 Chrome for Testing(見 `run_smoke.sh`)。
 - 不要用 `worker.evaluate` 做端到端斷言(service worker 閒置會被回收);從擴充功能頁面做。
 - 不要在 UI 模組載入時就讀 storage 或渲染(測試要能自己呼叫 render)。
