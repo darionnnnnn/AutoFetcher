@@ -421,3 +421,35 @@ test('立即抓取執行中按鈕停用，結束後恢復', async () => {
   await new Promise(r => setTimeout(r, 30))
   assert.equal(btn.disabled, false)
 })
+
+// ---- A4：報表自動重繪的接線 ----
+
+test('report 以 storage 訂閱入口接線，不自己碰 chrome.storage', () => {
+  const src = readFileSync(new URL('../src/ui/report/report.js', import.meta.url), 'utf8')
+  assert.ok(/subscribe\s*\(/.test(src), 'report.js 必須訂閱 storage 變更')
+  assert.ok(!/chrome\.storage/.test(src))
+})
+
+test('refreshCurrentView 只重繪目前頁籤，編輯模式中不重繪', async () => {
+  resetChromeMock()
+  installChromeMock()
+  const st = await import('../src/shared/storage.js?t=' + Math.random())
+  await st.init()
+  const jd = new JSDOM(TASKS_HTML, { url: 'chrome-extension://abc/ui/report/report.html' })
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  const rp = await import('../src/ui/report/report.js?t=' + Math.random())
+  assert.equal(typeof rp.refreshCurrentView, 'function', 'report 要匯出可測的重繪入口')
+
+  const db = await import('../src/ui/report/dashboard.js?t=' + Math.random())
+  assert.equal(typeof db.isEditing, 'function')
+
+  // 停在任務頁時不得去畫儀表板
+  rp.showTab('tasks')
+  await new Promise(r => setTimeout(r, 10))
+  const before = jd.window.document.getElementById('dashboard-grid')?.textContent ?? ''
+  await rp.refreshCurrentView()
+  await new Promise(r => setTimeout(r, 10))
+  assert.equal(jd.window.document.getElementById('dashboard-grid')?.textContent ?? '', before,
+    '目前在任務頁，儀表板不該被重畫')
+})
