@@ -1,7 +1,7 @@
 import {
   getLayout, saveLayout, addDashboard, renameDashboard,
   deleteDashboard, duplicateDashboard, reorderDashboards,
-  setLastDashboard
+  setLastDashboard, updateCard
 } from '../../shared/layout-store.js'
 import { getRecordsInRange, getTasks, getHealthMap, getMissedList } from '../../shared/storage.js'
 import { renderCard } from './cards.js'
@@ -10,6 +10,8 @@ import { placeCard, resizeCard, compact, autoArrange } from './layout.js'
 import { openDrawer } from './drawer.js'
 import { applyTemplate } from './templates.js'
 import { MSG } from '../../shared/messages.js'
+import { createDragSource, registerDropTarget, resetDnd } from './dnd.js'
+import { applyDrop } from './drop-rules.js'
 
 // 編輯模式狀態與復原歷史
 let editing = false
@@ -20,6 +22,7 @@ let activeOp = null
 let dashIdPendingDelete = null
 let templateKindPending = null
 let tabDrag = null
+let toastTimer = null
 
 /**
  * 將 YYYY-MM-DD 加上指定天數
@@ -116,10 +119,28 @@ export async function redo() {
 }
 
 /**
+ * 顯示拖曳投放提示訊息（3 秒後自動隱藏）
+ */
+function showToast(reason) {
+  const toast = document.getElementById('dnd-toast')
+  if (!toast) return
+  toast.textContent = reason || ''
+  toast.hidden = false
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => {
+    toast.hidden = true
+  }, 3000)
+}
+
+/**
  * 更新編輯模式的 DOM 視覺狀態
  */
 function updateEditingUI() {
   if (typeof document === 'undefined') return
+  const palette = document.getElementById('source-palette')
+  if (palette) {
+    palette.hidden = !editing
+  }
   const grid = document.getElementById('dashboard-grid')
   if (grid) {
     if (editing) {
@@ -461,6 +482,19 @@ function setupEvents(grid) {
       })
     }
   }
+
+  const search = document.getElementById('palette-search')
+  if (search && !search._paletteSearchAttached) {
+    search._paletteSearchAttached = true
+    search.addEventListener('input', () => {
+      const q = (search.value || '').toLowerCase()
+      const items = document.querySelectorAll('[data-palette-task]')
+      for (const item of items) {
+        const name = (item.textContent || '').toLowerCase()
+        item.hidden = Boolean(q && !name.includes(q))
+      }
+    })
+  }
 }
 
 /**
@@ -565,6 +599,98 @@ function prepareCardElement(card, ctx, dashId) {
   }
 
   return cardEl
+}
+
+/**
+ * 渲染資料來源側欄清單
+ */
+async function renderPalette() {
+  const listEl = document.getElementById('palette-list')
+  if (!listEl) return
+  const tasks = await getTasks()
+  listEl.textContent = ''
+  const searchInput = document.getElementById('palette-search')
+  const q = (searchInput?.value || '').toLowerCase()
+
+  for (const t of tasks) {
+    if (t.enabled === false) continue
+    const item = document.createElement('div')
+    item.setAttribute('data-palette-task', '')
+    item.setAttribute('data-task-id', t.id)
+    item.textContent = t.name || ''
+    if (q && !item.textContent.toLowerCase().includes(q)) {
+      item.hidden = true
+    }
+    createDragSource(item, () => ({ taskId: t.id, label: t.name }))
+    listEl.appendChild(item)
+  }
+}
+
+/**
+ * 將卡片註冊為拖曳投放目標
+ */
+function registerCardDropTarget(cardEl, card, ctx) {
+  cardEl._unregisterDropTarget = registerDropTarget(cardEl, {
+    accepts(payload) {
+      if (!editing) return false
+      if (!payload || !payload.taskId) return false
+      return applyDrop(card, payload.taskId, {}) !== null
+    },
+    async onDrop(payload, pos) {
+      if (!payload || !payload.taskId) return
+
+      let index
+      if (card.type === 'table') {
+        const ths = [...cardEl.querySelectorAll('thead th')]
+        const hasReadableHeaders = ths.length > 0 && ths.some(th => {
+          const r = th.getBoundingClientRect?.()
+          return r && (r.width > 0 || r.right > r.left)
+        })
+        if (hasReadableHeaders) {
+          let targetCol = -1
+          const x = pos?.x ?? 0
+          for (let i = 0; i < ths.length; i++) {
+            const rect = ths[i].getBoundingClientRect()
+            const midX = rect.left + rect.width / 2
+            if (x < midX) {
+              targetCol = i
+              break
+            }
+          }
+          if (targetCol === -1) {
+            index = ths.length - 1
+          } else {
+            index = Math.max(0, targetCol - 1)
+          }
+        }
+      }
+
+      const opts = {}
+      if (typeof index === 'number') {
+        opts.index = index
+      }
+      const taskName = payload.label || ctx?.tasksById?.[payload.taskId]?.name
+      if (typeof taskName === 'string' && taskName) {
+        opts.taskName = taskName
+      }
+      const firstTaskId = card.source?.[0]?.taskId
+      const prevTaskName = firstTaskId ? ctx?.tasksById?.[firstTaskId]?.name : undefined
+      if (typeof prevTaskName === 'string' && prevTaskName) {
+        opts.prevTaskName = prevTaskName
+      }
+
+      const patch = applyDrop(card, payload.taskId, opts)
+      if (!patch) return
+      if (patch.rejected) {
+        showToast(patch.reason)
+        return
+      }
+
+      await pushHistory()
+      await updateCard(currentDashId, card.id, patch)
+      await renderDashboard(currentDashId)
+    }
+  })
 }
 
 /**
@@ -736,11 +862,7 @@ export async function renderDashboard(dashId) {
     grid.classList.remove('single-column')
   }
 
-  if (editing) {
-    grid.classList.add('editing')
-  } else {
-    grid.classList.remove('editing')
-  }
+  updateEditingUI()
 
   const ctx = await buildDashboardContext(dash)
   const cards = Array.isArray(dash.cards) ? dash.cards : []
@@ -750,10 +872,15 @@ export async function renderDashboard(dashId) {
     emptyEl.hidden = cards.length > 0
   }
 
+  resetDnd()
+
+  await renderPalette()
+
   grid.textContent = ''
 
   for (const card of cards) {
     const cardEl = prepareCardElement(card, ctx, dash.id)
+    registerCardDropTarget(cardEl, card, ctx)
     grid.appendChild(cardEl)
   }
 }
@@ -781,8 +908,13 @@ export async function rerenderCard(dashId, cardId) {
   const oldCardEl = grid.querySelector(`[data-card-id="${cardId}"]`)
   if (!oldCardEl) return
 
+  if (typeof oldCardEl._unregisterDropTarget === 'function') {
+    oldCardEl._unregisterDropTarget()
+  }
+
   const ctx = await buildDashboardContext(dash)
   const newCardEl = prepareCardElement(card, ctx, dash.id)
+  registerCardDropTarget(newCardEl, card, ctx)
 
   oldCardEl.replaceWith(newCardEl)
 }

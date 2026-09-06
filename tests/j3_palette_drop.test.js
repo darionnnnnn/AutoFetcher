@@ -75,6 +75,20 @@ async function dragTaskTo(doc, win, taskId, x, y) {
 const cardOf = async (ls, did, cardId) =>
   (await ls.getLayout()).dashboards.find(d => d.id === did).cards.find(c => c.id === cardId)
 
+
+// pivot 沒有紀錄就不會有欄位,positional 測試需要先寫入當天紀錄
+async function seedRecords(st, taskIds) {
+  const d = new Date()
+  const p = (n) => String(n).padStart(2, '0')
+  const day = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  for (const id of taskIds) {
+    await st.appendRecord(day, {
+      taskId: id, slot: `${day}T09:00`, capturedAt: `${day}T09:00:00`,
+      value: 1, raw: '1', status: 'ok'
+    })
+  }
+}
+
 // ---- 側欄 ----
 
 test('編輯模式才顯示資料來源側欄', async () => {
@@ -155,14 +169,15 @@ test('拖到文字卡片不會有任何改變', async () => {
 
 test('瀏覽模式下拖曳不生效', async () => {
   const { ls, db, doc, win } = await fresh()
-  const { did, ids } = await seed(ls, [CARD('table', { source: [{ taskId: 't1' }] })])
+  const { did, ids } = await seed(ls, [CARD('table', { source: [{ taskId: 't1', aggregation: 'raw' }] })])
   await db.renderDashboard(did)
+  assert.equal(doc.getElementById('source-palette').hidden, true, '瀏覽模式側欄要隱藏')
   const el = doc.querySelector(`[data-card-id="${ids[0]}"]`)
   stubRect(el, [0, 0, 600, 200])
-  const item = doc.querySelector('[data-palette-task][data-task-id="t2"]')
-  assert.ok(!item || item.offsetParent === null || doc.getElementById('source-palette').hidden,
-    '瀏覽模式側欄應該是隱藏的')
-  assert.deepEqual((await cardOf(ls, did, ids[0])).source.map(s => s.taskId), ['t1'])
+  // 側欄項目在 DOM 裡仍然存在(只是隱藏),直接拖它:編輯模式沒開就不該生效
+  await dragTaskTo(doc, win, 't2', 300, 100)
+  assert.deepEqual((await cardOf(ls, did, ids[0])).source.map(s => s.taskId), ['t1'],
+    '沒進編輯模式就不該改動版面')
 })
 
 test('投放後可以用復原回到原狀', async () => {
@@ -212,4 +227,64 @@ test('折線卡片已有 8 條序列時再拖會顯示提示且不改動', async
   assert.equal((await cardOf(ls, did, ids[0])).source.length, 8, '超過上限不可加進去')
   const toast = doc.getElementById('dnd-toast')
   assert.ok(toast && !toast.hidden && toast.textContent.length > 0, '要告訴使用者為什麼沒加進去')
+})
+
+test('拖到表格中段時,依落點插到對應欄位之前', async () => {
+  const { st, ls, db, doc, win } = await fresh()
+  await seedRecords(st, ['t1', 't2'])
+  const { did, ids } = await seed(ls, [CARD('table', {
+    source: [{ taskId: 't1', aggregation: 'raw' }, { taskId: 't2', aggregation: 'raw' }],
+    options: { mode: 'pivot' }
+  })])
+  await db.renderDashboard(did)
+  await enterEditMode(doc)
+  const el = doc.querySelector(`[data-card-id="${ids[0]}"]`)
+  stubRect(el, [0, 0, 600, 200])
+  // 三個表頭:列軸(0~200)、電費(200~400)、水費(400~600)
+  const ths = [...el.querySelectorAll('thead th')]
+  assert.equal(ths.length, 3, `樞紐表應有三個表頭,實得 ${ths.length}`)
+  stubRect(ths[0], [0, 0, 200, 40])
+  stubRect(ths[1], [200, 0, 400, 40])
+  stubRect(ths[2], [400, 0, 600, 40])
+  // 落在「電費」那一欄的左半邊 -> 插在電費之前
+  await dragTaskTo(doc, win, 't3', 250, 100)
+  assert.deepEqual((await cardOf(ls, did, ids[0])).source.map(s => s.taskId), ['t3', 't1', 't2'])
+})
+
+test('拖到表格最右側時插在最後一欄之後', async () => {
+  const { st, ls, db, doc, win } = await fresh()
+  await seedRecords(st, ['t1', 't2'])
+  const { did, ids } = await seed(ls, [CARD('table', {
+    source: [{ taskId: 't1', aggregation: 'raw' }, { taskId: 't2', aggregation: 'raw' }],
+    options: { mode: 'pivot' }
+  })])
+  await db.renderDashboard(did)
+  await enterEditMode(doc)
+  const el = doc.querySelector(`[data-card-id="${ids[0]}"]`)
+  stubRect(el, [0, 0, 600, 200])
+  const ths = [...el.querySelectorAll('thead th')]
+  stubRect(ths[0], [0, 0, 200, 40])
+  stubRect(ths[1], [200, 0, 400, 40])
+  stubRect(ths[2], [400, 0, 600, 40])
+  await dragTaskTo(doc, win, 't3', 580, 100)
+  assert.deepEqual((await cardOf(ls, did, ids[0])).source.map(s => s.taskId), ['t1', 't2', 't3'])
+})
+
+test('拖到兩欄之間(第二欄左半)插在第二欄之前', async () => {
+  const { st, ls, db, doc, win } = await fresh()
+  await seedRecords(st, ['t1', 't2'])
+  const { did, ids } = await seed(ls, [CARD('table', {
+    source: [{ taskId: 't1', aggregation: 'raw' }, { taskId: 't2', aggregation: 'raw' }],
+    options: { mode: 'pivot' }
+  })])
+  await db.renderDashboard(did)
+  await enterEditMode(doc)
+  const el = doc.querySelector(`[data-card-id="${ids[0]}"]`)
+  stubRect(el, [0, 0, 600, 200])
+  const ths = [...el.querySelectorAll('thead th')]
+  stubRect(ths[0], [0, 0, 200, 40])
+  stubRect(ths[1], [200, 0, 400, 40])
+  stubRect(ths[2], [400, 0, 600, 40])
+  await dragTaskTo(doc, win, 't3', 450, 100)
+  assert.deepEqual((await cardOf(ls, did, ids[0])).source.map(s => s.taskId), ['t1', 't3', 't2'])
 })
