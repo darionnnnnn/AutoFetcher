@@ -236,3 +236,110 @@ test('多個動作照順序執行,前一個失敗就不做後面的', async () =
   assert.equal(res.ok, false)
   assert.equal(clicked, false, '前面已經失敗就不該再往下做')
 })
+
+// ---- Picker:前置動作的設定介面 ----
+
+async function picker() {
+  resetChromeMock()
+  const c = installChromeMock()
+  const st = await import('../src/shared/storage.js?t=' + Math.random())
+  await st.init()
+  const { readFileSync } = await import('node:fs')
+  const html = readFileSync(new URL('../src/ui/picker/picker.html', import.meta.url), 'utf8')
+  const jd = new JSDOM(html)
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  const pk = await import('../src/ui/picker/picker.js?t=' + Math.random())
+  return { c, st, pk, doc: jd.window.document }
+}
+
+test('Picker 有前置動作區,可以新增一條', async () => {
+  const { pk, doc } = await picker()
+  pk.render({ locator: { css: '#v' }, url: 'https://a.test/p', preview: '1' })
+  assert.ok(doc.getElementById('preaction-section'), '必須有前置動作區')
+  const add = doc.getElementById('preaction-add')
+  assert.ok(add, '要有新增按鈕')
+  add.click()
+  const rows = doc.querySelectorAll('[data-preaction-row]')
+  assert.equal(rows.length, 1)
+  const types = [...rows[0].querySelectorAll('select option')].map(o => o.value)
+  for (const t of ['waitFor', 'click', 'wait']) {
+    assert.ok(types.includes(t), `缺少動作型別 ${t},實得 ${types.join(',')}`)
+  }
+})
+
+test('前置動作存進 task.preActions,順序照畫面上的順序', async () => {
+  const { pk } = await picker()
+  const t = pk.buildTask(
+    { name: '電費', url: 'https://a.test/p', mode: 'number', strategy: 'auto',
+      scheduleType: 'daily', times: ['09:00'], weekdays: [0, 1, 2, 3, 4, 5, 6],
+      preActions: [
+        { type: 'click', locator: { css: '#close' } },
+        { type: 'wait', ms: 2000 }
+      ] },
+    { css: '#v' }
+  )
+  assert.equal(t.preActions.length, 2)
+  assert.equal(t.preActions[0].type, 'click')
+  assert.equal(t.preActions[1].ms, 2000)
+})
+
+test('沒有前置動作時任務上不得多出這個鍵', async () => {
+  const { pk } = await picker()
+  const t = pk.buildTask(
+    { name: '電費', url: 'https://a.test/p', mode: 'number', strategy: 'auto',
+      scheduleType: 'daily', times: ['09:00'], weekdays: [0, 1, 2, 3, 4, 5, 6], preActions: [] },
+    { css: '#v' }
+  )
+  assert.equal(t.preActions, undefined)
+})
+
+test('需要點元素的動作沒指定元素時不得存進去', async () => {
+  const { pk } = await picker()
+  const t = pk.buildTask(
+    { name: '電費', url: 'https://a.test/p', mode: 'number', strategy: 'auto',
+      scheduleType: 'daily', times: ['09:00'], weekdays: [0, 1, 2, 3, 4, 5, 6],
+      preActions: [
+        { type: 'click', locator: null },
+        { type: 'waitFor', locator: { css: '#ok' }, timeoutMs: 20000 }
+      ] },
+    { css: '#v' }
+  )
+  assert.equal(t.preActions.length, 1, `沒選元素的動作留著只會在抓取時失敗,實得 ${JSON.stringify(t.preActions)}`)
+  assert.equal(t.preActions[0].type, 'waitFor')
+})
+
+test('編輯既有任務時前置動作要顯示出來', async () => {
+  const { pk, doc } = await picker()
+  pk.render({
+    locator: { css: '#v' }, url: 'https://a.test/p', preview: '1',
+    task: {
+      id: 't1', name: '電費', url: 'https://a.test/p', mode: 'number',
+      locator: { css: '#v' }, spec: { strategy: 'auto' },
+      schedule: { type: 'daily', times: ['09:00'], weekdays: [0, 1, 2, 3, 4, 5, 6] },
+      preActions: [{ type: 'click', locator: { css: '#close' } }, { type: 'wait', ms: 1500 }]
+    }
+  })
+  const rows = doc.querySelectorAll('[data-preaction-row]')
+  assert.equal(rows.length, 2)
+  assert.equal(rows[0].querySelector('select').value, 'click')
+  assert.equal(rows[1].querySelector('select').value, 'wait')
+})
+
+test('按「在頁面上選取」會請 background 到目標分頁啟動選取模式', async () => {
+  const { c, pk, doc } = await picker()
+  pk.render({ locator: { css: '#v' }, url: 'https://a.test/p', preview: '1', tabId: 9 })
+  doc.getElementById('preaction-add').click()
+  const row = doc.querySelector('[data-preaction-row]')
+  row.querySelector('select').value = 'click'
+  row.querySelector('select').dispatchEvent(new globalThis.window.Event('change'))
+  const btn = row.querySelector('[data-action="preaction-pick"]')
+  assert.ok(btn, '需要點元素的動作要有「在頁面上選取」按鈕')
+  btn.click()
+  await new Promise(r => setTimeout(r, 30))
+  const msgs = c.__calls.filter(x => x.api === 'runtime.sendMessage').map(x => x.args[0])
+  const enter = msgs.find(m => m?.type === 'ENTER_PICK')
+  assert.ok(enter, `要送 ENTER_PICK,實得 ${JSON.stringify(msgs)}`)
+  assert.equal(enter.purpose, 'preaction')
+  assert.equal(enter.tabId, 9, '要指定原本那個目標分頁')
+})
