@@ -273,8 +273,17 @@
   帳本與 health 寫在**父任務 id** 上,`lastValues` 寫在子序列上。
   health:全成功 `ok` / 有備援或遲到取該狀態 / 部分值失敗 `partial` 並註明幾個 /
   全部值失敗取第一個失敗狀態(紅)。
-- `task.fields = [{ key, name, ... }]` 是**顯示用**的值清單(名稱、順序);
+- `task.fields = [{ key, name }]` 是**顯示用**的值清單(名稱、順序),
+  `task.spec.fields = [{ key, cell?|block? }]` 是**擷取規格**,兩者以 `key` 一一對應;
   `key` 建立後不變、同任務內唯一、不得含保留字元。改名不改 `key`。
+- **Picker 的值清單**(`#field-list`,每列 `data-field-row`):挑了 2 個以上的值才出現。
+  任務名稱只填一次(用 `nameHint`),每個值各自命名,預設 `cell` 型用「列標題 · 欄標題」、
+  `block` 型用表頭;同名自動加序號。可上下移動改順序、可移除。
+  聚合方式全任務一份(每個值各自聚合列在「明確不做」)。
+  移除一個值只影響之後的抓取,**舊紀錄保留**(它的子序列 id 還在)。
+  儲存前 `#save-summary` 顯示「將建立 1 個任務、N 個值」。
+  告警列在多值任務多一個「套用到」下拉(空值 = 全部值),寫進 `alert.field`。
+  「立即測試」對多值任務逐值顯示預覽。
 - 解析(`shared/table.js` 的 `parseTable`)→ 聚合(`shared/aggregate.js` 的 `aggregateCells`),
   兩層都是純函式;`extract.js` 的 block 分支串起來,**不走數值策略鏈**。
 - **欄位漂移偵測**:`axis: 'col'` 且有 `headerText` 時,先在表頭找它——
