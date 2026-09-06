@@ -3,6 +3,7 @@ import { MSG } from '../shared/messages.js'
 import { describe } from '../shared/selector.js'
 import { detectKind } from '../shared/block-detect.js'
 import { parseNumber } from '../shared/extract.js'
+import { columnHeaders, rowHeader } from '../shared/table.js'
 
 let active = false, currentPurpose = null, currentTaskId = undefined, currentTargetEl = null, backStack = []
 let overlayEl = null, highlightEl = null, panelEl = null
@@ -133,13 +134,9 @@ function setTarget(el) {
 // 取得待選欄或列之表頭文字
 function getHeaderText() {
   if (!currentTargetEl || !isTableMode(currentTargetEl)) return ''
-  if (tableAxis === 'row') return currentRowEl ? (getRowCells(currentRowEl)[0]?.textContent || '').trim() : ''
+  if (tableAxis === 'row') return currentRowEl ? rowHeader(currentRowEl) : ''
   if (colIndex === null) return ''
-  const headerRows = getTableRows(currentTargetEl).filter(isHeaderRow)
-  const headerFromRow = headerRows[0] ? (getRowCells(headerRows[0])[colIndex]?.textContent || '').trim() : ''
-  if (headerFromRow) return headerFromRow
-  const dk = kindOf(currentTargetEl)
-  return (dk.headers && dk.headers[colIndex]) || ''
+  return columnHeaders(currentTargetEl)[colIndex] || ''
 }
 
 // 處理表格內滑鼠移動

@@ -1,5 +1,5 @@
 // AutoFetcher 數值擷取策略鏈與後處理
-import { parseTable } from './table.js'
+import { parseTable, rowHeader, getDataRows } from './table.js'
 import { aggregateCells } from './aggregate.js'
 
 const STRATEGY_ORDER = ['auto', 'regex', 'attr', 'child', 'label']
@@ -115,6 +115,177 @@ export function parseNumber(text) {
   return num === 0 ? 0 : num
 }
 
+// 尋找陣列中最接近 preferredIndex 的符合項目索引
+function findClosestIndex(array, target, preferredIndex) {
+  let bestIndex = -1
+  let bestDist = Infinity
+  for (let i = 0; i < array.length; i++) {
+    if (array[i] === target) {
+      const dist = Math.abs(i - preferredIndex)
+      if (dist < bestDist) {
+        bestDist = dist
+        bestIndex = i
+      }
+    }
+  }
+  return bestIndex
+}
+
+// 取得資料列對應的列標題陣列
+function getTableRowHeaders(tableCells, dataRows) {
+  const headers = []
+  for (let r = 0; r < tableCells.length; r++) {
+    const rowEl = dataRows[r]
+    headers.push(rowEl ? rowHeader(rowEl) : rowHeader(tableCells[r]))
+  }
+  return headers
+}
+
+// 依表頭定位索引（欄與列同一套規則：表頭對得上就照用，搬家了跟著表頭走並標記備援）
+function locateByHeader(headers, spec) {
+  const s = spec || {}
+  const header = typeof s.header === 'string' ? s.header.trim() : ''
+  if (!header) {
+    return { ok: true, index: s.index, status: 'ok' }
+  }
+  const foundIndex = findClosestIndex(headers || [], header, s.index)
+  if (foundIndex === -1) {
+    return { ok: false, error: 'not_found' }
+  }
+  return foundIndex === s.index
+    ? { ok: true, index: s.index, status: 'ok' }
+    : { ok: true, index: foundIndex, status: 'fallback' }
+}
+
+// 從已解析的表格中擷取單一儲存格數值
+function extractCellFromTable(table, dataRows, cellSpec, specOpts = {}) {
+  if (!cellSpec) {
+    return { ok: false, error: 'not_found' }
+  }
+
+  const colLoc = locateByHeader(table.headers, cellSpec.col)
+  if (!colLoc.ok) return { ok: false, error: 'not_found' }
+
+  const rowHeaders = getTableRowHeaders(table.cells, dataRows)
+  const rowLoc = locateByHeader(rowHeaders, cellSpec.row)
+  if (!rowLoc.ok) return { ok: false, error: 'not_found' }
+
+  const targetRow = rowLoc.index
+  const targetCol = colLoc.index
+
+  if (typeof targetRow !== 'number' || targetRow < 0 || targetRow >= table.cells.length) {
+    return { ok: false, error: 'not_found' }
+  }
+  const rowData = table.cells[targetRow]
+  if (typeof targetCol !== 'number' || targetCol < 0 || targetCol >= rowData.length) {
+    return { ok: false, error: 'not_found' }
+  }
+
+  const status = (colLoc.status === 'fallback' || rowLoc.status === 'fallback') ? 'fallback' : 'ok'
+  const raw = rowData[targetCol]
+  const parsed = parseNumber(raw)
+  if (parsed === null) {
+    return { ok: false, error: 'parse_error', raw }
+  }
+
+  let value = parsed
+  const multiplier = specOpts.multiplier
+  if (typeof multiplier === 'number' && Number.isFinite(multiplier)) {
+    value = value * multiplier
+  }
+  const decimals = specOpts.decimals
+  if (typeof decimals === 'number' && Number.isFinite(decimals)) {
+    value = Number(value.toFixed(decimals))
+  }
+  if (value === 0) {
+    value = 0
+  }
+
+  return {
+    ok: true,
+    value,
+    raw,
+    status,
+    strategyUsed: 'cell'
+  }
+}
+
+// 從已解析的表格中聚合欄或列
+function extractBlockFromTable(table, blockSpec, specOpts = {}) {
+  const block = blockSpec || {}
+  let targetIndex = block.index
+  let status = 'ok'
+  let values = []
+
+  if (block.axis === 'row') {
+    // 列模式：直接依 index 取整列
+    if (typeof targetIndex !== 'number' || targetIndex < 0 || targetIndex >= table.cells.length) {
+      return { ok: false, error: 'not_found' }
+    }
+    values = table.cells[targetIndex]
+  } else {
+    // 欄模式（col）
+    const headerText = typeof block.headerText === 'string' ? block.headerText.trim() : ''
+    if (headerText) {
+      const foundIndex = findClosestIndex(table.headers || [], headerText, targetIndex)
+      if (foundIndex === -1) {
+        return { ok: false, error: 'not_found' }
+      }
+      if (foundIndex !== targetIndex) {
+        targetIndex = foundIndex
+        status = 'fallback'
+      }
+    }
+
+    // 取值：每一列的第 targetIndex 格
+    // 超出範圍：若所有列都沒有那一格，回 not_found
+    values = []
+    for (const row of table.cells) {
+      if (targetIndex >= 0 && targetIndex < row.length) {
+        values.push(row[targetIndex])
+      }
+    }
+    if (values.length === 0) {
+      return { ok: false, error: 'not_found' }
+    }
+  }
+
+  const agg = aggregateCells(values, block.aggregate)
+  const raw = values.join(', ')
+
+  if (agg.value === null) {
+    return {
+      ok: false,
+      error: 'parse_error',
+      raw
+    }
+  }
+
+  let value = agg.value
+  const multiplier = specOpts.multiplier
+  if (typeof multiplier === 'number' && Number.isFinite(multiplier)) {
+    value = value * multiplier
+  }
+  const decimals = specOpts.decimals
+  if (typeof decimals === 'number' && Number.isFinite(decimals)) {
+    value = Number(value.toFixed(decimals))
+  }
+  if (value === 0) {
+    value = 0
+  }
+
+  return {
+    ok: true,
+    value,
+    raw,
+    status,
+    strategyUsed: 'block',
+    used: agg.used,
+    skipped: agg.skipped,
+    partial: Boolean(table.partial)
+  }
+}
+
 /**
  * 從 DOM 元素擷取數值或文字
  * @param {Element} el - 目標 DOM 元素
@@ -130,70 +301,86 @@ export function extractValue(el, spec = {}) {
 
   // 區塊（block）模式：解析表格並聚合指定欄或列，不走數值策略鏈
   if (opts.mode === 'block') {
-    const block = opts.block || {}
     const table = parseTable(el)
     if (!table.cells || table.cells.length === 0) {
       return { ok: false, error: 'not_found' }
     }
+    const dataRows = getDataRows(el)
 
-    let targetIndex = block.index
-    let status = 'ok'
-    let values = []
-
-    if (block.axis === 'row') {
-      // 列模式：直接依 index 取整列
-      if (typeof targetIndex !== 'number' || targetIndex < 0 || targetIndex >= table.cells.length) {
-        return { ok: false, error: 'not_found' }
-      }
-      values = table.cells[targetIndex]
-    } else {
-      // 欄模式（col）
-      const headerText = typeof block.headerText === 'string' ? block.headerText.trim() : ''
-      if (headerText) {
-        const foundIndex = (table.headers || []).indexOf(headerText)
-        if (foundIndex === -1) {
-          return { ok: false, error: 'not_found' }
+    // (b) opts.fields: 一次抓多個值
+    if (Array.isArray(opts.fields)) {
+      const resultFields = {}
+      for (const field of opts.fields) {
+        if (!field || !field.key) continue
+        const key = field.key
+        if (field.cell) {
+          const res = extractCellFromTable(table, dataRows, field.cell, field)
+          if (res.ok) {
+            resultFields[key] = {
+              ok: true,
+              value: res.value,
+              raw: res.raw,
+              status: res.status
+            }
+          } else {
+            resultFields[key] = {
+              ok: false,
+              error: res.error,
+              ...(res.raw !== undefined ? { raw: res.raw } : {})
+            }
+          }
+        } else if (field.block) {
+          const res = extractBlockFromTable(table, field.block, field)
+          if (res.ok) {
+            resultFields[key] = {
+              ok: true,
+              value: res.value,
+              raw: res.raw,
+              status: res.status,
+              used: res.used,
+              skipped: res.skipped
+            }
+          } else {
+            resultFields[key] = {
+              ok: false,
+              error: res.error,
+              ...(res.raw !== undefined ? { raw: res.raw } : {})
+            }
+          }
+        } else {
+          resultFields[key] = { ok: false, error: 'not_found' }
         }
-        if (foundIndex !== targetIndex) {
-          targetIndex = foundIndex
-          status = 'fallback'
-        }
       }
-
-      // 取值：每一列的第 targetIndex 格
-      // 超出範圍：若所有列都沒有那一格，回 not_found
-      values = []
-      for (const row of table.cells) {
-        if (targetIndex >= 0 && targetIndex < row.length) {
-          values.push(row[targetIndex])
-        }
-      }
-      if (values.length === 0) {
-        return { ok: false, error: 'not_found' }
-      }
-    }
-
-    const agg = aggregateCells(values, block.aggregate)
-    const raw = values.join(', ')
-
-    if (agg.value === null) {
       return {
-        ok: false,
-        error: 'parse_error',
-        raw
+        ok: true,
+        fields: resultFields,
+        partial: Boolean(table.partial)
       }
     }
 
-    return {
-      ok: true,
-      value: agg.value,
-      raw,
-      status,
-      strategyUsed: 'block',
-      used: agg.used,
-      skipped: agg.skipped,
-      partial: Boolean(table.partial)
+    const block = opts.block || {}
+
+    // (a) opts.block.cell: 單一儲存格
+    if (block.cell) {
+      const res = extractCellFromTable(table, dataRows, block.cell, opts)
+      if (!res.ok) {
+        return {
+          ok: false,
+          error: res.error,
+          ...(res.raw !== undefined ? { raw: res.raw } : {})
+        }
+      }
+      return {
+        ok: true,
+        value: res.value,
+        raw: res.raw,
+        status: res.status,
+        strategyUsed: 'cell'
+      }
     }
+
+    // (c) opts.block: 現有的欄/列聚合
+    return extractBlockFromTable(table, block, opts)
   }
 
   // 文字模式不執行策略鏈
