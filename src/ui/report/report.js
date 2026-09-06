@@ -5,7 +5,8 @@ import {
 import {
   getRecordsInRange, getRecordsByDate, deleteRecord,
   getSettings, saveSettings, getTasks,
-  getHealthMap, getMissedList
+  getHealthMap, getMissedList,
+  subscribe
 } from '../../shared/storage.js'
 import { getLayout } from '../../shared/layout-store.js'
 import { buildSeries, pivot } from './series.js'
@@ -13,7 +14,7 @@ import { lineChart } from './charts.js'
 import { buildTsv } from './cards.js'
 import { renderTasks } from './tasks.js'
 import { renderSettings } from './settings.js'
-import { renderDashboard } from './dashboard.js'
+import { renderDashboard, isEditing } from './dashboard.js'
 import { isSuccess } from '../../shared/record-status.js'
 import { MSG } from '../../shared/messages.js'
 
@@ -390,6 +391,27 @@ export function showTab(name) {
   }
   if (name === 'settings') {
     renderSettings()
+  }
+}
+
+export async function refreshCurrentView() {
+  const currentView = state.view || 'dashboard'
+  if (currentView === 'dashboard') {
+    if (isEditing()) return
+    try {
+      const l = await getLayout()
+      const targetId = state.dash || l?.lastDashboardId || l?.dashboards?.[0]?.id
+      await renderDashboard(targetId)
+    } catch {}
+    return
+  }
+  if (currentView === 'tasks') {
+    await loadAndRenderTasks()
+    return
+  }
+  if (currentView === 'history') {
+    await applyCurrentFilters()
+    return
   }
 }
 
@@ -1080,7 +1102,8 @@ async function loadAndRenderPage() {
   }
 }
 
-if (globalThis.chrome?.runtime?.id) {
+if (typeof document !== 'undefined' && globalThis.chrome?.runtime?.id) {
+  subscribe(() => { refreshCurrentView() })
   loadAndRenderPage()
   if (typeof window !== 'undefined') {
     window.addEventListener('hashchange', () => {

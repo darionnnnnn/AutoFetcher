@@ -339,6 +339,7 @@ function setupEvents(grid) {
       if (!editing) {
         undoStack.length = 0
         redoStack.length = 0
+        renderDashboard(currentDashId).catch(() => {})
       }
       updateEditingUI()
     })

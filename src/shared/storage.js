@@ -480,3 +480,53 @@ export async function countRecordsForTask(taskId) {
   return count
 }
 
+// 訂閱 storage 變更（去抖 50ms，僅監聽 local 且指定鍵值與 rec: 紀錄鍵）
+const subscribers = new Set()
+let isListening = false
+let debounceTimer = null
+
+const NOTIFY_KEYS = new Set(['tasks', 'health', 'layout', 'missed', 'lastValues'])
+
+function shouldNotify(changes) {
+  if (!changes || typeof changes !== 'object') return false
+  for (const key of Object.keys(changes)) {
+    if (NOTIFY_KEYS.has(key) || isRecordKey(key)) {
+      return true
+    }
+  }
+  return false
+}
+
+export function subscribe(handler) {
+  if (typeof handler !== 'function') {
+    return () => {}
+  }
+  const onChanged = (typeof chrome !== 'undefined' && chrome.storage) ? chrome.storage.onChanged : null
+  if (!onChanged || typeof onChanged.addListener !== 'function') {
+    return () => {}
+  }
+  if (!isListening) {
+    onChanged.addListener((changes, areaName) => {
+      if (areaName !== 'local') return
+      if (!shouldNotify(changes)) return
+      if (debounceTimer) {
+        clearTimeout(debounceTimer)
+      }
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null
+        for (const fn of [...subscribers]) {
+          if (!subscribers.has(fn)) continue
+          try {
+            fn()
+          } catch {}
+        }
+      }, 50)
+    })
+    isListening = true
+  }
+  subscribers.add(handler)
+  return () => {
+    subscribers.delete(handler)
+  }
+}
+
