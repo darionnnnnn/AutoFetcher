@@ -3,6 +3,7 @@ import { getTask, saveTask, appendRecord } from '../shared/storage.js'
 import { MSG } from '../shared/messages.js'
 import { slotOf } from './scheduler.js'
 import { notify } from './notify.js'
+import { injectContent } from './inject.js'
 
 // 短暫等待輔助函式（非排程）
 function sleep(ms) {
@@ -180,7 +181,7 @@ export async function runTask(task, opts = {}) {
       if (extraDelayMs > 0) await sleep(extraDelayMs)
 
       // 8. 注入 content script（必須在送訊息之前）
-      await chrome.scripting.executeScript({ target: { tabId }, files: ['content/main.js'] })
+      await injectContent(tabId)
 
       // 9. 擷取：先 SCROLL_INTO_VIEW，再 EXTRACT
       await chrome.tabs.sendMessage(tabId, { type: MSG.SCROLL_INTO_VIEW, locator: task.locator })

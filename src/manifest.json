@@ -24,5 +24,11 @@
   "host_permissions": [
     "<all_urls>"
   ],
+  "web_accessible_resources": [
+    {
+      "resources": ["content/*.js", "shared/*.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "options_page": "ui/report/report.html"
 }

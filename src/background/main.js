@@ -20,6 +20,7 @@ import {
   parsePrecheckName
 } from './precheck.js'
 import { notify } from './notify.js'
+import { injectContent } from './inject.js'
 
 // 支援測試比對任務 alarm 名稱正規表示式
 const origRegExpTest = RegExp.prototype.test
@@ -293,10 +294,7 @@ export async function handleContextMenu(info, tab) {
     if (info.menuItemId === 'af-capture' || info.menuItemId === 'af-capture-block') {
       if (!tab?.id) return
 
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        files: ['content/main.js']
-      })
+      await injectContent(tab.id)
 
       const res = await chrome.tabs.sendMessage(tab.id, { type: MSG.DESCRIBE })
       if (!res || res.ok !== true) {
