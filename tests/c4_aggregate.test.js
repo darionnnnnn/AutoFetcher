@@ -25,6 +25,12 @@ test('解析不出來的格子跳過並計數', () => {
   assert.equal(r.used, 2)
 })
 
+test('avg 是除以「解析得出來的格子數」,不是全部格子數', () => {
+  const r = aggregateCells(['10', 'N/A', '—', '20'], 'avg')
+  assert.equal(r.value, 15, '(10+20)/2,不是 /4')
+  assert.equal(r.used, 2)
+})
+
 test('count 只算解析得出來的格子', () => {
   const r = aggregateCells(['10', 'N/A', '32'], 'count')
   assert.equal(r.value, 2)
