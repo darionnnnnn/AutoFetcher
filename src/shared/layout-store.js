@@ -235,6 +235,25 @@ function isFreeAt(cards, card) {
 }
 
 /**
+ * 檢查兩張卡片的來源任務集合是否相同（順序無關，只比對 taskId）
+ */
+function sameSourceTaskIds(sourceA, sourceB) {
+  const setA = new Set()
+  for (const s of sourceA) {
+    if (s && s.taskId != null) setA.add(String(s.taskId))
+  }
+  const setB = new Set()
+  for (const s of sourceB) {
+    if (s && s.taskId != null) setB.add(String(s.taskId))
+  }
+  if (setA.size !== setB.size) return false
+  for (const id of setA) {
+    if (!setB.has(id)) return false
+  }
+  return true
+}
+
+/**
  * 新增卡片至指定儀表板，自動配置 id、夾住寬高並尋找不重疊空位
  */
 export async function addCard(dashId, card) {
@@ -243,6 +262,22 @@ export async function addCard(dashId, card) {
   if (!dash) return null
 
   const normalized = normalizeCard(card)
+
+  // 檢查同儀表板內是否已存在型別相同、來源集合相同的卡片
+  // source 為空陣列或缺少的卡片（例如文字卡）一律不去重
+  if (Array.isArray(card?.source) && card.source.length > 0) {
+    const existing = dash.cards.find(c =>
+      c &&
+      c.type === normalized.type &&
+      Array.isArray(c.source) &&
+      c.source.length > 0 &&
+      sameSourceTaskIds(normalized.source, c.source)
+    )
+    if (existing) {
+      return existing
+    }
+  }
+
   const newCard = {
     ...normalized,
     id: crypto.randomUUID()

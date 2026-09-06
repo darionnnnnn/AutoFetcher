@@ -584,7 +584,8 @@ async function buildDashboardContext(dash) {
     nextRuns,
     today,
     range: { from: defaultFrom, to: defaultTo },
-    editing
+    editing,
+    cards: dash.cards
   }
 }
 

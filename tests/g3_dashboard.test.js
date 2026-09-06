@@ -62,7 +62,7 @@ const card = (over = {}) => ({
 test('渲染後每張卡片一個節點，帶格線座標', async () => {
   const { db, ls, st, doc, win } = await fresh()
   await st.saveTask(task('t1'))
-  const did = await seed(ls, [card(), card({ x: 6, y: 0 })])
+  const did = await seed(ls, [card(), card({ x: 6, y: 0, source: [{ taskId: 't2' }] })])
   stubGeometry(win, doc)
   await db.renderDashboard(did)
   const els = doc.querySelectorAll('#dashboard-grid [data-card-id]')
@@ -173,7 +173,7 @@ test('拖曳中顯示佔位陰影，放開後移除', async () => {
 
 test('拖曳把被壓到的卡片往下擠，結果不重疊', async () => {
   const { db, ls, doc, win } = await fresh()
-  const did = await seed(ls, [card({ x: 0, y: 0, w: 6, h: 2 }), card({ x: 6, y: 0, w: 6, h: 2 })])
+  const did = await seed(ls, [card({ x: 0, y: 0, w: 6, h: 2 }), card({ x: 6, y: 0, w: 6, h: 2, source: [{ taskId: 't2' }] })])
   const grid = stubGeometry(win, doc)
   await db.renderDashboard(did)
   doc.getElementById('edit-layout').click()

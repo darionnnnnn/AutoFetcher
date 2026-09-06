@@ -23,21 +23,60 @@ function formatNumber(val, decimals) {
   return String(val);
 }
 
+const CARD_TYPE_SUFFIXES = {
+  number: '數值',
+  line: '趨勢',
+  bar: '長條',
+  table: '明細',
+  gauge: '量表',
+  status: '狀態'
+};
+
 /**
- * 取得卡片標題（自訂標題優先，否則以頓號串接來源任務名稱）
+ * 依卡片 source 算出來源名稱（多來源以頓號串接）
+ */
+function getCardSourceName(card, ctx) {
+  const sources = card?.source || [];
+  const names = sources
+    .map(s => (s && s.taskId ? (ctx?.tasksById?.[s.taskId]?.name || s.taskId) : ''))
+    .filter(Boolean);
+  return names.length > 0 ? names.join('、') : '';
+}
+
+/**
+ * 取得卡片標題（自訂標題優先；否則以來源名稱為主，
+ * 若同一儀表板內排在前面已有同名但不同型別的卡片，就補上型別後綴以便分辨）
  */
 function getCardTitle(card, ctx) {
   if (card.title != null && String(card.title).trim() !== '') {
     return String(card.title);
   }
-  const sources = card.source || [];
-  const names = sources
-    .map(s => (s && s.taskId ? (ctx?.tasksById?.[s.taskId]?.name || s.taskId) : ''))
-    .filter(Boolean);
-  if (names.length > 0) {
-    return names.join('、');
+  const baseName = getCardSourceName(card, ctx);
+  if (!baseName) {
+    return '';
   }
-  return '';
+
+  if (Array.isArray(ctx?.cards)) {
+    let cardIndex = ctx.cards.indexOf(card);
+    if (cardIndex === -1 && card?.id) {
+      cardIndex = ctx.cards.findIndex(c => c && c.id === card.id);
+    }
+    if (cardIndex > 0) {
+      const hasConflict = ctx.cards.slice(0, cardIndex).some(c =>
+        c &&
+        c.type !== card.type &&
+        getCardSourceName(c, ctx) === baseName
+      );
+      if (hasConflict) {
+        const suffix = CARD_TYPE_SUFFIXES[card.type];
+        if (suffix) {
+          return `${baseName} · ${suffix}`;
+        }
+      }
+    }
+  }
+
+  return baseName;
 }
 
 /**

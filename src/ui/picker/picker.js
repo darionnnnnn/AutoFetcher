@@ -337,7 +337,7 @@ function applyDefaultCardTypes() {
     if (modeVal === 'text') {
       cb.checked = (cb.value === 'table')
     } else {
-      cb.checked = (cb.value === 'number' || cb.value === 'line')
+      cb.checked = (cb.value === 'number')
     }
   }
 }
