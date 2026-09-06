@@ -1,7 +1,7 @@
 import {
   getLayout, saveLayout, addDashboard, renameDashboard,
   deleteDashboard, duplicateDashboard, reorderDashboards,
-  setLastDashboard
+  setLastDashboard, addCard, updateCard
 } from '../../shared/layout-store.js'
 import { getRecordsInRange, getTasks, getHealthMap, getMissedList } from '../../shared/storage.js'
 import { renderCard } from './cards.js'
@@ -10,6 +10,8 @@ import { placeCard, resizeCard, compact, autoArrange } from './layout.js'
 import { openDrawer } from './drawer.js'
 import { applyTemplate } from './templates.js'
 import { MSG } from '../../shared/messages.js'
+import { createDragSource, registerDropTarget, resetDnd, isPointInside } from './dnd.js'
+import { applyDrop, cardTypeForTask } from './drop-rules.js'
 
 // 編輯模式狀態與復原歷史
 let editing = false
@@ -20,6 +22,7 @@ let activeOp = null
 let dashIdPendingDelete = null
 let templateKindPending = null
 let tabDrag = null
+let toastTimer = null
 
 /**
  * 將 YYYY-MM-DD 加上指定天數
@@ -116,10 +119,28 @@ export async function redo() {
 }
 
 /**
+ * 顯示拖曳投放提示訊息（3 秒後自動隱藏）
+ */
+function showToast(reason) {
+  const toast = document.getElementById('dnd-toast')
+  if (!toast) return
+  toast.textContent = reason || ''
+  toast.hidden = false
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => {
+    toast.hidden = true
+  }, 3000)
+}
+
+/**
  * 更新編輯模式的 DOM 視覺狀態
  */
 function updateEditingUI() {
   if (typeof document === 'undefined') return
+  const palette = document.getElementById('source-palette')
+  if (palette) {
+    palette.hidden = !editing
+  }
   const grid = document.getElementById('dashboard-grid')
   if (grid) {
     if (editing) {
@@ -130,6 +151,11 @@ function updateEditingUI() {
     const handles = grid.querySelectorAll('[data-role="resize-handle"]')
     for (const handle of handles) {
       handle.hidden = !editing
+    }
+    const removeHandles = grid.querySelectorAll('[data-remove-source]')
+    for (const handle of removeHandles) {
+      handle.hidden = !editing
+      handle.textContent = editing ? '×' : ''
     }
   }
   const editBtn = document.getElementById('edit-layout')
@@ -169,7 +195,7 @@ function onKeyDown(event) {
 function onPointerDown(e, card) {
   if (!editing) return
   if (e.button !== undefined && e.button !== 0) return
-  if (e.target.closest && e.target.closest('button')) return
+  if (e.target.closest && (e.target.closest('button') || e.target.closest('[data-remove-source]'))) return
 
   const isResize = Boolean(e.target.closest && e.target.closest('[data-role="resize-handle"]'))
 
@@ -461,6 +487,31 @@ function setupEvents(grid) {
       })
     }
   }
+
+  const paletteToggle = document.getElementById('palette-toggle')
+  if (paletteToggle && !paletteToggle._paletteToggleAttached) {
+    paletteToggle._paletteToggleAttached = true
+    paletteToggle.addEventListener('click', () => {
+      const palette = document.getElementById('source-palette')
+      if (!palette) return
+      const collapsed = palette.classList.toggle('collapsed')
+      paletteToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true')
+    })
+  }
+
+  const search = document.getElementById('palette-search')
+  if (search && !search._paletteSearchAttached) {
+    search._paletteSearchAttached = true
+    search.addEventListener('input', () => {
+      const q = (search.value || '').toLowerCase()
+      const items = document.querySelectorAll('[data-palette-task]')
+      for (const item of items) {
+        const nameEl = item.querySelector('.palette-task-name')
+        const name = ((nameEl ? nameEl.textContent : item.textContent) || '').toLowerCase()
+        item.hidden = Boolean(q && !name.includes(q))
+      }
+    })
+  }
 }
 
 /**
@@ -531,7 +582,8 @@ async function buildDashboardContext(dash) {
     missed,
     nextRuns,
     today,
-    range: { from: defaultFrom, to: defaultTo }
+    range: { from: defaultFrom, to: defaultTo },
+    editing
   }
 }
 
@@ -554,6 +606,12 @@ function prepareCardElement(card, ctx, dashId) {
   }
   handle.hidden = !editing
 
+  const removeHandles = cardEl.querySelectorAll('[data-remove-source]')
+  for (const h of removeHandles) {
+    const taskId = h.getAttribute('data-task-id')
+    createDragSource(h, () => ({ removeFrom: { cardId: card.id, taskId } }))
+  }
+
   cardEl.addEventListener('pointerdown', (e) => onPointerDown(e, card))
 
   const configBtn = cardEl.querySelector('[data-action="config"]')
@@ -565,6 +623,215 @@ function prepareCardElement(card, ctx, dashId) {
   }
 
   return cardEl
+}
+
+// 側欄上的抓取模式標示
+const MODE_LABELS = { number: '數值', text: '文字', block: '區塊' }
+
+/**
+ * 渲染資料來源側欄清單
+ */
+async function renderPalette() {
+  const listEl = document.getElementById('palette-list')
+  if (!listEl) return
+  const tasks = await getTasks()
+  listEl.textContent = ''
+  const searchInput = document.getElementById('palette-search')
+  const q = (searchInput?.value || '').toLowerCase()
+
+  for (const t of tasks) {
+    if (t.enabled === false) continue
+    const item = document.createElement('div')
+    item.setAttribute('data-palette-task', '')
+    item.setAttribute('data-task-id', t.id)
+    item.setAttribute('data-mode', t.mode || 'number')
+    const nameEl = document.createElement('span')
+    nameEl.className = 'palette-task-name'
+    nameEl.textContent = t.name || ''
+    item.appendChild(nameEl)
+    const modeEl = document.createElement('span')
+    modeEl.className = 'palette-task-mode'
+    modeEl.textContent = MODE_LABELS[t.mode] || MODE_LABELS.number
+    item.appendChild(modeEl)
+    if (q && !item.textContent.toLowerCase().includes(q)) {
+      item.hidden = true
+    }
+    createDragSource(item, () => ({ taskId: t.id, label: t.name }))
+    listEl.appendChild(item)
+  }
+}
+
+/**
+ * 將卡片註冊為拖曳投放目標
+ */
+function registerCardDropTarget(cardEl, card, ctx) {
+  cardEl._unregisterDropTarget = registerDropTarget(cardEl, {
+    accepts(payload) {
+      if (!editing) return false
+      if (!payload || !payload.taskId || payload.removeFrom) return false
+      // 表格永遠收:落點才決定插到第幾欄,已經在最後一欄的任務也要能拖到前面。
+      // 用空 opts 問 applyDrop 等於問「搬到最後有沒有變化」,會讓最後一欄拖不動。
+      if (card.type === 'table') return true
+      return applyDrop(card, payload.taskId, {}) !== null
+    },
+    async onDrop(payload, pos) {
+      if (!payload || !payload.taskId) return
+
+      let index
+      if (card.type === 'table' && card.options?.mode === 'pivot') {
+        const ths = [...cardEl.querySelectorAll('thead th')]
+        const hasReadableHeaders = ths.length > 0 && ths.some(th => {
+          const r = th.getBoundingClientRect?.()
+          return r && (r.width > 0 || r.right > r.left)
+        })
+        if (hasReadableHeaders) {
+          let targetCol = -1
+          const x = pos?.x ?? 0
+          for (let i = 0; i < ths.length; i++) {
+            const rect = ths[i].getBoundingClientRect()
+            const midX = rect.left + rect.width / 2
+            if (x < midX) {
+              targetCol = i
+              break
+            }
+          }
+          if (targetCol === -1) {
+            index = ths.length - 1
+          } else {
+            index = Math.max(0, targetCol - 1)
+          }
+        }
+      }
+
+      const opts = {}
+      if (typeof index === 'number') {
+        opts.index = index
+      }
+      const taskName = payload.label || ctx?.tasksById?.[payload.taskId]?.name
+      if (typeof taskName === 'string' && taskName) {
+        opts.taskName = taskName
+      }
+      const firstTaskId = card.source?.[0]?.taskId
+      const prevTaskName = firstTaskId ? ctx?.tasksById?.[firstTaskId]?.name : undefined
+      if (typeof prevTaskName === 'string' && prevTaskName) {
+        opts.prevTaskName = prevTaskName
+      }
+
+      const patch = applyDrop(card, payload.taskId, opts)
+      if (!patch) return
+      if (patch.rejected) {
+        showToast(patch.reason)
+        return
+      }
+
+      await pushHistory()
+      await updateCard(currentDashId, card.id, patch)
+      await renderDashboard(currentDashId)
+    }
+  })
+}
+
+/**
+ * 把落點座標換算成格線上的欄列(夾在合法範圍內)
+ */
+function gridCellAt(grid, pos, w) {
+  if (!grid || !pos || typeof grid.getBoundingClientRect !== 'function') return { x: 0, y: 0 }
+  const rect = grid.getBoundingClientRect()
+  if (!rect || !rect.width) return { x: 0, y: 0 }
+  const colWidth = rect.width / 12
+  const rowHeight = 80
+  const x = Math.max(0, Math.min(12 - w, Math.floor((pos.x - rect.left) / colWidth)))
+  const y = Math.max(0, Math.floor((pos.y - rect.top) / rowHeight))
+  return { x, y }
+}
+
+/**
+ * 指標是否落在某張卡片上(矩形判定用 dnd.js 那一份,不要再寫一次)
+ */
+function pointerOverAnyCard(grid, pos) {
+  if (!grid || !pos) return false
+  return [...grid.querySelectorAll('[data-card-id]')].some(el => isPointInside(el, pos))
+}
+
+/**
+ * 將格線註冊為拖曳投放目標（拖到空白格建新卡片、或拖出卡片移除資料來源）
+ */
+function registerGridDropTarget(grid) {
+  grid._unregisterDropTarget = registerDropTarget(grid, {
+    accepts(payload, pos) {
+      if (!editing) return false
+      if (!payload) return false
+      // 拖著移除把手時,放在哪張卡片上都算移除,格線一律接手
+      if (payload.removeFrom) return true
+      // 指標正壓在某張卡片上時交給那張卡片決定;它不收就是不收,
+      // 不可在它底下偷偷長出一張新卡片
+      if (payload.taskId) return !pointerOverAnyCard(grid, pos)
+      return false
+    },
+    async onDrop(payload, pos) {
+      if (!editing || !payload) return
+
+      if (payload.removeFrom) {
+        const { cardId, taskId } = payload.removeFrom
+        if (!cardId || !taskId) return
+
+        // 放回原本那張卡片上不算移除
+        const cardEl = grid.querySelector(`[data-card-id="${cardId}"]`)
+        if (isPointInside(cardEl, pos)) return
+
+        const layout = await getLayout()
+        const currentDash = layout.dashboards.find(d => d.id === currentDashId) || layout.dashboards[0]
+        if (!currentDash) return
+        const card = currentDash.cards.find(c => c.id === cardId)
+        if (!card) return
+
+        // status 卡片的來源存在 options.taskIds,不是 source
+        const patch = card.type === 'status'
+          ? { options: { ...(card.options || {}), taskIds: (card.options?.taskIds || []).filter(id => id !== taskId) } }
+          : { source: (card.source || []).filter(s => s.taskId !== taskId) }
+        await pushHistory()
+        await updateCard(currentDash.id, cardId, patch)
+        await renderDashboard(currentDash.id)
+        return
+      }
+
+      if (payload.taskId) {
+        const tasks = await getTasks()
+        const task = tasks.find(t => t.id === payload.taskId)
+        const type = cardTypeForTask(task)
+
+        let w = 6
+        let h = 2
+        if (type === 'number') {
+          w = 3
+          h = 2
+        } else if (type === 'table') {
+          w = 12
+          h = 4
+        }
+
+        const layout = await getLayout()
+        const currentDash = layout.dashboards.find(d => d.id === currentDashId) || layout.dashboards[0]
+        if (!currentDash) return
+
+        // 落點所在的格子當作希望的位置;放不下時交給 addCard 自己找空位
+        const wanted = gridCellAt(grid, pos, w)
+        const newCard = {
+          type,
+          w,
+          h,
+          x: wanted.x,
+          y: wanted.y,
+          source: [{ taskId: payload.taskId, aggregation: 'raw' }],
+          options: type === 'table' ? { mode: 'recent' } : {}
+        }
+
+        await pushHistory()
+        await addCard(currentDash.id, newCard)
+        await renderDashboard(currentDash.id)
+      }
+    }
+  })
 }
 
 /**
@@ -736,12 +1003,6 @@ export async function renderDashboard(dashId) {
     grid.classList.remove('single-column')
   }
 
-  if (editing) {
-    grid.classList.add('editing')
-  } else {
-    grid.classList.remove('editing')
-  }
-
   const ctx = await buildDashboardContext(dash)
   const cards = Array.isArray(dash.cards) ? dash.cards : []
 
@@ -750,12 +1011,22 @@ export async function renderDashboard(dashId) {
     emptyEl.hidden = cards.length > 0
   }
 
+  resetDnd()
+
+  await renderPalette()
+
   grid.textContent = ''
+
+  registerGridDropTarget(grid)
 
   for (const card of cards) {
     const cardEl = prepareCardElement(card, ctx, dash.id)
+    registerCardDropTarget(cardEl, card, ctx)
     grid.appendChild(cardEl)
   }
+
+  // 放在卡片都掛上之後:它會逐個把手設顯示/隱藏,放前面只會打在即將丟棄的舊 DOM 上
+  updateEditingUI()
 }
 
 /**
@@ -781,8 +1052,13 @@ export async function rerenderCard(dashId, cardId) {
   const oldCardEl = grid.querySelector(`[data-card-id="${cardId}"]`)
   if (!oldCardEl) return
 
+  if (typeof oldCardEl._unregisterDropTarget === 'function') {
+    oldCardEl._unregisterDropTarget()
+  }
+
   const ctx = await buildDashboardContext(dash)
   const newCardEl = prepareCardElement(card, ctx, dash.id)
+  registerCardDropTarget(newCardEl, card, ctx)
 
   oldCardEl.replaceWith(newCardEl)
 }

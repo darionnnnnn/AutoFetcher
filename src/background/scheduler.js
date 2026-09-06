@@ -65,7 +65,7 @@ export function shouldRunInterval(task, nowMs) {
   const schedule = task?.schedule || {}
   const weekdays = schedule.weekdays ?? task?.weekdays
   const now = new Date(nowMs)
-  if (!Array.isArray(weekdays) || !weekdays.includes(now.getDay())) {
+  if (Array.isArray(weekdays) && weekdays.length > 0 && !weekdays.includes(now.getDay())) {
     return false
   }
   const window = schedule.window
@@ -131,11 +131,10 @@ export async function rebuildAlarms() {
           }
         }
       } else if (schedule.type === 'interval') {
-        const weekdays = schedule.weekdays ?? task.weekdays
-        if (typeof schedule.everyMinutes !== 'number' || schedule.everyMinutes <= 0) continue
-        if (weekdays !== undefined && (!Array.isArray(weekdays) || weekdays.length === 0)) continue
-
-        await chrome.alarms.create(alarmName(task.id, 0), { periodInMinutes: schedule.everyMinutes })
+        const when = nextIntervalRun(task, Date.now())
+        if (when !== null) {
+          await chrome.alarms.create(alarmName(task.id, 0), { when })
+        }
       }
     } catch {
       continue
@@ -149,4 +148,63 @@ export async function ensureWatchdog() {
   if (!existing) {
     await chrome.alarms.create('__watchdog', { periodInMinutes: 15 })
   }
+}
+
+/**
+ * 計算下一個對齊的排程時刻
+ * @param {Object} task 任務物件
+ * @param {number} nowMs 當前毫秒時間戳
+ * @returns {number|null} 下一個對齊的毫秒時間戳，或 null
+ */
+export function nextIntervalRun(task, nowMs) {
+  const schedule = task?.schedule
+  const everyMinutes = schedule?.everyMinutes
+  if (typeof everyMinutes !== 'number' || !Number.isFinite(everyMinutes) || everyMinutes <= 0) {
+    return null
+  }
+
+  // weekdays 缺省或空陣列一律視為每天(與 daily 的必填不同,見 AF-4 A1 定案)
+  const weekdays = schedule?.weekdays ?? task?.weekdays
+  const everyDay = !Array.isArray(weekdays) || weekdays.length === 0
+
+  const window = schedule?.window
+  const hasWindow = !!(window && window.from && window.to)
+  const fromMins = hasWindow ? timeToMinutes(window.from) : 0
+  const toMins = hasWindow ? timeToMinutes(window.to) : 0
+
+  // 當天的候選分鐘數,一律遞增
+  const minutesOfDay = []
+  if (!hasWindow) {
+    for (let m = 0; m < 1440; m += everyMinutes) minutesOfDay.push(m)
+  } else if (fromMins <= toMins) {
+    // 同一天內,終點閉區間
+    for (let m = fromMins; m <= toMins; m += everyMinutes) minutesOfDay.push(m)
+  } else {
+    // 跨午夜:凌晨段從 00:00 起,傍晚段從 from 起
+    for (let m = 0; m <= toMins; m += everyMinutes) minutesOfDay.push(m)
+    for (let m = fromMins; m < 1440; m += everyMinutes) minutesOfDay.push(m)
+  }
+  if (minutesOfDay.length === 0) return null
+
+  const base = new Date(nowMs)
+  for (let offset = 0; offset < 8; offset++) {
+    const day = new Date(base.getFullYear(), base.getMonth(), base.getDate() + offset)
+    // 星期以候選時刻自己所在的那一天判定(跨午夜的凌晨段也算它自己那天)
+    if (!everyDay && !weekdays.includes(day.getDay())) continue
+
+    for (const m of minutesOfDay) {
+      const candidate = new Date(
+        day.getFullYear(),
+        day.getMonth(),
+        day.getDate(),
+        Math.floor(m / 60),
+        m % 60,
+        0,
+        0
+      ).getTime()
+      // 嚴格大於 now:等於 now 的格子要跳過
+      if (candidate > nowMs) return candidate
+    }
+  }
+  return null
 }

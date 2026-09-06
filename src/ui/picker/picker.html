@@ -156,8 +156,8 @@
             <option value="interval">固定間隔</option>
           </select>
         </label>
-        <label>執行時間（逗號分隔 HH:mm）<input type="text" id="times" value="09:00" placeholder="09:00, 15:00"></label>
-        <label>間隔時間（分鐘）<input type="number" id="every-minutes" value="15" min="1"></label>
+        <label data-schedule-only="daily">執行時間（逗號分隔 HH:mm）<input type="text" id="times" value="09:00" placeholder="09:00, 15:00"></label>
+        <label data-schedule-only="interval">間隔時間（分鐘）<input type="number" id="every-minutes" value="15" min="1"></label>
         <label>執行星期</label>
         <div id="weekdays">
           <label><input type="checkbox" value="1" checked>一</label>
@@ -168,8 +168,8 @@
           <label><input type="checkbox" value="6">六</label>
           <label><input type="checkbox" value="0">日</label>
         </div>
-        <label>生效時段起（HH:mm）<input type="text" id="window-from" placeholder="09:00"></label>
-        <label>生效時段訖（HH:mm）<input type="text" id="window-to" placeholder="18:00"></label>
+        <label data-schedule-only="interval">生效時段起（HH:mm）<input type="text" id="window-from" placeholder="09:00"></label>
+        <label data-schedule-only="interval">生效時段訖（HH:mm）<input type="text" id="window-to" placeholder="18:00"></label>
       </fieldset>
       <label>即時預覽</label>
       <div id="preview"></div>

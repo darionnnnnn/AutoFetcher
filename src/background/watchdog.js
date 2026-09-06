@@ -4,7 +4,8 @@ import {
   rebuildAlarms,
   alarmName,
   parseAlarmName,
-  nextDailyRun
+  nextDailyRun,
+  nextIntervalRun
 } from './scheduler.js'
 import { getTasks, trimOldRecords } from '../shared/storage.js'
 import { ensureSiteCheck } from './sitecheck.js'
@@ -52,14 +53,13 @@ async function repairMissingAlarms() {
         }
       }
     } else if (schedule.type === 'interval') {
-      const weekdays = schedule.weekdays ?? task.weekdays
-      if (typeof schedule.everyMinutes !== 'number' || schedule.everyMinutes <= 0) continue
-      if (weekdays !== undefined && (!Array.isArray(weekdays) || weekdays.length === 0)) continue
-
       const name = alarmName(task.id, 0)
       if (!existingNames.has(name)) {
-        await chrome.alarms.create(name, { periodInMinutes: schedule.everyMinutes })
-        existingNames.add(name)
+        const when = nextIntervalRun(task, Date.now())
+        if (when !== null) {
+          await chrome.alarms.create(name, { when })
+          existingNames.add(name)
+        }
       }
     }
   }

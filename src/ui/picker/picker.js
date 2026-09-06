@@ -122,8 +122,9 @@ export function validateForm(values) {
     }
   }
 
-  const hasFrom = typeof values.windowFrom === 'string' && values.windowFrom.trim() !== ''
-  const hasTo = typeof values.windowTo === 'string' && values.windowTo.trim() !== ''
+  // 時段只有 interval 用得到;daily 時該欄位是隱藏的,殘值不可擋住存檔
+  const hasFrom = values.scheduleType === 'interval' && typeof values.windowFrom === 'string' && values.windowFrom.trim() !== ''
+  const hasTo = values.scheduleType === 'interval' && typeof values.windowTo === 'string' && values.windowTo.trim() !== ''
   if ((hasFrom && !hasTo) || (!hasFrom && hasTo)) {
     errors.window = '時段起訖必須同時填寫或同時空白'
   } else if (hasFrom && hasTo) {
@@ -308,6 +309,7 @@ export function render(ctx) {
   }
 
   bindModeEvents()
+  syncScheduleFields()
   bindAlertEvents()
   bindPreActionEvents()
   bindPreActionMessageListener()
@@ -373,6 +375,16 @@ function updateBlockSection() {
 }
 
 /**
+ * 依排程型別只顯示相關欄位(隱藏的欄位保留已填的值,切回來還在)
+ */
+function syncScheduleFields() {
+  const type = document.getElementById('schedule-type')?.value || 'daily'
+  document.querySelectorAll('[data-schedule-only]').forEach(el => {
+    el.hidden = el.getAttribute('data-schedule-only') !== type
+  })
+}
+
+/**
  * 綁定模式切換事件
  */
 function bindModeEvents() {
@@ -383,6 +395,11 @@ function bindModeEvents() {
       updateBlockSection()
     })
     modeEl._modeEventsBound = true
+  }
+  const schedEl = document.getElementById('schedule-type')
+  if (schedEl && !schedEl._scheduleEventsBound) {
+    schedEl.addEventListener('change', syncScheduleFields)
+    schedEl._scheduleEventsBound = true
   }
 }
 
