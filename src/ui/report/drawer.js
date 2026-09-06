@@ -334,23 +334,14 @@ function collectPatch() {
     const aggSelect = document.getElementById('drawer-aggregation')
     const aggVal = (aggSelect && aggSelect.value) ? aggSelect.value : 'raw'
 
-    const checkedSource = []
-    for (const box of checkedBoxes) {
-      const tid = box.value
-      const existing = currentCard?.source?.find(s => s.taskId === tid)
-      checkedSource.push({
-        taskId: tid,
-        aggregation: existing?.aggregation || aggVal
-      })
-    }
-    // 保留的來源要放回它原本的位置：source 的順序就是樞紐表的欄序，
-    // 一律排到最前面等於偷偷把使用者的欄位重排了
-    source = [...checkedSource]
-    const originalOrder = (currentCard?.source || []).map(s => s?.taskId)
-    for (const item of preserved) {
-      const at = originalOrder.indexOf(item.taskId)
-      const before = originalOrder.slice(0, at).filter(id => source.some(s => s.taskId === id)).length
-      source.splice(Math.min(before, source.length), 0, item)
+    // source 的順序就是樞紐表的欄序，而清單是依任務分組畫的——
+    // 以原本的 source 為基準做增刪，不用清單的 DOM 順序重建，使用者調過的欄序才不會被洗掉
+    const checkedIds = new Set([...checkedBoxes].map(b => b.value))
+    const preservedIds = new Set(preserved.map(s => s.taskId))
+    const original = currentCard?.source || []
+    source = original.filter(s => s && s.taskId && (checkedIds.has(s.taskId) || preservedIds.has(s.taskId)))
+    for (const tid of checkedIds) {
+      if (!original.some(s => s && s.taskId === tid)) source.push({ taskId: tid, aggregation: aggVal })
     }
     options.aggregation = aggVal
   }

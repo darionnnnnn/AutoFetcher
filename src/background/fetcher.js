@@ -474,16 +474,13 @@ export async function runTask(task, opts = {}) {
           }
 
           // 設定頁的診斷要看得出這一次抓了幾個值、哪幾個沒抓到
-          const idx = buildSeriesIndex([task])
+          // 診斷頁是用字串串接顯示；環形緩衝只有 500 筆，全成功就不占位子（否則會把看門狗紀錄擠掉）
           const failedNames = records
             .filter(r => !isSuccess(r))
-            .map(r => nameOf(idx, r.taskId))
-          await diag.log('fetch_fields', {
-            taskId: task.id,
-            slot,
-            total: records.length,
-            failed: failedNames
-          })
+            .map(r => buildSeriesIndex([task]).byId[r.taskId]?.shortName || r.taskId)
+          if (failedNames.length > 0) {
+            await diag.log('fetch_fields', `「${task.name}」${records.length} 個值，失敗 ${failedNames.length}：${failedNames.join('、')}`)
+          }
 
           const firstSuccess = records.find(r => isSuccess(r))
           return firstSuccess || records[0] || null

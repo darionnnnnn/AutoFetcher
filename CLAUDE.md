@@ -40,11 +40,11 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **不要把會掃整個 storage 的操作(`get(null)`)放在抓取寫入路徑上**:紀錄會累積到 MB 級;這類清理放看門狗並自帶一天一次的守衛。
 - **版面的唯一入口**:`shared/layout-store`(儀表板與卡片的增刪改),它自己只經 `shared/storage`。
 - **序列 id 的唯一入口**:`shared/series-index`。一個任務可以抓多個值,紀錄的 `taskId` 會是
-  `<任務id>#<值key>`;任何地方都不得自己 split 字串。
-  **父任務 id 用在**排程 alarm、帳本、health、missed、預檢、診斷;
-  **序列 id 用在**紀錄、`lastValues`、`alertLog`、卡片 `source`、歷史篩選。記錯會讓冪等失效或畫面永遠空白。
+  `<任務id>#<值key>`;任何地方都不得自己 split 字串。父任務 id 與序列 id 各用在哪見 SPEC §7 的分工表,
+  記錯會讓冪等失效或畫面永遠空白。
 - **UI 監看資料變動的唯一入口**:`shared/storage` 的 `subscribe`(UI 不得自己碰 `chrome.storage.onChanged`)。
-- **health 只在 `background/fetcher.js` 寫**,而且狀態的算法只有 `healthFromRecords` 那一份。
+- **health 一律經 `background/health.js` 的 `setTaskHealth` 寫**(fetcher / precheck / sitecheck 三個呼叫端);
+  抓取結果 → 狀態的算法只有 `fetcher.js` 的 `healthFromRecords` 那一份。
 
 ## 文件地圖
 
@@ -55,10 +55,15 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1392 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1409 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
-- **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅)。
-  AF-2 靠突變抓到多處同義反覆的測試;併回前另做兩份獨立終檢(程式碼 + 文件),抓到 14 類真實缺陷。
+- **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
+  併回前另做兩份獨立終檢(程式碼 + 文件)。
+- **突變要改到真正的守門那一行**:數呼叫次數、把門檻設在本來就不會命中的位置,都是任何實作下都會過的假斷言。
+- **段與段之間要有鏈結測試**:每段驗收都自己造輸入時,訊息欄位(`picks`、`locator`、`preselect`)沒有人從發訊端一路斷言到收訊端;
+  `tests/m2_chain.test.js` 是這種測試,新增跨模組欄位時要補進去。
+- **驗收時 grep 正式碼有無測試檔名、`__test`、`Error().stack`**:委派端曾在正式碼塞測試替身呼叫,
+  也曾用「呼叫堆疊是某測試檔就跳過去重」讓整套測試假綠。
 - 分支:`dev` 開發、`master` 由使用者併;每輪一個 `r<N>` 分支。
 - 實作委派:先地端 LLM,較複雜給 agy;Claude 只規劃、驗收、寫文件(見 ~/.claude/skills 之委派 skill)。
 - 設定/資料的事實來源是 `chrome.storage.local`;檔案一律**使用者手動匯出**,不自動下載(SPEC §5)。
@@ -69,8 +74,8 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **`slot` 是本地時間、`capturedAt` 是 UTC**:絕不可直接比字串或切前 16 碼;換算只有一份
   (`series.js` 的 `effectiveTimeOf`/`sortKeyOf`,規則見 SPEC §8.2)。
 - **卡片來源的順序就是表格欄序**:抽屜的上下移動與拖曳插入都只改 `card.source` 一份資料,不要另存欄序。
-- **新增卡片不要自己算位置**:`layout-store.addCard` 已經呼叫 `findFreeSlot`,再算一次就是兩份邏輯。
-- **新增卡片一律走 `layout-store.addCard`**,它自己會去重(同型別 + 同來源集合 + 同呈現模式)。
+- **新增卡片一律走 `layout-store.addCard`**:它已呼叫 `findFreeSlot` 並自帶去重(同型別 + 同來源集合 + 同呈現模式),
+  再算一次位置或自己去重就是兩份邏輯。
 - **每個 UI 頁的樣式表都要有 `[hidden] { display: none !important; }`**:
   區塊自己的 `display: flex/grid` 會壓過 `hidden` 屬性,空的橫幅會露出一條空殼。
 - **圖表 SVG 只設 `viewBox`**,外層用 `width: 100%` 縮放;`viewBox` 的長寬比要跟著卡片的格數走,
@@ -82,8 +87,8 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 
 - 不要把帳號密碼存明文於 `storage.sync`(會同步到所有裝置;SPEC §6 規定只放 `storage.local` 並標示風險)。
 - 不要用 `setTimeout`/`setInterval` 做排程(MV3 service worker 會被殺;一律 `chrome.alarms`)。
-- **不要用 `periodInMinutes` 做任務排程**(daily 與 interval 都不行;相位會漂、日光節約會漂移;
-  一律每次觸發後重算對齊的 `when`,規則見 SPEC §4);`__watchdog` 自己那個固定 alarm 是唯一例外。
+- **不要用 `periodInMinutes` 做任務排程**(daily 與 interval 都不行,一律每次觸發後重算對齊的 `when`,
+  理由與規則見 SPEC §4);`__watchdog` 自己那個固定 alarm 是唯一例外。
 - 不要在帳本之外直接呼叫 `runTask`(同一排程槽會重複抓;冪等靠 `runs[taskId][slot]`,SPEC §4.1)。
 - 不要假設抓取時目標分頁已開啟(排程到點由 background 自己開分頁,SPEC §4)。
 - **不要在 background 用動態 `import()`**(MV3 service worker 規格禁止,會在真實瀏覽器才炸;一律靜態匯入)。
@@ -109,6 +114,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   **不要用 `document.elementFromPoint`**(jsdom 沒有,測不動)。命中與拒收往下找的規則見 SPEC §8.2。
 - **底層投放目標要自己判斷指標是否壓在上層元素上**,否則會在拒收的卡片底下偷偷長出新卡片。
 - **缺值不補 0、不內插**(SPEC §8.6);抓取失敗一律顯示 `—`,錯誤原因放 `title`。
+- **數值不進科學記號、不截有效位數**:整數原樣輸出,只對有小數的值去浮點尾巴(`cards.js` 的 `formatNumber`)。
 - 不要在匯出的獨立 HTML 報表放 `<script>` 或任何外部資源(靜態快照,離線可開)。
 - 不要在 UI 直接讀 `chrome.storage`(一律經 `shared/storage`),也不要自己解析 alarm 名稱
   (下次執行時間問 background 的 `GET_NEXT_RUNS`,它已排除預檢與重試 alarm)。

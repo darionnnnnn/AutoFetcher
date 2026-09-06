@@ -751,6 +751,15 @@ function updateFieldListState() {
     if (downBtn) downBtn.disabled = (i === n - 1)
   })
 
+  // 一格就是一個值，沒有東西要聚合；有整欄／整列的值時才需要選聚合方式。
+  // 值的數量也決定預設建哪幾張卡，移除／上下移之後都要重算
+  const aggLabel = document.getElementById('block-aggregate')?.closest('label')
+  if (aggLabel) {
+    const hasBlockField = rows.some(r => (r._spec || fieldSpecs.get(r.dataset.fieldKey || ''))?.block)
+    aggLabel.hidden = n > 0 && !hasBlockField
+  }
+  applyDefaultCardTypes()
+
   const summaryEl = document.getElementById('save-summary')
   if (summaryEl) {
     if (n >= 2) {
@@ -826,6 +835,7 @@ function createFieldRow({ key, name, spec }) {
   return row
 }
 
+
 function renderFieldList(items) {
   const fieldList = document.getElementById('field-list')
   if (!fieldList) return
@@ -839,12 +849,7 @@ function renderFieldList(items) {
   }
 
   updateFieldListState()
-  // 一格就是一個值，沒有東西要聚合；有整欄／整列的值時才需要選聚合方式
-  const aggLabel = document.getElementById('block-aggregate')?.closest('label')
-  if (aggLabel) {
-    const hasBlockField = (items || []).some(it => it && it.spec && it.spec.block)
-    aggLabel.hidden = (items || []).length > 0 && !hasBlockField
-  }
+  updateFieldListState()
 
 }
 
@@ -1136,8 +1141,11 @@ export async function renderDashboardSection(task) {
     }
   }
 
-  applyDefaultCardTypes()
   bindModeEvents()
+  // 還沒有任何勾選（例如測試或首次開啟）才給預設；已勾的（含還原回來的）不動
+  if (![...document.querySelectorAll('#card-types input[type="checkbox"]')].some(cb => cb.checked)) {
+    applyDefaultCardTypes()
+  }
 }
 
 export async function handleSave() {
@@ -1301,15 +1309,15 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
       renderDashboardSection(currentCtx?.task)
     })
   } else if (params.has('ctx')) {
-    try {
-      const parsed = JSON.parse(decodeURIComponent(params.get('ctx')))
-      render(parsed)
-      applyPickerDefaults(parsed?.task)
-      renderDashboardSection(parsed?.task)
-    } catch {
-      applyPickerDefaults(null)
-      renderDashboardSection(null)
-    }
+    // 順序不能並行：儀表板下拉要先建好，記住的 dashboardId 才還原得回去；
+    // 預設值要最後套，才不會被儀表板區塊的預設勾選蓋掉
+    let parsed = null
+    try { parsed = JSON.parse(decodeURIComponent(params.get('ctx'))) } catch { parsed = null }
+    ;(async () => {
+      if (parsed) render(parsed)
+      await renderDashboardSection(parsed?.task)
+      await applyPickerDefaults(parsed?.task)
+    })()
   } else {
     applyPickerDefaults(null)
     renderDashboardSection(null)

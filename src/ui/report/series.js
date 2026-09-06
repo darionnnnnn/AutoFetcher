@@ -387,9 +387,7 @@ export function withDelta(rows, columnIds) {
     const deltas = {};
     for (const col of cols) {
       const raw = row?.values?.[col];
-      const cur = typeof raw === 'number' && Number.isFinite(raw)
-        ? raw
-        : (raw && typeof raw.value === 'number' && Number.isFinite(raw.value) ? raw.value : null);
+      const cur = typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
       const before = prev[col];
       if (cur !== null && typeof before === 'number') {
         deltas[col] = { diff: cur - before, prev: before };

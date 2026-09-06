@@ -123,6 +123,13 @@ export async function redo() {
 /**
  * 顯示拖曳投放提示訊息（3 秒後自動隱藏）
  */
+// 套範本；產不出卡片時把原因說出來（三個入口共用這一份）
+async function applyTemplateWithToast(dashId, kind) {
+  const res = await applyTemplate(dashId, kind)
+  if (res && res.applied === false && res.reason) showToast(res.reason)
+  return res
+}
+
 function showToast(reason) {
   const toast = document.getElementById('dnd-toast')
   if (!toast) return
@@ -412,8 +419,7 @@ function setupEvents(grid) {
         if (templateKindPending && currentDashId) {
           const kind = templateKindPending
           templateKindPending = null
-          const tplRes = await applyTemplate(currentDashId, kind)
-          if (tplRes && tplRes.applied === false && tplRes.reason) showToast(tplRes.reason)
+          await applyTemplateWithToast(currentDashId, kind)
           const select = document.getElementById('apply-template')
           if (select) select.value = ''
           await renderDashboard(currentDashId)
@@ -434,8 +440,7 @@ function setupEvents(grid) {
         templateKindPending = kind
         templateConfirm.hidden = false
       } else {
-        const tplRes = await applyTemplate(currentDashId, kind)
-          if (tplRes && tplRes.applied === false && tplRes.reason) showToast(tplRes.reason)
+        await applyTemplateWithToast(currentDashId, kind)
         e.target.value = ''
         await renderDashboard(currentDashId)
       }
@@ -478,8 +483,7 @@ function setupEvents(grid) {
         if (currentDashId) {
           const select = document.getElementById('apply-template')
           const kind = select?.value || 'overview'
-          const tplRes = await applyTemplate(currentDashId, kind)
-          if (tplRes && tplRes.applied === false && tplRes.reason) showToast(tplRes.reason)
+          await applyTemplateWithToast(currentDashId, kind)
           if (select) select.value = ''
           await renderDashboard(currentDashId)
         }
@@ -654,7 +658,9 @@ function filterPaletteItems(q) {
       if (!query || childMatches) {
         anyChildMatches = true
       }
-      child.hidden = Boolean(query && !childMatches && !parentMatches)
+      // 顯示條件只在這裡算一次：符合搜尋、而且父列沒收合
+      const parentCollapsed = parent.dataset.collapsed === '1'
+      child.hidden = parentCollapsed || Boolean(query && !childMatches && !parentMatches)
     }
 
     parent.hidden = Boolean(query && !parentMatches && !anyChildMatches)
@@ -669,6 +675,12 @@ async function renderPalette() {
   if (!listEl) return
   const tasks = await getTasks()
   const index = buildSeriesIndex(tasks)
+  // 資料變動會整個重畫；收合狀態不能跟著回到全展開
+  const collapsedParents = new Set(
+    [...listEl.querySelectorAll('[data-palette-task]')]
+      .filter(el => el.dataset.collapsed === '1')
+      .map(el => el.getAttribute('data-task-id'))
+  )
   listEl.textContent = ''
 
   for (const t of tasks) {
@@ -687,16 +699,24 @@ async function renderPalette() {
       toggle.setAttribute('data-palette-toggle', t.id)
       toggle.className = 'palette-toggle'
       toggle.textContent = '▾'
+      // 把手不是拖曳的起點：pointerdown 一冒泡到父列，拖曳的 pointer capture 會把 click 吃掉
+      toggle.addEventListener('pointerdown', (ev) => ev.stopPropagation())
       toggle.addEventListener('click', (ev) => {
         ev.stopPropagation()
-        const children = [...document.querySelectorAll('[data-palette-series]')]
-          .filter(el => el.getAttribute('data-parent-id') === t.id)
-        const collapsed = toggle.getAttribute('aria-expanded') === 'false'
-        for (const c of children) c.hidden = !collapsed
+        // 收合狀態記在父列上，顯示與否交給 filterPaletteItems 一處計算（搜尋與收合才不會互踩）
+        const collapsed = item.dataset.collapsed === '1'
+        item.dataset.collapsed = collapsed ? '' : '1'
         toggle.setAttribute('aria-expanded', collapsed ? 'true' : 'false')
         toggle.textContent = collapsed ? '▾' : '▸'
+        filterPaletteItems(document.getElementById('palette-search')?.value || '')
       })
-      toggle.setAttribute('aria-expanded', 'true')
+      if (collapsedParents.has(t.id)) {
+        item.dataset.collapsed = '1'
+        toggle.setAttribute('aria-expanded', 'false')
+        toggle.textContent = '▸'
+      } else {
+        toggle.setAttribute('aria-expanded', 'true')
+      }
       item.appendChild(toggle)
     }
     const nameEl = document.createElement('span')

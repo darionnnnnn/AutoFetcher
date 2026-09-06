@@ -26,6 +26,60 @@ import { isSuccess } from '../shared/record-status.js'
 import { parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
 
 
+// 重選時把選好的值寫回任務：沒動的值保留原本的 key 與名稱（紀錄靠 key），新值配新 key
+function pickSpecOf(pick) {
+  if (pick?.cell) return { cell: pick.cell }
+  if (pick?.block) return { block: { axis: pick.block.axis, index: pick.block.index, headerText: pick.block.headerText } }
+  return null
+}
+function sameSpec(a, b) {
+  return JSON.stringify(pickSpecOf(a)) === JSON.stringify(pickSpecOf(b))
+}
+function defaultFieldName(pick, n) {
+  if (pick?.cell) {
+    const r = pick.cell.row?.header || ''
+    const c = pick.cell.col?.header || ''
+    return (r && c) ? `${r} · ${c}` : (r || c || `值 ${n}`)
+  }
+  return pick?.block?.headerText || `值 ${n}`
+}
+function applyRepick(task, picks) {
+  if (picks.length === 0) return
+  const hadFields = Array.isArray(task.fields) && task.fields.length > 0
+  if (!hadFields && picks.length === 1) {
+    // 單值任務只換定位與規格，聚合方式沿用
+    const spec = pickSpecOf(picks[0])
+    if (!spec) return
+    task.mode = 'block'
+    task.spec = { ...(task.spec || {}), mode: 'block' }
+    delete task.spec.fields
+    task.spec.block = spec.cell
+      ? { cell: spec.cell }
+      : { ...spec.block, aggregate: task.spec?.block?.aggregate || 'sum' }
+    return
+  }
+  const aggregate = task.spec?.block?.aggregate
+    || (task.spec?.fields || []).find(f => f.block?.aggregate)?.block?.aggregate
+    || 'sum'
+  const oldSpecs = task.spec?.fields || []
+  const oldNames = new Map((task.fields || []).map(f => [f.key, f.name]))
+  const fields = []
+  const specFields = []
+  picks.forEach((pick, i) => {
+    const spec = pickSpecOf(pick)
+    if (!spec) return
+    const kept = oldSpecs.find(f => sameSpec(f, pick))
+    const key = kept ? kept.key : crypto.randomUUID().slice(0, 8)
+    const name = kept ? (oldNames.get(kept.key) || defaultFieldName(pick, i + 1)) : defaultFieldName(pick, i + 1)
+    fields.push({ key, name })
+    specFields.push(spec.cell ? { key, cell: spec.cell } : { key, block: { ...spec.block, aggregate } })
+  })
+  task.mode = 'block'
+  task.fields = fields
+  task.spec = { ...(task.spec || {}), mode: 'block', fields: specFields }
+  delete task.spec.block
+}
+
 // 由任務的擷取規格推出選取模式要預先勾回去的值（多值走 spec.fields，單值走 spec.block）
 function preselectOf(task) {
   if (!task || !task.spec) return undefined
@@ -332,6 +386,7 @@ export async function handleMessage(msg, sender) {
           return { ok: true }
         }
         task.locator = msg.locator
+        applyRepick(task, Array.isArray(msg.picks) ? msg.picks : [])
         await saveTask(task)
         return { ok: true }
       }

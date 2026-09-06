@@ -261,7 +261,8 @@ function setTarget(el) {
   // 不清掉會把 A 表的索引配上 B 表的定位一起送出去
   // 滑鼠落在「另一張表格」裡（不論停在表格本身或它的某一格）才算換表
   const hostTable = el && typeof el.closest === 'function' ? el.closest('table, [role="grid"], [role="table"]') : null
-  if (selectedList.length > 0 && pickedTableEl && hostTable && hostTable !== pickedTableEl && !pickedTableEl.contains(hostTable)) {
+  if (selectedList.length > 0 && pickedTableEl && hostTable && hostTable !== pickedTableEl &&
+      !pickedTableEl.contains(hostTable) && !hostTable.contains(pickedTableEl)) {
     clearPickedMarks(document)
     selectedList = []
     limitReached = false

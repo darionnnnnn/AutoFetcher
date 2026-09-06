@@ -187,8 +187,8 @@ test('抓完留下一筆診斷，說得出哪些值失敗', async () => {
   }))
   await fe.runTask(multi(), { slot: '2026-09-06T09:30', ...FAST })
   const diag = await st.getDiagList()
-  const entry = diag.find(d => JSON.stringify(d).includes('bank'))
+  const entry = diag.find(d => d.kind === 'fetch_fields')
   assert.ok(entry, '設定頁的診斷看不到多值抓取發生過什麼事')
-  assert.ok(JSON.stringify(entry).includes('k2') || JSON.stringify(entry).includes('美金賣出'),
-    '要說得出是哪個值失敗')
+  assert.equal(typeof entry.detail, 'string', '設定頁用字串串接顯示')
+  assert.ok(entry.detail.includes('美金賣出'), `要說得出是哪個值失敗：${entry.detail}`)
 })

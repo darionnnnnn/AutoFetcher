@@ -1,6 +1,6 @@
 // AutoFetcher 紀錄狀態共用模組 (record-status)
 
-export const SUCCESS_STATUSES = ['ok', 'fallback', 'late']
+const SUCCESS_STATUSES = ['ok', 'fallback', 'late']
 export const WARN_STATUSES = ['fallback', 'late', 'partial']
 export const RED_STATUSES = [
   'login_failed',
