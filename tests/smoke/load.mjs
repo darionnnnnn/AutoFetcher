@@ -197,6 +197,31 @@ try {
     console.log(`${browserName}:通知送出正常`)
   }
 
+  // 5b. 選取模式:真的在網頁上畫出 overlay,離開時收乾淨
+  const pickResult = await ext2.evaluate(async () => {
+    const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/*' })
+    const tabId = tabs[0].id
+    const out = {}
+    await chrome.tabs.sendMessage(tabId, { type: 'ENTER_PICK', purpose: 'task' })
+    const probe = () => chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => ({
+        overlay: !!document.querySelector('[data-af-overlay]'),
+        panel: (document.querySelector('[data-af-panel]')?.textContent || '').slice(0, 60)
+      })
+    }).then(r => r[0].result)
+    out.during = await probe()
+    await chrome.tabs.sendMessage(tabId, { type: 'EXIT_PICK' })
+    out.after = await probe()
+    return out
+  })
+  if (!pickResult.during?.overlay) errors.push('進入選取模式後頁面上沒有 overlay')
+  if (pickResult.after?.overlay) errors.push('離開選取模式後 overlay 沒有移除')
+  if (!pickResult.during?.panel) errors.push('選取模式面板沒有文字')
+  if (pickResult.during?.overlay && !pickResult.after?.overlay) {
+    console.log(`${browserName}:選取模式進出正常 (面板:${pickResult.during.panel.split('\n')[0]})`)
+  }
+
   await ext2.close()
   await pageUnderTest.close()
   await new Promise(r => server.close(r))

@@ -6,86 +6,164 @@
   <link rel="stylesheet" href="../theme.css">
   <style>
     * { box-sizing: border-box; }
-    body { margin: 0; padding: 12px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; color: #333; background: #f5f5f7; width: 360px; }
-    h2 { margin: 0 0 10px; font-size: 15px; }
-    form { display: flex; flex-direction: column; gap: 10px; }
-    label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: #555; }
-    input[type="text"], input[type="number"], select { width: 100%; padding: 5px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
-    input[readonly] { background: #eee; }
-    fieldset { border: 1px solid #ddd; border-radius: 4px; padding: 8px; margin: 0; display: flex; flex-direction: column; gap: 8px; }
-    legend { font-size: 12px; font-weight: 600; padding: 0 4px; }
+    body {
+      margin: 0;
+      padding: 12px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 13px;
+      color: var(--text);
+      background: var(--bg);
+      width: 360px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    h2 { margin: 0 0 10px; font-size: 15px; flex-shrink: 0; color: var(--text); }
+    form { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    .settings-body {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding-right: 2px;
+    }
+    label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--text-muted); }
+    input[type="text"], input[type="number"], select {
+      width: 100%;
+      padding: 5px 8px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 13px;
+      background: var(--surface);
+      color: var(--text);
+    }
+    input[readonly] { background: var(--hover); }
+    fieldset {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 8px;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    legend { font-size: 12px; font-weight: 600; padding: 0 4px; color: var(--text); }
     #weekdays, #card-types { display: flex; gap: 6px; flex-wrap: wrap; }
-    #weekdays label, #card-types label { display: inline-flex; flex-direction: row; align-items: center; cursor: pointer; }
-    #preview { padding: 6px 8px; background: #fff; border: 1px solid #ddd; border-radius: 4px; min-height: 20px; word-break: break-all; font-family: monospace; font-size: 12px; }
-    #errors { color: #d32f2f; font-size: 12px; white-space: pre-line; }
-    footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
-    button { padding: 6px 12px; border-radius: 4px; border: 1px solid #ccc; background: #fff; cursor: pointer; font-size: 13px; }
-    #save { background: #0071e3; border-color: #0071e3; color: #fff; }
+    #weekdays label, #card-types label { display: inline-flex; flex-direction: row; align-items: center; cursor: pointer; color: var(--text); }
+    #preview {
+      padding: 6px 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      min-height: 20px;
+      word-break: break-all;
+      font-family: monospace;
+      font-size: 12px;
+      color: var(--text);
+    }
+    #errors { color: var(--danger); font-size: 12px; white-space: pre-line; }
+    #block-summary { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+    footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding-top: 10px;
+      flex-shrink: 0;
+    }
+    button {
+      padding: 6px 12px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 13px;
+    }
+    button:hover { background: var(--hover); }
+    #save { background: var(--primary); border-color: var(--primary); color: var(--surface); }
+    [hidden] { display: none !important; }
   </style>
   <script type="module" src="./picker.js"></script>
 </head>
 <body>
   <h2>設定抓取任務</h2>
   <form id="picker-form" onsubmit="return false;">
-    <label>任務名稱<input type="text" id="name" placeholder="請輸入任務名稱"></label>
-    <label>目標網址<input type="text" id="url" readonly></label>
-    <label>數值類型
-      <select id="mode">
-        <option value="number" selected>數字</option>
-        <option value="text">文字</option>
-      </select>
-    </label>
-    <label>抓取策略
-      <select id="strategy">
-        <option value="auto" selected>自動</option>
-        <option value="regex">正規表達式</option>
-        <option value="attr">屬性</option>
-        <option value="child">子元素</option>
-        <option value="label">標籤</option>
-      </select>
-    </label>
-    <label>正規表達式<input type="text" id="regex" placeholder="策略為正規表達式時必填"></label>
-    <fieldset>
-      <legend>排程設定</legend>
-      <label>排程類型
-        <select id="schedule-type">
-          <option value="daily" selected>每日固定時間</option>
-          <option value="interval">固定間隔</option>
+    <div class="settings-body">
+      <label>任務名稱<input type="text" id="name" placeholder="請輸入任務名稱"></label>
+      <label>目標網址<input type="text" id="url" readonly></label>
+      <label>數值類型
+        <select id="mode">
+          <option value="number" selected>數字</option>
+          <option value="text">文字</option>
+          <option value="block">表格/清單區塊</option>
         </select>
       </label>
-      <label>執行時間（逗號分隔 HH:mm）<input type="text" id="times" value="09:00" placeholder="09:00, 15:00"></label>
-      <label>間隔時間（分鐘）<input type="number" id="every-minutes" value="15" min="1"></label>
-      <label>執行星期</label>
-      <div id="weekdays">
-        <label><input type="checkbox" value="1" checked>一</label>
-        <label><input type="checkbox" value="2" checked>二</label>
-        <label><input type="checkbox" value="3" checked>三</label>
-        <label><input type="checkbox" value="4" checked>四</label>
-        <label><input type="checkbox" value="5" checked>五</label>
-        <label><input type="checkbox" value="6">六</label>
-        <label><input type="checkbox" value="0">日</label>
-      </div>
-      <label>生效時段起（HH:mm）<input type="text" id="window-from" placeholder="09:00"></label>
-      <label>生效時段訖（HH:mm）<input type="text" id="window-to" placeholder="18:00"></label>
-    </fieldset>
-    <label>即時預覽</label>
-    <div id="preview"></div>
-    <div id="errors"></div>
-    <fieldset id="add-to-dashboard">
-      <legend>加入儀表板</legend>
-      <label>目標儀表板
-        <select id="dashboard-select">
-          <option value="none">不加入</option>
+      <fieldset id="block-section" hidden>
+        <legend>區塊設定</legend>
+        <div id="block-summary"></div>
+        <label>聚合方式
+          <select id="block-aggregate">
+            <option value="max">最大值</option>
+            <option value="min">最小值</option>
+            <option value="avg">平均</option>
+            <option value="sum" selected>加總</option>
+            <option value="count">筆數</option>
+          </select>
+        </label>
+      </fieldset>
+      <label>抓取策略
+        <select id="strategy">
+          <option value="auto" selected>自動</option>
+          <option value="regex">正規表達式</option>
+          <option value="attr">屬性</option>
+          <option value="child">子元素</option>
+          <option value="label">標籤</option>
         </select>
       </label>
-      <label>卡片型別</label>
-      <div id="card-types">
-        <label><input type="checkbox" value="number">數字</label>
-        <label><input type="checkbox" value="line">折線</label>
-        <label><input type="checkbox" value="bar">長條</label>
-        <label><input type="checkbox" value="table">表格</label>
-      </div>
-    </fieldset>
+      <label>正規表達式<input type="text" id="regex" placeholder="策略為正規表達式時必填"></label>
+      <fieldset>
+        <legend>排程設定</legend>
+        <label>排程類型
+          <select id="schedule-type">
+            <option value="daily" selected>每日固定時間</option>
+            <option value="interval">固定間隔</option>
+          </select>
+        </label>
+        <label>執行時間（逗號分隔 HH:mm）<input type="text" id="times" value="09:00" placeholder="09:00, 15:00"></label>
+        <label>間隔時間（分鐘）<input type="number" id="every-minutes" value="15" min="1"></label>
+        <label>執行星期</label>
+        <div id="weekdays">
+          <label><input type="checkbox" value="1" checked>一</label>
+          <label><input type="checkbox" value="2" checked>二</label>
+          <label><input type="checkbox" value="3" checked>三</label>
+          <label><input type="checkbox" value="4" checked>四</label>
+          <label><input type="checkbox" value="5" checked>五</label>
+          <label><input type="checkbox" value="6">六</label>
+          <label><input type="checkbox" value="0">日</label>
+        </div>
+        <label>生效時段起（HH:mm）<input type="text" id="window-from" placeholder="09:00"></label>
+        <label>生效時段訖（HH:mm）<input type="text" id="window-to" placeholder="18:00"></label>
+      </fieldset>
+      <label>即時預覽</label>
+      <div id="preview"></div>
+      <div id="errors"></div>
+      <fieldset id="add-to-dashboard">
+        <legend>加入儀表板</legend>
+        <label>目標儀表板
+          <select id="dashboard-select">
+            <option value="none">不加入</option>
+          </select>
+        </label>
+        <label>卡片型別</label>
+        <div id="card-types">
+          <label><input type="checkbox" value="number">數字</label>
+          <label><input type="checkbox" value="line">折線</label>
+          <label><input type="checkbox" value="bar">長條</label>
+          <label><input type="checkbox" value="table">表格</label>
+        </div>
+      </fieldset>
+    </div>
     <footer>
       <button type="button" id="test-now">立即測試</button>
       <button type="button" id="cancel">取消</button>

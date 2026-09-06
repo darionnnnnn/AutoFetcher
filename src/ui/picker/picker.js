@@ -3,6 +3,7 @@ import { MSG } from '../../shared/messages.js'
 import { getLayout, addCard } from '../../shared/layout-store.js'
 
 let currentCtx = null
+let currentBlock = null
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
 
 function getFormData() {
@@ -27,7 +28,19 @@ function getFormData() {
   const windowFrom = document.getElementById('window-from')?.value ?? ''
   const windowTo = document.getElementById('window-to')?.value ?? ''
 
-  return { name, url, mode, strategy, regex, scheduleType, times, weekdays, everyMinutes, windowFrom, windowTo }
+  const data = { name, url, mode, strategy, regex, scheduleType, times, weekdays, everyMinutes, windowFrom, windowTo }
+
+  if (mode === 'block') {
+    const agg = document.getElementById('block-aggregate')?.value || 'sum'
+    data.block = {
+      axis: currentBlock?.axis,
+      index: currentBlock?.index,
+      headerText: currentBlock?.headerText,
+      aggregate: agg
+    }
+  }
+
+  return data
 }
 
 export function validateForm(values) {
@@ -80,6 +93,9 @@ export function buildTask(values, locator, existing) {
   const id = existing?.id || crypto.randomUUID()
   const spec = { strategy: values.strategy }
   if (values.mode === 'text') spec.mode = 'text'
+  if (values.mode === 'block' && values.block) {
+    spec.block = values.block
+  }
   for (const k of ['regex', 'attr', 'childSel', 'labelText']) {
     if (values[k]) spec[k] = values[k]
   }
@@ -154,7 +170,35 @@ export function render(ctx) {
       if (t.schedule.window.from) document.getElementById('window-from').value = t.schedule.window.from
       if (t.schedule.window.to) document.getElementById('window-to').value = t.schedule.window.to
     }
+    if (t.spec?.block) {
+      currentBlock = { ...t.spec.block }
+      const aggEl = document.getElementById('block-aggregate')
+      if (aggEl && t.spec.block.aggregate) aggEl.value = t.spec.block.aggregate
+    }
   }
+
+  if (ctx?.blockInfo && (ctx.blockInfo.kind === 'table' || ctx.blockInfo.kind === 'grid')) {
+    const b = ctx.blockInfo
+    currentBlock = {
+      axis: b.axis,
+      index: b.index,
+      headerText: b.headerText,
+      rows: b.rows,
+      cols: b.cols,
+      kind: b.kind
+    }
+    const modeEl = document.getElementById('mode')
+    if (modeEl) modeEl.value = 'block'
+  } else if (!ctx?.task?.spec?.block) {
+    currentBlock = null
+    const modeEl = document.getElementById('mode')
+    if (modeEl && !ctx?.task && modeEl.value === 'block') {
+      modeEl.value = 'number'
+    }
+  }
+
+  bindModeEvents()
+  updateBlockSection()
 }
 
 // 卡片型別對應的預設尺寸
@@ -180,6 +224,52 @@ function applyDefaultCardTypes() {
     } else {
       cb.checked = (cb.value === 'number' || cb.value === 'line')
     }
+  }
+}
+
+/**
+ * 更新區塊設定區顯示與說明文字
+ */
+function updateBlockSection() {
+  const section = document.getElementById('block-section')
+  if (!section) return
+  const modeVal = document.getElementById('mode')?.value || 'number'
+  if (modeVal !== 'block') {
+    section.hidden = true
+    return
+  }
+
+  section.hidden = false
+  const summaryEl = document.getElementById('block-summary')
+  if (!summaryEl) return
+
+  // index 為 null 代表使用者只選到表格、還沒點任何一欄或一列，不能當成選了第 0 欄
+  if (currentBlock && (currentBlock.headerText || currentBlock.index !== undefined && currentBlock.index !== null)) {
+    const isRow = currentBlock.axis === 'row'
+    const targetDesc = currentBlock.headerText
+      ? `「${currentBlock.headerText}」這${isRow ? '一列' : '一欄'}`
+      : `第 ${Number(currentBlock.index) + 1} ${isRow ? '列' : '欄'}`
+
+    const prefix = (currentBlock.rows !== undefined && currentBlock.cols !== undefined)
+      ? `表格 ${currentBlock.rows} 列 × ${currentBlock.cols} 欄，`
+      : '表格，'
+    summaryEl.textContent = `${prefix}取${targetDesc}`
+  } else {
+    summaryEl.textContent = '請回到目標頁面重新選取，並在表格上點一欄或一列'
+  }
+}
+
+/**
+ * 綁定模式切換事件
+ */
+function bindModeEvents() {
+  const modeEl = document.getElementById('mode')
+  if (modeEl && !modeEl._modeEventsBound) {
+    modeEl.addEventListener('change', () => {
+      applyDefaultCardTypes()
+      updateBlockSection()
+    })
+    modeEl._modeEventsBound = true
   }
 }
 
@@ -220,12 +310,7 @@ export async function renderDashboardSection(task) {
   }
 
   applyDefaultCardTypes()
-
-  const modeEl = document.getElementById('mode')
-  if (modeEl && !modeEl._dashSectionBound) {
-    modeEl.addEventListener('change', applyDefaultCardTypes)
-    modeEl._dashSectionBound = true
-  }
+  bindModeEvents()
 }
 
 export async function handleSave() {
@@ -333,6 +418,7 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
   document.getElementById('save')?.addEventListener('click', () => handleSave())
   document.getElementById('cancel')?.addEventListener('click', () => window.close())
   document.getElementById('test-now')?.addEventListener('click', () => handleTestNow())
+  bindModeEvents()
 
   const search = typeof window !== 'undefined' ? window.location?.search : ''
   const params = new URLSearchParams(search || '')

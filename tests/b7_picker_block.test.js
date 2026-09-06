@@ -68,6 +68,17 @@ test('存檔時把軸、索引、表頭與聚合方式寫進 spec.block', async 
   assert.deepEqual(t.spec.block, { axis: 'col', index: 1, headerText: '數量', aggregate: 'sum' })
 })
 
+test('選到表格但沒點任何一格時,不得謊稱選了第 1 欄', async () => {
+  const { pk, doc } = await fresh()
+  pk.render({
+    ...blockCtx,
+    blockInfo: { kind: 'table', rows: 3, cols: 2, headers: ['日期', '數量'], axis: 'col', index: null, headerText: '' }
+  })
+  const summary = doc.getElementById('block-summary').textContent
+  assert.ok(!/第\s*1\s*欄/.test(summary), `沒選欄就不能說第 1 欄,實得:${summary}`)
+  assert.ok(/選取|點/.test(summary), `要提示使用者回去點一欄,實得:${summary}`)
+})
+
 test('手選 block 模式但沒有區塊資訊時,提示回頁面上點一欄', async () => {
   const { pk, doc } = await fresh()
   pk.render({ locator: { css: '#v' }, url: 'https://a.test/p', preview: 'x' })
