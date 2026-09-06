@@ -2,6 +2,7 @@
 import { getTask, saveTask, appendRecord } from '../shared/storage.js'
 import { MSG } from '../shared/messages.js'
 import { slotOf } from './scheduler.js'
+import { notify } from './notify.js'
 
 // 短暫等待輔助函式（非排程）
 function sleep(ms) {
@@ -227,8 +228,7 @@ export async function runTask(task, opts = {}) {
         if (streak >= 2) currentTask.suggestForeground = true
         await saveTask(currentTask)
 
-        await chrome.notifications.create(`${task.id}:not_found`, {
-          type: 'basic',
+        await notify(`${task.id}:not_found`, {
           title: `AutoFetcher: ${task.name}`,
           message: '擷取失敗：找不到目標元素'
         })

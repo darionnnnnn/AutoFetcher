@@ -19,6 +19,7 @@ import {
   runPrecheck,
   parsePrecheckName
 } from './precheck.js'
+import { notify } from './notify.js'
 
 // 支援測試比對任務 alarm 名稱正規表示式
 const origRegExpTest = RegExp.prototype.test
@@ -299,9 +300,7 @@ export async function handleContextMenu(info, tab) {
 
       const res = await chrome.tabs.sendMessage(tab.id, { type: MSG.DESCRIBE })
       if (!res || res.ok !== true) {
-        await chrome.notifications.create({
-          type: 'basic',
-          iconUrl: 'assets/icon-48.png',
+        await notify(null, {
           title: 'AutoFetcher',
           message: '請先在要抓取的內容上按右鍵'
         })
