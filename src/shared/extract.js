@@ -79,8 +79,9 @@ export function parseNumber(text) {
   // 全形數字 ０-９ 轉半形
   str = str.replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
 
-  // 會計負數判斷：整串被小括號包覆
+  // 會計負數判斷：整串被小括號包覆（繁中財務頁面常用全形括號，一併認）
   let isAccountingNegative = false
+  str = str.replace(/（/g, '(').replace(/）/g, ')')
   const parenMatch = str.match(/^\s*\(([^()]*)\)\s*$/)
   if (parenMatch) {
     isAccountingNegative = true

@@ -126,3 +126,10 @@ test('元素為 null 時回 not_found,不丟例外', () => {
   assert.equal(r.ok, false)
   assert.equal(r.error, 'not_found')
 })
+
+test('會計負數:全形括號也算負數(繁中財務頁面常見)', () => {
+  assert.equal(parseNumber('（50）'), -50)
+  assert.equal(parseNumber('（1,234）'), -1234)
+  assert.equal(parseNumber('(50)'), -50, '半形的行為不得改變')
+  assert.equal(parseNumber('（未提供）'), null, '括號裡沒有數字仍然是 null')
+})
