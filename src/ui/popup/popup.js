@@ -1,5 +1,5 @@
 // AutoFetcher 工具列 popup 控制器 (SPEC §12.2)
-import { getTasks, saveTask } from '../../shared/storage.js'
+import { getTasks, saveTask, getHealthMap, getMissedList, getLastValues } from '../../shared/storage.js'
 import { MSG } from '../../shared/messages.js'
 import { computeHealth } from '../../background/health.js'
 
@@ -188,11 +188,10 @@ if (typeof document !== 'undefined' && globalThis.chrome?.runtime?.id) {
   (async () => {
     try {
       const tasks = await getTasks()
-      const storageData = await chrome.storage.local.get(['health', 'missed', 'lastValues'])
-      const healthMap = (storageData && storageData.health && typeof storageData.health === 'object')
-        ? storageData.health
-        : {}
-      const missed = Array.isArray(storageData?.missed) ? storageData.missed : []
+      // UI 一律經 shared/storage，不直接碰 chrome.storage
+      const [healthMap, missed, lastValues] = await Promise.all([
+        getHealthMap(), getMissedList(), getLastValues()
+      ])
       const health = computeHealth(tasks, healthMap, missed)
 
       // 取得 alarms 下次執行時間
@@ -213,7 +212,6 @@ if (typeof document !== 'undefined' && globalThis.chrome?.runtime?.id) {
       }
 
       // 取得最後數值
-      const lastValues = storageData?.lastValues || {}
 
       render({ health, tasks, lastValues, nextRuns, healthMap })
 

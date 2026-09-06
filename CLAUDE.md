@@ -72,7 +72,9 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   (唯一入口、統一圖示、遵守通知偏好)。`iconUrl` 必須是 `chrome.runtime.getURL()` 的絕對網址。
 - **不要用 `executeScript({files})` 注入 content script**:它是 ES module,一律走 `background/inject.js`。
 - **不要為了讓測試好寫去改寫內建原型**:改測試,不要改實作(`tests/a4_conventions.test.js` 會擋)。
-- **不要在 `src/` 寫色碼字面值**:唯一豁免是 `content/picker-mode.js`(網頁沒有載入 theme.css)。
+- **不要在 `src/` 寫色碼字面值**:只有兩處豁免,都是拿不到 CSS 變數的執行環境——
+  `content/picker-mode.js`(注入在網頁上,網頁沒載入 theme.css)與
+  `background/health.js`(`setBadgeBackgroundColor` 只吃色碼字串)。
 - **不要用任務設定的網址判斷「現在在哪一頁」**:要讀 `chrome.tabs.get(tabId).url`(轉址後的實際位置)。
 - **不要把每日排程算出來的時間直接當 alarm**:算出來若已經過去(例如現在剛好在預檢與抓取之間),
   Chrome 會立刻觸發、alarm 隨即消失,要跳過這一輪排到下一次。

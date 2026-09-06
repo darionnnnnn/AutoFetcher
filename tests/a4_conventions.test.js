@@ -71,3 +71,26 @@ test('D4 守門:不得改寫內建原型', () => {
     .map(rel)
   assert.deepEqual(offenders, [], `不得猴補內建原型:${offenders.join(', ')}`)
 })
+
+test('UI 不得直接讀寫 chrome.storage(一律經 shared/storage)', () => {
+  const offenders = jsFiles()
+    .filter((p) => rel(p).startsWith('ui/'))
+    .filter((p) => /chrome\s*\.\s*storage\s*\./.test(read(p)))
+    .map(rel)
+  assert.deepEqual(offenders, [], `這些 UI 檔案直接碰了 chrome.storage:${offenders.join(', ')}`)
+})
+
+// 色碼字面值只有兩處豁免，兩處都是「拿不到 CSS 變數」的執行環境：
+//   content/picker-mode.js —— 注入在網頁上，網頁沒有載入 ui/theme.css
+//   background/health.js   —— chrome.action.setBadgeBackgroundColor 只吃色碼字串
+const COLOR_EXEMPT = ['content/picker-mode.js', 'background/health.js']
+
+test('D12 守門:色碼字面值只准出現在 theme.css 與兩處已記錄的豁免', () => {
+  const offenders = []
+  for (const p of [...jsFiles(), ...walk(SRC, (n) => n.endsWith('.html'))]) {
+    if (COLOR_EXEMPT.includes(rel(p))) continue
+    const hits = read(p).match(/#[0-9a-fA-F]{3,8}\b/g) || []
+    if (hits.length > 0) offenders.push(`${rel(p)}(${hits.length})`)
+  }
+  assert.deepEqual(offenders, [], `顏色一律走 theme.css 變數:${offenders.join(', ')}`)
+})

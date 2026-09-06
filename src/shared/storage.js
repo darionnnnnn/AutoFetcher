@@ -375,6 +375,12 @@ export async function getHealthMap() {
   return (res.health && typeof res.health === 'object') ? res.health : {}
 }
 
+// 取得各任務最後一次抓到的值（popup 顯示用）
+export async function getLastValues() {
+  const res = await chrome.storage.local.get('lastValues')
+  return res.lastValues && typeof res.lastValues === 'object' ? res.lastValues : {}
+}
+
 // 取得補抓清單
 export async function getMissedList() {
   const res = await chrome.storage.local.get('missed')
