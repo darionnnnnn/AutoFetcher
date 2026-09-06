@@ -111,13 +111,20 @@
     會滑出時段末端,把本來排定合法的最後一格丟掉。
   - 補建 alarm 的地方只有兩處(`scheduler.rebuildAlarms` 與看門狗),兩者共用同一個 `nextIntervalRun`。
   - interval 任務**不進錯過清單**(一個週末可累積上百槽,補抓沒有意義);睡醒後從下一個對齊槽繼續。
+- **手動抓取(`reason: 'manual'`,來自任務頁與 popup 的「立即抓取」)**與排程觸發走同一個 `runTask`,但四點不同:
+  ①**不查也不寫冪等帳本**——手動的 slot 是「當下這一分鐘」,寫進帳本會讓同一分鐘真正排定的 alarm 被擋掉,
+  錯過清單也會誤判那一槽跑過;代價是同一分鐘按兩次會有兩筆紀錄(樞紐表同列取最新的成功值)。
+  ②**不重試**,任何結果都立刻寫紀錄,使用者才看得到失敗。
+  ③**不累加 `notFoundStreak`、不發通知**(使用者正看著畫面)。
+  ④`res.status` 照原樣寫入,手動抓到欄位漂移仍是 `fallback`。
+  `RUN_TASK` 回傳 `{ok, outcome: 'done'|'failed', status, value, error}`,UI 在按鈕旁就地顯示。
 - 時區:一律用瀏覽器本地時間;紀錄同時存 ISO 字串(含 offset)與「排程槽」`slot`(`YYYY-MM-DDTHH:mm` 本地)。
 
 ### §4.1 排程穩定性(MV3 的坑與對策)
 
 | 風險 | 現象 | 對策 |
 |---|---|---|
-| service worker 被殺 | 閒置 30 秒或執行 5 分鐘就被回收,抓到一半消失 | 抓取期間每 20 秒呼叫一個輕量 API(`runtime.getPlatformInfo`)延壽;流程狀態機(`queued → loading → extracting → done`)寫 `storage.session`,worker 重啟時把卡在中途超過 3 分鐘的 run 標 `interrupted` 並重新排入 |
+| service worker 被殺 | 閒置 30 秒或執行 5 分鐘就被回收,抓到一半消失 | 抓取開始時呼叫一次輕量 API(`runtime.getPlatformInfo`)延壽(**現況只呼叫一次,不是週期性續命**,見 BACKLOG);流程狀態機(`queued → loading → extracting → done`)寫 `storage.session`,worker 重啟時把卡在中途超過 3 分鐘的 run 標 `interrupted` 並重新排入 |
 | alarms 在擴充功能更新 / 重新載入後消失 | 更新後所有任務靜默停擺 | `runtime.onInstalled`、`runtime.onStartup` 一律 `rebuildAlarms()`;另有看門狗(下) |
 | alarm 觸發不準或重複 | 可能晚 0~60 秒、極少數重複觸發;補抓與正常觸發撞在同一槽 | **執行帳本** `runs[taskId][slot] = status`:同一 `slot` 只執行一次,重複觸發直接略過(冪等) |
 | 電腦睡眠 | alarm 在喚醒時才響,可能已晚數小時 | 觸發時算 `late = now - slot`;≤ 任務的 `lateTolerance`(預設 30 分鐘)照抓並標 `late`;超過則進錯過清單交使用者決定(§4 補抓) |
@@ -434,8 +441,21 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
 
 - 狀態由 background 的 `health` 匯總;任何 run / 預檢 / 看門狗結束都重算並 `setBadgeText` / `setBadgeBackgroundColor` / `setIcon`。
 - 使用者在 popup 或 Report 看過該項(點開)即標已讀,黃/紅計數減少;問題真正解決(下次成功)才回綠。
-- **現況**:紅燈來自預檢失敗與站台登入失敗(`health['site:<origin>']`);黃燈來自 `partial` 與錯過清單。
-  正式抓取失敗目前不寫 health,`setIcon` 的圖示變體也還沒接(見 BACKLOG)。
+- **每寫一筆紀錄就寫一次 health**(`fetcher.js` 的 `writeRecord`,全檔唯一一處),對應表由
+  `shared/record-status.js` 的 `healthStatusOf` 提供,`background/health.js` 的紅/黃集合也引用同一份,
+  不得各自維護:
+
+  | 紀錄 status | health status | 燈號 |
+  |---|---|---|
+  | `ok` | `ok` | 綠 |
+  | `fallback` / `late` / `partial` | 同名 | 黃 |
+  | `not_found` | `selector_lost` | 紅 |
+  | `parse_error` / `login_failed` | 同名 | 紅 |
+  | `error` | `failed` | 紅 |
+
+  **抓取成功會把 health 寫回 `ok`**:曾經失敗過的任務不會再永遠停在紅燈(舊行為只有預檢會清)。
+  health 寫在**父任務 id** 上,卡片以子序列 id 當來源時要先取父 id 才查得到。
+- `setIcon` 的圖示變體還沒接(見 BACKLOG)。
 - 圖示 `title`(滑鼠停留)顯示一行摘要:「2 個任務異常:A 無法登入、B 找不到元素」。
 
 ### §12.2 popup

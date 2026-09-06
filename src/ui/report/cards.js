@@ -5,7 +5,8 @@ import { buildSeries, resolvePeriod, latest, pivot, effectiveTimeOf } from './se
 // 樞紐表未指定列數上限時的預設(避免長時間區間渲染上千列)
 const DEFAULT_PIVOT_ROWS = 50;
 import { lineChart, barChart, gauge, sparkline } from './charts.js';
-import { isSuccess } from '../../shared/record-status.js';
+import { isSuccess, isRed, isWarn } from '../../shared/record-status.js';
+import { parentIdOf } from '../../shared/series-index.js';
 
 const SUPPORTED_TYPES = new Set(['number', 'line', 'bar', 'table', 'gauge', 'text', 'status']);
 
@@ -103,9 +104,12 @@ function createCardShell(card, ctx) {
 function renderNumberCard(card, ctx, { cardEl, bodyEl }) {
   const taskId = card.source?.[0]?.taskId;
   const { current, prev, prevDay } = taskId ? latest(ctx.records, taskId, ctx.today) : { current: null, prev: null, prevDay: null };
-  const health = taskId ? ctx.health?.[taskId] : null;
+  // health 掛在父任務上（一個任務可以有多個值，卡片來源可能是子序列 id）
+  const health = taskId ? ctx.health?.[parentIdOf(taskId)] : null;
 
-  const isFailed = (current && !isSuccess(current)) || (health && health.status && !isSuccess(health));
+  // 只有「最新一筆不成功」或「health 是紅燈」才蓋掉值；
+  // 黃燈（備援、遲到、只抓到部分）照樣顯示抓到的值，原因放 title
+  const isFailed = (current && !isSuccess(current)) || isRed(health);
   const hasValidValue = !isFailed && current != null && typeof current.value === 'number' && Number.isFinite(current.value);
 
   const displayEl = document.createElement('div');
@@ -116,6 +120,10 @@ function renderNumberCard(card, ctx, { cardEl, bodyEl }) {
 
   if (hasValidValue) {
     valEl.textContent = formatNumber(current.value, card.options?.decimals);
+    // 黃燈仍顯示值，但要讓使用者看得到這個值是怎麼來的
+    if (isWarn(health) && health?.reason) {
+      valEl.setAttribute('title', health.reason);
+    }
     displayEl.appendChild(valEl);
 
     if (card.options?.unit) {

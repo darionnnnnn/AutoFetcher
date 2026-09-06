@@ -324,6 +324,8 @@ test('只抓到部分時數值卡照顯示值，原因放 title', async () => {
   const el = CR.renderCard(numCard(), ctx)
   assert.ok(el.textContent.includes('88'), `黃燈不可把值蓋掉：${el.textContent}`)
   assert.ok(!el.textContent.includes('—'))
+  assert.equal(el.querySelector('.card-number-value').getAttribute('title'), '只抓到部分',
+    '黃燈要讓使用者看得到值是怎麼來的')
 })
 
 test('紅燈仍顯示破折號', async () => {
