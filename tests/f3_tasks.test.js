@@ -312,11 +312,12 @@ test('CATCH_UP_ONE 與 SKIP_ONE 訊息在 background 有處理', async () => {
   assert.deepEqual(res2, { ok: true })
 })
 
-test('messages.js 有三個新訊息型別', async () => {
+test('messages.js 有補抓與選取模式的訊息型別', async () => {
   const { MSG } = await import('../src/shared/messages.js?t=' + Math.random())
   assert.equal(MSG.CATCH_UP_ONE, 'CATCH_UP_ONE')
   assert.equal(MSG.SKIP_ONE, 'SKIP_ONE')
-  assert.equal(MSG.REPICK, 'REPICK')
+  assert.equal(MSG.ENTER_PICK, 'ENTER_PICK')
+  assert.equal(MSG.PICKED, 'PICKED')
 })
 
 // ---- Picker 以 taskId 開啟 ----

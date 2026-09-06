@@ -1,5 +1,5 @@
 // AutoFetcher MV3 Background Service Worker 入口總接線
-import { init as initStorage, getTask } from '../shared/storage.js'
+import { init as initStorage, getTask, saveTask } from '../shared/storage.js'
 import { MSG } from '../shared/messages.js'
 import * as diag from '../shared/diag.js'
 import {
@@ -19,7 +19,6 @@ import {
   runPrecheck,
   parsePrecheckName
 } from './precheck.js'
-import { notify } from './notify.js'
 import { injectContent } from './inject.js'
 
 
@@ -72,13 +71,18 @@ function getDailySlot(task, index) {
   return `${y}-${m}-${day}T${h.padStart(2, '0')}:${min.padStart(2, '0')}`
 }
 
+// 短暫等待輔助函式
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 // 建立右鍵選單項目
-async function setupContextMenus() {
+export async function setupContextMenus() {
   try {
     await chrome.contextMenus.removeAll()
     chrome.contextMenus.create({ id: 'af-root', title: 'AutoFetcher', contexts: ['all'] })
-    chrome.contextMenus.create({ id: 'af-capture', parentId: 'af-root', title: '抓取此文字/數值', contexts: ['all'] })
-    chrome.contextMenus.create({ id: 'af-capture-block', parentId: 'af-root', title: '抓取此區塊', contexts: ['all'] })
+    chrome.contextMenus.create({ id: 'af-pick', parentId: 'af-root', title: '選取要抓的內容', contexts: ['all'] })
+    chrome.contextMenus.create({ id: 'af-site-login', parentId: 'af-root', title: '設定此站台登入', contexts: ['all'] })
     chrome.contextMenus.create({ id: 'af-open-report', parentId: 'af-root', title: '開啟 AutoFetcher 報表', contexts: ['all'] })
   } catch {}
 }
@@ -205,16 +209,68 @@ export async function handleMessage(msg, sender) {
       return { ok: true }
     }
 
-    if (msg.type === MSG.REPICK) {
-      const { task } = await getValidTask(msg.taskId)
-      if (task?.url) {
-        const tab = await chrome.tabs.create({ url: task.url })
-        if (tab?.id) {
-          try {
-            await chrome.tabs.sendMessage(tab.id, { type: MSG.REPICK, taskId: msg.taskId })
-          } catch {}
-        }
+    if (msg.type === MSG.PICKED) {
+      if (msg.cancelled === true) {
+        return { ok: true }
       }
+
+      if (msg.purpose === 'task') {
+        const payload = {
+          locator: msg.locator,
+          preview: msg.preview,
+          previewValue: msg.previewValue,
+          blockInfo: msg.blockInfo,
+          tabId: sender?.tab?.id,
+          url: sender?.tab?.url
+        }
+        const ctx = encodeURIComponent(JSON.stringify(payload))
+        const base = typeof chrome.runtime?.getURL === 'function'
+          ? await chrome.runtime.getURL('ui/picker/picker.html')
+          : 'ui/picker/picker.html'
+
+        await chrome.windows.create({
+          url: `${base}?ctx=${ctx}`,
+          type: 'popup',
+          width: 480,
+          height: 760
+        })
+        return { ok: true }
+      }
+
+      if (msg.purpose === 'repick') {
+        const task = await getTask(msg.taskId)
+        if (!task) {
+          return { ok: true }
+        }
+        task.locator = msg.locator
+        await saveTask(task)
+        return { ok: true }
+      }
+
+      return { ok: true }
+    }
+
+    if (msg.type === MSG.ENTER_PICK) {
+      const task = await getTask(msg.taskId)
+      if (!task) {
+        return { ok: false }
+      }
+      const tab = await chrome.tabs.create({ url: task.url, active: true })
+      if (!tab?.id) return { ok: false }
+      const pollMs = msg.pollMs ?? 250
+      const loadTimeoutMs = msg.loadTimeoutMs ?? 30000
+      let tabInfo = await chrome.tabs.get(tab.id)
+      const loadStart = Date.now()
+      while (tabInfo?.status !== 'complete' && Date.now() - loadStart < loadTimeoutMs) {
+        await sleep(pollMs)
+        tabInfo = await chrome.tabs.get(tab.id)
+      }
+      await injectContent(tab.id)
+      await chrome.tabs.sendMessage(tab.id, {
+        type: MSG.ENTER_PICK,
+        purpose: msg.purpose || 'repick',
+        taskId: msg.taskId
+      })
       return { ok: true }
     }
 
@@ -280,38 +336,12 @@ export async function handleContextMenu(info, tab) {
       return
     }
 
-    if (info.menuItemId === 'af-capture' || info.menuItemId === 'af-capture-block') {
+    if (info.menuItemId === 'af-pick' || info.menuItemId === 'af-site-login') {
       if (!tab?.id) return
-
       await injectContent(tab.id)
-
-      const res = await chrome.tabs.sendMessage(tab.id, { type: MSG.DESCRIBE })
-      if (!res || res.ok !== true) {
-        await notify(null, {
-          title: 'AutoFetcher',
-          message: '請先在要抓取的內容上按右鍵'
-        })
-        return
-      }
-
-      const payload = {
-        locator: res.locator,
-        preview: res.preview,
-        previewValue: res.previewValue,
-        tabId: tab.id,
-        url: tab.url
-      }
-      const ctx = encodeURIComponent(JSON.stringify(payload))
-      const base = typeof chrome.runtime?.getURL === 'function'
-        ? await chrome.runtime.getURL('ui/picker/picker.html')
-        : 'ui/picker/picker.html'
-
-      await chrome.windows.create({
-        url: `${base}?ctx=${ctx}`,
-        type: 'popup',
-        width: 480,
-        height: 640
-      })
+      const purpose = info.menuItemId === 'af-pick' ? 'task' : 'login-user'
+      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose })
+      return
     }
   } catch {}
 }

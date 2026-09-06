@@ -1,6 +1,7 @@
 import { MSG } from '../shared/messages.js'
 import { describe, resolve } from '../shared/selector.js'
 import { extractValue, parseNumber } from '../shared/extract.js'
+import { enterPickMode, exitPickMode } from './picker-mode.js'
 
 // 記住使用者最後右鍵點擊的元素
 let lastTarget = null
@@ -94,8 +95,19 @@ if (!globalThis.__afContentLoaded) {
       return true
     }
 
-    if (msg.type === MSG.REPICK) {
-      sendResponse({ ok: false, reason: 'unsupported' })
+    if (msg.type === MSG.ENTER_PICK) {
+      enterPickMode({
+        purpose: msg.purpose,
+        taskId: msg.taskId,
+        initialTarget: lastTarget
+      })
+      sendResponse({ ok: true })
+      return true
+    }
+
+    if (msg.type === MSG.EXIT_PICK) {
+      exitPickMode()
+      sendResponse({ ok: true })
       return true
     }
   })

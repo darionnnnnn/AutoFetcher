@@ -375,15 +375,20 @@ test('storage 提供任務紀錄筆數查詢', async () => {
 
 // ---- 14. 重新選取要有可見結果 ----
 
-test('按重新選取會開啟該任務的目標頁', async () => {
+test('按重新選取會請 background 開啟目標頁並進入選取模式', async () => {
   const { c, doc } = await fresh()
   const ts = await import('../src/ui/report/tasks.js?t=' + Math.random())
   ts.renderTasks([task('t1', '電費')], {}, [])
   doc.querySelector('[data-task-id="t1"] [data-action="repick"]').click()
   await new Promise(r => setTimeout(r, 40))
-  const opened = c.__calls.filter(x => x.api === 'tabs.create')
-  assert.ok(opened.some(x => String(x.args[0].url).includes('x.test/t1')),
-    `應開啟目標頁，實得 ${JSON.stringify(opened.map(o => o.args[0]))}`)
+  // UI 不自己開分頁也不自己注入（舊版這樣做，因為沒注入所以永遠失敗）；
+  // 一律交給 background，它才有 scripting 權限與注入流程。
+  const sent = c.__calls.filter(x => x.api === 'runtime.sendMessage').map(x => x.args[0])
+  const enter = sent.find(m => m?.type === 'ENTER_PICK')
+  assert.ok(enter, `應送出 ENTER_PICK，實得 ${JSON.stringify(sent)}`)
+  assert.equal(enter.taskId, 't1')
+  assert.equal(enter.purpose, 'repick')
+  assert.equal(c.__calls.filter(x => x.api === 'tabs.create').length, 0, 'UI 不該自己開分頁')
 })
 
 test('content 不支援選取模式時任務頁顯示提示', async () => {
