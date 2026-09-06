@@ -43,7 +43,25 @@ test('ARIA 表格(role=grid/table)也判定為 table', () => {
     <div role="row"><span role="cell">1</span><span role="cell">2</span></div></div>`))
   assert.equal(r.kind, 'table')
   assert.equal(r.cols, 2)
+  assert.equal(r.rows, 2)
   assert.deepEqual(r.headers, ['A', 'B'])
+})
+
+test('ARIA 表格沒有表頭時,欄數仍要從資料列(role=cell)數出來', () => {
+  const r = detectKind(el(`<div role="table">
+    <div role="row"><span role="cell">1</span><span role="cell">2</span><span role="cell">3</span></div>
+    <div role="row"><span role="cell">4</span><span role="cell">5</span><span role="cell">6</span></div></div>`))
+  assert.equal(r.kind, 'table')
+  assert.equal(r.cols, 3, 'role="cell" 也是資料格,不能只認 gridcell')
+  assert.equal(r.rows, 2)
+  assert.deepEqual(r.headers, [])
+})
+
+test('role=gridcell 一樣要算進欄數', () => {
+  const r = detectKind(el(`<div role="grid">
+    <div role="row"><span role="gridcell">1</span><span role="gridcell">2</span></div>
+    <div role="row"><span role="gridcell">3</span><span role="gridcell">4</span></div></div>`))
+  assert.equal(r.cols, 2)
 })
 
 test('ul / ol 判定為 list 並回報項目數', () => {
@@ -68,6 +86,14 @@ test('子節點結構不一致的容器不算 grid', () => {
     <div><span>b</span><span>c</span></div>
     <div><span>d</span><span>e</span><span>f</span></div></div>`))
   assert.notEqual(r.kind, 'grid')
+})
+
+test('每列只有一欄的容器不算 grid(那只是普通的區塊排版)', () => {
+  const r = detectKind(el(`<div>
+    <div><span>甲</span></div>
+    <div><span>乙</span></div>
+    <div><span>丙</span></div></div>`))
+  assert.notEqual(r.kind, 'grid', '單欄不成表格,聚合也沒有意義')
 })
 
 test('只有兩個同構子節點不算 grid(太容易誤判)', () => {
