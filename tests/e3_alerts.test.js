@@ -42,6 +42,7 @@ test('deltaPct:與前一筆成功紀錄相比,漲跌超過設定值才命中', (
   assert.deepEqual(ids(evaluateAlerts(t, ok(130), [ok(100)])), ['a1'], '漲 30% 命中')
   assert.deepEqual(ids(evaluateAlerts(t, ok(70), [ok(100)])), ['a1'], '跌 30% 也要命中')
   assert.deepEqual(ids(evaluateAlerts(t, ok(110), [ok(100)])), [], '漲 10% 不命中')
+  assert.deepEqual(ids(evaluateAlerts(t, ok(120), [ok(100)])), ['a1'], '剛好 20% 要命中(門檻是大於等於)')
 })
 
 test('deltaPct:中間夾著失敗紀錄時,要跟最近一筆「成功」的比', () => {
@@ -59,6 +60,18 @@ test('deltaPct:沒有前一筆成功紀錄時不命中,也不得拋例外', () =
 test('deltaPct:前一筆是 0 時不命中(除以 0 沒有意義)', () => {
   const t = task([{ id: 'a1', type: 'deltaPct', value: 20, enabled: true }])
   assert.deepEqual(ids(evaluateAlerts(t, ok(5), [ok(0)])), [])
+})
+
+test('deltaPct:前一筆是負值時,幅度要用絕對值算(會計負數是支援的)', () => {
+  const t = task([{ id: 'a1', type: 'deltaPct', value: 20, enabled: true }])
+  assert.deepEqual(ids(evaluateAlerts(t, ok(-130), [ok(-100)])), ['a1'], '從 -100 變 -130 是 30% 變動')
+  assert.deepEqual(ids(evaluateAlerts(t, ok(-110), [ok(-100)])), [], '從 -100 變 -110 只有 10%')
+})
+
+test('eq:大數也要能判定相等(絕對誤差門檻對大數太嚴)', () => {
+  const t = task([{ id: 'a1', type: 'eq', value: 1e10, enabled: true }])
+  assert.deepEqual(ids(evaluateAlerts(t, ok(1e10), [])), ['a1'])
+  assert.deepEqual(ids(evaluateAlerts(t, ok(1e10 + 1), [])), [], '差 1 就不是相等')
 })
 
 // ---- 連續失敗 ----
