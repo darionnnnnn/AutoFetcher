@@ -264,7 +264,29 @@ function createTaskRow(t) {
   runBtn.dataset.action = 'run'
   runBtn.textContent = '立即抓取'
   runBtn.addEventListener('click', async () => {
-    await chrome.runtime.sendMessage({ type: MSG.RUN_TASK, taskId: t.id })
+    // 每一列只有一個結果位置，重複按就地更新
+    const showResult = (msg) => {
+      let el = row.querySelector('.task-run-result')
+      if (!el) {
+        el = document.createElement('span')
+        el.className = 'task-run-result'
+        runBtn.after(el)
+      }
+      el.textContent = msg
+    }
+    runBtn.disabled = true
+    try {
+      const res = await chrome.runtime.sendMessage({ type: MSG.RUN_TASK, taskId: t.id })
+      if (res && res.outcome === 'done') {
+        showResult(res.value !== null && res.value !== undefined ? `抓到 ${res.value}` : '抓到值')
+      } else {
+        showResult(`失敗：${res?.error || res?.status || ''}`.trim())
+      }
+    } catch (err) {
+      showResult(`失敗：${err?.message || String(err)}`)
+    } finally {
+      runBtn.disabled = false
+    }
   })
   actionsEl.appendChild(runBtn)
 

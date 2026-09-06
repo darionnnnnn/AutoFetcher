@@ -195,9 +195,13 @@ async function freshMain() {
   return { c, st }
 }
 
+// 走真實的 onMessage 契約：監聽器回傳 true，答案由 sendResponse 回呼送出
 function sendTo(c, msg) {
-  const listeners = [...c.runtime.onMessage._listeners]
-  return listeners[0](msg, {}, () => {})
+  const listener = [...c.runtime.onMessage._listeners][0]
+  return new Promise((resolve, reject) => {
+    const ret = listener(msg, {}, resolve)
+    if (ret !== true) reject(new Error('onMessage 監聽器必須回傳 true，非同步回覆才不會被丟掉'))
+  })
 }
 
 test('RUN_TASK 回傳抓取結果，讓 UI 能就地顯示', async () => {
@@ -223,8 +227,9 @@ test('RUN_TASK 失敗時回傳 failed 與原因', async () => {
 test('RUN_TASK 一律以 manual 執行（__testOpts 不得覆蓋 reason）', async () => {
   const { c, st } = await freshMain()
   await st.saveTask(task())
+  c.__setTabResponder(() => ({ ok: true, value: 9, raw: '9', status: 'ok', strategyUsed: 'auto', layer: 'css' }))
   await c.storage.local.set({ runs: { t1: {} } })
-  const res = await sendTo(c, { type: 'RUN_TASK', taskId: 't1', __testOpts: FAST })
+  const res = await sendTo(c, { type: 'RUN_TASK', taskId: 't1', __testOpts: { ...FAST, reason: 'scheduled' } })
   assert.equal(res.outcome, 'done')
   const runs = (await c.storage.local.get('runs')).runs || {}
   assert.deepEqual(runs.t1, {}, 'manual 不寫帳本')

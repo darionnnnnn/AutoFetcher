@@ -22,6 +22,7 @@ import {
 } from './precheck.js'
 import { injectContent } from './inject.js'
 import { scheduleSiteCheck, runSiteCheck } from './sitecheck.js'
+import { isSuccess } from '../shared/record-status.js'
 
 
 // 取任務並檢查存在與啟用狀態（共用小函式）
@@ -214,10 +215,21 @@ export async function handleMessage(msg, sender) {
 
     if (msg.type === MSG.RUN_TASK) {
       const { task } = await getValidTask(msg.taskId)
-      if (task) {
-        await runTask(task, { slot: slotOf(Date.now()), ...(msg.__testOpts || {}) })
+      if (!task) {
+        return { ok: false, outcome: 'failed', error: '找不到任務' }
       }
-      return { ok: true }
+      const record = await runTask(task, {
+        slot: slotOf(Date.now()),
+        ...(msg.__testOpts || {}),
+        reason: 'manual'
+      })
+      if (!record) {
+        return { ok: true, outcome: 'failed', status: 'error', error: '沒有結果' }
+      }
+      if (isSuccess(record)) {
+        return { ok: true, outcome: 'done', status: record.status, value: record.value }
+      }
+      return { ok: true, outcome: 'failed', status: record.status, error: record.error || '' }
     }
 
     if (msg.type === MSG.REBUILD_ALARMS) {
