@@ -119,13 +119,16 @@ test('rebuildAlarms:daily 三個時間建三個 alarm,且不得使用 periodInMi
   }
 })
 
-test('rebuildAlarms:interval 用 periodInMinutes', async () => {
+// AF-4:interval 改為對齊的 one-shot alarm,原「用 periodInMinutes」的斷言已反轉,
+// 詳細行為見 tests/d15_interval_wiring.test.js
+test('rebuildAlarms:interval 用對齊的 when,不用 periodInMinutes', async () => {
   const { st, sc } = await fresh()
   await st.saveTask(interval('i1', 15))
   await sc.rebuildAlarms()
   const all = await chrome.alarms.getAll()
   assert.equal(all.length, 1)
-  assert.equal(all[0].periodInMinutes, 15)
+  assert.equal(all[0].periodInMinutes, undefined)
+  assert.ok(all[0].scheduledTime > Date.now())
 })
 
 test('rebuildAlarms:停用的任務不建 alarm', async () => {
