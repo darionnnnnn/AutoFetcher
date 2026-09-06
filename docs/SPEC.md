@@ -152,8 +152,9 @@
 
 ## §5 儲存
 
-- 主資料:`chrome.storage.local`
-  - `tasks: Task[]`、`sites: Record<origin, Site>`、`records: Record<YYYY-MM-DD, Record[]>`
+- 主資料:`chrome.storage.local`,`schemaVersion` 目前為 **2**
+  - `tasks: Task[]`、`sites: Record<origin, Site>`、紀錄以 `rec:<YYYY-MM-DD>` 為鍵
+  - 其他鍵:`runs`(冪等帳本)、`missed`、`health`、`diag`、`layout`、`alertLog`、`cryptoKey`、`settings`;`storage.session.inflight`
   - 保留天數預設 365,超過自動刪最舊(設定可調)。
 - 檔案匯出(**只在使用者手動觸發**,不自動下載):
   - Report 設定頁「匯出」區:選日期範圍(單日 / 本月 / 全部)與格式(JSON 日檔、CSV、獨立 HTML 報表 §8.5),
@@ -164,7 +165,7 @@
     (`@media print` 下卡片不跨頁截斷)。
   - 擴充功能無法自行寫任意路徑,自動落地方案(File System Access / Native host)列 BACKLOG。
 - 設定匯出/匯入(換機):
-  - 匯出 `autofetcher-settings.json`:`tasks`、`sites`(密碼**預設不含**,勾選「含密碼」時以匯出時輸入的密語 AES-GCM 加密)、
+  - 匯出 `autofetcher-settings.json`:`tasks`、`sites`(密碼**預設不含**;勾「含密碼」時以匯出時輸入的密語 AES-GCM 加密,見 §6)、
     Report 版面(§8)。不含 `records`(歷史另有日檔)。
   - 匯入:同 `taskId` 覆蓋、新 id 新增;匯入後重建所有 alarms;若含加密密碼則要求輸入密語。
   - 歷史匯入:Report 頁可選多個日檔 JSON 併回 `records`(同 taskId + capturedAt 去重,既有紀錄不被覆蓋);
@@ -184,7 +185,12 @@
   登入頁判定(URL 前綴 或 密碼欄存在)。三個選擇器沒選齊不給存(存了也只會在抓取時失敗)。
 - 密碼只存 `chrome.storage.local`,以 WebCrypto AES-GCM 加密(`shared/crypto.js`),
   金鑰自動產生後存於同一 storage(**僅防誤讀,不防同機惡意程式**;設定視窗與設定頁都明示)。
-  不使用 `storage.sync`。設定匯出**一律不含密碼**——本機金鑰的密文換一台機器也解不開。
+  不使用 `storage.sync`。
+- **設定匯出**:預設不含密碼(連密文都不放)。勾「含密碼」時,先用本機金鑰解回明文、
+  再用使用者輸入的**密語**重新加密放進 `secrets`;匯入端以密語解開後,**用該機器的本機金鑰重新加密**
+  寫成 `passwordEnc`——storage 內任何時候都不留明文。密語錯誤則整批不寫入。
+- **舊格式遷移**(`schemaVersion` 1 → 2,`storage.init` 做一次):
+  `loginPageUrlPrefix` → `loginCheck`;明文 `password` → 加密成 `passwordEnc` 並刪除原欄位。
 - 抓取流程(`background/login.js`,在等待載入之後、注入擷取之前):
   1. 讀**分頁被轉址之後的實際網址**判斷是不是停在登入頁。
      (不能用任務設定的網址——那是 AF-3 之前的 bug,`login_failed` 因此從未真的出現過。)

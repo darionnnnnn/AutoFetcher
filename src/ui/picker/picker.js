@@ -140,6 +140,8 @@ export function buildTask(values, locator, existing) {
   const spec = { strategy: values.strategy }
   if (values.mode === 'text') spec.mode = 'text'
   if (values.mode === 'block' && values.block) {
+    // extract.js 是看 spec.mode 分派的，少了這一行會落回數值策略鏈、抓到整張表的第一個數字
+    spec.mode = 'block'
     spec.block = values.block
   }
   for (const k of ['regex', 'attr', 'childSel', 'labelText']) {

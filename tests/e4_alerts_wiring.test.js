@@ -150,8 +150,12 @@ test('點告警通知會開報表並定位到該任務那一天', async () => {
   assert.ok(opened, '要開報表')
   const url = String(opened.args[0].url)
   assert.match(url, /report\.html/)
-  assert.ok(url.includes('t1'), `要帶上任務,實得 ${url}`)
   assert.ok(url.includes('2026-09-06'), `要帶上日期,實得 ${url}`)
+  // 參數名必須是報表真的認得的那一個：logic.initFromHash 只解析 taskIds
+  const lg = await import('../src/ui/report/logic.js?t=' + Math.random())
+  const parsed = lg.parseHash(url.slice(url.indexOf('#')))
+  assert.deepEqual(parsed.taskIds, ['t1'], `報表必須解析得出任務篩選,實得 ${JSON.stringify(parsed)}`)
+  assert.equal(parsed.from, '2026-09-06')
 })
 
 test('通知點擊事件真的有註冊(不是只寫了函式沒接上)', async () => {

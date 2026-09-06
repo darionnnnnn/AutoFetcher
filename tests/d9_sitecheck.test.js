@@ -221,3 +221,44 @@ test('這兩個設定的預設值要顯示出來,不是空白', async () => {
   assert.equal(doc.getElementById('pref-alert-cooldown').value, '60')
   assert.equal(doc.getElementById('pref-site-check-time').value, '08:00')
 })
+
+// ---- 站台的健康狀態要進燈號(規劃批次 D 改動第 9 項) ----
+
+test('站台登入失敗會讓燈號變紅,摘要說得出是哪個站台', async () => {
+  const { computeHealth } = await import('../src/background/health.js?t=' + Math.random())
+  const tasks = [{ id: 't1', name: '電費', enabled: true }]
+  const health = {
+    't1': { status: 'ok' },
+    'site:https://a.test': { status: 'login_failed', reason: '無法登入' }
+  }
+  const res = computeHealth(tasks, health, [])
+  assert.equal(res.level, 'red', '站台登不進去等於所有靠它的任務都會失敗,不能只跳一次通知就沒了')
+  assert.equal(res.redCount, 1)
+  assert.ok(res.summary.includes('a.test'), `摘要要說得出是哪個站台,實得:${res.summary}`)
+})
+
+test('站台正常時不影響燈號', async () => {
+  const { computeHealth } = await import('../src/background/health.js?t=' + Math.random())
+  const res = computeHealth(
+    [{ id: 't1', name: '電費', enabled: true }],
+    { 't1': { status: 'ok' }, 'site:https://a.test': { status: 'ok' } },
+    []
+  )
+  assert.equal(res.level, 'green')
+})
+
+test('站台的健康項目已讀後不再計入(與任務一致)', async () => {
+  const { computeHealth } = await import('../src/background/health.js?t=' + Math.random())
+  const res = computeHealth(
+    [{ id: 't1', name: '電費', enabled: true }],
+    { 'site:https://a.test': { status: 'login_failed', read: true } },
+    []
+  )
+  assert.equal(res.level, 'green')
+})
+
+test('沒有任何任務時,站台異常也不該讓燈號亮(整體已暫停)', async () => {
+  const { computeHealth } = await import('../src/background/health.js?t=' + Math.random())
+  const res = computeHealth([], { 'site:https://a.test': { status: 'login_failed' } }, [])
+  assert.equal(res.level, 'off')
+})

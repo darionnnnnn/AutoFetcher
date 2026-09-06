@@ -62,12 +62,6 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - 不要在帳本之外直接呼叫 `runTask`(同一排程槽會重複抓;冪等靠 `runs[taskId][slot]`,SPEC §4.1)。
 - 不要假設抓取時目標分頁已開啟(排程到點由 background 自己開分頁,SPEC §4)。
 - **不要在 background 用動態 `import()`**(MV3 service worker 規格禁止,會在真實瀏覽器才炸;一律靜態匯入)。
-- **不要用 `executeScript({files})` 注入 content script**:它是 ES module,傳統 script 注入會直接在頁面爆掉
-  (AF-3 前這個 bug 讓擴充功能從來沒抓成功過一次);一律走 `background/inject.js` 的 `func` + 動態 `import()`。
-- **不要直接呼叫 `chrome.notifications.create`**:一律走 `background/notify.js`(唯一入口,統一圖示、遵守通知偏好)。
-  `iconUrl` 必須是 `chrome.runtime.getURL()` 的絕對網址,相對路徑會 404 而讓整則通知不顯示。
-- **不要為了讓測試好寫去改寫內建原型**(`String.prototype`/`RegExp.prototype` 都犯過):改測試,不要改實作。
-  `tests/a4_conventions.test.js` 會擋住這三類再犯。
 - **不要在 background 直接呼叫 `chrome.notifications.create`**:一律走 `background/notify.js`
   (唯一入口、統一圖示、遵守通知偏好)。`iconUrl` 必須是 `chrome.runtime.getURL()` 的絕對網址。
 - **不要用 `executeScript({files})` 注入 content script**:它是 ES module,一律走 `background/inject.js`。

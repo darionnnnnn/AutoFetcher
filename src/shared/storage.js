@@ -1,5 +1,6 @@
 // AutoFetcher 儲存層：所有 chrome.storage 存取的唯一入口
 import { pruneCardsForTask } from './layout-store.js'
+import { encryptSecret } from './crypto.js'
 
 const DEFAULT_SETTINGS = {
   retentionDays: 365,
@@ -24,12 +25,43 @@ function keyToDate(key) {
   return key.slice(REC_PREFIX.length)
 }
 
-// 初始化儲存空間（冪等：已存在值不得覆蓋）
+const SCHEMA_VERSION = 2
+
+// v1 → v2：站台從「登入頁前綴 + 明文密碼」改為「loginCheck + AES-GCM 密文」
+async function migrateSitesToV2(sites) {
+  const migrated = {}
+  for (const [origin, site] of Object.entries(sites)) {
+    if (!site || typeof site !== 'object') continue
+    const next = { ...site }
+    if (next.loginCheck === undefined && typeof next.loginPageUrlPrefix === 'string') {
+      next.loginCheck = { type: 'urlPrefix', value: next.loginPageUrlPrefix }
+    }
+    delete next.loginPageUrlPrefix
+    if (next.password !== undefined) {
+      if (next.passwordEnc === undefined && typeof next.password === 'string' && next.password !== '') {
+        next.passwordEnc = await encryptSecret(next.password)
+      }
+      delete next.password
+    }
+    migrated[origin] = next
+  }
+  return migrated
+}
+
+// 初始化儲存空間（冪等：已存在值不得覆蓋；順便做一次性的 schema 遷移）
 export async function init() {
-  const current = await chrome.storage.local.get(['schemaVersion', 'settings'])
+  const current = await chrome.storage.local.get(['schemaVersion', 'settings', 'sites'])
   const patch = {}
-  if (current.schemaVersion === undefined) patch.schemaVersion = 1
   if (current.settings === undefined) patch.settings = { ...DEFAULT_SETTINGS }
+
+  const version = typeof current.schemaVersion === 'number' ? current.schemaVersion : SCHEMA_VERSION
+  if (version < 2 && current.sites && typeof current.sites === 'object') {
+    patch.sites = await migrateSitesToV2(current.sites)
+  }
+  if (current.schemaVersion === undefined || version < SCHEMA_VERSION) {
+    patch.schemaVersion = SCHEMA_VERSION
+  }
+
   if (Object.keys(patch).length > 0) {
     await chrome.storage.local.set(patch)
   }

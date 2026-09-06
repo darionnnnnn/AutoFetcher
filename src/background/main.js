@@ -365,7 +365,8 @@ export async function handleNotificationClick(notificationId) {
     const base = typeof chrome.runtime?.getURL === 'function'
       ? await chrome.runtime.getURL('ui/report/report.html')
       : 'ui/report/report.html'
-    const url = `${base}#view=history&from=${date}&to=${date}&task=${taskId}`
+    // 報表的 hash 參數是 taskIds（複數），寫成 task= 的話只會定位到日期、篩不到任務
+    const url = `${base}#view=history&from=${date}&to=${date}&taskIds=${encodeURIComponent(taskId)}`
 
     await chrome.tabs.create({ url })
     await chrome.notifications.clear(notificationId)

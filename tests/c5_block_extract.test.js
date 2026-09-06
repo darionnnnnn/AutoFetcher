@@ -198,3 +198,29 @@ test('歷史列的策略欄對 block 模式要說明取了哪一欄與聚合方�
   assert.ok(/略過|skipped/.test(text), `要看得到跳過幾格,實得:${text}`)
   assert.ok(/部分|partial/.test(text), `partial 要讓使用者知道只抓到一部分,實得:${text}`)
 })
+
+// ---- 端到端:Picker 存出來的任務,擷取時要真的走 block ----
+
+test('Picker 建立的區塊任務,拿去擷取要得到聚合值(不是整張表的第一個數字)', async () => {
+  resetChromeMock()
+  installChromeMock()
+  const { readFileSync } = await import('node:fs')
+  const st = await import('../src/shared/storage.js?t=' + Math.random())
+  await st.init()
+  const html = readFileSync(new URL('../src/ui/picker/picker.html', import.meta.url), 'utf8')
+  const jd = new JSDOM(html)
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  const pk = await import('../src/ui/picker/picker.js?t=' + Math.random())
+
+  const task = pk.buildTask(
+    { name: '每日數量', url: 'https://a.test/p', mode: 'block', strategy: 'auto',
+      scheduleType: 'daily', times: ['09:00'], weekdays: [0, 1, 2, 3, 4, 5, 6],
+      block: { axis: 'col', index: 1, headerText: '數量', aggregate: 'sum' } },
+    { css: '#t', path: '', anchor: null, xpath: '' }
+  )
+  // 這一步是重點:直接把 buildTask 產出的 spec 交給擷取,不自己補欄位
+  const r = extractValue(el(TABLE), task.spec)
+  assert.equal(r.strategyUsed, 'block', `任務存出來的 spec 必須走 block 分支,實得 ${r.strategyUsed}`)
+  assert.equal(r.value, 49)
+})
