@@ -85,7 +85,9 @@ try {
   const alarms = await ext.evaluate(() => chrome.alarms.getAll())
   const names = alarms.map(a => a.name)
   // 名稱格式由 scheduler.alarmName / precheck 決定,這裡只要求「每個時間點各有一個正式與一個預檢」
-  const taskAlarms = names.filter(n => n.includes('smoke-1') && !n.includes(':pre:'))
+  // 只算正式排程：預檢（:pre:）與重試（:retry:）都不是。
+  // 測試在 09:00/15:00 兩個時間點附近跑時，任務可能真的觸發並排出重試 alarm。
+  const taskAlarms = names.filter(n => n.includes('smoke-1') && !n.includes(':pre:') && !n.includes(':retry:'))
   const preAlarms = names.filter(n => n.includes('smoke-1') && n.includes(':pre:'))
   const missing = []
   if (taskAlarms.length !== 2) missing.push(`正式 alarm 應有 2 個,實際 ${taskAlarms.length}`)
