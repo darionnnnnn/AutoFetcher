@@ -15,7 +15,8 @@
 | 任務設定 `storage.sync` 自動同步 | 使用者常在多台機器切換且嫌手動匯入麻煩時 |
 | 抓取時同時截圖存證 | 使用者需要查證抓到的值時 |
 | 同一頁多元素合併為一個任務(一次抓多值) | 使用者一頁要抓 5 個以上的值時 |
-| Picker 設定 `attr` / `child` / `label` 策略的參數 | 目前這三個主策略在 Picker 選得到但沒有欄位填參數,等於選了必定失敗的策略;有站台需要時補欄位(或先從下拉移除) |
+| Picker 設定 `attr` / `child` / `label` 策略的參數 | AF-5 已從下拉移除(選了必定失敗);`extract.js` 仍支援,既有任務重存也會保留原值。有站台需要時補上參數欄位再放回下拉 |
+| 抓取期間週期性續命(每 20 秒呼叫 `getPlatformInfo`) | 目前只在開始時呼叫一次;有任務因 service worker 被回收而抓到一半失敗時 |
 | Picker 設定乘數與小數位數 | `extract.js` 支援 `multiplier`/`decimals`,但只能靠匯入設定檔設定 |
 | 任務層級的 `precheckLeadMinutes` 介面 | 程式支援,Picker 沒有欄位 |
 | `lateTolerance`(遲到容忍度) | 規格寫了但沒實作;`late` 目前只來自補抓 |

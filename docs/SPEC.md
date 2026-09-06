@@ -68,6 +68,9 @@
   - 選到表格或 CSS 假表格時,滑鼠移到某一格會標示**整欄**(`Tab` 切換成整列),
     點擊即選定該欄/列;此時 locator 仍指向表格容器本身,欄列資訊另外帶回。
   - **一個任務只抓一個元素**:同一頁要抓四張表格的最大值,就是四個任務(各自命名),不是一個任務抓四個值。
+- 選到表格類元素時,content 一併算出 **`nameHint`**(表格的 `<caption>` → 目標之前最近的
+  `h1`~`h6` → 頁面 `title`,截 60 字)帶進 `PICKED`,Picker 拿它當任務名稱的預設值;
+  非表格不帶,由 Picker 退回文字錨定或預覽前 20 字。
 - 確認後 content 送 `PICKED` 給 background,由它決定去處(`purpose`):
   `task` 開 Picker 設定視窗、`repick` 直接更新既有任務的 locator、
   `login-*` 轉發給站台登入設定視窗、`preaction` 轉發給 Picker 的前置動作那一列。
@@ -417,6 +420,22 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
 - Report:月曆對有告警的日期上色(與失敗分開)、歷史列標記並可展開看到命中哪一條、
   「只看告警」可篩選;number 卡片沿用既有的閾值色機制,不另加一套顏色規則。
 - `deltaPct` 找不到前一筆成功紀錄、或前一筆是 0 時不命中(除以 0 沒有意義)。
+
+### §2.1 Picker 表單的預設值
+
+- `settings.pickerDefaults = { last, pinned }`,優先序 **`pinned` → `last` → 內建**。
+  內建值寫在 `picker.js`(`BUILTIN_DEFAULTS`),**不放進 `DEFAULT_SETTINGS`**——
+  `getSettings` 不與預設合併,放進去對舊使用者仍是 `undefined`。
+  內建排程是**每天 09:30**(銀行牌告之類的頁面多在九點過後才更新)。
+- 每次儲存新任務都更新 `last`;勾了「將此次設定固定為預設值」才另外寫 `pinned`。
+  `saveSettings` 是淺層合併,寫 `pickerDefaults` 一律 read-modify-write,否則會把另一半洗掉。
+  設定頁的「清除固定的預設值」只刪 `pinned`,保留 `last`。
+- **編輯既有任務不套用任何預設值**,也不更新 `last` / `pinned`。
+- **進階設定**(策略、正規表達式、生效時段、告警條件、前置動作)收在 `<details id="advanced-section">`,
+  預設收合;編輯既有任務且其中有非預設值時自動展開。所有欄位 id 不變,只是換了外層容器。
+- 「立即測試」與正式抓取共用同一份規格組裝 `buildSpec(values)`,不得各組一份
+  (否則區塊模式的預覽會落回數值策略鏈,測到整張表的第一個數字)。
+  編輯既有任務時沒有目標分頁,「立即測試」維持隱藏。
 
 ## §11 數值擷取策略與後處理(number 模式)
 

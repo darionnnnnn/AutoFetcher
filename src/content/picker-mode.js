@@ -169,6 +169,61 @@ function handleTableMouseMove(target) {
   markCells(dataRows, row, tableAxis, colIndex)
 }
 
+// 取得表格 caption 文字
+function getCaptionText(el) {
+  if (!el || typeof el.querySelector !== 'function') return ''
+  const caption = el.querySelector('caption')
+  return caption && caption.textContent ? caption.textContent.trim() : ''
+}
+
+// 判定元素是否為標題或內含標題，回傳其中最後一個標題之文字
+function getHeadingFromElement(el) {
+  if (!el) return ''
+  const tag = (el.tagName || '').toLowerCase()
+  if (/^h[1-6]$/.test(tag)) {
+    const text = (el.textContent || '').trim()
+    if (text) return text
+  }
+  if (typeof el.querySelectorAll === 'function') {
+    const headings = el.querySelectorAll('h1, h2, h3, h4, h5, h6')
+    for (let i = headings.length - 1; i >= 0; i--) {
+      const text = (headings[i].textContent || '').trim()
+      if (text) return text
+    }
+  }
+  return ''
+}
+
+// 從目標元素往前同層、再往父層尋找最近的標題文字
+function getPrecedingHeadingText(el) {
+  const doc = el.ownerDocument || (typeof document !== 'undefined' ? document : null)
+  const body = doc ? doc.body : null
+  let curr = el
+  while (curr && curr !== body && curr.parentElement) {
+    let sibling = curr.previousElementSibling
+    while (sibling) {
+      const headingText = getHeadingFromElement(sibling)
+      if (headingText) return headingText
+      sibling = sibling.previousElementSibling
+    }
+    curr = curr.parentElement
+  }
+  return ''
+}
+
+// 算出表格名稱提示
+function computeNameHint(el) {
+  if (!el || !isTableMode(el)) return undefined
+  const caption = getCaptionText(el)
+  if (caption) return caption.slice(0, 60)
+  const heading = getPrecedingHeadingText(el)
+  if (heading) return heading.slice(0, 60)
+  const doc = el.ownerDocument || (typeof document !== 'undefined' ? document : null)
+  const title = (doc && doc.title ? doc.title.trim() : '')
+  if (title) return title.slice(0, 60)
+  return undefined
+}
+
 // 送出確認訊息並離開
 function confirmPick() {
   if (!currentTargetEl) return
@@ -184,6 +239,10 @@ function confirmPick() {
     delete blockInfo.index
   }
   const msg = { type: MSG.PICKED, purpose: currentPurpose, locator: describe(currentTargetEl), preview, previewValue, blockInfo }
+  if (isTableMode(currentTargetEl)) {
+    const nameHint = computeNameHint(currentTargetEl)
+    if (nameHint) msg.nameHint = nameHint
+  }
   if (currentTaskId !== undefined) msg.taskId = currentTaskId
   chrome.runtime.sendMessage(msg)
   exitPickMode()

@@ -279,6 +279,24 @@ function setupPreferenceListeners(settings) {
       })
     }
   }
+
+  const clearPinnedBtn = document.getElementById('clear-pinned-defaults')
+  if (clearPinnedBtn && !clearPinnedBtn._afBound) {
+    clearPinnedBtn._afBound = true
+    clearPinnedBtn.addEventListener('click', async () => {
+      const currentSettings = await getSettings()
+      if (!currentSettings.pickerDefaults || typeof currentSettings.pickerDefaults !== 'object') {
+        return
+      }
+      const nextDefaults = { ...currentSettings.pickerDefaults }
+      delete nextDefaults.pinned
+      await saveSettings({ pickerDefaults: nextDefaults })
+      const resultEl = document.getElementById('clear-pinned-result') || clearPinnedBtn.nextElementSibling
+      if (resultEl) {
+        resultEl.textContent = '已清除固定的預設值'
+      }
+    })
+  }
 }
 
 // 初始化匯出日期預設值

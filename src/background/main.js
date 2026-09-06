@@ -271,7 +271,8 @@ export async function handleMessage(msg, sender) {
           previewValue: msg.previewValue,
           blockInfo: msg.blockInfo,
           tabId: sender?.tab?.id,
-          url: sender?.tab?.url
+          url: sender?.tab?.url,
+          nameHint: msg.nameHint
         }
         const ctx = encodeURIComponent(JSON.stringify(payload))
         const base = typeof chrome.runtime?.getURL === 'function'
