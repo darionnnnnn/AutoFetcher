@@ -63,6 +63,8 @@ function updateSourcesDisabledState(type) {
 
 /**
  * 產生來源任務清單 checkbox
+ * 已選的來源依 card.source 的順序排在前面(那個順序就是表格的欄序),
+ * 每一列附上下移動按鈕;未選的任務接在後面
  */
 function renderSources(tasks, currentSources = [], type = 'number') {
   const container = document.getElementById('drawer-sources')
@@ -70,14 +72,32 @@ function renderSources(tasks, currentSources = [], type = 'number') {
   container.textContent = ''
 
   const isNumeric = ['number', 'line', 'bar', 'gauge'].includes(type)
-  const sourceTaskIds = new Set((currentSources || []).map(s => s && s.taskId).filter(Boolean))
+  const selectedIds = (currentSources || []).map(s => s && s.taskId).filter(Boolean)
+  const taskById = new Map(tasks.map(t => [t.id, t]))
 
+  // 已選的照欄序,未選的照任務清單順序接在後面
+  const ordered = []
+  for (const id of selectedIds) {
+    if (taskById.has(id)) ordered.push({ task: taskById.get(id), checked: true })
+  }
+  const selectedSet = new Set(selectedIds)
   for (const t of tasks) {
+    if (!selectedSet.has(t.id)) ordered.push({ task: t, checked: false })
+  }
+
+  const selectedCount = ordered.filter(o => o.checked).length
+
+  ordered.forEach((entry, idx) => {
+    const t = entry.task
+    const row = document.createElement('div')
+    row.setAttribute('data-source-row', '')
+    row.setAttribute('data-task-id', t.id)
+
     const label = document.createElement('label')
     const input = document.createElement('input')
     input.type = 'checkbox'
     input.value = t.id
-    input.checked = sourceTaskIds.has(t.id)
+    input.checked = entry.checked
 
     if (isNumeric && t.mode === 'text') {
       input.disabled = true
@@ -88,9 +108,28 @@ function renderSources(tasks, currentSources = [], type = 'number') {
       label.appendChild(input)
       label.appendChild(document.createTextNode(` ${t.name || t.id}`))
     }
+    row.appendChild(label)
 
-    container.appendChild(label)
-  }
+    // 只有已選的來源需要調整欄序
+    if (entry.checked) {
+      const up = document.createElement('button')
+      up.type = 'button'
+      up.setAttribute('data-action', 'source-up')
+      up.textContent = '↑'
+      up.title = '往前移一欄'
+      up.disabled = idx === 0
+      const down = document.createElement('button')
+      down.type = 'button'
+      down.setAttribute('data-action', 'source-down')
+      down.textContent = '↓'
+      down.title = '往後移一欄'
+      down.disabled = idx === selectedCount - 1
+      row.appendChild(up)
+      row.appendChild(down)
+    }
+
+    container.appendChild(row)
+  })
 }
 
 /**
@@ -215,6 +254,21 @@ function collectPatch() {
       options.limit = Number(limitInput.value)
     } else {
       delete options.limit
+    }
+
+    const rowHeaderInput = document.getElementById('drawer-row-header')
+    if (rowHeaderInput && rowHeaderInput.value.trim() !== '') {
+      options.rowHeader = rowHeaderInput.value.trim()
+    } else {
+      delete options.rowHeader
+    }
+
+    // 容差存成數字,pivot 用 Number.isInteger 判斷,存字串會整個失效
+    const bucketSelect = document.getElementById('drawer-bucket')
+    if (bucketSelect && bucketSelect.value !== '' && Number.isFinite(Number(bucketSelect.value))) {
+      options.bucketMinutes = Number(bucketSelect.value)
+    } else {
+      delete options.bucketMinutes
     }
   }
 
@@ -363,6 +417,14 @@ function populateFields(card) {
   if (limitInput) {
     limitInput.value = card.options?.limit != null ? String(card.options.limit) : ''
   }
+  const rowHeaderInput = document.getElementById('drawer-row-header')
+  if (rowHeaderInput) {
+    rowHeaderInput.value = card.options?.rowHeader ?? ''
+  }
+  const bucketSelect = document.getElementById('drawer-bucket')
+  if (bucketSelect) {
+    bucketSelect.value = card.options?.bucketMinutes != null ? String(card.options.bucketMinutes) : '0'
+  }
 
   renderSources(cachedTasks, card.source, card.type)
   renderStatusTasks(cachedTasks, card.options?.taskIds)
@@ -452,6 +514,34 @@ function setupDrawerEvents() {
   drawer.addEventListener('change', (e) => {
     applyChanges(e)
   })
+
+  // 來源欄序調整(欄序就是表格的欄順序)
+  drawer.addEventListener('click', (e) => {
+    const btn = e.target?.closest?.('[data-action="source-up"], [data-action="source-down"]')
+    if (!btn || btn.disabled) return
+    const row = btn.closest('[data-source-row]')
+    if (!row) return
+    moveSource(row.getAttribute('data-task-id'), btn.getAttribute('data-action') === 'source-up' ? -1 : 1)
+  })
+}
+
+/**
+ * 把某個來源在欄序中前後移動一位,並立即寫回卡片
+ */
+async function moveSource(taskId, delta) {
+  if (!currentDashId || !currentCardId || !currentCard) return
+  const source = [...(currentCard.source || [])]
+  const from = source.findIndex(s => s && s.taskId === taskId)
+  const to = from + delta
+  if (from === -1 || to < 0 || to >= source.length) return
+
+  const [moved] = source.splice(from, 1)
+  source.splice(to, 0, moved)
+
+  currentCard = { ...currentCard, source }
+  await updateCard(currentDashId, currentCardId, { source })
+  await rerenderCard(currentDashId, currentCardId)
+  renderSources(cachedTasks, source, currentCard.type)
 }
 
 /**
