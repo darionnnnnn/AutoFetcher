@@ -240,7 +240,8 @@ function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
   // 依期間範圍篩選紀錄
   const filteredRecords = (ctx?.records || []).filter(r => {
     if (!r) return false;
-    const d = r.slot ? r.slot.slice(0, 10) : r.date;
+    // 有效時刻與 pivot 一致:slot 優先,沒有就用 capturedAt;兩者皆無才無從比對
+    const d = r.slot ? r.slot.slice(0, 10) : (r.date || (r.capturedAt ? r.capturedAt.slice(0, 10) : ''));
     if (!d) return true;
     if (periodRange.from && d < periodRange.from) return false;
     if (periodRange.to && d > periodRange.to) return false;
@@ -259,10 +260,18 @@ function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
 
   if (isPivot) {
     const taskIds = (card.source || []).map(s => s && s.taskId).filter(Boolean);
-    const { columns, rows } = pivot(filteredRecords, taskIds, taskIds);
+    // 欄序就是 card.source 的順序(拖曳插入欄位靠它)
+    const { columns, rows } = pivot(filteredRecords, taskIds, {
+      taskOrder: taskIds,
+      bucketMinutes: card.options?.bucketMinutes,
+      limit: card.options?.limit
+    });
 
-    // 表頭：第一欄是時間，後續是各任務名稱
-    tsvHeaders = ['時間', ...columns.map(id => ctx?.tasksById?.[id]?.name || id)];
+    // 表頭：第一欄是列軸標頭（可自訂，預設「時間」），後續是各任務名稱
+    const rowHeader = typeof card.options?.rowHeader === 'string' && card.options.rowHeader.trim() !== ''
+      ? card.options.rowHeader.trim()
+      : '時間';
+    tsvHeaders = [rowHeader, ...columns.map(id => ctx?.tasksById?.[id]?.name || id)];
     const headTr = document.createElement('tr');
     for (const h of tsvHeaders) {
       const th = document.createElement('th');
@@ -283,6 +292,11 @@ function renderTableCard(card, ctx, { bodyEl, actionsEl, configBtn }) {
       for (const col of columns) {
         const val = r.values?.[col];
         const td = document.createElement('td');
+        // 這一格由多筆合併而來時說明來源筆數，避免使用者以為只抓了一次
+        const mergedCount = r.merged?.[col];
+        if (typeof mergedCount === 'number' && mergedCount > 1) {
+          td.title = `合併 ${mergedCount} 筆，取最新的成功值`;
+        }
         if (val != null && typeof val === 'number' && Number.isFinite(val)) {
           const formatted = formatNumber(val, card.options?.decimals);
           td.textContent = formatted;
