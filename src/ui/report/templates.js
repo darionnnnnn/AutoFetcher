@@ -1,15 +1,7 @@
-// 儀表板範本產生與套用模組（純函式與版面組裝）
 import { findFreeSlot } from './layout.js'
 import { getTasks } from '../../shared/storage.js'
 import { getLayout, saveLayout, addCard } from '../../shared/layout-store.js'
-
-/**
- * 篩選出模式為數值的任務清單
- */
-function getNumberTasks(tasks) {
-  if (!Array.isArray(tasks)) return []
-  return tasks.filter(t => t && t.mode === 'number')
-}
+import { buildSeriesIndex } from '../../shared/series-index.js'
 
 /**
  * 將卡片規格陣列依序排入無重疊的合法格線座標
@@ -33,58 +25,60 @@ function arrangeCards(cardSpecs) {
 export function buildTemplate(kind, tasks) {
   if (!Array.isArray(tasks) || tasks.length === 0) return []
 
-  const numTasks = getNumberTasks(tasks)
+  const index = buildSeriesIndex(tasks)
+  const numericSeriesIds = index.seriesIds.filter(sid => index.byId[sid]?.mode !== 'text')
+  const allSeriesIds = index.seriesIds
 
   if (kind === 'overview') {
-    if (numTasks.length === 0) return []
+    if (numericSeriesIds.length === 0) return []
     const specs = []
-    for (const t of numTasks) {
+    for (const sid of numericSeriesIds) {
       specs.push({
         type: 'number',
-        title: t.name || '',
+        title: '',
         w: 3,
         h: 2,
-        source: [{ taskId: t.id }],
+        source: [{ taskId: sid }],
         options: {}
       })
     }
     specs.push({
       type: 'line',
-      title: '趨勢總覽',
+      title: '',
       w: 12,
       h: 3,
-      source: numTasks.map(t => ({ taskId: t.id })),
+      source: numericSeriesIds.map(sid => ({ taskId: sid })),
       options: {}
     })
     return arrangeCards(specs)
   }
 
   if (kind === 'deepDive') {
-    if (numTasks.length === 0) return []
-    const target = numTasks[0]
+    if (numericSeriesIds.length === 0) return []
+    const targetId = numericSeriesIds[0]
     const specs = [
       {
         type: 'line',
-        title: target.name || '',
+        title: '',
         w: 9,
         h: 3,
-        source: [{ taskId: target.id }],
+        source: [{ taskId: targetId }],
         options: {}
       },
       {
         type: 'gauge',
-        title: target.name || '',
+        title: '',
         w: 3,
         h: 2,
-        source: [{ taskId: target.id }],
+        source: [{ taskId: targetId }],
         options: {}
       },
       {
         type: 'table',
-        title: target.name || '',
+        title: '',
         w: 12,
         h: 3,
-        source: [{ taskId: target.id }],
+        source: [{ taskId: targetId }],
         options: { mode: 'recent' }
       }
     ]
@@ -92,21 +86,22 @@ export function buildTemplate(kind, tasks) {
   }
 
   if (kind === 'compare') {
+    if (numericSeriesIds.length === 0) return []
     const specs = [
       {
         type: 'line',
-        title: '比較趨勢',
+        title: '',
         w: 12,
         h: 3,
-        source: numTasks.map(t => ({ taskId: t.id })),
+        source: numericSeriesIds.map(sid => ({ taskId: sid })),
         options: {}
       },
       {
         type: 'table',
-        title: '比較明細',
+        title: '',
         w: 12,
         h: 3,
-        source: tasks.map(t => ({ taskId: t.id })),
+        source: allSeriesIds.map(sid => ({ taskId: sid })),
         options: { mode: 'pivot' }
       }
     ]
@@ -122,6 +117,10 @@ export function buildTemplate(kind, tasks) {
 export async function applyTemplate(dashId, kind) {
   const tasks = await getTasks()
   const templateCards = buildTemplate(kind, tasks)
+  if (!Array.isArray(templateCards) || templateCards.length === 0) {
+    return
+  }
+
   const layout = await getLayout()
   const dash = layout.dashboards.find(d => d.id === dashId)
   if (!dash) return
