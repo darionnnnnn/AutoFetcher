@@ -221,6 +221,7 @@
 ## 體檢交接
 
 - **全量測試：1462 綠 / 0 紅**（基準 1409，本輪 +53）。
-- 尚未執行真實瀏覽器煙霧測試（`./run_smoke.sh` 需 Chrome for Testing，本機未安裝）；
-  新增的 5e 段（跨網域 iframe 先點按鈕再擷取）**待使用者實測**。
+- **真實瀏覽器煙霧測試：Chrome 152 與 Edge 全部通過**（2026-09-07 於 Windows 實跑）。
+  新增的 5e 段（跨網域 iframe 先點按鈕才顯示值 → 指名 frameId 擷取）兩個瀏覽器都抓到 5678，
+  且最上層找不到該元素——證明值真的來自 iframe。`run_smoke.sh` 另補了 Windows 的 Edge 路徑。
 - 待驗：作業 0 的 `--no-experimental-global-navigator` 在 mac 的舊版 Node 是否被拒絕。
