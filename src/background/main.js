@@ -89,7 +89,10 @@ function preselectOf(task) {
       .map(f => (f?.cell ? { cell: f.cell } : (f?.block ? { block: f.block } : null)))
       .filter(Boolean)
   }
-  if (task.spec.block) return [{ block: task.spec.block }]
+  if (task.spec.block) {
+    if (task.spec.block.cell) return [{ cell: task.spec.block.cell }]
+    return [{ block: task.spec.block }]
+  }
   return undefined
 }
 

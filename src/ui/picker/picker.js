@@ -8,7 +8,7 @@ let currentBlock = null
 const fieldSpecs = new Map()
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
 
-function getFormData() {
+export function getFormData() {
   const name = document.getElementById('name')?.value ?? ''
   const urlEl = document.getElementById('url')
   const url = (urlEl?.value ?? urlEl?.textContent ?? currentCtx?.url ?? '').trim()
@@ -107,12 +107,16 @@ function getFormData() {
   if (fields) {
     data.fields = fields
   } else if (mode === 'block') {
-    const agg = document.getElementById('block-aggregate')?.value || 'sum'
-    data.block = {
-      axis: currentBlock?.axis,
-      index: currentBlock?.index,
-      headerText: currentBlock?.headerText,
-      aggregate: agg
+    if (currentBlock && currentBlock.cell) {
+      data.block = { cell: currentBlock.cell }
+    } else {
+      const agg = document.getElementById('block-aggregate')?.value || 'sum'
+      data.block = {
+        axis: currentBlock?.axis,
+        index: currentBlock?.index,
+        headerText: currentBlock?.headerText,
+        aggregate: agg
+      }
     }
   }
 
@@ -188,6 +192,9 @@ export function buildSpec(values) {
       if (f.block) item.block = f.block
       return item
     })
+  } else if (values.block && values.block.cell) {
+    spec.mode = 'block'
+    spec.block = { cell: values.block.cell }
   } else {
     if (values.mode === 'text') spec.mode = 'text'
     if (values.mode === 'block' && values.block) {
@@ -433,7 +440,11 @@ export function render(ctx) {
       if (t.schedule.window.to) document.getElementById('window-to').value = t.schedule.window.to
     }
     if (t.spec?.block) {
-      currentBlock = { ...t.spec.block }
+      if (t.spec.block.cell) {
+        currentBlock = { cell: t.spec.block.cell }
+      } else {
+        currentBlock = { ...t.spec.block }
+      }
       const aggEl = document.getElementById('block-aggregate')
       if (aggEl && t.spec.block.aggregate) aggEl.value = t.spec.block.aggregate
     }
@@ -460,14 +471,18 @@ export function render(ctx) {
     if (modeEl) modeEl.value = 'block'
   }
 
-  if (ctx?.picks && Array.isArray(ctx.picks) && ctx.picks.length === 1 && ctx.picks[0].block) {
+  if (ctx?.picks && Array.isArray(ctx.picks) && ctx.picks.length === 1 && ctx.picks[0].cell) {
+    currentBlock = { cell: ctx.picks[0].cell }
+    const modeEl = document.getElementById('mode')
+    if (modeEl) modeEl.value = 'block'
+  } else if (ctx?.picks && Array.isArray(ctx.picks) && ctx.picks.length === 1 && ctx.picks[0].block) {
     currentBlock = {
       ...(currentBlock || {}),
       ...ctx.picks[0].block
     }
     const modeEl = document.getElementById('mode')
     if (modeEl) modeEl.value = 'block'
-  } else if (ctx?.blockInfo && (ctx.blockInfo.kind === 'table' || ctx.blockInfo.kind === 'grid')) {
+  } else if (!ctx?.task?.spec?.block && ctx?.blockInfo && (ctx.blockInfo.kind === 'table' || ctx.blockInfo.kind === 'grid')) {
     const b = ctx.blockInfo
     currentBlock = {
       axis: b.axis,
@@ -652,6 +667,23 @@ function updateBlockSection() {
     return
   }
 
+  if (currentBlock && currentBlock.cell) {
+    const row = currentBlock.cell.row
+    const col = currentBlock.cell.col
+    const rowH = (row && typeof row.header === 'string') ? row.header.trim() : ''
+    const colH = (col && typeof col.header === 'string') ? col.header.trim() : ''
+    if (rowH && colH) {
+      summaryEl.textContent = `表格，取「${rowH} · ${colH}」這一格`
+    } else if (rowH || colH) {
+      summaryEl.textContent = `表格，取「${rowH || colH}」這一格`
+    } else {
+      const rIdx = Number(row ? row.index : 0) + 1
+      const cIdx = Number(col ? col.index : 0) + 1
+      summaryEl.textContent = `表格，取第 ${rIdx} 列第 ${cIdx} 欄這一格`
+    }
+    return
+  }
+
   // index 為 null 代表使用者只選到表格、還沒點任何一欄或一列，不能當成選了第 0 欄
   if (currentBlock && (currentBlock.headerText || currentBlock.index !== undefined && currentBlock.index !== null)) {
     const isRow = currentBlock.axis === 'row'
@@ -769,8 +801,10 @@ function updateFieldListState() {
   // 值的數量也決定預設建哪幾張卡，移除／上下移之後都要重算
   const aggLabel = document.getElementById('block-aggregate')?.closest('label')
   if (aggLabel) {
-    const hasBlockField = rows.some(r => (r._spec || fieldSpecs.get(r.dataset.fieldKey || ''))?.block)
-    aggLabel.hidden = n > 0 && !hasBlockField
+    const hasBlockField = n > 0
+      ? rows.some(r => (r._spec || fieldSpecs.get(r.dataset.fieldKey || ''))?.block)
+      : !(currentBlock && currentBlock.cell)
+    aggLabel.hidden = !hasBlockField
   }
   applyDefaultCardTypes()
 
