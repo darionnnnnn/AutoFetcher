@@ -47,7 +47,8 @@
    任何一層命中超過一個 → 進下一層；三層都失敗或第 ③ 層多重命中 → **判失敗**（取錯 frame 會靜默抓到錯的值，比抓不到更糟）。
    失敗紀錄 `status: 'not_found'`、`error: '找不到目標所在的框架'`——**不新增 status**，`shared/record-status.js` 不動。
 4. **範圍**：前置動作可以跨 frame（作業 C）；自動登入（`CHECK_ELEMENT` / `FILL_LOGIN`）維持 top frame，「登入表單在 iframe 內」列 BACKLOG。
-5. `about:blank` / `srcdoc` 的 iframe（內容由 JS 塞入）：注入加 `matchOriginAsFallback: true`，網址無辨識度只剩第 ③ 層——**暫定支援**，煙霧不涵蓋。
+5. `about:blank` / `srcdoc` 的 iframe（內容由 JS 塞入）：`allFrames: true` 會涵蓋它們，但網址無辨識度只剩第 ③ 層——**盡力而為、不保證**，煙霧不涵蓋。
+   （查核修正：`matchOriginAsFallback` **不是** `chrome.scripting.executeScript` 的合法屬性，它只用於 `registerContentScripts` 與 manifest 的 `content_scripts`；規劃初稿寫錯，已移除。）
 6. 巢狀 iframe：allFrames 本來就含巢狀，網址比對不分層級，不另做。
 7. **所有 `chrome.tabs.sendMessage` 一律明確帶 `{ frameId }`**（top 為 0）：多 frame 注入後不帶就是廣播，誰先回誰贏。a4 加守門。
 8. 前置動作與目標的先後：**先執行全部前置動作，再定位目標 frame**（iframe 可能是點了按鈕才出現、或切頁籤後重建）。
@@ -71,8 +72,9 @@
 見〈核對結果〉斷點 1、2、3 的前半（訊息帶 frame）。
 
 ### 改動（行為契約）
-1. `background/inject.js`：`injectContent(tabId, { frameId } | { allFrames: true })`，預設只注入 top（`frameId: 0`）；
-   `allFrames` 時同時帶 `matchOriginAsFallback: true`。content script 既有的 `__afContentLoaded` 守衛每個 frame 各一份，重複注入無害。
+1. `background/inject.js`：`injectContent(tabId, opts)`——`opts.allFrames === true` → `target: { tabId, allFrames: true }`；
+   否則 `target: { tabId, frameIds: [opts?.frameId ?? 0] }`（**預設只注入 top，且一定明寫 frameIds**，不得回到不指定 frame 的形式）。
+   content script 既有的 `__afContentLoaded` 守衛每個 frame 各一份，重複注入無害。
 2. 右鍵「選取要抓的內容」：注入並送 `ENTER_PICK` 到 **`info.frameId`** 那個 frame（`chrome.tabs.sendMessage(tabId, msg, { frameId })`）。
    「設定此站台登入」維持 top（定案 4）。
 3. `PICKED{purpose:'task'}`：payload 增 `frameId: sender.frameId`、`frameUrl: sender.url`；**`frameId === 0` 時兩欄都不放**。

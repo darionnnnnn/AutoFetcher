@@ -128,6 +128,9 @@ function buildChromeMock() {
   let defaultTabStatus = 'complete'
   let tabResponder = () => undefined
   let runtimeResponder = () => undefined
+  // executeScript 預設回空陣列；列 frame 的測試用 __setScriptResponder 給
+  // [{frameId, result}, ...] 這種真實形狀
+  let scriptResponder = () => []
 
   const mock = {
     __calls: calls,
@@ -210,9 +213,11 @@ function buildChromeMock() {
           tab.status = defaultTabStatus
         }
       },
-      async sendMessage(tabId, msg) {
-        recordCall('tabs.sendMessage', [tabId, msg])
-        return tabResponder(tabId, msg)
+      // 第三個參數是 chrome 的 options（本專案只用 frameId）：多 frame 注入後
+      // 不帶它就是廣播給所有 frame，誰先回誰贏，所以一律記錄下來供斷言
+      async sendMessage(tabId, msg, options) {
+        recordCall('tabs.sendMessage', [tabId, msg, options])
+        return tabResponder(tabId, msg, options)
       },
       async update(tabId, updateProps = {}) {
         recordCall('tabs.update', [tabId, updateProps])
@@ -300,7 +305,7 @@ function buildChromeMock() {
     scripting: {
       async executeScript(...args) {
         recordCall('scripting.executeScript', args)
-        return []
+        return scriptResponder(...args)
       },
       async insertCSS(...args) {
         recordCall('scripting.insertCSS', args)
@@ -404,6 +409,9 @@ function buildChromeMock() {
     __setRuntimeResponder(fn) {
       runtimeResponder = fn
     },
+    __setScriptResponder(fn) {
+      scriptResponder = fn
+    },
     __setTabState(tabId, patch) {
       const tab = tabsMap.get(tabId)
       if (tab) Object.assign(tab, patch)
@@ -421,6 +429,7 @@ function buildChromeMock() {
       defaultTabStatus = 'complete'
       tabResponder = () => undefined
       runtimeResponder = () => undefined
+      scriptResponder = () => []
       localStorage._reset()
       sessionStorage._reset()
       storageOnChanged._reset()
