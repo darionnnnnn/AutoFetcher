@@ -124,9 +124,11 @@ test('呼叫端明確給了 extraDelayMs 時最優先(測試與預檢要能加�
 
 // ---- 前置動作 ----
 
+// AF-6 起 wait 由 background 自己等（不需要頁面、也不需要 frame），
+// 所以這裡改用 click 當樣本；本測試保障的是「前置動作先於擷取」這個順序。
 test('前置動作在擷取之前執行', async () => {
   const { c, st, fe } = await fresh()
-  const t = task({ preActions: [{ type: 'wait', ms: 1 }] })
+  const t = task({ preActions: [{ type: 'click', locator: { css: '#close' } }] })
   await st.saveTask(t)
   await fe.runTask(t, { slot: '2026-09-06T09:00', extraDelayMs: 0, ...FAST })
   const types = sentTypes(c)

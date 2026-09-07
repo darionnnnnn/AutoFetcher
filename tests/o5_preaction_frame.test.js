@@ -88,7 +88,8 @@ test('前置動作的 frame 等不到就失敗，後面的動作與擷取都不�
   c.__setScriptResponder(framesAs([[0, 'https://a.test/p']]))
   c.__setTabResponder((tabId, msg) => (msg.type === 'RESOLVE_LOCATOR' ? { ok: true, found: false } : { ok: true, value: 1 }))
   const rec = await fe.runTask(t, { slot: '2026-09-05T09:00', ...FAST })
-  assert.notEqual(rec.status, 'ok')
+  // 前置動作失敗走既有的重試路徑（不寫紀錄、回 null）；不管走哪條，都不准是成功
+  assert.notEqual(rec?.status, 'ok')
   assert.equal(preMsgs(c).length, 0, '第一個動作就定位不到，不該還去送第二個')
   assert.equal(extractMsgs(c).length, 0)
 })

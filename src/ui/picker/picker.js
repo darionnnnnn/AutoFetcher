@@ -56,18 +56,20 @@ function getFormData() {
     const valStr = valInput?.value?.trim() ?? ''
     const num = valStr === '' ? NaN : Number(valStr)
 
+    const frame = row._frame || null
     if (type === 'waitFor') {
-      return {
+      const act = {
         type,
         locator,
         timeoutMs: Number.isFinite(num) ? num : (valStr === '' ? 20000 : NaN)
       }
+      if (frame) act.frame = frame
+      return act
     }
     if (type === 'click') {
-      return {
-        type,
-        locator
-      }
+      const act = { type, locator }
+      if (frame) act.frame = frame
+      return act
     }
     if (type === 'wait') {
       return {
@@ -264,6 +266,14 @@ export async function applyPickerDefaults(task) {
   syncScheduleFields()
 }
 
+// 前置動作的 frame 只在合法時保留（要抓的按鈕可能在另一個 iframe 裡）
+function withFrame(action, frame) {
+  if (frame && typeof frame === 'object' && typeof frame.url === 'string' && frame.url !== '') {
+    action.frame = { url: frame.url }
+  }
+  return action
+}
+
 export function buildTask(values, locator, existing, frame) {
   const id = existing?.id || crypto.randomUUID()
   const spec = buildSpec(values)
@@ -332,13 +342,13 @@ export function buildTask(values, locator, existing, frame) {
         if (a.type === 'click') {
           const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
           if (!hasLoc) return null
-          return { type: 'click', locator: a.locator }
+          return withFrame({ type: 'click', locator: a.locator }, a.frame)
         }
         if (a.type === 'waitFor') {
           const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
           if (!hasLoc) return null
           const timeoutMs = Number.isFinite(Number(a.timeoutMs)) ? Number(a.timeoutMs) : 20000
-          return { type: 'waitFor', locator: a.locator, timeoutMs }
+          return withFrame({ type: 'waitFor', locator: a.locator, timeoutMs }, a.frame)
         }
         if (a.type === 'wait') {
           // 空字串經 Number() 會變成 0，看起來合法但其實是使用者沒填
@@ -955,7 +965,14 @@ function updatePreActionLocatorText(row) {
   const targetEl = row.querySelector('.preaction-target')
   if (!targetEl) return
   const loc = row._locator
-  targetEl.textContent = (loc?.css || loc?.path || '') || '尚未選取'
+  let text = (loc?.css || loc?.path || '') || '尚未選取'
+  if (row._frame?.url) {
+    try {
+      const host = new URL(row._frame.url).hostname
+      if (host) text += `（${host}）`
+    } catch {}
+  }
+  targetEl.textContent = text
 }
 
 /**
@@ -994,6 +1011,7 @@ function addPreActionRow(data = {}) {
   row.className = 'preaction-row'
   row.setAttribute('data-preaction-row', '')
   row._locator = data.locator || null
+  row._frame = data.frame || null
 
   const select = document.createElement('select')
   select.className = 'preaction-type'
@@ -1102,6 +1120,7 @@ function bindPreActionMessageListener() {
       if (msg?.type === MSG.PICKED && msg.purpose === 'preaction') {
         if (lastPreActionPickRow && !msg.cancelled) {
           lastPreActionPickRow._locator = msg.locator || null
+          lastPreActionPickRow._frame = msg.frameUrl ? { url: msg.frameUrl } : null
           updatePreActionLocatorText(lastPreActionPickRow)
         }
       }

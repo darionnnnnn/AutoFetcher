@@ -6,6 +6,9 @@ import { parseNumber } from '../shared/extract.js'
 import { columnHeaders, rowHeader } from '../shared/table.js'
 
 let active = false, currentPurpose = null, currentTaskId = undefined, currentTargetEl = null, backStack = []
+// 進不去框架時要說出來；代理層是 iframe 的替身（見 frameOfProxy）
+let currentHint = null
+let pendingPreselect = null
 let overlayEl = null, highlightEl = null, panelEl = null, menuEl = null
 let tableAxis = null, cellIndex = null, colIndex = null, rowIndex = null, currentDataRows = [], currentRowEl = null
 let selectedList = [], maxPicks = 20, limitReached = false, headerChangedNotice = false
@@ -208,6 +211,41 @@ function getPickName(pick) {
   return '目標'
 }
 
+// iframe 的代理層:滑鼠移到 <iframe> 上時事件由 iframe 自己的文件接走，
+// 最上層永遠 hover 不到那個元素，所以在它上面貼一層可以指到的替身。
+function frameOfProxy(el) {
+  return el && el.getAttribute && el.getAttribute('data-af-frame-proxy') !== null ? el.__afFrame || null : null
+}
+
+// 目標是 iframe（或它的代理層）時，回傳那個 iframe，否則 null
+function iframeOf(el) {
+  if (!el) return null
+  const viaProxy = frameOfProxy(el)
+  if (viaProxy) return viaProxy
+  return el.tagName === 'IFRAME' ? el : null
+}
+
+function buildFrameProxies() {
+  if (typeof document === 'undefined' || !document.body || !overlayEl) return
+  for (const frame of document.querySelectorAll('iframe')) {
+    const rect = typeof frame.getBoundingClientRect === 'function' ? frame.getBoundingClientRect() : null
+    const proxy = document.createElement('div')
+    proxy.setAttribute('data-af-frame-proxy', '')
+    proxy.__afFrame = frame
+    const sx = (typeof window !== 'undefined' && (window.scrollX || window.pageXOffset)) || 0
+    const sy = (typeof window !== 'undefined' && (window.scrollY || window.pageYOffset)) || 0
+    proxy.style.position = 'absolute'
+    proxy.style.left = `${(rect?.left || 0) + sx}px`
+    proxy.style.top = `${(rect?.top || 0) + sy}px`
+    proxy.style.width = `${rect?.width || 0}px`
+    proxy.style.height = `${rect?.height || 0}px`
+    // 這一層必須收得到滑鼠事件,否則就跟沒貼一樣
+    proxy.style.pointerEvents = 'auto'
+    proxy.style.zIndex = '2147483646'
+    overlayEl.appendChild(proxy)
+  }
+}
+
 // 產生說明面板文字
 function updatePanel(panel, el) {
   if (!panel) return
@@ -230,8 +268,24 @@ function updatePanel(panel, el) {
     return
   }
 
+  const frameEl = iframeOf(el)
+  if (frameEl) {
+    const lines = ['框架 iframe']
+    let host = ''
+    try {
+      host = new URL(frameEl.getAttribute('src') || '', location.href).hostname
+    } catch {}
+    if (host) lines.push(host)
+    lines.push('確認即進入這個框架選取')
+    if (currentHint === 'frame_not_found') lines.push('無法進入這個框架')
+    lines.push('Enter 進入 / Esc 取消')
+    panel.textContent = lines.join('\n')
+    return
+  }
+
   if (!el) {
     const lines = []
+    if (currentHint === 'frame_not_found') lines.push('無法進入這個框架')
     if (limitReached || selectedList.length >= maxPicks) lines.push('（已達選取上限）')
     if (headerChangedNotice) lines.push('（位置已變）')
     lines.push('↑ 放大 ↓ 縮小 / Shift 點選加選 / 拖曳框選 / 右鍵選單 / Enter 確認 Esc 取消')
@@ -249,6 +303,7 @@ function updatePanel(panel, el) {
   const lines = [tagDesc]
   if (preview) lines.push(preview)
   lines.push(typeDesc)
+  if (currentHint === 'frame_not_found') lines.push('無法進入這個框架')
   if (limitReached || selectedList.length >= maxPicks) lines.push('（已達選取上限）')
   if (headerChangedNotice) lines.push('（位置已變）')
   lines.push('↑ 放大 ↓ 縮小 / Shift 點選加選 / 拖曳框選 / 右鍵選單 / Enter 確認 Esc 取消')
@@ -368,6 +423,18 @@ function confirmPick() {
     setTarget(pickedTableEl)
   }
   if (!currentTargetEl) return
+
+  // 目標是 iframe(或它的代理層):值在框架裡面，選這個殼沒有意義，改成鑽進去
+  const descendTarget = iframeOf(currentTargetEl)
+  if (descendTarget) {
+    const msg = { type: MSG.DESCEND_FRAME, purpose: currentPurpose, src: descendTarget.getAttribute('src') || '' }
+    if (currentTaskId !== undefined) msg.taskId = currentTaskId
+    if (pendingPreselect) msg.preselect = pendingPreselect
+    chrome.runtime.sendMessage(msg)
+    exitPickMode()
+    return
+  }
+
   const preview = (currentTargetEl.textContent || '').trim()
   const previewValue = parseNumber(preview)
   const blockInfo = { ...kindOf(currentTargetEl) }
@@ -728,7 +795,9 @@ function applyPreselect(preselect, tableEl) {
 function onMouseMove(event) {
   if (!active) return
   const target = event.target
-  if (!target || (overlayEl && (target === overlayEl || overlayEl.contains(target)))) return
+  // overlay 自己的元素一律跳過，唯一例外是 iframe 的代理層——它就是為了被指到才貼的
+  const isProxy = !!frameOfProxy(target)
+  if (!target || (!isProxy && overlayEl && (target === overlayEl || overlayEl.contains(target)))) return
 
   if (dragStart && event.buttons === 1 && currentTargetEl && isTableMode(currentTargetEl)) {
     const info = resolveCell(target, currentTargetEl)
@@ -932,6 +1001,9 @@ export function enterPickMode(opts) {
   suppressClick = false
   menuTargetContext = null
   backStack = []
+  currentHint = opts?.hint || null
+  // 下鑽之後要把原本要勾回的值一起帶過去
+  pendingPreselect = opts?.preselect || null
   if (typeof document === 'undefined' || !document.body) return
 
   originalUserSelect = document.body.style.userSelect || ''
@@ -956,6 +1028,7 @@ export function enterPickMode(opts) {
   overlayEl.appendChild(panelEl)
 
   document.body.appendChild(overlayEl)
+  buildFrameProxies()
   setTarget(opts?.initialTarget || null)
 
   if (opts?.preselect && currentTargetEl && isTableMode(currentTargetEl)) {
@@ -973,6 +1046,7 @@ export function enterPickMode(opts) {
 }
 
 export function exitPickMode() {
+  currentHint = null
   if (typeof document !== 'undefined') {
     document.removeEventListener('mousemove', onMouseMove, true)
     document.removeEventListener('keydown', onKeyDown, true)
