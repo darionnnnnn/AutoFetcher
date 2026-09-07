@@ -866,8 +866,10 @@ function onKeyDown(event) {
   } else if (event.key === 'ArrowUp') {
     event.preventDefault()
     if (!currentTargetEl || currentTargetEl === document.body) return
-    if (currentTargetEl.parentElement) {
-      backStack.push(currentTargetEl); setTarget(currentTargetEl.parentElement)
+    // 指在代理層時往上要走 iframe 的父層；代理層自己的父層是我們的 overlay
+    const anchor = frameOfProxy(currentTargetEl) || currentTargetEl
+    if (anchor.parentElement) {
+      backStack.push(currentTargetEl); setTarget(anchor.parentElement)
     }
   } else if (event.key === 'ArrowDown') {
     event.preventDefault()

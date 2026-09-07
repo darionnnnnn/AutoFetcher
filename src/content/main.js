@@ -217,7 +217,9 @@ if (!globalThis.__afContentLoaded) {
         purpose: msg.purpose,
         taskId: msg.taskId,
         initialTarget: target,
-        preselect: msg.preselect
+        preselect: msg.preselect,
+        // 下鑽失敗被退回來時 background 會帶 hint，面板要讓使用者知道為什麼還在原地
+        hint: msg.hint
       })
       sendResponse({ ok: true })
       return true

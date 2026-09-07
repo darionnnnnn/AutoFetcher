@@ -1,8 +1,8 @@
 # AF 第 6 輪規劃：iframe 內元素的選取與抓取
 
-> 狀態：全案完成，待實測後併 dev
+> 狀態：全案完成已併 dev（體檢完成）
 > 基準：dev@9f89d90（1409 綠；Windows + Node 21 需本輪作業 0 的可攜性修正才跑得綠）
-> 完成：r6（**1462 綠**，+53）
+> 完成：r6 併入 dev（**1464 綠**，+55；含體檢輪 2 條）
 > 來源：使用者實測——目標值在跨網域 iframe 內時選不到也抓不到；並要求支援「先點指定按鈕（可能多層）再抓 iframe」的設定流程
 > 委派模型：整輪 **agy**（跨 background / content / picker 三個執行環境，且要接訊息鏈；地端模型容易斷鏈）
 
@@ -244,8 +244,36 @@
 
 ## 體檢交接
 
+- 實作方：**Claude Opus 5**（作業 0、A、B 委派 agy 後驗收；C、D 與終檢手改親做）。
+- 體檢方：**Claude Fable 5.1**（使用者 `/model` 切換後下收尾指令）。
+- 實作方最沒把握的地方：`content/picker-mode.js` 的代理層與下鑽（跨 document 的互動只有 jsdom 驗過）、
+  `background/frames.js` 第 ③ 層在失敗路徑上對全部非最上層 frame 注入的成本。
+
 - **全量測試：1462 綠 / 0 紅**（基準 1409，本輪 +53）。
 - **真實瀏覽器煙霧測試：Chrome 152 與 Edge 全部通過**（2026-09-07 於 Windows 實跑）。
   新增的 5e 段（跨網域 iframe 先點按鈕才顯示值 → 指名 frameId 擷取）兩個瀏覽器都抓到 5678，
   且最上層找不到該元素——證明值真的來自 iframe。`run_smoke.sh` 另補了 Windows 的 Edge 路徑。
 - 待驗：作業 0 的 `--no-experimental-global-navigator` 在 mac 的舊版 Node 是否被拒絕。
+
+## 體檢輪修正（Fable 5.1，範圍 `9f89d90..HEAD`）
+
+兩條都是「單元測試各自綠、接起來卻壞」的洞——先前的測試直接呼叫 `enterPickMode()`，
+繞過了 `content/main.js` 的訊息路由，而斷點正好在路由那一層。
+
+| # | 哪裡 | 症狀 | 修法 | 迴歸測試 |
+|---|---|---|---|---|
+| 1 | `content/main.js` `ENTER_PICK` 處理 | background 下鑽失敗退回時帶 `hint: 'frame_not_found'`，路由沒把 `hint` 傳進 `enterPickMode` → 真實瀏覽器裡「無法進入這個框架」**永遠不會顯示**，使用者不知道為什麼還留在原地 | 傳 `hint: msg.hint` | `o8_checkup` #1：經 `__emitMessage` 走真實路由，斷言面板文字 |
+| 2 | `content/picker-mode.js` `↑` 鍵 | 指在 iframe 代理層時 `↑` 取 `proxy.parentElement` = 我們自己的 overlay，再按 Enter 就把 overlay 的 `div` 當目標送出（`body > div:nth-of-type(2)`） | `↑` 時以 `frameOfProxy(target) || target` 為起點走父層 | `o8_checkup` #2：代理層 → `↑` → Enter，斷言 `PICKED.locator.path` 是 `body` |
+
+其他角度無發現：規劃比對（實作輪已逐條做過，體檢方重驗一致）、架構契合（新函式皆 ≥2 呼叫端、
+無規格外設定項、`sleep` 各模組自有一份是既有慣例）、CLAUDE.md「不要做」（背景無動態 import、
+色碼只在豁免檔、UI 不碰 `chrome.storage`）、終檢後手改三個 commit（`85b970f`、`7b27d53`、`7f614e5`）
+逐行重讀無問題。
+
+記進 BACKLOG 一項：代理層在進入選取模式時一次建好，之後版面重排（lazy layout 把 iframe 推開）不會跟著更新。
+
+全量測試：**1464 綠 / 0 紅**（實作輪 1462 + 體檢 2）。
+
+## 終檢輪
+
+體檢修正兩處各一行、皆由走真實路由的測試守住；全量重跑 1464 綠。**終檢無新發現。**

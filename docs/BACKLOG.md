@@ -46,6 +46,7 @@
 | 告警觸發時 POST 到 webhook | 使用者要接自動化時(`shared/alerts.js` 的 hits 就是觸發點) |
 | 登入表單在 iframe 內 | 自動登入固定走最上層 frame(SPEC §6);有站台把登入表單放在 iframe 時 |
 | `about:blank` / `srcdoc` iframe 的煙霧驗證 | 網址沒有辨識度,只剩 SPEC §3 第 3 層定位;有使用者回報這種站台時 |
+| iframe 代理層隨版面重排更新 | 目前進入選取模式時一次建好;lazy layout 在之後把 iframe 推開時,代理層會留在舊位置。有使用者回報「指不到 iframe」時,改用 ResizeObserver / 每次 mousemove 重算 |
 | 選取模式從 iframe 往上回到父頁面 | 目前只能往下鑽,要換目標得 `Esc` 重來;使用者反映麻煩時 |
 | 英文介面 / i18n | 上架 Chrome Web Store 或要分享給非中文使用者時 |
 | 從 Distill / Visualping 匯入任務 | 有使用者提出時 |
