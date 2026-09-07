@@ -75,3 +75,23 @@ test('代理層本身不得被當成可以抓的目標送出去', async () => {
   const last = runtimeMsgs(c).at(-1)
   assert.notEqual(last.type, 'PICKED', '送出 PICKED 的話，抓到的會是我們自己貼上去的空 div')
 })
+
+test('iframe 的 src 是相對路徑時，下鑽要送絕對網址', async () => {
+  // 送原始屬性值的話，background 那邊 new URL() 會拋，一律變成「無法進入此框架」
+  resetChromeMock()
+  const c = installChromeMock()
+  const jd = new JSDOM('<!doctype html><html><body><div id="v">1</div><iframe id="fr" src="/inner.html"></iframe></body></html>',
+    { url: 'https://a.test/page' })
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  globalThis.Event = jd.window.Event
+  globalThis.MouseEvent = jd.window.MouseEvent
+  globalThis.KeyboardEvent = jd.window.KeyboardEvent
+  const pm = await import('../src/content/picker-mode.js?t=' + Math.random())
+  const doc = jd.window.document
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('fr') })
+  doc.dispatchEvent(new jd.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  const last = c.__calls.filter(x => x.api === 'runtime.sendMessage').map(x => x.args[0]).at(-1)
+  assert.equal(last.type, 'DESCEND_FRAME')
+  assert.equal(last.src, 'https://a.test/inner.html')
+})

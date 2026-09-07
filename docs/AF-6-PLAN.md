@@ -1,7 +1,8 @@
 # AF 第 6 輪規劃：iframe 內元素的選取與抓取
 
-> 狀態：規劃中
+> 狀態：全案完成，待實測後併 dev
 > 基準：dev@9f89d90（1409 綠；Windows + Node 21 需本輪作業 0 的可攜性修正才跑得綠）
+> 完成：r6（**1462 綠**，+53）
 > 來源：使用者實測——目標值在跨網域 iframe 內時選不到也抓不到；並要求支援「先點指定按鈕（可能多層）再抓 iframe」的設定流程
 > 委派模型：整輪 **agy**（跨 background / content / picker 三個執行環境，且要接訊息鏈；地端模型容易斷鏈）
 
@@ -189,4 +190,37 @@
 
 | 作業-階段 | 執行者 | 結果 | 驗收 | 落差與處置 |
 |---|---|---|---|---|
-| 0 | Claude | 1409 綠（Windows/Node 21.6） | ✅ | mac 舊 Node 待驗 |
+| 0 可攜性 | Claude | 1409 綠（Windows/Node 21.6） | ✅ | mac 舊 Node 待驗 |
+| A 選取端 | agy | 1423 綠 | ✅ 突變未做（純接線） | 摘要宣稱「11 處 sendMessage 皆已帶第三參數」，但它自己貼的 grep 只看得到單行呼叫；實測全綠才採信。多出一個結尾空行，Claude 清掉 |
+| B 抓取端 | agy | 1440 綠 | ✅ 三個突變都紅（多重命中取第一個／不輪詢／定位失敗硬抓 top） | 無。驗收時我用 `git checkout` 還原突變，因 frames.js 未追蹤導致整條指令失敗、突變殘留在 fetcher.js，發現後改回 |
+| C 下鑽＋前置動作 | agy → **Claude** | 1458 綠 | ✅ 三個突變都紅（整批送／不下鑽／代理層收不到滑鼠） | agy 逾 15 分鐘零 diff，依 skill 規則終止改自做 |
+| D 文件＋煙霧 | Claude | 1458 綠 | ✅ | 無 |
+| 終檢-程式碼 | Explore | 無產出 | ❌ | 代理逾時無結果，改由 Claude 自審（見下） |
+| 終檢-文件 | Explore | 2 項落差 + 1 誤判 | ✅ | 見下 |
+
+### 終檢發現與處置
+
+| # | 來源 | 問題 | 處置 |
+|---|---|---|---|
+| 1 | Claude 自審（鏈結 grep） | 前置動作的「在頁面上選取」進到**任務目標的 frame**，與定案 9「先從最上層」矛盾；按鈕在外層時就永遠選不到，而選取模式只能往下鑽回不去 | 改成一律 `frameId: 0`，補測試，SPEC §2 補上這條 |
+| 2 | 文件終檢 A-1 | 下鑽送的是 `getAttribute('src')` 原始值；相對路徑（`src="/inner.html"`）會讓 background 的 `new URL()` 拋出 → 一律「無法進入此框架」 | 抽 `frameSrcOf()` 以 `document.baseURI` 絕對化，面板顯示主機名共用同一份；補相對路徑的測試 |
+| 3 | Claude 自審（precheck） | 預檢的 `frame_not_found` 落到泛用的「抓取失敗」，使用者看不出是框架問題 | 新增分支 → `selector_lost` /「找不到目標所在的框架」，補測試 |
+| 4 | 文件終檢 B-1 | 「煙霧 fixture 不存在」 | **誤判**：fixture 內嵌在 `tests/smoke/load.mjs` 的 5e 段（48123 外層 + 48124 內層兩個 origin），不是獨立檔案 |
+| 5 | 文件終檢 B-2 | PLAN 的執行紀錄與狀態沒更新 | 本節即是 |
+
+### Claude 自審（代替失敗的程式碼終檢）
+
+- `locateFrame` 的迴圈三個出口（命中／`ambiguous`／逾時）都會結束；`timeoutMs: 0` 也會在第一輪就跳出。
+- `injectContent` 與 `sendMessage` 的例外都接住，候選逐一問完才判斷「唯一」。
+- 第 3 層在**每次定位失敗**時都會對所有非最上層 frame 注入一次 content script；
+  廣告很多的頁面上這是一筆額外成本，但只發生在已經等了 20 秒的失敗路徑上，可接受。
+- `DESCEND_FRAME` 不會無限循環：下鑽後在子 frame 進入選取模式，該 frame 內若還有 iframe，
+  再下鑽是往更深一層（frame 樹有限深度），不會回到原點。
+- 代理層掛在 overlay 底下，`exitPickMode` 移除 overlay 時一併消失（有測試守著）。
+
+## 體檢交接
+
+- **全量測試：1462 綠 / 0 紅**（基準 1409，本輪 +53）。
+- 尚未執行真實瀏覽器煙霧測試（`./run_smoke.sh` 需 Chrome for Testing，本機未安裝）；
+  新增的 5e 段（跨網域 iframe 先點按鈕再擷取）**待使用者實測**。
+- 待驗：作業 0 的 `--no-experimental-global-navigator` 在 mac 的舊版 Node 是否被拒絕。

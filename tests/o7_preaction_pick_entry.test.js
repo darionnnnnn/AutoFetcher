@@ -45,3 +45,27 @@ test('目標在最上層時行為不變', async () => {
   doc.querySelector('[data-action="preaction-pick"]').click()
   assert.equal(enterPicks(c).at(-1).frameId, 0)
 })
+
+// ---- 預檢要說得出「是框架的問題」 ----
+
+test('預檢定位不到框架時，燈號原因要指出是框架', async () => {
+  resetChromeMock()
+  const c = installChromeMock()
+  globalThis.navigator = { onLine: true }
+  const st = await import('../src/shared/storage.js?t=' + Math.random())
+  await st.init()
+  const pc = await import('../src/background/precheck.js?t=' + Math.random())
+  const task = {
+    id: 'p1', name: '匯率', url: 'https://a.test/p', mode: 'number', enabled: true,
+    locator: { css: '#v', path: '', anchor: null, xpath: '' },
+    spec: { strategy: 'auto' },
+    frame: { url: 'https://gone.example/w.html' },
+    schedule: { type: 'daily', times: ['09:00'], weekdays: [0, 1, 2, 3, 4, 5, 6] }
+  }
+  await st.saveTask(task)
+  c.__setScriptResponder((injection) => (Array.isArray(injection?.args) ? [] : [{ frameId: 0, result: 'https://a.test/p' }]))
+  c.__setTabResponder((tabId, msg) => (msg.type === 'RESOLVE_LOCATOR' ? { ok: true, found: false } : { ok: true, value: 1 }))
+  await pc.runPrecheck(task, { pollMs: 1, loadTimeoutMs: 100, extraDelayMs: 0, extractTimeoutMs: 100, frameTimeoutMs: 30 })
+  const health = (await st.getHealthMap())?.['p1']
+  assert.match(health?.reason || '', /框架/, `原因是「${health?.reason}」，使用者看不出是框架的問題`)
+})

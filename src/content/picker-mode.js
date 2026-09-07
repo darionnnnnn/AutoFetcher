@@ -211,6 +211,17 @@ function getPickName(pick) {
   return '目標'
 }
 
+// iframe 的 src 一律轉成絕對網址:background 拿它跟 frame 的 location.href 比對，
+// 送相對路徑過去 new URL() 會拋，結果是永遠「無法進入此框架」
+function frameSrcOf(frameEl) {
+  const raw = frameEl?.getAttribute?.('src') || ''
+  try {
+    return new URL(raw, document?.baseURI).href
+  } catch {
+    return raw
+  }
+}
+
 // iframe 的代理層:滑鼠移到 <iframe> 上時事件由 iframe 自己的文件接走，
 // 最上層永遠 hover 不到那個元素，所以在它上面貼一層可以指到的替身。
 function frameOfProxy(el) {
@@ -273,7 +284,7 @@ function updatePanel(panel, el) {
     const lines = ['框架 iframe']
     let host = ''
     try {
-      host = new URL(frameEl.getAttribute('src') || '', location.href).hostname
+      host = new URL(frameSrcOf(frameEl)).hostname
     } catch {}
     if (host) lines.push(host)
     lines.push('確認即進入這個框架選取')
@@ -427,7 +438,7 @@ function confirmPick() {
   // 目標是 iframe(或它的代理層):值在框架裡面，選這個殼沒有意義，改成鑽進去
   const descendTarget = iframeOf(currentTargetEl)
   if (descendTarget) {
-    const msg = { type: MSG.DESCEND_FRAME, purpose: currentPurpose, src: descendTarget.getAttribute('src') || '' }
+    const msg = { type: MSG.DESCEND_FRAME, purpose: currentPurpose, src: frameSrcOf(descendTarget) }
     if (currentTaskId !== undefined) msg.taskId = currentTaskId
     if (pendingPreselect) msg.preselect = pendingPreselect
     chrome.runtime.sendMessage(msg)

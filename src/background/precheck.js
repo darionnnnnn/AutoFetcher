@@ -136,6 +136,10 @@ export async function runPrecheck(task, opts = {}) {
       } else if (res?.error === 'parse_error') {
         status = 'parse_error'
         reason = '抓不到數值'
+      } else if (res?.error === 'frame_not_found') {
+        // 與「找不到元素」分開講：使用者要處理的是 iframe 不見了或換了網址
+        status = 'selector_lost'
+        reason = '找不到目標所在的框架'
       } else {
         status = 'failed'
         reason = '抓取失敗'
