@@ -107,6 +107,13 @@ function handleCheckElement(msg, sendResponse) {
   sendResponse({ ok: true, found })
 }
 
+// 處理 RESOLVE_LOCATOR 訊息：檢查目標元素是否存在
+function handleResolveLocator(msg, sendResponse) {
+  const resolved = resolve(document, msg?.locator)
+  const found = !resolved?.error && !!resolved?.el
+  sendResponse({ ok: true, found })
+}
+
 // 處理 RUN_PRE_ACTIONS 訊息：依序執行前置動作
 async function handlePreActions(msg, sendResponse) {
   const actions = Array.isArray(msg?.actions) ? msg.actions : []
@@ -234,6 +241,11 @@ if (!globalThis.__afContentLoaded) {
 
     if (msg.type === MSG.RUN_PRE_ACTIONS) {
       handlePreActions(msg, sendResponse)
+      return true
+    }
+
+    if (msg.type === MSG.RESOLVE_LOCATOR) {
+      handleResolveLocator(msg, sendResponse)
       return true
     }
   })

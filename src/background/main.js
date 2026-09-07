@@ -21,6 +21,7 @@ import {
   parsePrecheckName
 } from './precheck.js'
 import { injectContent } from './inject.js'
+import { locateFrame } from './frames.js'
 import { scheduleSiteCheck, runSiteCheck } from './sitecheck.js'
 import { isSuccess } from '../shared/record-status.js'
 import { parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
@@ -429,7 +430,14 @@ export async function handleMessage(msg, sender) {
         await sleep(pollMs)
         tabInfo = await chrome.tabs.get(tab.id)
       }
-      await injectContent(tab.id)
+
+      const loc = await locateFrame(tab.id, task.frame, task.locator, { pollMs })
+      if (!loc) {
+        return { ok: false, error: 'frame_not_found' }
+      }
+
+      const frameId = loc.frameId
+      await injectContent(tab.id, { frameId })
       await chrome.tabs.sendMessage(tab.id, {
         type: MSG.ENTER_PICK,
         purpose: msg.purpose || 'repick',
@@ -438,7 +446,7 @@ export async function handleMessage(msg, sender) {
         // 不帶這兩個欄位就沒有預選對象，既有的值也勾不回來
         locator: msg.locator || task.locator,
         preselect: msg.preselect || preselectOf(task)
-      }, { frameId: 0 })
+      }, { frameId })
       return { ok: true }
     }
 

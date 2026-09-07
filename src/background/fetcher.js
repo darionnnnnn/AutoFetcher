@@ -9,6 +9,7 @@ import { evaluateAlerts } from '../shared/alerts.js'
 import { isSuccess, healthStatusOf } from '../shared/record-status.js'
 import { setTaskHealth, refreshBadge } from './health.js'
 import { ensureLoggedIn } from './login.js'
+import { locateFrame } from './frames.js'
 import * as diag from '../shared/diag.js'
 
 // 短暫等待輔助函式（非排程）
@@ -377,11 +378,26 @@ export async function runTask(task, opts = {}) {
         }
       }
 
+      // 定位目標所在的 frame
+      const loc = await locateFrame(tabId, task.frame, task.locator, { pollMs, timeoutMs: opts.frameTimeoutMs ?? 20000 })
+      if (loc === null) {
+        if (dryRun) return { ok: false, error: 'frame_not_found' }
+        return await writeRecord({
+          taskId: task.id,
+          slot,
+          capturedAt: new Date().toISOString(),
+          status: 'not_found',
+          error: '找不到目標所在的框架'
+        }, { parentId: task.id, skipLedger: isManual })
+      }
+
+      await injectContent(tabId, { frameId: loc.frameId })
+
       // 10. 擷取：先 SCROLL_INTO_VIEW，再 EXTRACT
-      await chrome.tabs.sendMessage(tabId, { type: MSG.SCROLL_INTO_VIEW, locator: task.locator }, { frameId: 0 })
+      await chrome.tabs.sendMessage(tabId, { type: MSG.SCROLL_INTO_VIEW, locator: task.locator }, { frameId: loc.frameId })
 
       const res = await Promise.race([
-        chrome.tabs.sendMessage(tabId, { type: MSG.EXTRACT, locator: task.locator, spec: task.spec }, { frameId: 0 }),
+        chrome.tabs.sendMessage(tabId, { type: MSG.EXTRACT, locator: task.locator, spec: task.spec }, { frameId: loc.frameId }),
         new Promise((_, reject) => setTimeout(() => reject(new Error('Extract timeout')), extractTimeoutMs))
       ])
 
