@@ -3,9 +3,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const SRC = new URL('../src/', import.meta.url).pathname
+// Windows 上 URL.pathname 會多一個前導斜線（/C:/…），一律用 fileURLToPath
+const SRC = fileURLToPath(new URL('../src/', import.meta.url))
 
 function walk(dir, filter, out = []) {
   for (const name of readdirSync(dir)) {
@@ -16,7 +18,8 @@ function walk(dir, filter, out = []) {
   return out
 }
 
-const rel = (p) => p.slice(SRC.length)
+// 豁免清單用 '/' 寫，Windows 的 join 會給反斜線，統一正規化
+const rel = (p) => p.slice(SRC.length).split(sep).join('/')
 const jsFiles = () => walk(SRC, (n) => n.endsWith('.js'))
 const read = (p) => readFileSync(p, 'utf8')
 
