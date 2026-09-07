@@ -40,10 +40,24 @@ function isHeaderCell(c) {
   return c?.tagName === 'TH' || c?.getAttribute?.('role') === 'columnheader'
 }
 
-// 取得列中的格子
+const CELL_SELECTOR = 'td, th, [role="cell"], [role="gridcell"], [role="columnheader"]'
+
+// 取得元素所屬的最近表格
+function tableOf(el) {
+  return el && typeof el.closest === 'function' ? el.closest('table, [role="grid"], [role="table"]') : null
+}
+
+// 判定儲存格是否屬於指定表格
+function cellBelongsToTable(cell, tableEl) {
+  return tableOf(cell) === tableEl
+}
+
+// 取得列中的格子（只取這一列自己的儲存格，排除巢狀小表格的儲存格）
 function getRowCells(row) {
   if (!row) return []
-  const cells = row.querySelectorAll ? Array.from(row.querySelectorAll('td, th, [role="cell"], [role="gridcell"], [role="columnheader"]')) : []
+  const rowTable = tableOf(row)
+  const raw = row.querySelectorAll ? Array.from(row.querySelectorAll(CELL_SELECTOR)) : []
+  const cells = rowTable ? raw.filter(c => cellBelongsToTable(c, rowTable)) : raw
   return cells.length > 0 ? cells : Array.from(row.children || [])
 }
 
@@ -57,7 +71,7 @@ function isHeaderRow(r) {
 // 取得表格的所有列
 function getTableRows(tableEl) {
   if (!tableEl) return []
-  const rows = tableEl.querySelectorAll ? Array.from(tableEl.querySelectorAll('tr, [role="row"]')).filter(r => r.closest('table, [role="grid"], [role="table"]') === tableEl) : []
+  const rows = tableEl.querySelectorAll ? Array.from(tableEl.querySelectorAll('tr, [role="row"]')).filter(r => tableOf(r) === tableEl) : []
   return rows.length > 0 ? rows : Array.from(tableEl.children || []).filter(c => c?.getAttribute?.('role') === 'row')
 }
 
@@ -76,8 +90,15 @@ function resolveCell(target, tableEl) {
   const isTable = kindOf(tableEl).kind === 'table'
   let row = null, cell = null, dataRows = []
   if (isTable) {
-    cell = target.closest ? target.closest('td, th, [role="cell"], [role="gridcell"], [role="columnheader"]') : null
-    if (!cell || !tableEl.contains(cell)) return null
+    let curr = target
+    while (curr && curr !== tableEl) {
+      if (curr.matches && curr.matches(CELL_SELECTOR) && cellBelongsToTable(curr, tableEl)) {
+        cell = curr
+        break
+      }
+      curr = curr.parentElement
+    }
+    if (!cell) return null
     row = cell.closest ? cell.closest('tr, [role="row"]') : null
     if (!row || !tableEl.contains(row)) return null
     dataRows = getTableRows(tableEl).filter(r => !isHeaderRow(r))
@@ -326,7 +347,7 @@ function setTarget(el) {
   // 換到另一張表格（或離開表格）時，先前選的列欄索引就沒有意義了；
   // 不清掉會把 A 表的索引配上 B 表的定位一起送出去
   // 滑鼠落在「另一張表格」裡（不論停在表格本身或它的某一格）才算換表
-  const hostTable = el && typeof el.closest === 'function' ? el.closest('table, [role="grid"], [role="table"]') : null
+  const hostTable = tableOf(el)
   if (selectedList.length > 0 && pickedTableEl && hostTable && hostTable !== pickedTableEl &&
       !pickedTableEl.contains(hostTable) && !hostTable.contains(pickedTableEl)) {
     clearPickedMarks(document)
@@ -427,6 +448,39 @@ function computeNameHint(el) {
   return undefined
 }
 
+// 取得單一儲存格的文字內容
+function getCellText(cellSpec, tableEl) {
+  if (!tableEl || !cellSpec || !cellSpec.row || !cellSpec.col) return ''
+  const dataRows = resolveDataRows(tableEl)
+  const rowEl = dataRows[cellSpec.row.index]
+  if (!rowEl) return ''
+  const cells = getRowCells(rowEl)
+  const cellEl = cells[cellSpec.col.index]
+  return (cellEl && cellEl.textContent ? cellEl.textContent : '').trim()
+}
+
+// 取得整欄或整列聚合的描述文字
+function getBlockPreview(blockSpec, tableEl) {
+  if (!tableEl || !blockSpec) return ''
+  const isRow = blockSpec.axis === 'row'
+  const axisName = isRow ? '列' : '欄'
+  const dataRows = resolveDataRows(tableEl)
+  let n = 0
+  const idx = (blockSpec.index !== null && blockSpec.index !== undefined) ? blockSpec.index : 0
+  if (isRow) {
+    const rowEl = dataRows[idx]
+    n = rowEl ? getRowCells(rowEl).length : 0
+  } else {
+    for (const r of dataRows) {
+      const cells = getRowCells(r)
+      if (idx >= 0 && idx < cells.length) n++
+    }
+  }
+  const header = typeof blockSpec.headerText === 'string' ? blockSpec.headerText.trim() : ''
+  const label = header ? `「${header}」` : `第 ${Number(idx) + 1} ${axisName}`
+  return `${label}整${axisName} ${n} 格`
+}
+
 // 送出確認訊息並離開
 function confirmPick() {
   // 已選了值就以那張表格為準：滑鼠可能正停在表格外的一段文字上
@@ -445,24 +499,6 @@ function confirmPick() {
     exitPickMode()
     return
   }
-
-  const preview = (currentTargetEl.textContent || '').trim()
-  const previewValue = parseNumber(preview)
-  const blockInfo = { ...kindOf(currentTargetEl) }
-  if (isTableMode(currentTargetEl)) {
-    blockInfo.axis = tableAxis || 'col'
-    blockInfo.index = currentCellIndex()
-    blockInfo.headerText = getHeaderText()
-  } else {
-    delete blockInfo.axis
-    delete blockInfo.index
-  }
-  const msg = { type: MSG.PICKED, purpose: currentPurpose, locator: describe(currentTargetEl), preview, previewValue, blockInfo }
-  if (isTableMode(currentTargetEl)) {
-    const nameHint = computeNameHint(currentTargetEl)
-    if (nameHint) msg.nameHint = nameHint
-  }
-  if (currentTaskId !== undefined) msg.taskId = currentTaskId
 
   let picks = []
   if (selectedList.length > 0) {
@@ -495,7 +531,55 @@ function confirmPick() {
   if (currentPurpose !== 'task' && picks.length > 1) {
     picks = picks.slice(0, 1)
   }
-  msg.picks = picks
+
+  const blockInfo = { ...kindOf(currentTargetEl) }
+  if (isTableMode(currentTargetEl)) {
+    blockInfo.axis = tableAxis || 'col'
+    blockInfo.index = currentCellIndex()
+    blockInfo.headerText = getHeaderText()
+  } else {
+    delete blockInfo.axis
+    delete blockInfo.index
+  }
+
+  const msg = {
+    type: MSG.PICKED,
+    purpose: currentPurpose,
+    locator: describe(currentTargetEl),
+    blockInfo,
+    picks
+  }
+
+  if (isTableMode(currentTargetEl)) {
+    const nameHint = computeNameHint(currentTargetEl)
+    if (nameHint) msg.nameHint = nameHint
+  }
+  if (currentTaskId !== undefined) msg.taskId = currentTaskId
+
+  if (!isTableMode(currentTargetEl)) {
+    msg.preview = (currentTargetEl.textContent || '').trim()
+    msg.previewValue = parseNumber(msg.preview)
+  } else if (picks.length > 1) {
+    const firstText = picks[0].cell
+      ? getCellText(picks[0].cell, currentTargetEl)
+      : (picks[0].block ? getBlockPreview(picks[0].block, currentTargetEl) : (currentTargetEl.textContent || '').trim())
+    msg.preview = `${firstText}（共 ${picks.length} 個值）`
+  } else if (picks.length === 1 && picks[0].cell) {
+    const cellText = getCellText(picks[0].cell, currentTargetEl)
+    msg.preview = cellText
+    const num = parseNumber(cellText)
+    if (num !== null) {
+      msg.previewValue = num
+    }
+  } else if (picks.length === 1 && picks[0].block) {
+    msg.preview = getBlockPreview(picks[0].block, currentTargetEl)
+  } else {
+    msg.preview = (currentTargetEl.textContent || '').trim()
+    const num = parseNumber(msg.preview)
+    if (num !== null) {
+      msg.previewValue = num
+    }
+  }
 
   chrome.runtime.sendMessage(msg)
   exitPickMode()
@@ -522,7 +606,7 @@ function closeMenu() {
 function openMenu(event) {
   const target = event.target
   const tableEl = (currentTargetEl && isTableMode(currentTargetEl)) ? currentTargetEl
-    : (target && target.closest ? target.closest('table, [role="grid"], [role="table"]') : null)
+    : tableOf(target)
   const isTable = Boolean(tableEl && isTableMode(tableEl))
 
   if (!menuEl) {
