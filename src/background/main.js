@@ -21,6 +21,7 @@ import {
   parsePrecheckName
 } from './precheck.js'
 import { injectContent } from './inject.js'
+import { locateFrame, listFrames, matchFrameByUrl } from './frames.js'
 import { scheduleSiteCheck, runSiteCheck } from './sitecheck.js'
 import { isSuccess } from '../shared/record-status.js'
 import { parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
@@ -276,6 +277,12 @@ export async function handleAlarm(alarm, testOpts = {}) {
 }
 
 // 處理內部訊息分派
+// 送訊息那個 frame 的身分；最上層不留欄位（舊任務零遷移的前提）
+function frameIdentityOf(sender) {
+  if (sender?.frameId === undefined || sender.frameId === 0) return {}
+  return { frameId: sender.frameId, frameUrl: sender.url }
+}
+
 export async function handleMessage(msg, sender) {
   try {
     if (!msg || typeof msg !== 'object') return undefined
@@ -349,7 +356,7 @@ export async function handleMessage(msg, sender) {
 
       if (msg.purpose === 'preaction' || (typeof msg.purpose === 'string' && msg.purpose.startsWith('login-'))) {
         try {
-          await chrome.runtime.sendMessage(msg)
+          await chrome.runtime.sendMessage({ ...msg, ...frameIdentityOf(sender) })
         } catch {}
         return { ok: true }
       }
@@ -366,6 +373,7 @@ export async function handleMessage(msg, sender) {
           // 使用者一次挑的那幾個值；漏掉這一個欄位，多值任務就會退化成單值
           picks: msg.picks
         }
+        Object.assign(payload, frameIdentityOf(sender))
         const ctx = encodeURIComponent(JSON.stringify(payload))
         const base = typeof chrome.runtime?.getURL === 'function'
           ? await chrome.runtime.getURL('ui/picker/picker.html')
@@ -394,9 +402,32 @@ export async function handleMessage(msg, sender) {
       return { ok: true }
     }
 
+    if (msg.type === MSG.DESCEND_FRAME) {
+      const tabId = sender?.tab?.id
+      if (!tabId) return { ok: true }
+      const enter = {
+        type: MSG.ENTER_PICK,
+        purpose: msg.purpose,
+        taskId: msg.taskId,
+        preselect: msg.preselect
+      }
+      // 選取當下沒有目標的 locator 可以驗證，所以只用網址比對；
+      // 不是唯一命中就退回原本那一層，硬猜會鑽錯 iframe
+      const matched = matchFrameByUrl(await listFrames(tabId), msg.src)
+      if (matched?.frameId !== undefined) {
+        await injectContent(tabId, { frameId: matched.frameId })
+        await chrome.tabs.sendMessage(tabId, enter, { frameId: matched.frameId })
+        return { ok: true }
+      }
+      const backTo = sender?.frameId ?? 0
+      await chrome.tabs.sendMessage(tabId, { ...enter, hint: 'frame_not_found' }, { frameId: backTo })
+      return { ok: true }
+    }
+
     if (msg.type === MSG.ENTER_PICK) {
       if (msg.tabId) {
-        await injectContent(msg.tabId)
+        const frameId = msg.frameId ?? 0
+        await injectContent(msg.tabId, { frameId })
         const known = msg.taskId ? await getTask(msg.taskId) : null
         await chrome.tabs.sendMessage(msg.tabId, {
           type: MSG.ENTER_PICK,
@@ -406,7 +437,7 @@ export async function handleMessage(msg, sender) {
           // 要靠任務自己的 locator 才找得到目標，也才勾得回既有的值
           locator: msg.locator || known?.locator,
           preselect: msg.preselect || preselectOf(known)
-        })
+        }, { frameId })
         return { ok: true }
       }
 
@@ -424,7 +455,14 @@ export async function handleMessage(msg, sender) {
         await sleep(pollMs)
         tabInfo = await chrome.tabs.get(tab.id)
       }
-      await injectContent(tab.id)
+
+      const loc = await locateFrame(tab.id, task.frame, task.locator, { pollMs })
+      if (!loc) {
+        return { ok: false, error: 'frame_not_found' }
+      }
+
+      const frameId = loc.frameId
+      await injectContent(tab.id, { frameId })
       await chrome.tabs.sendMessage(tab.id, {
         type: MSG.ENTER_PICK,
         purpose: msg.purpose || 'repick',
@@ -433,7 +471,7 @@ export async function handleMessage(msg, sender) {
         // 不帶這兩個欄位就沒有預選對象，既有的值也勾不回來
         locator: msg.locator || task.locator,
         preselect: msg.preselect || preselectOf(task)
-      })
+      }, { frameId })
       return { ok: true }
     }
 
@@ -537,15 +575,16 @@ export async function handleContextMenu(info, tab) {
         width: 480,
         height: 760
       })
-      await injectContent(tab.id)
-      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'login-user' })
+      await injectContent(tab.id, { frameId: 0 })
+      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'login-user' }, { frameId: 0 })
       return
     }
 
     if (info.menuItemId === 'af-pick') {
       if (!tab?.id) return
-      await injectContent(tab.id)
-      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'task' })
+      const frameId = info.frameId ?? 0
+      await injectContent(tab.id, { frameId })
+      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'task' }, { frameId })
       return
     }
   } catch {}

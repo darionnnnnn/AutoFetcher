@@ -383,3 +383,32 @@ test('記住的目標儀表板與卡片型別下次要套回來', async () => {
   const checked = [...doc.querySelectorAll('#card-types input:checked')].map(i => i.value)
   assert.deepEqual(checked, ['line'], '存了卻不還原，等於每次都要重選')
 })
+
+// ---- AF-6:iframe 的 frame 身分要從右鍵一路走到存進任務 ----
+
+test('在 iframe 裡右鍵選的目標，frame 身分要一路傳到任務裡', async () => {
+  const { c } = await freshBg()
+  // ① 右鍵落在 frameId 7
+  await c.__emitContextMenuClick({ menuItemId: 'af-pick', frameId: 7 }, { id: 3, url: 'https://a.test/p' })
+  const enter = c.__calls.filter(x => x.api === 'tabs.sendMessage').at(-1)
+  assert.deepEqual(enter.args[2], { frameId: 7 }, 'ENTER_PICK 沒指名 frame 就會廣播，top 會搶先回應')
+
+  // ② 那個 frame 裡的 content script 送回 PICKED
+  await sendTo(c, {
+    type: 'PICKED', purpose: 'task', locator: { css: '#rate' }, preview: '31.2'
+  }, { tab: { id: 3, url: 'https://a.test/p' }, frameId: 7, url: 'https://b.example/widget.html?token=abc' })
+
+  const created = c.__calls.find(x => x.api === 'windows.create')
+  const ctx = JSON.parse(decodeURIComponent(created.args[0].url.split('?ctx=')[1]))
+  assert.equal(ctx.frameUrl, 'https://b.example/widget.html?token=abc', 'frame 網址掉在 background 就再也找不回那個 frame')
+
+  // ③ Picker 把它存進任務
+  const { pk } = await freshPicker()
+  const task = pk.buildTask(
+    { name: '匯率', url: ctx.url, mode: 'number', strategy: 'auto', scheduleType: 'daily', times: ['09:30'], weekdays: [1] },
+    ctx.locator,
+    undefined,
+    ctx.frameUrl ? { url: ctx.frameUrl } : undefined
+  )
+  assert.deepEqual(task.frame, { url: 'https://b.example/widget.html?token=abc' })
+})

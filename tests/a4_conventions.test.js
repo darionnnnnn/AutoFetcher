@@ -3,9 +3,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const SRC = new URL('../src/', import.meta.url).pathname
+// Windows 上 URL.pathname 會多一個前導斜線（/C:/…），一律用 fileURLToPath
+const SRC = fileURLToPath(new URL('../src/', import.meta.url))
 
 function walk(dir, filter, out = []) {
   for (const name of readdirSync(dir)) {
@@ -16,7 +18,8 @@ function walk(dir, filter, out = []) {
   return out
 }
 
-const rel = (p) => p.slice(SRC.length)
+// 豁免清單用 '/' 寫，Windows 的 join 會給反斜線，統一正規化
+const rel = (p) => p.slice(SRC.length).split(sep).join('/')
 const jsFiles = () => walk(SRC, (n) => n.endsWith('.js'))
 const read = (p) => readFileSync(p, 'utf8')
 
@@ -93,4 +96,88 @@ test('D12 守門:色碼字面值只准出現在 theme.css 與兩處已記錄的�
     if (hits.length > 0) offenders.push(`${rel(p)}(${hits.length})`)
   }
   assert.deepEqual(offenders, [], `顏色一律走 theme.css 變數:${offenders.join(', ')}`)
+})
+
+test('D13 守門:tabs.sendMessage 一律指名 frameId(否則會廣播給每個 frame)', () => {
+  const offenders = []
+  for (const p of jsFiles()) {
+    const src = read(p)
+    const target = 'chrome.tabs.sendMessage('
+    let idx = 0
+    while ((idx = src.indexOf(target, idx)) !== -1) {
+      let i = idx + target.length
+      let parenDepth = 0
+      let braceDepth = 0
+      let bracketDepth = 0
+      let topCommas = 0
+      let inString = null
+
+      while (i < src.length) {
+        const ch = src[i]
+        const next = src[i + 1]
+
+        if (inString) {
+          if (ch === '\\') {
+            i += 2
+            continue
+          }
+          if (ch === inString) {
+            inString = null
+          }
+          i++
+          continue
+        }
+
+        if (ch === '/' && next === '/') {
+          i += 2
+          while (i < src.length && src[i] !== '\n') i++
+          continue
+        }
+
+        if (ch === '/' && next === '*') {
+          i += 2
+          while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i++
+          i += 2
+          continue
+        }
+
+        if (ch === "'" || ch === '"' || ch === '`') {
+          inString = ch
+          i++
+          continue
+        }
+
+        if (ch === '(') {
+          parenDepth++
+        } else if (ch === ')') {
+          if (parenDepth === 0 && braceDepth === 0 && bracketDepth === 0) {
+            break
+          }
+          parenDepth--
+        } else if (ch === '{') {
+          braceDepth++
+        } else if (ch === '}') {
+          braceDepth--
+        } else if (ch === '[') {
+          bracketDepth++
+        } else if (ch === ']') {
+          bracketDepth--
+        } else if (ch === ',') {
+          if (parenDepth === 0 && braceDepth === 0 && bracketDepth === 0) {
+            topCommas++
+          }
+        }
+
+        i++
+      }
+
+      if (topCommas < 2) {
+        const line = src.slice(0, idx).split('\n').length
+        offenders.push(`${rel(p)}:${line}`)
+      }
+
+      idx = i + 1
+    }
+  }
+  assert.deepEqual(offenders, [], `tabs.sendMessage 必須帶第 3 個引數指定 frameId:${offenders.join(', ')}`)
 })

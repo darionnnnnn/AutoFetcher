@@ -9,6 +9,7 @@ import { evaluateAlerts } from '../shared/alerts.js'
 import { isSuccess, healthStatusOf } from '../shared/record-status.js'
 import { setTaskHealth, refreshBadge } from './health.js'
 import { ensureLoggedIn } from './login.js'
+import { locateFrame } from './frames.js'
 import * as diag from '../shared/diag.js'
 
 // 短暫等待輔助函式（非排程）
@@ -366,22 +367,54 @@ export async function runTask(task, opts = {}) {
       // 9. 注入 content script（必須在送訊息之前）
       await injectContent(tabId)
 
-      // 執行前置動作（若有指定）
+      // 執行前置動作（若有指定）：一次一個，各自定位自己的 frame。
+      // 「先點按鈕，iframe 才出現」是常見情境，整批送給同一個 frame 一定失敗。
       if (Array.isArray(task.preActions) && task.preActions.length > 0) {
-        const preRes = await chrome.tabs.sendMessage(tabId, {
-          type: MSG.RUN_PRE_ACTIONS,
-          actions: task.preActions
-        })
-        if (preRes?.ok !== true) {
-          throw new Error(`前置動作失敗：${preRes?.error || '未知錯誤'}`)
+        for (let i = 0; i < task.preActions.length; i++) {
+          const action = task.preActions[i]
+          if (action?.type === 'wait') {
+            const ms = typeof action.ms === 'number' ? action.ms : 0
+            if (ms > 0) await sleep(ms)
+            continue
+          }
+          const actionTimeout = action?.type === 'waitFor'
+            ? (action.timeoutMs ?? 20000)
+            : (opts.frameTimeoutMs ?? 20000)
+          const actionLoc = await locateFrame(tabId, action?.frame, action?.locator, { pollMs, timeoutMs: actionTimeout })
+          if (actionLoc === null) {
+            throw new Error(`前置動作失敗：第 ${i + 1} 個動作找不到所在的框架`)
+          }
+          await injectContent(tabId, { frameId: actionLoc.frameId })
+          const preRes = await chrome.tabs.sendMessage(tabId, {
+            type: MSG.RUN_PRE_ACTIONS,
+            actions: [action]
+          }, { frameId: actionLoc.frameId })
+          if (preRes?.ok !== true) {
+            throw new Error(`前置動作失敗：${preRes?.error || '未知錯誤'}`)
+          }
         }
       }
 
+      // 定位目標所在的 frame
+      const loc = await locateFrame(tabId, task.frame, task.locator, { pollMs, timeoutMs: opts.frameTimeoutMs ?? 20000 })
+      if (loc === null) {
+        if (dryRun) return { ok: false, error: 'frame_not_found' }
+        return await writeRecord({
+          taskId: task.id,
+          slot,
+          capturedAt: new Date().toISOString(),
+          status: 'not_found',
+          error: '找不到目標所在的框架'
+        }, { parentId: task.id, skipLedger: isManual })
+      }
+
+      await injectContent(tabId, { frameId: loc.frameId })
+
       // 10. 擷取：先 SCROLL_INTO_VIEW，再 EXTRACT
-      await chrome.tabs.sendMessage(tabId, { type: MSG.SCROLL_INTO_VIEW, locator: task.locator })
+      await chrome.tabs.sendMessage(tabId, { type: MSG.SCROLL_INTO_VIEW, locator: task.locator }, { frameId: loc.frameId })
 
       const res = await Promise.race([
-        chrome.tabs.sendMessage(tabId, { type: MSG.EXTRACT, locator: task.locator, spec: task.spec }),
+        chrome.tabs.sendMessage(tabId, { type: MSG.EXTRACT, locator: task.locator, spec: task.spec }, { frameId: loc.frameId }),
         new Promise((_, reject) => setTimeout(() => reject(new Error('Extract timeout')), extractTimeoutMs))
       ])
 

@@ -12,6 +12,7 @@ src/
 ├── background/          ← service worker:main 總接線 / scheduler 排程 / fetcher 抓取 / login 自動登入
 │                          precheck 預檢 / sitecheck 每日站台檢查 / missed 補抓 / watchdog 看門狗
 │                          health 燈號 / notify 通知唯一入口 / inject 注入唯一入口
+│                          frames 目標所在 iframe 的定位唯一入口
 ├── content/             ← 注入頁面:main.js 訊息路由/擷取/填登入/前置動作
 │                          picker-mode.js 選取模式(高亮 overlay、↑↓、表格點欄列)
 ├── ui/theme.css         ← **顏色的唯一來源**(亮/暗雙軌 + --chart-1~8 圖表調色盤)
@@ -43,6 +44,8 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   `<任務id>#<值key>`;任何地方都不得自己 split 字串。父任務 id 與序列 id 各用在哪見 SPEC §7 的分工表,
   記錯會讓冪等失效或畫面永遠空白。
 - **UI 監看資料變動的唯一入口**:`shared/storage` 的 `subscribe`(UI 不得自己碰 `chrome.storage.onChanged`)。
+- **frame 定位只有一份**:`background/frames.js`(`listFrames` / `matchFrameByUrl` / `locateFrame`);
+  任務存的是 `frame: { url }`,**`frameId` 存不得**(每次載入都不同),見 SPEC §3。
 - **health 一律經 `background/health.js` 的 `setTaskHealth` 寫**(fetcher / precheck / sitecheck 三個呼叫端);
   抓取結果 → 狀態的算法只有 `fetcher.js` 的 `healthFromRecords` 那一份。
 
@@ -55,7 +58,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1409 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1458 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -95,6 +98,9 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **不要在 background 直接呼叫 `chrome.notifications.create`**:一律走 `background/notify.js`
   (唯一入口、統一圖示、遵守通知偏好)。`iconUrl` 必須是 `chrome.runtime.getURL()` 的絕對網址。
 - **不要用 `executeScript({files})` 注入 content script**:它是 ES module,一律走 `background/inject.js`。
+- **不要讓 `chrome.tabs.sendMessage` 少掉第三個參數**:一個分頁可能有多個 frame,不指名 `{ frameId }`
+  就是廣播,最上層會搶先回「找不到」而結案(`tests/a4_conventions.test.js` 的 D13 會擋)。
+- **不要用 `matchOriginAsFallback`**:它不是 `executeScript` 的屬性,只用於 `registerContentScripts` 與 manifest。
 - **不要為了讓測試好寫去改寫內建原型**:改測試,不要改實作(`tests/a4_conventions.test.js` 會擋)。
 - **不要在 `src/` 寫色碼字面值**:只有兩處豁免,都是拿不到 CSS 變數的執行環境——
   `content/picker-mode.js`(注入在網頁上,網頁沒載入 theme.css)與

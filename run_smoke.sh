@@ -3,6 +3,10 @@
 set -e
 cd "$(dirname "$0")"
 CFT=$(ls -d .browsers/chrome/*/chrome-mac-arm64/"Google Chrome for Testing.app"/Contents/MacOS/"Google Chrome for Testing" 2>/dev/null | head -1)
+# Windows(Git Bash)的 Chrome for Testing 路徑不同
+if [ -z "$CFT" ]; then
+  CFT=$(ls -d .browsers/chrome/*/chrome-win64/chrome.exe 2>/dev/null | head -1)
+fi
 if [ -z "$CFT" ]; then
   echo "缺少 Chrome for Testing,先跑:npx @puppeteer/browsers install chrome@stable --path \"\$PWD/.browsers\""
   exit 1

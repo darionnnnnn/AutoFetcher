@@ -147,11 +147,29 @@ try {
 <script>document.getElementById('go').onclick = () => {
   document.title = document.getElementById('u').value + '/' + document.getElementById('p').value
 }</script>`
+  // 跨網域 iframe 的內頁:另一個 origin(不同主機名 + 不同 port)。
+  // 值一開始不在頁面上,要先點按鈕才出現——這就是本輪要支援的情境。
+  const innerHtml = `<!doctype html><meta charset="utf-8">
+<button id="show" type="button">顯示</button>
+<div id="iv" style="display:none">5,678</div>
+<script>document.getElementById('show').onclick = () => {
+  document.getElementById('iv').style.display = 'block'
+}</script>`
+  const outerHtml = `<!doctype html><meta charset="utf-8">
+<h1>外層</h1>
+<iframe id="fr" src="http://localhost:48124/inner" width="400" height="200"></iframe>`
   const server = http.createServer((req, res) => {
     res.setHeader('content-type', 'text/html; charset=utf-8')
-    res.end(req.url.startsWith('/login') ? loginHtml : fixtureHtml)
+    if (req.url.startsWith('/login')) return res.end(loginHtml)
+    if (req.url.startsWith('/withframe')) return res.end(outerHtml)
+    res.end(fixtureHtml)
   })
   await new Promise(r => server.listen(48123, '127.0.0.1', r))
+  const innerServer = http.createServer((req, res) => {
+    res.setHeader('content-type', 'text/html; charset=utf-8')
+    res.end(innerHtml)
+  })
+  await new Promise(r => innerServer.listen(48124, '127.0.0.1', r))
 
   const pageUnderTest = await browser.newPage()
   const targetErrors = []
@@ -284,9 +302,65 @@ try {
   }
   await loginPage.close()
 
+  // 5e. 跨網域 iframe:列 frame → 指名 frame 注入 → 先點按鈕 → 抓 iframe 裡的值
+  //     這是 AF-6 的核心:不指名 frame 的話訊息會廣播,最上層會搶先回「找不到」。
+  const framePage = await browser.newPage()
+  await framePage.goto('http://127.0.0.1:48123/withframe', { waitUntil: 'load' })
+  await new Promise(r => setTimeout(r, 500))
+  const frameResult = await ext2.evaluate(async () => {
+    const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/withframe*' })
+    if (tabs.length === 0) return { error: '找不到含 iframe 的分頁' }
+    const tabId = tabs[0].id
+    const out = {}
+    const listed = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: () => location.href
+    })
+    out.frames = listed.map(r => ({ frameId: r.frameId, url: r.result }))
+    const inner = out.frames.find(f => (f.url || '').includes(':48124/'))
+    if (!inner) return { ...out, error: '列不到跨網域 iframe' }
+    out.frameId = inner.frameId
+    await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [inner.frameId] },
+      func: (url) => import(url),
+      args: [chrome.runtime.getURL('content/main.js')]
+    })
+    // 先點按鈕（前置動作），值才會出現
+    out.pre = await chrome.tabs.sendMessage(tabId, {
+      type: 'RUN_PRE_ACTIONS',
+      actions: [{ type: 'click', locator: { css: '#show', path: '', anchor: null, xpath: '' } }]
+    }, { frameId: inner.frameId })
+    out.extract = await chrome.tabs.sendMessage(tabId, {
+      type: 'EXTRACT',
+      locator: { css: '#iv', path: '', anchor: null, xpath: '' },
+      spec: { strategy: 'auto' }
+    }, { frameId: inner.frameId })
+    // 最上層找不到這個元素——證明剛才那筆值真的來自 iframe 而不是碰巧
+    out.topFound = await chrome.tabs.sendMessage(tabId, {
+      type: 'RESOLVE_LOCATOR',
+      locator: { css: '#iv', path: '', anchor: null, xpath: '' }
+    }, { frameId: 0 }).catch(e => ({ error: String(e) }))
+    return out
+  })
+  if (frameResult.error) {
+    errors.push(`跨網域 iframe:${frameResult.error}`)
+  } else if (frameResult.pre?.ok !== true) {
+    errors.push(`iframe 內的前置動作失敗:${JSON.stringify(frameResult.pre)}`)
+  } else if (frameResult.extract?.ok !== true) {
+    errors.push(`iframe 內擷取失敗:${JSON.stringify(frameResult.extract)}`)
+  } else if (frameResult.extract.value !== 5678) {
+    errors.push(`iframe 內應抓到 5678,實得 ${frameResult.extract.value}`)
+  } else if (frameResult.topFound?.found === true) {
+    errors.push('最上層也找得到 #iv,這個煙霧測試證明不了值來自 iframe')
+  } else {
+    console.log(`${browserName}:跨網域 iframe 先點按鈕再擷取成功 (frameId=${frameResult.frameId}, value=${frameResult.extract.value})`)
+  }
+  await framePage.close()
+
   await ext2.close()
   await pageUnderTest.close()
   await new Promise(r => server.close(r))
+  await new Promise(r => innerServer.close(r))
 
   await ext.evaluate(() => chrome.storage.local.clear())
   await ext.close()
