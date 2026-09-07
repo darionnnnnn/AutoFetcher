@@ -1046,7 +1046,10 @@ function addPreActionRow(data = {}) {
         purpose: 'preaction',
         tabId: currentCtx?.tabId,
         taskId: currentCtx?.task?.id,
-        frameId: currentCtx?.frameId ?? 0
+        // 一律從最上層開始：要點的按鈕跟要抓的值常常不在同一層（值在 iframe 裡、
+        // 按鈕是外層的頁籤）。進到值所在的 frame 就選不到外層的按鈕了——
+        // 選取模式只能往下鑽、回不去（SPEC §2）。
+        frameId: 0
       })
     }
   })
