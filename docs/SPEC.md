@@ -144,6 +144,14 @@
 - 「立即測試」與正式抓取共用同一份規格組裝 `buildSpec(values)`,不得各組一份
   (否則區塊模式的預覽會落回數值策略鏈,測到整張表的第一個數字)。
   編輯既有任務時沒有目標分頁,「立即測試」維持隱藏。
+- **「立即測試」由 background 執行,不是 Picker 自己對頁面送 `EXTRACT`**:
+  Picker 用 `buildTask` 組一個未儲存的任務(id `__preview`),送 `TEST_TASK{task, tabId}`;
+  background 以 `runTask(task, { dryRun: true, reason: 'manual', tabId })` 跑完整流程
+  ——找分頁、等載入、登入檢查、`locateFrame` 重新定位 iframe、`injectContent` 重新注入、`EXTRACT`——
+  結果原樣回傳,**不寫紀錄、不進帳本、不存任務**。
+  自己直送會在目標頁重新整理後拿到「Could not establish connection」:content script 已經不在、
+  `frameId` 也換了。`runTask` 的 `opts.tabId` 指定分頁存在就沿用,不在就退回原本的找分頁流程。
+  失敗時錯誤只放 `#errors`、`#preview` 顯示 `—`(同一句話不重複顯示兩次)。
 
 ## §3 選擇器(穩定性)
 

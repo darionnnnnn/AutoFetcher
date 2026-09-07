@@ -1305,14 +1305,18 @@ export async function handleTestNow() {
   if (errorsEl) errorsEl.textContent = ''
 
   const values = getFormData()
-  const spec = buildSpec(values)
+  if (!values.url && currentCtx?.url) values.url = currentCtx.url
+  // buildTask 內部會呼叫 buildSpec(values) 組出規格
+  const task = buildTask(values, currentCtx?.locator, currentCtx?.task, currentCtx?.frameUrl ? { url: currentCtx.frameUrl } : undefined)
+  // 這個任務不會被儲存，id 只是讓 runTask 的 inflight 鍵有個名字
+  task.id = '__preview'
 
   try {
-    const res = await chrome.tabs.sendMessage(currentCtx?.tabId, {
-      type: MSG.EXTRACT,
-      locator: currentCtx?.locator,
-      spec
-    }, { frameId: currentCtx?.frameId ?? 0 })
+    const res = await chrome.runtime.sendMessage({
+      type: MSG.TEST_TASK,
+      task,
+      tabId: currentCtx?.tabId
+    })
     if (res && res.ok) {
       if (values.fields) {
         const lines = values.fields.map(f => {
@@ -1329,15 +1333,16 @@ export async function handleTestNow() {
       } else {
         if (previewEl) previewEl.textContent = res.value !== undefined ? String(res.value) : (res.raw ?? '')
       }
+      if (errorsEl) errorsEl.textContent = ''
     } else {
       const err = res?.error || '找不到目標元素'
-      if (previewEl) previewEl.textContent = err
       if (errorsEl) errorsEl.textContent = err
+      if (previewEl) previewEl.textContent = '—'
     }
   } catch (e) {
     const err = e?.message || '找不到目標元素'
-    if (previewEl) previewEl.textContent = err
     if (errorsEl) errorsEl.textContent = err
+    if (previewEl) previewEl.textContent = '—'
   }
 }
 

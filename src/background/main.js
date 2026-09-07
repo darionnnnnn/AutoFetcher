@@ -290,6 +290,14 @@ export async function handleMessage(msg, sender) {
   try {
     if (!msg || typeof msg !== 'object') return undefined
 
+    if (msg.type === MSG.TEST_TASK) {
+      const task = msg.task
+      if (!task || typeof task !== 'object' || !task.url || !task.locator || !task.spec) {
+        return { ok: false, error: '任務設定不完整' }
+      }
+      return await runTask(task, { dryRun: true, reason: 'manual', tabId: msg.tabId })
+    }
+
     if (msg.type === MSG.RUN_TASK) {
       const { task } = await getValidTask(msg.taskId)
       if (!task) {

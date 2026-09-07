@@ -1,6 +1,6 @@
 # AF-7 第 7 輪規劃：單格選取修正、立即測試改走背景、選取工具列、外觀
 
-> 狀態：實作中（批次 A 完成，1485 綠）
+> 狀態：實作中（批次 A、B 完成，1498 綠）
 > 基準：dev@98836d4（1464 綠）
 > 來源：使用者回饋三項（iframe 內巢狀表格選錯值、立即測試「Receiving end does not exist」、選取模式要有軸向切換與排除已選項）＋ UX／外觀強化
 
@@ -201,7 +201,7 @@
 | A-1 shared 巢狀判準 | agy | 通過 | 自跑 A-1/A-2 綠、突變 otherCellsEmpty 殺死 | Claude 補 resolveHtmlTable:容器 div 包表格時欄名/資料列會變空(agy 沒察覺),另加護欄測試 |
 | A-2 選取模式格子歸屬與預覽 | agy | 通過 | 自跑 A-3 綠、兩處守門突變各殺死 2/1 條 | 無 |
 | A-3 Picker 單格一等公民 | agy | 通過 | 全套 1485 綠、三處守門突變各殺死 3/1/1 條 | getFormData 為了測試改成 export(可接受,render/buildSpec 本就外露) |
-| B | | | | |
+| B 立即測試走背景 | agy | 通過 | 全套 1498 綠、三處守門突變各殺死 6/6/12 條 | Claude 改寫 c1_picker 一條釘住舊契約的測試（規格禁止 agy 動 tests）；暫時任務 id 由 `__test` 改 `__preview`，避免誤觸慣例掃描 |
 | C | | | | |
 | D | | | | |
 
