@@ -366,6 +366,10 @@ export async function handleMessage(msg, sender) {
           // 使用者一次挑的那幾個值；漏掉這一個欄位，多值任務就會退化成單值
           picks: msg.picks
         }
+        if (sender?.frameId !== undefined && sender.frameId !== 0) {
+          payload.frameId = sender.frameId
+          payload.frameUrl = sender.url
+        }
         const ctx = encodeURIComponent(JSON.stringify(payload))
         const base = typeof chrome.runtime?.getURL === 'function'
           ? await chrome.runtime.getURL('ui/picker/picker.html')
@@ -396,7 +400,8 @@ export async function handleMessage(msg, sender) {
 
     if (msg.type === MSG.ENTER_PICK) {
       if (msg.tabId) {
-        await injectContent(msg.tabId)
+        const frameId = msg.frameId ?? 0
+        await injectContent(msg.tabId, { frameId })
         const known = msg.taskId ? await getTask(msg.taskId) : null
         await chrome.tabs.sendMessage(msg.tabId, {
           type: MSG.ENTER_PICK,
@@ -406,7 +411,7 @@ export async function handleMessage(msg, sender) {
           // 要靠任務自己的 locator 才找得到目標，也才勾得回既有的值
           locator: msg.locator || known?.locator,
           preselect: msg.preselect || preselectOf(known)
-        })
+        }, { frameId })
         return { ok: true }
       }
 
@@ -433,7 +438,7 @@ export async function handleMessage(msg, sender) {
         // 不帶這兩個欄位就沒有預選對象，既有的值也勾不回來
         locator: msg.locator || task.locator,
         preselect: msg.preselect || preselectOf(task)
-      })
+      }, { frameId: 0 })
       return { ok: true }
     }
 
@@ -537,15 +542,16 @@ export async function handleContextMenu(info, tab) {
         width: 480,
         height: 760
       })
-      await injectContent(tab.id)
-      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'login-user' })
+      await injectContent(tab.id, { frameId: 0 })
+      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'login-user' }, { frameId: 0 })
       return
     }
 
     if (info.menuItemId === 'af-pick') {
       if (!tab?.id) return
-      await injectContent(tab.id)
-      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'task' })
+      const frameId = info.frameId ?? 0
+      await injectContent(tab.id, { frameId })
+      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'task' }, { frameId })
       return
     }
   } catch {}

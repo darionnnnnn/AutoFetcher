@@ -371,17 +371,17 @@ export async function runTask(task, opts = {}) {
         const preRes = await chrome.tabs.sendMessage(tabId, {
           type: MSG.RUN_PRE_ACTIONS,
           actions: task.preActions
-        })
+        }, { frameId: 0 })
         if (preRes?.ok !== true) {
           throw new Error(`前置動作失敗：${preRes?.error || '未知錯誤'}`)
         }
       }
 
       // 10. 擷取：先 SCROLL_INTO_VIEW，再 EXTRACT
-      await chrome.tabs.sendMessage(tabId, { type: MSG.SCROLL_INTO_VIEW, locator: task.locator })
+      await chrome.tabs.sendMessage(tabId, { type: MSG.SCROLL_INTO_VIEW, locator: task.locator }, { frameId: 0 })
 
       const res = await Promise.race([
-        chrome.tabs.sendMessage(tabId, { type: MSG.EXTRACT, locator: task.locator, spec: task.spec }),
+        chrome.tabs.sendMessage(tabId, { type: MSG.EXTRACT, locator: task.locator, spec: task.spec }, { frameId: 0 }),
         new Promise((_, reject) => setTimeout(() => reject(new Error('Extract timeout')), extractTimeoutMs))
       ])
 

@@ -264,7 +264,7 @@ export async function applyPickerDefaults(task) {
   syncScheduleFields()
 }
 
-export function buildTask(values, locator, existing) {
+export function buildTask(values, locator, existing, frame) {
   const id = existing?.id || crypto.randomUUID()
   const spec = buildSpec(values)
   if (existing?.spec) {
@@ -298,6 +298,10 @@ export function buildTask(values, locator, existing) {
     locator,
     spec,
     schedule
+  }
+  const resolvedFrame = frame || existing?.frame
+  if (resolvedFrame) {
+    task.frame = resolvedFrame
   }
   if (values.fields) {
     task.fields = values.fields.map(f => ({ key: f.key, name: f.name }))
@@ -1023,7 +1027,8 @@ function addPreActionRow(data = {}) {
         type: MSG.ENTER_PICK,
         purpose: 'preaction',
         tabId: currentCtx?.tabId,
-        taskId: currentCtx?.task?.id
+        taskId: currentCtx?.task?.id,
+        frameId: currentCtx?.frameId ?? 0
       })
     }
   })
@@ -1161,7 +1166,7 @@ export async function handleSave() {
     return
   }
 
-  const task = buildTask(values, currentCtx?.locator, currentCtx?.task)
+  const task = buildTask(values, currentCtx?.locator, currentCtx?.task, currentCtx?.frameUrl ? { url: currentCtx.frameUrl } : undefined)
   await saveTask(task)
   if (globalThis.chrome?.runtime?.sendMessage) {
     await chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS })
@@ -1251,7 +1256,7 @@ export async function handleTestNow() {
       type: MSG.EXTRACT,
       locator: currentCtx?.locator,
       spec
-    })
+    }, { frameId: currentCtx?.frameId ?? 0 })
     if (res && res.ok) {
       if (values.fields) {
         const lines = values.fields.map(f => {

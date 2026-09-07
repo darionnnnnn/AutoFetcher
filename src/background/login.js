@@ -77,7 +77,7 @@ export async function ensureLoggedIn(tabId, task, opts) {
       const checkRes = await chrome.tabs.sendMessage(tabId, {
         type: MSG.CHECK_ELEMENT,
         selector: 'input[type="password"]'
-      })
+      }, { frameId: 0 })
       isLoginPage = checkRes?.ok === true && checkRes?.found === true
     } catch {
       isLoginPage = false
@@ -110,7 +110,7 @@ export async function ensureLoggedIn(tabId, task, opts) {
       selectors: site.selectors,
       username: site.username,
       password: plainPassword
-    })
+    }, { frameId: 0 })
   } catch {
     return await recordLoginFailure(origin, site)
   }
@@ -136,7 +136,7 @@ export async function ensureLoggedIn(tabId, task, opts) {
       const checkRes = await chrome.tabs.sendMessage(tabId, {
         type: MSG.CHECK_ELEMENT,
         selector: site.successCheck.value
-      })
+      }, { frameId: 0 })
       isSuccess = checkRes?.ok === true && checkRes?.found === true
     } catch {
       isSuccess = false
