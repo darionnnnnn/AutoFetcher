@@ -1,6 +1,6 @@
 // AutoFetcher 區塊型別偵測（選取模式面板與 §7 區塊聚合共用同一份判定）
 import { parseNumber } from './extract.js'
-import { columnHeaders } from './table.js'
+import { columnHeaders, innermostTable } from './table.js'
 
 const CELL_SELECTOR = 'td, th, [role="cell"], [role="gridcell"], [role="columnheader"]'
 
@@ -14,7 +14,10 @@ function isTableLike(el) {
 // 取得表格的列元素；ARIA 表格可能沒有 tr
 function getRows(el) {
   if (typeof el.querySelectorAll !== 'function') return []
-  const rows = Array.from(el.querySelectorAll('tr, [role="row"]'))
+  const allRows = Array.from(el.querySelectorAll('tr, [role="row"]'))
+  const rows = allRows.filter(
+    (row) => typeof row.closest !== 'function' || row.closest('table, [role="grid"], [role="table"]') === el
+  )
   if (rows.length > 0) return rows
   return Array.from(el.children || []).filter(
     (child) => child.getAttribute && child.getAttribute('role') === 'row'
@@ -28,7 +31,10 @@ function describeTable(el) {
 
   for (const row of rows) {
     if (typeof row.querySelectorAll !== 'function') continue
-    const cells = row.querySelectorAll(CELL_SELECTOR)
+    const allCells = Array.from(row.querySelectorAll(CELL_SELECTOR))
+    const cells = allCells.filter(
+      (cell) => typeof cell.closest !== 'function' || cell.closest('tr, [role="row"]') === row
+    )
     if (cells.length > cols) cols = cells.length
   }
 
@@ -44,11 +50,9 @@ function describeTable(el) {
 export function detectKind(el) {
   if (!el) return { kind: 'text', value: null }
 
-  // 1. 表格：巢狀表格取最內層（排版用表格常把真正的資料表包在裡面）
+  // 1. 表格：巢狀表格只在純包裝時取內層
   if (isTableLike(el)) {
-    const inner = typeof el.querySelector === 'function' ? el.querySelector('table') : null
-    if (inner) return describeTable(inner)
-    return describeTable(el)
+    return describeTable(innermostTable(el))
   }
 
   // 2. 清單

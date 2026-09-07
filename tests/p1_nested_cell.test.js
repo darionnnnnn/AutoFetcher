@@ -67,6 +67,14 @@ test('A-1 rowHeader 取那一列第一個非空文字（外層第一格是空 sp
   assert.equal(rowHeader(rows[FIRST_IP_ROW]), '10.231.1.31')
 })
 
+test('A-1 外層容器（div）包著表格時仍找得到欄名與資料列', () => {
+  const wrap = el(`<div><table>
+      <thead><tr><th>甲</th><th>乙</th></tr></thead>
+      <tbody><tr><td>1</td><td>2</td></tr></tbody></table></div>`)
+  assert.deepEqual(columnHeaders(wrap), ['甲', '乙'], '選取模式常把容器當目標，不能因此變成空的')
+  assert.equal(getDataRows(wrap).length, 1)
+})
+
 test('A-1 沒有 th 的表格 columnHeaders 是空陣列，定位只能靠索引', () => {
   assert.deepEqual(columnHeaders(monitorTable()), [])
 })
