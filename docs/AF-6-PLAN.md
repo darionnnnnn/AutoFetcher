@@ -80,7 +80,8 @@
    「設定此站台登入」維持 top（定案 4）。
 3. `PICKED{purpose:'task'}`：payload 增 `frameId: sender.frameId`、`frameUrl: sender.url`；**`frameId === 0` 時兩欄都不放**。
 4. `ui/picker`：`buildTask` 在 ctx 有 `frameUrl` 時寫 `task.frame = { url }`；編輯既有任務保留原 `frame`；「立即測試」的 `EXTRACT` 帶 `{ frameId: ctx.frameId ?? 0 }`。
-5. `ENTER_PICK` 帶 `tabId` 的那條路（picker 內的重選／前置動作選取）沿用 ctx 的 frameId（選到 `<iframe>` 元素時的下鑽在作業 C 加）。
+5. `ENTER_PICK` 帶 `tabId` 的那條路（picker 內的前置動作選取）沿用 ctx 的 frameId（選到 `<iframe>` 元素時的下鑽在作業 C 加）。
+   **（終檢推翻：改為一律 `frameId: 0`，理由見〈終檢發現與處置〉第 1 項。任務頁的重選不帶 `tabId`，走 background 自開分頁 + `locateFrame` 那條路。）**
 6. `tests/chrome-mock.js`：`tabs.sendMessage(tabId, msg, options)` 記錄第三個參數；`scripting.executeScript` 可由測試預設回傳值（`allFrames` 列 frame 用）。
 
 ### 測試／驗收（Claude 先寫，agy 實作）
@@ -217,6 +218,29 @@
 - `DESCEND_FRAME` 不會無限循環：下鑽後在子 frame 進入選取模式，該 frame 內若還有 iframe，
   再下鑽是往更深一層（frame 樹有限深度），不會回到原點。
 - 代理層掛在 overlay 底下，`exitPickMode` 移除 overlay 時一併消失（有測試守著）。
+
+## 規劃 vs 實作 逐條比對（2026-09-07 收尾複查）
+
+定案 1~9、作業 A（6 項）、B（5 項）、C（4 項）、D（4 項）**全部有實作**，逐條證據見下方
+「已核對」清單；以下只列**與規劃文字不同**的四處：
+
+| # | 規劃原文 | 實際 | 判定 |
+|---|---|---|---|
+| 1 | 作業 A 改動 5：前置動作選取「沿用 ctx 的 frameId」 | 一律 `frameId: 0` | **刻意推翻**（定案 9 要求「先從最上層」；沿用 ctx 會讓外層按鈕選不到）。已改寫上方 A5 |
+| 2 | 定案 3：「任何一層命中超過一個 → 進下一層」 | 第 ① 層多重命中時**直接跳到第 ③ 層**，不經第 ② 層 | **等價簡化**：網址完全相同的兩個 frame，`origin+pathname` 必然也相同，第 ② 層不可能區分得出來 |
+| 3 | 定案 9：下鑽送「該元素的 `src`」 | 送以 `document.baseURI` 絕對化的網址 | **修正**：送原始屬性值時，相對路徑會讓對端 `new URL()` 拋出（終檢第 2 項） |
+| 4 | 作業 D 改動 4：煙霧 fixture「兩個本機 port 各服務一頁」 | 實作為 `tests/smoke/load.mjs` 內嵌的兩個 server（48123 / 48124），非獨立 fixture 檔 | **形式不同、實質相同**，Chrome + Edge 實跑通過 |
+
+規劃外另補了三項（皆源自終檢，已記在〈終檢發現與處置〉）：iframe 代理層、
+前置動作選取的進入層修正、預檢的 `frame_not_found` 專屬原因。
+
+已核對的關鍵證據：`inject.js:2-5`（A1）、`main.js:585-588`（A2）、`main.js:280-284,376`（A3、C3 共用組裝）、
+`picker.js:312-315,1281`（A4）、`chrome-mock.js:218,308`（A6）、`frames.js:10,24,72`（B1）、
+`fetcher.js:399-410`（B2）、`main.js:459-466`（B3）、`login.js` 三處 `{frameId: 0}`（B4）、
+`a4_conventions.test.js:101`（B5）、`picker.js:269-274,340-351`（C1）、`fetcher.js:370-396`（C2）、
+`main.js:405-425`（C3）、`picker.js:59,969,1014,1126`（C4）、`smoke/load.mjs:150-172,305-362`（D4）。
+「明確不做」四項確認都沒做：`src/` 內查無 `webNavigation`、`contentDocument`、`matchOriginAsFallback`；
+`shared/record-status.js` 全輪零改動。
 
 ## 體檢交接
 
