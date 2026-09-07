@@ -9,7 +9,7 @@
 
 ```
 ┌──────────────── 目標網頁(任意站台)────────────────┐
-│ content script(注入)                               │
+│ content script(注入,**每個 frame 各一份**)         │
 │  • 記住最後右鍵的元素                               │
 │  • 產生 / 解析四層選擇器(§3)                        │
 │  • 擷取:文字 / 數值策略鏈(§11)/ 表格聚合(§7)       │
@@ -38,6 +38,8 @@
 └─────────────────┘          └───────────────────────────────┘
 ```
 
+- **frame 是第四個維度**:同一個分頁可能有多個 frame(iframe),content script 每個 frame 各一份。
+  background 送訊息**一律指名 `{ frameId }`**——不指名就是廣播,最上層會搶先回「找不到」而結案(§3)。
 - **三個執行環境**:content script 只碰 DOM;background 只做排程與流程;UI 頁只讀寫 storage 與發訊息。
   彼此以 `chrome.runtime.sendMessage` 溝通,訊息型別集中在 `shared/messages.js`。
 - **資料流**:右鍵 → content 描述元素 → picker 存任務 → scheduler 建 alarm → 到點 fetcher 開分頁擷取 → storage →
@@ -93,6 +95,18 @@
   - **一個任務只抓一個元素,但那個元素裡可以挑多個值**(§7):
     同一張匯率表要抓美金買入與賣出,是一個任務兩個值;
     同一頁要抓四張**不同的表格**,才是四個任務(各自命名)。
+- **目標在 iframe 內時(§3 的 `frame`)**:
+  - 在 iframe 裡右鍵 → `contextMenus.onClicked` 的 `info.frameId` 就是那個 frame,
+    直接在**該 frame** 進入選取模式(這是最常走、也最省事的一條)。
+  - 在最上層右鍵、目標卻在 iframe 裡 → 選取模式在 iframe 上蓋一層**代理層**
+    (`data-af-frame-proxy`,`pointer-events: auto`)。**沒有這一層就 hover 不到 `<iframe>`**:
+    滑鼠移到 iframe 上時事件由 iframe 自己的文件接走,最上層的 overlay 又是 `pointer-events: none`。
+    指到代理層時面板顯示「框架 iframe / 主機名 / 確認即進入這個框架選取」。
+  - 確認的目標是 `<iframe>`(或其代理層)時**不送 `PICKED`**,改送 `DESCEND_FRAME{purpose, taskId, src, preselect}`;
+    background 以 `src` 對當下的 frame 清單做**網址比對**(只有 §3 的第 1、2 層——選取當下還沒有目標的 locator 可驗證),
+    唯一命中才注入該 frame 並重新 `ENTER_PICK`(`purpose` 原樣帶著)。
+  - 不是唯一命中 → 退回發出要求的那一層,`ENTER_PICK` 帶 `hint: 'frame_not_found'`,面板顯示「無法進入這個框架」。
+  - **只能往下鑽,不能往上回**(`↑` 到該 frame 的 `body` 就停住);要換目標一律 `Esc` 重來。
 - 選到表格類元素時,content 一併算出 **`nameHint`**(表格的 `<caption>` → 目標之前最近的
   `h1`~`h6` → 頁面 `title`,截 60 字)帶進 `PICKED`,Picker 拿它當任務名稱的預設值;
   非表格不帶,由 Picker 退回文字錨定或預覽前 20 字。
@@ -131,6 +145,22 @@
 4. 絕對 XPath(最後手段)
 
 三者以上失敗 → 紀錄 `status: "not_found"`,並附當時 DOM 片段前 500 字方便除錯。
+
+**目標在 iframe 內時另存 `task.frame = { url }`**(選取當下那個 frame 的 `location.href`);
+目標在最上層時**不存這個欄位**(舊任務零遷移,沒有這個鍵就等於最上層)。
+`frameId` 每次載入都不同、**存不得**——排程到點是開新分頁,所以要重新定位。
+定位只有一份實作:`background/frames.js` 的 `locateFrame`,三層,**第一個「唯一」命中為準**:
+
+1. 網址完全相同
+2. `origin + pathname` 相同(query 常帶 token 或時戳)
+3. 逐個候選 frame 送 `RESOLVE_LOCATOR`(只判定不擷取),唯一 `found` 的那個
+
+任一層命中兩個以上 → 進下一層;**第 3 層多重命中或全部失敗 → 判失敗**
+(取錯 frame 會靜默抓到隔壁那張表的數字,比抓不到更糟)。
+iframe 可能是「先點按鈕才出現」,所以 1、2 層是**輪詢**等待(預設 20 秒)。
+定位失敗一律寫 `status: "not_found"`、`error: "找不到目標所在的框架"`——**不新增 status 種類**。
+列 frame 用 `chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: () => location.href })`,
+**不需要 `webNavigation` 權限**。`about:blank` / `srcdoc` 的 iframe 網址沒有辨識度,只剩第 3 層,盡力而為。
 
 ## §4 排程與擷取流程
 
@@ -223,6 +253,13 @@
   `waitFor`(等某元素出現,預設逾時 20 秒,用 `MutationObserver` 不用輪詢)、
   `click`(點某元素:關閉彈窗、切分頁籤)、`wait`(等 N 毫秒)。
   在 Picker 的「前置動作」區設定,要點的元素直接回頁面上選(走 §2 的選取模式)。
+- **前置動作逐一執行,每個動作各自帶 `frame`**(形狀同 `task.frame`,缺省 = 最上層):
+  每個動作執行前各自 `locateFrame`(`waitFor` 用自己的 `timeoutMs`,`click` 用 20 秒),
+  命中才注入該 frame 並送**只含這一個動作**的 `RUN_PRE_ACTIONS`。
+  整批送給同一個 frame 是行不通的:要點的按鈕可能在最上層,而值在 iframe 裡。
+  定位不到 → 走既有的前置動作失敗路徑(訊息含第幾個動作),後面的動作與擷取都不執行。
+  **`wait` 由 background 自己等**,不送訊息到頁面、也不需要 frame。
+- **順序是「先跑完全部前置動作,再定位目標的 frame」**:iframe 常常是點了按鈕才出現、或切頁籤後整個重建。
 - **額外等待秒數**的優先序:呼叫端指定 > `task.extraDelaySec` > `settings.extraDelaySec` > 3 秒。
   `0` 是合法值(代表不等)。
 
@@ -532,6 +569,11 @@
 content script 是 ES module,`executeScript({files})` 以傳統 script 注入會拋
 `Cannot use import statement outside a module`,注入必須改成 `executeScript({func: (url) => import(url)})`,
 而動態 import 只能讀 web accessible 的資源。代價是網頁可以探測本擴充功能是否安裝(列 BACKLOG)。
+
+跨網域 iframe 的注入靠既有的 `host_permissions: ["<all_urls>"]`,**不需要新權限**;
+列出分頁裡有哪些 frame 也**不需要 `webNavigation`**——`executeScript` 的 `allFrames: true`
+回傳的每一項就帶 `frameId`。注意 `matchOriginAsFallback` **不是** `executeScript` 的屬性
+(它只用於 `registerContentScripts` 與 manifest 的 `content_scripts`)。
 
 `icons`(16/32/48/128)與 `action.default_icon` 為必填:通知的 `iconUrl` 只要載不到,
 Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runtime.getURL()` 取絕對網址**——

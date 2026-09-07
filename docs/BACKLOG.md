@@ -44,7 +44,9 @@
 | `web_accessible_resources` 收斂成單一 bundle | 上架審核要求、或有人反映網頁可探測到本擴充功能時(需要打包步驟,與「無框架原生 JS」慣例衝突) |
 | 前置動作支援輸入文字、捲動到底 | 目前只有等元素/點元素/等待;有站台需要時 |
 | 告警觸發時 POST 到 webhook | 使用者要接自動化時(`shared/alerts.js` 的 hits 就是觸發點) |
-| iframe 內元素 | 目標值在跨域 iframe 內時(需 allFrames 注入) |
+| 登入表單在 iframe 內 | 自動登入固定走最上層 frame(SPEC §6);有站台把登入表單放在 iframe 時 |
+| `about:blank` / `srcdoc` iframe 的煙霧驗證 | 網址沒有辨識度,只剩 SPEC §3 第 3 層定位;有使用者回報這種站台時 |
+| 選取模式從 iframe 往上回到父頁面 | 目前只能往下鑽,要換目標得 `Esc` 重來;使用者反映麻煩時 |
 | 英文介面 / i18n | 上架 Chrome Web Store 或要分享給非中文使用者時 |
 | 從 Distill / Visualping 匯入任務 | 有使用者提出時 |
 | 互動版獨立 HTML 報表(目前是靜態快照) | 使用者需要在匯出檔內切換範圍或篩選時 |
