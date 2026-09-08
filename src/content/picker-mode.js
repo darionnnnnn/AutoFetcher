@@ -1,9 +1,24 @@
-// 豁免說明：此檔案在網頁 isolated world 執行，網頁未載入 ui/theme.css，因此為全專案唯一允許寫色碼字面值之檔案。色碼源自 ui/theme.css 亮色：主色 #2563eb、白 #ffffff、警示 #d97706。
+// 豁免說明：此檔案在網頁 isolated world 執行，網頁未載入 ui/theme.css，
+// 因此為全專案唯一允許寫色碼字面值之檔案。所有色碼集中在下方 COLORS 常數，
+// 其餘程式碼一律引用 COLORS 的屬性。
 import { MSG } from '../shared/messages.js'
 import { describe } from '../shared/selector.js'
 import { detectKind } from '../shared/block-detect.js'
 import { parseNumber } from '../shared/extract.js'
 import { columnHeaders, rowHeader } from '../shared/table.js'
+
+// 顏色常數（對應 theme.css 暗色軌）——這是本檔唯一允許出現色碼字面值的地方
+const COLORS = {
+  bg: '#0f172a',
+  surface: '#1e293b',
+  border: '#334155',
+  text: '#f8fafc',
+  textMuted: '#94a3b8',
+  primary: '#3b82f6',
+  warn: '#fbbf24',
+  ok: '#22c55e',
+  danger: '#ef4444'
+}
 
 let active = false, currentPurpose = null, currentTaskId = undefined, currentTargetEl = null, backStack = []
 // 進不去框架時要說出來；代理層是 iframe 的替身（見 frameOfProxy）
@@ -125,7 +140,7 @@ function clearMarkedCells(doc) {
   for (const cell of d.querySelectorAll('[data-af-cell]')) {
     cell.removeAttribute('data-af-cell')
     if (cell.hasAttribute('data-af-picked')) {
-      cell.style.outline = '2px solid #2563eb'
+      cell.style.outline = `2px solid ${COLORS.primary}`
     } else {
       cell.style.outline = ''
     }
@@ -138,21 +153,21 @@ function markCells(cell, dataRows, row, mode, cIdx) {
   if (mode === 'cell') {
     if (cell && !isHeaderCell(cell)) {
       cell.setAttribute('data-af-cell', '')
-      cell.style.outline = '2px solid #d97706'
+      cell.style.outline = `2px solid ${COLORS.warn}`
     }
   } else if (mode === 'col' && cIdx !== null && cIdx >= 0 && dataRows) {
     for (const dRow of dataRows) {
       const targetCell = getRowCells(dRow)[cIdx]
       if (targetCell && !isHeaderCell(targetCell)) {
         targetCell.setAttribute('data-af-cell', '')
-        targetCell.style.outline = '2px solid #d97706'
+        targetCell.style.outline = `2px solid ${COLORS.warn}`
       }
     }
   } else if (mode === 'row' && row) {
     for (const c of getRowCells(row)) {
       if (!isHeaderCell(c)) {
         c.setAttribute('data-af-cell', '')
-        c.style.outline = '2px solid #d97706'
+        c.style.outline = `2px solid ${COLORS.warn}`
       }
     }
   }
@@ -165,7 +180,7 @@ function clearPickedMarks(doc) {
   for (const cell of d.querySelectorAll('[data-af-picked]')) {
     cell.removeAttribute('data-af-picked')
     if (cell.hasAttribute('data-af-cell')) {
-      cell.style.outline = '2px solid #d97706'
+      cell.style.outline = `2px solid ${COLORS.warn}`
     } else {
       cell.style.outline = ''
     }
@@ -186,7 +201,7 @@ function applyPickedMarks(tableEl) {
         if (cell && !isHeaderCell(cell)) {
           cell.setAttribute('data-af-picked', '')
           if (!cell.hasAttribute('data-af-cell')) {
-            cell.style.outline = '2px solid #2563eb'
+            cell.style.outline = `2px solid ${COLORS.primary}`
           }
         }
       }
@@ -198,7 +213,7 @@ function applyPickedMarks(tableEl) {
           if (cell && !isHeaderCell(cell)) {
             cell.setAttribute('data-af-picked', '')
             if (!cell.hasAttribute('data-af-cell')) {
-              cell.style.outline = '2px solid #2563eb'
+              cell.style.outline = `2px solid ${COLORS.primary}`
             }
           }
         }
@@ -209,7 +224,7 @@ function applyPickedMarks(tableEl) {
             if (!isHeaderCell(cell)) {
               cell.setAttribute('data-af-picked', '')
               if (!cell.hasAttribute('data-af-cell')) {
-                cell.style.outline = '2px solid #2563eb'
+                cell.style.outline = `2px solid ${COLORS.primary}`
               }
             }
           }
@@ -316,12 +331,12 @@ function updateToolbar() {
 
     if (key === pickMode) {
       btn.setAttribute('data-af-active', '')
-      btn.style.backgroundColor = '#2563eb'
-      btn.style.color = '#ffffff'
+      btn.style.backgroundColor = COLORS.primary
+      btn.style.color = COLORS.text
     } else {
       btn.removeAttribute('data-af-active')
-      btn.style.backgroundColor = '#ffffff'
-      btn.style.color = '#2563eb'
+      btn.style.backgroundColor = COLORS.surface
+      btn.style.color = COLORS.primary
     }
   }
 }
@@ -377,10 +392,14 @@ function updatePanel(panel, el) {
       chip.setAttribute('data-af-chip', String(i))
       chip.style.display = 'inline-flex'
       chip.style.alignItems = 'center'
-      chip.style.backgroundColor = 'rgba(255, 255, 255, 0.2)'
+      chip.style.backgroundColor = COLORS.surface
+      chip.style.color = COLORS.text
+      chip.style.border = `1px solid ${COLORS.border}`
       chip.style.borderRadius = '3px'
       chip.style.padding = '2px 6px'
-      chip.style.fontSize = '11px'
+      chip.style.fontSize = '12px'
+      chip.style.minHeight = '28px'
+      chip.style.transition = 'background-color 150ms ease'
 
       const nameSpan = document.createElement('span')
       nameSpan.textContent = getPickName(pick)
@@ -388,7 +407,7 @@ function updatePanel(panel, el) {
 
       const removeBtn = document.createElement('span')
       removeBtn.setAttribute('data-af-chip-remove', '')
-      removeBtn.textContent = '×'
+      removeBtn.textContent = '\u00d7'
       removeBtn.style.marginLeft = '6px'
       removeBtn.style.cursor = 'pointer'
       removeBtn.style.fontWeight = 'bold'
@@ -403,13 +422,15 @@ function updatePanel(panel, el) {
     removeLastBtn.setAttribute('data-af-remove-last', '')
     removeLastBtn.textContent = '移除最後一項'
     removeLastBtn.style.padding = '2px 8px'
-    removeLastBtn.style.fontSize = '11px'
-    removeLastBtn.style.backgroundColor = '#ffffff'
-    removeLastBtn.style.color = '#2563eb'
-    removeLastBtn.style.border = 'none'
+    removeLastBtn.style.fontSize = '12px'
+    removeLastBtn.style.backgroundColor = COLORS.surface
+    removeLastBtn.style.color = COLORS.primary
+    removeLastBtn.style.border = `1px solid ${COLORS.border}`
     removeLastBtn.style.borderRadius = '3px'
     removeLastBtn.style.cursor = 'pointer'
+    removeLastBtn.style.minHeight = '28px'
     removeLastBtn.style.marginBottom = '4px'
+    removeLastBtn.style.transition = 'background-color 150ms ease'
     panel.appendChild(removeLastBtn)
 
     const noticeLines = []
@@ -765,11 +786,11 @@ function openMenu(event) {
   menuEl.style.position = 'fixed'
   menuEl.style.left = `${event.clientX || 0}px`
   menuEl.style.top = `${event.clientY || 0}px`
-  menuEl.style.backgroundColor = '#ffffff'
-  menuEl.style.border = '1px solid #2563eb'
+  menuEl.style.backgroundColor = COLORS.surface
+  menuEl.style.border = `1px solid ${COLORS.border}`
   menuEl.style.borderRadius = '4px'
   menuEl.style.padding = '4px 0'
-  menuEl.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.15)'
+  menuEl.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.4)'
   menuEl.style.zIndex = '2147483647'
   menuEl.style.pointerEvents = 'auto'
 
@@ -802,9 +823,10 @@ function openMenu(event) {
     el.style.padding = '6px 16px'
     el.style.cursor = 'pointer'
     el.style.fontSize = '12px'
-    el.style.color = '#2563eb'
-    el.style.backgroundColor = '#ffffff'
+    el.style.color = COLORS.text
+    el.style.backgroundColor = COLORS.surface
     el.style.userSelect = 'none'
+    el.style.transition = 'background-color 150ms ease'
     menuEl.appendChild(el)
   }
 }
@@ -1353,16 +1375,21 @@ export function enterPickMode(opts) {
 
   highlightEl = document.createElement('div')
   highlightEl.setAttribute('data-af-highlight', '')
-  highlightEl.style.position = 'absolute'; highlightEl.style.border = '2px solid #2563eb'
+  highlightEl.style.position = 'absolute'; highlightEl.style.border = `2px solid ${COLORS.primary}`
   highlightEl.style.boxSizing = 'border-box'; highlightEl.style.pointerEvents = 'none'; highlightEl.style.zIndex = '2147483647'
   overlayEl.appendChild(highlightEl)
 
-  // 建立工具列
+  // 建立工具列（三段相連，作用中段用主色底）
   toolbarEl = document.createElement('div')
   toolbarEl.setAttribute('data-af-toolbar', '')
   toolbarEl.style.position = 'fixed'; toolbarEl.style.right = '16px'; toolbarEl.style.top = '16px'
-  toolbarEl.style.display = 'flex'; toolbarEl.style.gap = '4px'; toolbarEl.style.pointerEvents = 'auto'
+  toolbarEl.style.display = 'flex'; toolbarEl.style.gap = '0'; toolbarEl.style.pointerEvents = 'auto'
   toolbarEl.style.zIndex = '2147483647'
+  toolbarEl.style.backgroundColor = COLORS.surface
+  toolbarEl.style.border = `1px solid ${COLORS.border}`
+  toolbarEl.style.borderRadius = '8px'
+  toolbarEl.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.4)'
+  toolbarEl.style.overflow = 'hidden'
 
   const toolsDef = [
     { key: 'cell', label: '單格' },
@@ -1377,19 +1404,26 @@ export function enterPickMode(opts) {
     btn.textContent = def.label
     btn.style.padding = '4px 10px'
     btn.style.fontSize = '12px'
-    btn.style.borderRadius = '4px'
-    btn.style.border = '1px solid #2563eb'
+    btn.style.borderRadius = '0'
+    btn.style.border = 'none'
+    btn.style.borderRight = `1px solid ${COLORS.border}`
     btn.style.cursor = 'pointer'
     btn.style.fontFamily = 'inherit'
+    btn.style.minHeight = '28px'
+    btn.style.transition = 'background-color 150ms ease, color 150ms ease'
     toolbarEl.appendChild(btn)
   }
+  // 移除最後一個按鈕的右邊框
+  if (toolbarEl.lastChild) toolbarEl.lastChild.style.borderRight = 'none'
   overlayEl.appendChild(toolbarEl)
 
   panelEl = document.createElement('div')
   panelEl.setAttribute('data-af-panel', '')
   panelEl.style.position = 'fixed'; panelEl.style.right = '16px'; panelEl.style.bottom = '16px'
-  panelEl.style.backgroundColor = '#2563eb'; panelEl.style.color = '#ffffff'; panelEl.style.pointerEvents = 'auto'; panelEl.style.zIndex = '2147483647'
-  panelEl.style.padding = '8px 12px'; panelEl.style.borderRadius = '4px'; panelEl.style.fontSize = '12px'; panelEl.style.lineHeight = '1.4'; panelEl.style.whiteSpace = 'pre-line'
+  panelEl.style.backgroundColor = COLORS.surface; panelEl.style.color = COLORS.textMuted; panelEl.style.pointerEvents = 'auto'; panelEl.style.zIndex = '2147483647'
+  panelEl.style.border = `1px solid ${COLORS.border}`
+  panelEl.style.padding = '8px 12px'; panelEl.style.borderRadius = '8px'; panelEl.style.fontSize = '12px'; panelEl.style.lineHeight = '1.4'; panelEl.style.whiteSpace = 'pre-line'
+  panelEl.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.4)'
   overlayEl.appendChild(panelEl)
 
   document.body.appendChild(overlayEl)

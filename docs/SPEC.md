@@ -137,7 +137,13 @@
   **同一套狀態機,只有確認後的去向不同。**
 - overlay 的樣式以 `element.style` 逐項設定(頁面 CSS 會污染 class),
   且 `content/picker-mode.js` 是**全專案唯一允許寫色碼字面值**的檔案——
-  網頁沒有載入 `ui/theme.css`。
+  網頁沒有載入 `ui/theme.css`。**色碼一律集中在檔頭的 `COLORS` 常數**(值照抄 theme.css 暗色軌),
+  其餘程式碼只引用它。外觀是深色系:深底、細邊框、圓角 8px;工具列是分段控制,
+  作用中那段主色底;chip 深底淺字、移除鈕用 `×` 字元(不用 emoji);可點高度至少 28px。
+- **擴充功能頁的共用元件樣式在 `ui/ui.css`**(按鈕三級、卡片、表單、chip、sticky footer、
+  `[hidden]`、`:focus-visible`、`prefers-reduced-motion`),**只吃 `theme.css` 變數、零色碼**。
+  `picker.html` 與 `site.html` 都載入它,頁面自己的 `<style>` 只留版面規則;
+  Report 與 popup 尚未沿用(見 BACKLOG)。
 
 ### §2.1 Picker 表單的預設值
 

@@ -114,11 +114,78 @@ test('D-3 儲存與取消是可聚焦的按鈕', () => {
 // ---------- D-4 無障礙 ----------
 
 test('D-4 焦點樣式存在且沒有被關掉', () => {
-  assert.ok(!/outline:\s*(none|0)\s*;/.test(UI_CSS.replace(/:focus-visible[^{]*\{[^}]*\}/g, '')),
-    '不得整體關掉外框')
-  assert.match(UI_CSS, /:focus-visible/, '要有可見的鍵盤焦點樣式')
+  const blocks = [...UI_CSS.matchAll(/:focus-visible[^{]*\{([^}]*)\}/g)].map(m => m[1])
+  assert.ok(blocks.length > 0, '要有 :focus-visible 的鍵盤焦點樣式')
+  // 焦點框本身要看得見：不能是 none/0，而且要指定顏色
+  const visible = blocks.some(b => /outline:/.test(b) && !/outline:\s*(none|0)\b/.test(b))
+  assert.ok(visible, `:focus-visible 要畫得出外框，實得 ${JSON.stringify(blocks)}`)
+  // 其他地方也不得整體關掉外框
+  const rest = UI_CSS.replace(/:focus-visible[^{]*\{[^}]*\}/g, '')
+  assert.ok(!/outline:\s*(none|0)\s*;/.test(rest), '不得在別處整體關掉外框')
 })
 
 test('D-4 可點元素要有 cursor: pointer', () => {
   assert.match(UI_CSS, /cursor:\s*pointer/)
+})
+
+// ---------- D-5 樣式不得引用沒有人設定的屬性 ----------
+
+test('D-5 content: attr() 引用的屬性必須真的有人寫進 DOM', () => {
+  const styles = [PICKER_HTML, SITE_HTML, UI_CSS].join('\n')
+  const used = [...styles.matchAll(/content:\s*attr\(([a-zA-Z0-9-]+)\)/g)].map(m => m[1])
+  const sources = styles +
+    readOrEmpty('../src/ui/picker/picker.js') +
+    readOrEmpty('../src/ui/site/site.js') +
+    readOrEmpty('../src/content/picker-mode.js')
+  for (const attr of used) {
+    const written = sources.includes(`setAttribute('${attr}'`) ||
+      sources.includes(`setAttribute("${attr}"`) ||
+      sources.includes(`${attr}=`)
+    assert.ok(written, `${attr} 沒有任何地方設定，這條樣式永遠是空白的`)
+  }
+})
+
+// ---------- D-6 選取模式 overlay 實際套用的樣式 ----------
+
+test('D-6 面板與工具列套用深色系與可點尺寸', async () => {
+  const { installChromeMock, resetChromeMock } = await import('./chrome-mock.js')
+  resetChromeMock()
+  installChromeMock()
+  const jd = new JSDOM(`<!doctype html><html><body>
+    <table id="t"><thead><tr><th>幣別</th><th>買入</th></tr></thead>
+    <tbody><tr><td>美金</td><td id="a1">31.2</td></tr></tbody></table></body></html>`)
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  globalThis.MouseEvent = jd.window.MouseEvent
+  globalThis.KeyboardEvent = jd.window.KeyboardEvent
+  const pm = await import('../src/content/picker-mode.js?t=' + Math.random())
+  const doc = jd.window.document
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('t') })
+
+  const panel = doc.querySelector('[data-af-panel]')
+  const toolbar = doc.querySelector('[data-af-tool]')?.parentElement
+  assert.ok(panel && toolbar, '面板與工具列都要在')
+
+  const hexOf = (v) => (v || '').toLowerCase()
+  assert.ok(/#1e293b|rgb\(30, 41, 59\)/.test(hexOf(panel.style.backgroundColor)),
+    `面板要用深色面底，實得 ${panel.style.backgroundColor}`)
+  assert.ok(/#334155|rgb\(51, 65, 85\)/.test(hexOf(panel.style.border)),
+    `面板要有細邊框，實得 ${panel.style.border}`)
+
+  // 工具列按鈕的可點高度
+  for (const btn of doc.querySelectorAll('[data-af-tool]')) {
+    const h = parseInt(btn.style.minHeight, 10)
+    assert.ok(h >= 28, `工具列按鈕高度要 ≥28px，實得 ${btn.style.minHeight}`)
+  }
+
+  // chip 的可點高度與非 emoji 的移除鈕
+  const cell = doc.getElementById('a1')
+  cell.dispatchEvent(new jd.window.MouseEvent('mousemove', { bubbles: true }))
+  cell.dispatchEvent(new jd.window.MouseEvent('click', { bubbles: true, shiftKey: true }))
+  const chip = doc.querySelector('[data-af-chip]')
+  assert.ok(chip, '要有 chip')
+  assert.ok(parseInt(chip.style.minHeight, 10) >= 28, `chip 高度要 ≥28px，實得 ${chip.style.minHeight}`)
+  const remove = chip.querySelector('[data-af-chip-remove]')
+  assert.equal(remove.textContent, '×', '移除鈕用乘號字元，不得用 emoji')
+  pm.exitPickMode()
 })

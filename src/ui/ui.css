@@ -1,0 +1,228 @@
+/* AutoFetcher 共用元件樣式表
+   所有色彩皆引用 theme.css 的 CSS 變數，本檔案不含色碼字面值。
+   深色優先；亮色軌與暗色軌由 theme.css 媒體查詢自動切換。
+*/
+
+/* ============================================================
+   基礎重設
+   ============================================================ */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* 強制隱藏屬性（display: flex/grid 等會覆蓋 hidden 原生行為）*/
+[hidden] { display: none !important; }
+
+/* ============================================================
+   無障礙：焦點樣式（僅鍵盤觸發）
+   ============================================================ */
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* ============================================================
+   基礎排版
+   ============================================================ */
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: var(--text-sm);
+  color: var(--text);
+  background: var(--bg);
+}
+
+h2 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-md);
+  font-weight: 700;
+  flex-shrink: 0;
+  color: var(--text);
+}
+
+/* ============================================================
+   按鈕元件（三級）
+   ============================================================ */
+
+/* 基礎按鈕（次要 / ghost 風格）*/
+button,
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-family: inherit;
+  line-height: 1.4;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, filter 150ms ease;
+  user-select: none;
+}
+
+button:hover,
+.btn:hover {
+  background: var(--hover);
+}
+
+/* 主要按鈕（實心主色）*/
+.btn-primary,
+button.btn-primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--bg);
+  font-weight: 500;
+}
+
+.btn-primary:hover,
+button.btn-primary:hover {
+  background: var(--primary);
+  border-color: var(--primary);
+  filter: brightness(1.1);
+}
+
+/* 危險按鈕 */
+.btn-danger,
+button.btn-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--bg);
+  font-weight: 500;
+}
+
+.btn-danger:hover,
+button.btn-danger:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+  filter: brightness(1.1);
+}
+
+/* ============================================================
+   卡片 / 分區容器
+   ============================================================ */
+.card,
+fieldset {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-2);
+  margin: 0;
+}
+
+fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+legend,
+.card-title {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 0 var(--space-1);
+  color: var(--text);
+}
+
+/* ============================================================
+   表單欄位與標籤
+   ============================================================ */
+label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+input[type="text"],
+input[type="number"],
+input[type="password"],
+select,
+textarea {
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  font-family: inherit;
+  background: var(--surface);
+  color: var(--text);
+  transition: border-color 150ms ease;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus,
+input[type="password"]:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--primary);
+}
+
+input[readonly] {
+  background: var(--hover);
+}
+
+/* 原生核取方塊／單選鈕的預設色與深色系衝突，統一成主色 */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+/* ============================================================
+   Chip / Pill（值清單小標籤）
+   ============================================================ */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  background: var(--primary-soft);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 2);
+  font-size: var(--text-xs);
+  color: var(--text);
+  line-height: 1;
+}
+
+.chip-remove {
+  cursor: pointer;
+  font-weight: bold;
+  color: var(--text-muted);
+  transition: color 150ms ease;
+  user-select: none;
+}
+
+.chip-remove:hover {
+  color: var(--danger);
+}
+
+/* ============================================================
+   底部固定動作列（sticky footer）
+   ============================================================ */
+footer,
+.sticky-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   prefers-reduced-motion：關閉過渡與動畫
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}

@@ -18,6 +18,8 @@
 | 多值任務的 Picker `ctx` 改走 `storage.session` | 目前走 URL 參數(20 個值約 6KB,遠低於限制);值的數量成長到讓網址過長時 |
 | `picker-mode.js` 自帶的 `getRowCells` / `isHeaderRow` / `getTableRows` 併進 `shared/table.js` | 兩份判準不同(picker-mode 版多認 ARIA role 與 children 退路);合併要連 ARIA 表格的測試一起補,下次動表格解析時做 |
 | 深色模式以外的主題色 | 使用者提出 |
+| Report 頁與 popup 沿用 `ui/ui.css` | AF-7 只讓 picker 與 site 走它(Report 樣式量大、風險高);下次動 Report 樣式時順手搬 |
+| 「立即測試」對編輯既有任務開放 | AF-7 改走 background 後技術上已可行(它會自己開分頁定位);使用者反映編輯時也想先試抓時 |
 | 秒級抓取 | 目前最小 1 分鐘;alarms 下限 30 秒,再快要常駐分頁 |
 | Firefox 支援 | 有需求時;選擇器與 alarms API 皆可移植,contextMenus 差異最大 |
 | Chrome Web Store 與 Edge Add-ons 上架 | 使用者想分享給別人安裝時(兩邊分別審核) |
