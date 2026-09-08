@@ -21,7 +21,9 @@ src/
 ├── ui/ui.css            ← 擴充功能頁的**共用元件樣式**(按鈕三級/卡片/表單/chip/sticky footer/
 │                          [hidden]/焦點/reduced-motion);只吃 theme.css 變數,零色碼。
 │                          picker 與 site 都載入它;report/popup 尚未沿用
-├── ui/picker/           ← 選取完成後的設定視窗(命名、時間、模式、區塊、告警、前置動作、儀表板)
+├── ui/picker/           ← 選取完成後的設定視窗;版面只回答三個問題
+│                          (抓什麼／多久抓一次／抓完放哪裡),頂部摘要卡即時說出目前設定,
+│                          網址與數值類型收在進階
 ├── ui/site/             ← 站台登入設定視窗(右鍵「設定此站台登入」)
 ├── ui/popup/            ← 工具列 popup(燈號摘要)
 ├── ui/report/           ← AutoFetcher-Report 頁(report.html)
@@ -36,6 +38,8 @@ src/
                            extract(策略鏈)、export(三種匯出)、settings-io(設定匯出入)、diag(診斷)
                            layout-store(版面唯一入口)、record-status(成功狀態唯一來源)、crypto(站台密碼)
                            純函式:block-detect / table / aggregate / alerts
+                           schedule-math(排程數學,background 與 Picker 共用)
+                           describe(目標／排程／去處的白話句,全站唯一一份)
 docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ```
 
@@ -64,7 +68,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1677 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1748 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -82,6 +86,11 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - 訊息型別集中 `shared/messages.js`;三個執行環境的分工見 SPEC §0。
 - **顏色一律走 `ui/theme.css` 變數**,任何模組內都不得出現色碼字面值(多序列用 `--chart-1`~`--chart-8`)。
 - **格線數學與資料聚合寫成純函式**(無 DOM、無 `chrome.`),DOM 接線另置,才測得動。
+- **白話描述只有一份**:`shared/describe.js`(Picker 摘要卡與儲存回饋、任務頁的排程欄、
+  popup 任務列的 `title` 都用它)。
+  同一個任務在不同畫面上長得不一樣,比沒有描述更糟。
+- **排程數學只有一份**:`shared/schedule-math.js`(`nextIntervalRun` 等);
+  `background/scheduler.js` 只 re-export。Picker 的觸發預覽要用同一份,不得自己算一套。
 - **「哪些 status 算成功」只有一份**:`shared/record-status.js`(`ok`/`fallback`/`late`)。
 - **`slot` 是本地時間、`capturedAt` 是 UTC**:絕不可直接比字串或切前 16 碼;換算只有一份
   (`series.js` 的 `effectiveTimeOf`/`sortKeyOf`,規則見 SPEC §8.2)。
@@ -116,6 +125,17 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   `background/health.js`(`setBadgeBackgroundColor` 只吃色碼字串)。
   **`picker-mode.js` 的色碼只能出現在檔頭的 `COLORS` 常數裡**(值照抄 theme.css 暗色軌),
   其餘程式碼一律引用它;連檔頭註解都不要列舉色碼(`tests/p4_ui_css.test.js` 會擋)。
+- **選取模式的面板動作列建一次、只更新文字**:每次 hover 重建會把使用者正要按的那一顆換掉
+  (「完成鈕點了沒反應」的根因);面板文字在 `data-af-panel-body`,動作列是它的兄弟節點。
+- **停用的控制項被點到不得靜默無事**:要嘛記住意圖稍後兌現(工具列的 `pendingMode`),
+  要嘛說出原因,而且**理由要對到真正的判定**(非表格就說不是表格,不要說成用途限制)。
+  靜默 return 會讓使用者以為自己已經切好了模式。
+- **「自動套用預設值」的函式要有『使用者動過就不再覆蓋』的守衛**:
+  `applyDefaultCardTypes` 曾在移除一個值、上下移、改定位時把使用者勾的卡片型別改回預設。
+- **延遲關窗前要確認 `globalThis.window` 還是自己那一個**:jsdom 測試共用全域 window,
+  也可能關到別人的視窗。
+- **會跨表格殘留的狀態，在「換表清空」那一段也要一起清**:AF-7 是 `pickedTableEl`、AF-9 是復原快照 `undoSnapshot`,
+  兩次都是「清單清了、旁邊那份索引沒清」,`Ctrl+Z` 或送出就把 A 表的索引配上 B 表的定位。
 - **選取模式的模組狀態要在 `exitPickMode` 全部重設**:漏一個(例如「已選屬於哪張表」)
   會讓同一頁的下一次選取沿用上一張表的 locator、配上新表的列欄索引送出,抓到的永遠是錯的值。
   只驗「DOM 元素被移除」的測試抓不到這種殘留,要驗「連續選兩次」的行為。

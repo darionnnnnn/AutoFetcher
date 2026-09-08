@@ -3,6 +3,7 @@ import { getTasks, saveTask, getHealthMap, getMissedList, getLastValues } from '
 import { MSG } from '../../shared/messages.js'
 import { seriesIdOf } from '../../shared/series-index.js'
 import { computeHealth } from '../../background/health.js'
+import { describeSchedule } from '../../shared/describe.js'
 
 let currentCtx = null
 
@@ -56,6 +57,9 @@ function renderTaskRow(task, { lastValues, nextRuns, healthMap }) {
   const nextSpan = document.createElement('span')
   nextSpan.className = 'task-next'
   nextSpan.textContent = formatTime(nextRuns?.[task.id])
+  // 只寫一個時刻，久沒用回來看不出這是每天還是每十分鐘一次；
+  // 排程白話走 shared/describe.js（與 Picker 摘要卡、任務頁同一份）
+  nextSpan.title = describeSchedule(task.schedule)
   subDiv.appendChild(nextSpan)
 
   if (task.enabled === false) {
@@ -177,6 +181,35 @@ export function render(ctx) {
       if (currentCtx) {
         const updatedTasks = await getTasks()
         render({ ...currentCtx, tasks: updatedTasks })
+      }
+    }
+  }
+
+  // 最主要的入口：使用者裝好之後第一件想做的事就是「抓這一頁的東西」。
+  // 只靠右鍵選單的話，沒人告訴他要按右鍵（AF-9）
+  const pickBtn = document.getElementById('pick-here')
+  const pickNote = document.getElementById('pick-here-note')
+  if (pickBtn) {
+    pickBtn.onclick = async () => {
+      if (pickNote) pickNote.textContent = ''
+      try {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
+        const tab = tabs?.[0]
+        // 擴充功能頁、chrome:// 這些注入不進去，要說清楚而不是靜靜失敗
+        if (!tab?.id || !/^https?:/i.test(tab.url || '')) {
+          if (pickNote) pickNote.textContent = '這個頁面無法選取，請切換到一般網頁再試'
+          return
+        }
+        await chrome.runtime.sendMessage({
+          type: MSG.ENTER_PICK,
+          purpose: 'task',
+          tabId: tab.id,
+          // 一律從最上層開始：iframe 內的目標由選取模式自己往下鑽
+          frameId: 0
+        })
+        if (typeof window !== 'undefined' && window.close) window.close()
+      } catch {
+        if (pickNote) pickNote.textContent = '這個頁面無法選取，請切換到一般網頁再試'
       }
     }
   }

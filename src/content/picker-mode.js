@@ -25,12 +25,26 @@ let active = false, currentPurpose = null, currentTaskId = undefined, currentTar
 let currentHint = null
 let pendingPreselect = null
 let overlayEl = null, highlightEl = null, panelEl = null, toolbarEl = null, menuEl = null
+// 面板拆兩層：內文每次重建，動作列建一次只更新文字——
+// 每次 hover 重建按鈕會把焦點與正在按下的那一顆整個換掉，使用者會覺得「完成鈕點了沒反應」
+let panelBodyEl = null, panelDoneEl = null, panelUndoEl = null
+// 「取代」前的已選清單快照：取代是最容易誤觸的動作，要留一步可以反悔
+let undoSnapshot = null
+// 面板固定在右下角，但游標靠近時要閃到左下角，否則它就擋在使用者要選的內容上
+let panelCorner = 'right'
+// 換角之後先鎖住，等游標離開面板附近才允許再換（避免沿邊緣移動時來回彈跳）
+let panelAvoidLatched = false
 let pickMode = 'cell', cellIndex = null, colIndex = null, rowIndex = null, currentDataRows = [], currentRowEl = null, currentCellEl = null
 let selectedList = [], maxPicks = 20, limitReached = false, headerChangedNotice = false
 // 非表格元素被「點一下鎖定」後不再跟著滑鼠跑（檔案總管點一下選取的習慣）
 let lockedEl = null
 // 帶 preselect 進來的多個已選值，第一次「點一下取代」只提示、再點一次才真的換掉
 let preselectPristine = false, replaceConfirmPending = null
+// 工具列被點到停用的那一段時要說原因（點不動卻沒訊息是最容易被當成壞掉的）
+let toolbarNotice = null
+// 目標還不是表格時點「整欄／整列」：記下意圖，等滑鼠移到表格上再自動套用。
+// 沒有這個的話按鈕當下是停用的，點了完全沒事，使用者卻以為模式已經切好了
+let pendingMode = null
 // 拖曳框選放開後瀏覽器會補一個 click，接著可能被當成雙擊；短時間內的雙擊要吃掉
 let lastDragEndAt = 0
 // 指標與表頭提示都是我們加在頁面上的，離開時要原樣還回去
@@ -418,6 +432,7 @@ function updateToolbar() {
 // 移除指定序號之已選項
 function removePickAt(index) {
   if (index < 0 || index >= selectedList.length) return
+  clearUndoSnapshot()
   selectedList.splice(index, 1)
   limitReached = false
   if (selectedList.length === 0) {
@@ -430,6 +445,7 @@ function removePickAt(index) {
 // 移除最後一項已選項
 function removeLastPick() {
   if (selectedList.length === 0) return
+  clearUndoSnapshot()
   selectedList.pop()
   limitReached = false
   if (selectedList.length === 0) {
@@ -442,10 +458,12 @@ function removeLastPick() {
 // 產生說明面板文字與已選清單
 function updatePanel(panel, el) {
   if (!panel) return
-
-  while (panel.firstChild) {
-    panel.removeChild(panel.firstChild)
+  // 動作列是 panelBodyEl 的兄弟節點，不能跟著內文一起被清掉
+  const body = panelBodyEl && panel.contains(panelBodyEl) ? panelBodyEl : panel
+  while (body.firstChild) {
+    body.removeChild(body.firstChild)
   }
+  panel = body
 
   if (selectedList.length > 0) {
     const headerDiv = document.createElement('div')
@@ -519,12 +537,16 @@ function updatePanel(panel, el) {
     if (replaceConfirmPending) {
       noticeLines.push(`（再點一次會取代這 ${selectedList.length} 個已選值）`)
     }
-    noticeLines.push('雙擊或 Enter 完成 · Ctrl／⌘ 點加選或取消 · Backspace 移除最後一項')
+    if (undoSnapshot) {
+      noticeLines.push('已換成新的選取（可按復原或 Ctrl／⌘＋Z 還原）')
+    }
+    if (toolbarNotice) noticeLines.push(toolbarNotice)
+    noticeLines.push(instructionLine(el))
     const footerDiv = document.createElement('div')
     footerDiv.textContent = noticeLines.join('\n')
     footerDiv.style.whiteSpace = 'pre-line'
     panel.appendChild(footerDiv)
-    appendPanelActions(panel, el)
+    updatePanelActions(el)
     return
   }
 
@@ -540,7 +562,7 @@ function updatePanel(panel, el) {
     if (currentHint === 'frame_not_found') lines.push('無法進入這個框架')
     lines.push('點一下即進入這個框架')
     appendPanelText(panel, lines)
-    appendPanelActions(panel, el)
+    updatePanelActions(el)
     return
   }
 
@@ -549,9 +571,10 @@ function updatePanel(panel, el) {
     if (currentHint === 'frame_not_found') lines.push('無法進入這個框架')
     if (limitReached || selectedList.length >= maxPicks) lines.push('（已達選取上限）')
     if (headerChangedNotice) lines.push('（位置已變）')
-    lines.push('把滑鼠移到要抓的內容上')
+    if (toolbarNotice) lines.push(toolbarNotice)
+    lines.push(instructionLine(null))
     appendPanelText(panel, lines)
-    appendPanelActions(panel, el)
+    updatePanelActions(el)
     return
   }
   const tagDesc = (el.tagName ? el.tagName.toLowerCase() : '') + (el.id ? `#${el.id}` : '')
@@ -571,11 +594,31 @@ function updatePanel(panel, el) {
   if (limitReached || selectedList.length >= maxPicks) lines.push('（已達選取上限）')
   if (headerChangedNotice) lines.push('（位置已變）')
   if (lockedEl && el === lockedEl) lines.push('（已鎖定：滑鼠移開也不會換目標，點別處解除）')
-  lines.push(isTableMode(el)
-    ? '點一格選取 · Ctrl／⌘ 加選 · Shift 拉範圍 · 點表頭選整欄 · 雙擊或 Enter 完成'
-    : '點一下鎖定這個元素 · 雙擊或 Enter 完成 · ↑ 放大 ↓ 縮小')
+  if (toolbarNotice) lines.push(toolbarNotice)
+  lines.push(instructionLine(el))
   appendPanelText(panel, lines)
-  appendPanelActions(panel, el)
+  updatePanelActions(el)
+}
+
+/**
+ * 面板永遠有一句「現在該做什麼」，隨狀態換。這一句就是全部的教學——
+ * 使用者不會去看說明文件，也不該需要看。
+ */
+function instructionLine(el) {
+  if (currentPurpose === 'preaction' || (currentPurpose && currentPurpose.startsWith('login'))) {
+    return '點一下要操作的那個元素就完成'
+  }
+  if (selectedList.length > 0) {
+    return `已選 ${selectedList.length} 個值，再點可換、Ctrl／⌘ 點可加，好了按完成（或雙擊、Enter）`
+  }
+  if (el && isTableMode(el)) {
+    return '點你要的那一格；點表頭可選整欄'
+  }
+  if (el) {
+    return '點一下鎖定這個元素 · 雙擊或 Enter 完成 · ↑ 放大 ↓ 縮小'
+  }
+  // 目標還沒出現：多半是內容要先操作頁面才會載入（例如點頁籤才出現的 iframe）
+  return '把滑鼠移到要抓的內容上；還沒出現的話按 Esc，先操作頁面讓它載入，再在它上面按右鍵'
 }
 
 // 面板的文字段落（動作列是真的按鈕，所以文字不能再用 panel.textContent 整包覆蓋）
@@ -586,8 +629,9 @@ function appendPanelText(panel, lines) {
   panel.appendChild(div)
 }
 
-// 面板底部的動作列：畫面上看得見的「完成／取消」，不必先知道 Enter 與 Esc
-function appendPanelActions(panel, el) {
+// 面板底部的動作列：畫面上看得見的「完成／取消／復原」，不必先知道 Enter 與 Esc。
+// **建一次，之後只更新文字與狀態**——每次 hover 重建會把使用者正要按的那顆換掉。
+function buildPanelActions() {
   const bar = document.createElement('div')
   bar.style.display = 'flex'
   bar.style.gap = '8px'
@@ -596,7 +640,51 @@ function appendPanelActions(panel, el) {
   const done = document.createElement('button')
   done.type = 'button'
   done.setAttribute('data-af-done', '')
+  // 主色由 updatePanelActions 依「有沒有已選」切換：沒東西可完成時就不該長得像主要動作
+  styleActionButton(done, false)
+  addFocusRing(done)
+  bar.appendChild(done)
+
+  const cancel = document.createElement('button')
+  cancel.type = 'button'
+  cancel.setAttribute('data-af-cancel', '')
+  cancel.textContent = '取消'
+  styleActionButton(cancel, false)
+  addFocusRing(cancel)
+  bar.appendChild(cancel)
+
+  const undo = document.createElement('button')
+  undo.type = 'button'
+  undo.setAttribute('data-af-undo', '')
+  undo.textContent = '復原'
+  styleActionButton(undo, false)
+  addFocusRing(undo)
+  undo.hidden = true
+  bar.appendChild(undo)
+
+  panelDoneEl = done
+  panelUndoEl = undo
+  return bar
+}
+
+function styleActionButton(btn, primary) {
+  btn.style.padding = '4px 12px'
+  btn.style.fontSize = '12px'
+  btn.style.fontFamily = 'inherit'
+  btn.style.minHeight = '28px'
+  btn.style.borderRadius = '4px'
+  btn.style.cursor = 'pointer'
+  btn.style.backgroundColor = primary ? COLORS.primary : COLORS.surface
+  btn.style.color = primary ? COLORS.text : COLORS.textMuted
+  btn.style.border = primary ? 'none' : `1px solid ${COLORS.border}`
+}
+
+// 只更新既有按鈕的文字與可用狀態（不重建節點）
+function updatePanelActions(el) {
+  if (!panelDoneEl) return
+  const done = panelDoneEl
   const n = selectedList.length
+  done.removeAttribute('aria-disabled')
   if (n > 0) {
     done.textContent = `完成（${n} 個值）`
   } else if (iframeOf(el)) {
@@ -609,36 +697,13 @@ function appendPanelActions(panel, el) {
     done.textContent = '完成（這個元素）'
   }
   const disabled = done.getAttribute('aria-disabled') === 'true'
-  done.style.padding = '4px 12px'
-  done.style.fontSize = '12px'
-  done.style.fontFamily = 'inherit'
-  done.style.minHeight = '28px'
-  done.style.borderRadius = '4px'
-  done.style.border = 'none'
+  // 有東西可以完成時才是主要動作（未選時長得跟「取消」一樣重會誘導誤按）；
+  // 樣式先套，游標與透明度後蓋，否則停用時的 not-allowed 會被 pointer 洗掉
+  styleActionButton(done, n > 0 || !disabled)
   done.style.cursor = disabled ? 'not-allowed' : 'pointer'
   done.style.opacity = disabled ? '0.5' : '1'
-  done.style.backgroundColor = COLORS.primary
-  done.style.color = COLORS.text
-  addFocusRing(done)
-  bar.appendChild(done)
 
-  const cancel = document.createElement('button')
-  cancel.type = 'button'
-  cancel.setAttribute('data-af-cancel', '')
-  cancel.textContent = '取消'
-  cancel.style.padding = '4px 12px'
-  cancel.style.fontSize = '12px'
-  cancel.style.fontFamily = 'inherit'
-  cancel.style.minHeight = '28px'
-  cancel.style.borderRadius = '4px'
-  cancel.style.border = `1px solid ${COLORS.border}`
-  cancel.style.cursor = 'pointer'
-  cancel.style.backgroundColor = COLORS.surface
-  cancel.style.color = COLORS.textMuted
-  addFocusRing(cancel)
-  bar.appendChild(cancel)
-
-  panel.appendChild(bar)
+  if (panelUndoEl) panelUndoEl.hidden = !undoSnapshot
 }
 
 // 設定當前目標元素
@@ -653,6 +718,8 @@ function setTarget(el) {
     selectedList = []
     limitReached = false
     pickedTableEl = null
+    // 快照裡是上一張表的列欄索引，留著會被 Ctrl+Z 配上這張表的定位送出去（AF-7 同型缺陷）
+    undoSnapshot = null
   }
   clearMarkedCells(document)
   currentTargetEl = el; currentDataRows = []; currentRowEl = null; colIndex = null; rowIndex = null; cellIndex = null; currentCellEl = null
@@ -668,6 +735,12 @@ function setTarget(el) {
   }
   // 非表格是「抓整個元素」，用十字指標；表格的格子與表頭由 handleTableMouseMove 各自設
   if (!isTableMode(el)) setCursor('crosshair')
+  // 在非表格上點過「整欄／整列」的意圖，等目標變成表格才兌現
+  if (pendingMode && isTableMode(el) && isMultiPickPurpose()) {
+    pickMode = pendingMode
+    pendingMode = null
+    toolbarNotice = null
+  }
   updateToolbar()
   if (panelEl) updatePanel(panelEl, el)
 }
@@ -1168,6 +1241,8 @@ function samePick(a, b) {
 
 // 加入一個值：去重與上限的判斷只有這一份，所有加選路徑都走它
 function addPick(pick) {
+  // 任何加選都讓復原快照失效（取代之後又加了東西，就沒有「上一步」可回了）
+  clearUndoSnapshot()
   if (selectedList.some(p => samePick(p, pick))) return false
   if (selectedList.length >= maxPicks) {
     limitReached = true
@@ -1180,6 +1255,7 @@ function addPick(pick) {
 
 // Shift 點擊：已經選過就取消，否則加入
 function togglePick(pick) {
+  clearUndoSnapshot()
   const at = selectedList.findIndex(p => samePick(p, pick))
   if (at >= 0) {
     selectedList.splice(at, 1)
@@ -1300,10 +1376,50 @@ function applyPreselect(preselect, tableEl) {
   }
 }
 
+/**
+ * 面板閃避：游標靠近面板 24px 內就換到另一角。
+ * 面板本身正在被使用（滑鼠在它上面、或它裡面有焦點）時不動——
+ * 移動會讓使用者按到一半的按鈕跑掉。
+ */
+const PANEL_AVOID_MARGIN = 24
+function avoidPanel(event) {
+  if (!panelEl || !panelEl.getBoundingClientRect) return
+  if (overlayEl && panelEl.contains(event.target)) return
+  const focused = typeof document !== 'undefined' ? document.activeElement : null
+  if (focused && panelEl.contains(focused)) return
+  const r = panelEl.getBoundingClientRect()
+  if (!r || (r.width === 0 && r.height === 0)) return
+  const near = event.clientX >= r.left - PANEL_AVOID_MARGIN &&
+    event.clientX <= r.right + PANEL_AVOID_MARGIN &&
+    event.clientY >= r.top - PANEL_AVOID_MARGIN &&
+    event.clientY <= r.bottom + PANEL_AVOID_MARGIN
+  if (!near) {
+    // 離開之後才解除鎖定，否則游標沿著面板邊緣走會左右來回彈跳
+    panelAvoidLatched = false
+    return
+  }
+  if (panelAvoidLatched) return
+  panelAvoidLatched = true
+  setPanelCorner(panelCorner === 'right' ? 'left' : 'right')
+}
+
+function setPanelCorner(corner) {
+  panelCorner = corner
+  if (!panelEl) return
+  if (corner === 'left') {
+    panelEl.style.left = '16px'
+    panelEl.style.right = ''
+  } else {
+    panelEl.style.right = '16px'
+    panelEl.style.left = ''
+  }
+}
+
 // 事件監聽處理常式
 function onMouseMove(event) {
   if (!active) return
   const target = event.target
+  avoidPanel(event)
   // overlay 自己的元素一律跳過，唯一例外是 iframe 的代理層——它就是為了被指到才貼的
   const isProxy = !!frameOfProxy(target)
   if (!target || (!isProxy && overlayEl && (target === overlayEl || overlayEl.contains(target)))) return
@@ -1382,7 +1498,14 @@ function onKeyDown(event) {
     applyPickedMarks(currentTargetEl)
     updatePanel(panelEl, currentTargetEl)
   } else if ((event.ctrlKey || event.metaKey) && (event.key === 'z' || event.key === 'Z')) {
-    // Ctrl／⌘＋Z：復原＝移除最後一項；沒東西可移除就把按鍵放給頁面
+    // Ctrl／⌘＋Z：**先還原上一次取代**（那是最容易誤觸、損失最大的動作），
+    // 沒有可還原的取代才退回「移除最後一項」；兩者都沒有就把按鍵放給頁面
+    if (undoSnapshot) {
+      event.preventDefault()
+      undoReplace()
+      updatePanel(panelEl, currentTargetEl)
+      return
+    }
     if (selectedList.length === 0) return
     event.preventDefault()
     removeLastPick()
@@ -1490,6 +1613,25 @@ function onClick(event) {
   const toolBtn = event.target && event.target.closest ? event.target.closest('[data-af-tool]') : null
   if (toolBtn) {
     if (toolBtn.getAttribute('aria-disabled') === 'true') {
+      // 靜默 return 會讓使用者以為模式切了（實際沒切），要說出點不動的原因
+      const mode = toolBtn.getAttribute('data-af-tool')
+      // 點工具列＝使用者要重新挑目標，先前點非表格元素造成的鎖定一律解除；
+      // 鎖著的話滑鼠移到表格上也完全沒有反應，看起來就是「工具列壞了」
+      lockedEl = null
+      const onTable = Boolean(currentTargetEl && isTableMode(currentTargetEl))
+      if (!onTable) {
+        // 停用的真正原因是「這裡不是表格」，與用途無關；
+        // 說成「一次只選一個」會跟面板上一行的「非表格：抓整個元素」自相矛盾
+        if (isMultiPickPurpose() && (mode === 'col' || mode === 'row')) {
+          pendingMode = mode
+          toolbarNotice = `先把滑鼠移到表格上，會自動切成${mode === 'row' ? '整列' : '整欄'}`
+        } else {
+          toolbarNotice = '先把滑鼠移到表格上'
+        }
+      } else {
+        toolbarNotice = '這個用途一次只選一個元素'
+      }
+      if (panelEl) updatePanel(panelEl, currentTargetEl)
       return
     }
     // 焦點不留在工具列上：留著的話之後的 Enter／Space 會再按一次同一顆
@@ -1498,12 +1640,16 @@ function onClick(event) {
     if (mode && (mode === 'cell' || mode === 'col' || mode === 'row')) {
       pickMode = mode
       cellIndex = pickMode === 'row' ? rowIndex : colIndex
+      toolbarNotice = null
+      pendingMode = null
+      // 已選的最後一項是單一儲存格時，切整欄／整列＝把那一格升級成整欄／整列
+      upgradeLastPickTo(mode)
       updateToolbar()
       if (currentTargetEl && isTableMode(currentTargetEl)) {
         markCells(currentCellEl, currentDataRows, currentRowEl, pickMode, colIndex)
         applyPickedMarks(currentTargetEl)
-        updatePanel(panelEl, currentTargetEl)
       }
+      if (panelEl) updatePanel(panelEl, currentTargetEl)
     }
     return
   }
@@ -1518,6 +1664,13 @@ function onClick(event) {
         removePickAt(idx)
       }
     }
+    return
+  }
+
+  // 3b. 面板「復原」按鈕：還原上一次取代
+  const undoBtn = event.target && event.target.closest ? event.target.closest('[data-af-undo]') : null
+  if (undoBtn) {
+    if (undoReplace()) updatePanel(panelEl, currentTargetEl)
     return
   }
 
@@ -1647,13 +1800,66 @@ function pickKey(pick) {
   return 'x'
 }
 
+/**
+ * 已選清單的最後一項是單一儲存格時，切到整欄／整列＝把那一格升級成該欄／該列。
+ * 「先點一格，再按整欄」是最直覺的操作順序，沒有這一條使用者得先切模式再重點一次。
+ * 取代掉的那一格可以復原。最後一項不是單格（或清單是空的）就只切模式。
+ */
+function upgradeLastPickTo(mode) {
+  if (mode !== 'col' && mode !== 'row') return false
+  if (selectedList.length === 0) return false
+  const last = selectedList[selectedList.length - 1]
+  if (!last || !last.cell) return false
+  if (!currentTargetEl || !isTableMode(currentTargetEl)) return false
+
+  const axis = mode === 'row' ? 'row' : 'col'
+  const index = axis === 'row' ? last.cell.row.index : last.cell.col.index
+  const headerText = (axis === 'row' ? last.cell.row.header : last.cell.col.header) || ''
+  const upgraded = { block: { axis, index, headerText } }
+  const previous = selectedList.slice()
+  if (selectedList.some(p => samePick(p, upgraded))) {
+    // 已經選過同一欄／列了，只要把那一格拿掉就好
+    selectedList = selectedList.slice(0, -1)
+  } else {
+    selectedList = selectedList.slice(0, -1).concat([upgraded])
+  }
+  // 取代前留一步反悔：復原快照只活到下一個動作為止
+  undoSnapshot = previous
+  limitReached = selectedList.length >= maxPicks
+  clearPickedMarks(document)
+  applyPickedMarks(currentTargetEl)
+  return true
+}
+
+// 加選、移除、送出都讓快照失效——留著會在幾步之後莫名其妙跳回舊的一批
+function clearUndoSnapshot() {
+  undoSnapshot = null
+}
+
+/**
+ * 還原上一次取代。回傳有沒有真的還原（沒有快照時交回 false，
+ * 讓 Ctrl+Z 退回原本的「移除最後一項」）
+ */
+function undoReplace() {
+  if (!undoSnapshot) return false
+  clearPickedMarks(document)
+  selectedList = undoSnapshot.slice()
+  undoSnapshot = null
+  limitReached = selectedList.length >= maxPicks
+  if (currentTargetEl && isTableMode(currentTargetEl)) applyPickedMarks(currentTargetEl)
+  return true
+}
+
 // 取代目前已選：點一下就是「只選這一個」
 function replaceSelection(candidate) {
+  // 空清單沒有東西可復原：第一次點格不能長出「復原」鈕與「已換成」提示
+  const previous = selectedList.length > 0 ? selectedList.slice() : null
   clearPickedMarks(document)
   selectedList = []
   limitReached = false
   pickedTableEl = null
   addPick(candidate)
+  undoSnapshot = previous
 }
 
 // 從錨點格到目標格的矩形範圍一次加進來（Shift 點的行為）
@@ -1844,6 +2050,11 @@ export function enterPickMode(opts) {
   panelEl.style.border = `1px solid ${COLORS.border}`
   panelEl.style.padding = '8px 12px'; panelEl.style.borderRadius = '8px'; panelEl.style.fontSize = '12px'; panelEl.style.lineHeight = '1.4'; panelEl.style.whiteSpace = 'pre-line'
   panelEl.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.4)'
+  panelBodyEl = document.createElement('div')
+  panelBodyEl.setAttribute('data-af-panel-body', '')
+  panelBodyEl.style.whiteSpace = 'pre-line'
+  panelEl.appendChild(panelBodyEl)
+  panelEl.appendChild(buildPanelActions())
   overlayEl.appendChild(panelEl)
 
   document.body.appendChild(overlayEl)
@@ -1911,6 +2122,19 @@ export function exitPickMode() {
   replaceConfirmPending = null
   preselectPristine = false
   lastDragEndAt = 0
+  // AF-9 新增的狀態：漏清會讓下一次選取沿用上一次的復原快照、提示與面板位置
+  undoSnapshot = null
+  toolbarNotice = null
+  pendingMode = null
+  panelBodyEl = null
+  panelDoneEl = null
+  panelUndoEl = null
+  panelCorner = 'right'
+  panelAvoidLatched = false
+  // 這兩個漏清會讓下一次選取沿用上一次的預選、以及舊的表格列欄數快取
+  pendingPreselect = null
+  kindCacheEl = null
+  kindCache = null
 }
 
 export function isActive() { return active }
@@ -1918,3 +2142,5 @@ export function currentTarget() { return currentTargetEl }
 export function currentAxis() { return (!currentTargetEl || !isTableMode(currentTargetEl)) ? null : (pickMode === 'row' ? 'row' : 'col') }
 export function currentCellIndex() { return (!currentTargetEl || !isTableMode(currentTargetEl)) ? null : cellIndex }
 export function selectedCount() { return selectedList.length }
+// 唯讀複本：外部（含測試）要看已選了什麼，不得直接改動內部陣列
+export function selectedPicks() { return selectedList.slice() }

@@ -41,13 +41,22 @@ test('選每日固定時間時,間隔與時段欄位隱藏,執行時間顯示', 
   for (const id of INTERVAL_ONLY) assert.equal(visible(doc, id), false, `daily 應隱藏 #${id}`)
 })
 
-test('選固定間隔時,執行時間隱藏,間隔與時段顯示', async () => {
+// AF-9：時段欄位改成「勾了『只在某個時段內執行』才出現」，
+// 不再是 interval 一律顯示（一般使用者不設時段，兩個空欄位只是雜訊）
+test('選固定間隔時,執行時間隱藏,間隔顯示;時段要勾選才出現', async () => {
   const { pk, doc } = await fresh()
   pk.render({ locator: LOCATOR, url: 'https://a.test/p' })
   doc.getElementById('schedule-type').value = 'interval'
   doc.getElementById('schedule-type').dispatchEvent(new doc.defaultView.Event('change'))
   for (const id of DAILY_ONLY) assert.equal(visible(doc, id), false, `interval 應隱藏 #${id}`)
-  for (const id of INTERVAL_ONLY) assert.equal(visible(doc, id), true, `interval 應顯示 #${id}`)
+  assert.equal(visible(doc, 'every-minutes'), true, 'interval 應顯示 #every-minutes')
+  assert.equal(visible(doc, 'window-enabled'), true, '時段開關要看得到')
+  assert.equal(doc.getElementById('window-fields').hidden, true, '沒勾就不顯示時段欄位')
+
+  const cb = doc.getElementById('window-enabled')
+  cb.checked = true
+  cb.dispatchEvent(new doc.defaultView.Event('change'))
+  assert.equal(doc.getElementById('window-fields').hidden, false, '勾了就顯示時段欄位')
 })
 
 test('星期在兩種型別都顯示', async () => {
