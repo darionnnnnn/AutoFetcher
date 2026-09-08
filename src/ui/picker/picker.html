@@ -120,6 +120,7 @@
     }
     .chip button:hover { color: var(--text); }
     /* 執行星期看起來也是 chip；DOM 仍是 checkbox，輔助技術才讀得到勾選狀態 */
+    #card-types label,
     #weekdays label {
       padding: 2px var(--space-2, 8px);
       min-height: 28px;
@@ -128,6 +129,7 @@
       background: var(--surface);
       font-size: var(--text-xs, 12px);
     }
+    #card-types label:has(input:checked),
     #weekdays label:has(input:checked) {
       border-color: var(--primary);
       color: var(--primary);

@@ -204,6 +204,18 @@ test('C12 動作列建一次：連續 hover 之後「完成」還是同一個節
   assert.match(first.textContent, /1 個值/, '只更新文字')
 })
 
+test('C12b 「完成」只有在真的有東西可完成時才是主要動作', async () => {
+  const { doc, win } = await enter()
+  const done = doc.querySelector('[data-af-done]')
+  const plain = done.style.backgroundColor
+  assert.equal(done.getAttribute('aria-disabled'), 'true', '表格上還沒選任何一格')
+
+  move(win, doc.getElementById('a1'))
+  click(win, doc.getElementById('a1'))
+  assert.notEqual(doc.querySelector('[data-af-done]').style.backgroundColor, plain,
+    '選了之後「完成」要變成主色，否則使用者看不出哪一顆是接下來要按的')
+})
+
 test('C13-1 面板閃避：游標靠近時換到另一角', async () => {
   const { doc, win } = await enter()
   const panel = doc.querySelector('[data-af-panel]')

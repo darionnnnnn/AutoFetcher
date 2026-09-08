@@ -640,7 +640,8 @@ function buildPanelActions() {
   const done = document.createElement('button')
   done.type = 'button'
   done.setAttribute('data-af-done', '')
-  styleActionButton(done, true)
+  // 主色由 updatePanelActions 依「有沒有已選」切換：沒東西可完成時就不該長得像主要動作
+  styleActionButton(done, false)
   addFocusRing(done)
   bar.appendChild(done)
 
@@ -699,6 +700,8 @@ function updatePanelActions(el) {
   const disabled = done.getAttribute('aria-disabled') === 'true'
   done.style.cursor = disabled ? 'not-allowed' : 'pointer'
   done.style.opacity = disabled ? '0.5' : '1'
+  // 有東西可以完成時才是主要動作（未選時長得跟「取消」一樣重會誘導誤按）
+  styleActionButton(done, n > 0 || !disabled)
 
   if (panelUndoEl) panelUndoEl.hidden = !undoSnapshot
 }
