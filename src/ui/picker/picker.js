@@ -2,6 +2,8 @@ import { saveTask, getTask, getSettings, saveSettings } from '../../shared/stora
 import { MSG } from '../../shared/messages.js'
 import { getLayout, addCard } from '../../shared/layout-store.js'
 import { seriesIdOf } from '../../shared/series-index.js'
+import { describeSchedule } from '../../shared/describe.js'
+import { nextIntervalRun } from '../../shared/schedule-math.js'
 
 let currentCtx = null
 let currentBlock = null
@@ -299,6 +301,8 @@ export async function applyPickerDefaults(task) {
   if (target.windowFrom !== undefined) {
     const el = document.getElementById('window-from')
     if (el) el.value = target.windowFrom
+    const winCb = document.getElementById('window-enabled')
+    if (winCb && String(target.windowFrom).trim() !== '') winCb.checked = true
   }
   if (target.windowTo !== undefined) {
     const el = document.getElementById('window-to')
@@ -334,6 +338,29 @@ function withFrame(action, frame) {
   return action
 }
 
+/**
+ * 表單值 → task.schedule。**唯一一份**：存檔與觸發預覽都走這裡，
+ * 各組一份會讓畫面預告的時刻與實際排的 alarm 不一樣。
+ * @param {Object} values getFormData() 的結果
+ * @returns {Object} schedule
+ */
+export function buildSchedule(values) {
+  if (values.scheduleType === 'daily') {
+    return { type: 'daily', times: values.times || [], weekdays: values.weekdays || [] }
+  }
+  const schedule = {
+    type: 'interval',
+    everyMinutes: values.everyMinutes,
+    weekdays: values.weekdays || []
+  }
+  const hasFrom = typeof values.windowFrom === 'string' && values.windowFrom.trim() !== ''
+  const hasTo = typeof values.windowTo === 'string' && values.windowTo.trim() !== ''
+  if (hasFrom && hasTo) {
+    schedule.window = { from: values.windowFrom.trim(), to: values.windowTo.trim() }
+  }
+  return schedule
+}
+
 export function buildTask(values, locator, existing, frame) {
   const id = existing?.id || crypto.randomUUID()
   const spec = buildSpec(values)
@@ -347,17 +374,7 @@ export function buildTask(values, locator, existing, frame) {
     }
   }
 
-  let schedule
-  if (values.scheduleType === 'daily') {
-    schedule = { type: 'daily', times: values.times || [], weekdays: values.weekdays || [] }
-  } else {
-    schedule = { type: 'interval', everyMinutes: values.everyMinutes, weekdays: values.weekdays || [] }
-    const hasFrom = typeof values.windowFrom === 'string' && values.windowFrom.trim() !== ''
-    const hasTo = typeof values.windowTo === 'string' && values.windowTo.trim() !== ''
-    if (hasFrom && hasTo) {
-      schedule.window = { from: values.windowFrom.trim(), to: values.windowTo.trim() }
-    }
-  }
+  const schedule = buildSchedule(values)
 
   const task = {
     id,
@@ -534,6 +551,9 @@ export function render(ctx) {
     if (t.schedule?.window) {
       if (t.schedule.window.from) document.getElementById('window-from').value = t.schedule.window.from
       if (t.schedule.window.to) document.getElementById('window-to').value = t.schedule.window.to
+      // 既有任務有時段就要把開關勾起來，否則欄位藏著、使用者以為沒設定
+      const winCb = document.getElementById('window-enabled')
+      if (winCb) winCb.checked = true
     }
     if (t.spec?.block) {
       if (t.spec.block.cell) {
@@ -1033,6 +1053,132 @@ function syncScheduleFields() {
   document.querySelectorAll('[data-schedule-only]').forEach(el => {
     el.hidden = el.getAttribute('data-schedule-only') !== type
   })
+  syncWindowFields()
+  renderTimeChips()
+  updateSchedulePreview()
+}
+
+/**
+ * 時段欄位只在勾了「只在某個時段內執行」時出現；
+ * 取消勾選要把兩個欄位清空，否則殘值會被 buildTask 寫成 schedule.window
+ */
+function syncWindowFields() {
+  const cb = document.getElementById('window-enabled')
+  const fields = document.getElementById('window-fields')
+  if (!cb || !fields) return
+  fields.hidden = !cb.checked
+}
+
+/**
+ * 取消勾選「只在某個時段內執行」時才清空欄位——殘值留著會被 buildSchedule
+ * 寫成 schedule.window，變成使用者沒要求的時段限制。
+ * 只在 change 事件呼叫，不在每次 sync 呼叫（切換排程型別不得清掉已填的值）
+ */
+function clearWindowIfDisabled() {
+  const cb = document.getElementById('window-enabled')
+  if (!cb || cb.checked) return
+  const from = document.getElementById('window-from')
+  const to = document.getElementById('window-to')
+  if (from) from.value = ''
+  if (to) to.value = ''
+}
+
+// #times 是事實來源；chip 只是它的介面
+function readTimes() {
+  const raw = document.getElementById('times')?.value ?? ''
+  return raw.split(',').map(t => t.trim()).filter(t => t !== '')
+}
+
+function writeTimes(list) {
+  const el = document.getElementById('times')
+  if (el) el.value = list.join(', ')
+  renderTimeChips()
+  updateSchedulePreview()
+}
+
+/**
+ * 把 #times 畫成可移除的 chip
+ */
+export function renderTimeChips() {
+  const box = document.getElementById('time-chips')
+  if (!box) return
+  const times = readTimes()
+  box.replaceChildren()
+  for (const t of times) {
+    const chip = document.createElement('span')
+    chip.className = 'chip'
+    chip.setAttribute('data-time-chip', t)
+    chip.setAttribute('role', 'listitem')
+    const label = document.createElement('span')
+    label.textContent = t
+    const rm = document.createElement('button')
+    rm.type = 'button'
+    rm.setAttribute('data-time-remove', t)
+    rm.setAttribute('aria-label', `移除 ${t}`)
+    rm.textContent = '×'
+    rm.onclick = () => {
+      writeTimes(readTimes().filter(x => x !== t))
+    }
+    chip.appendChild(label)
+    chip.appendChild(rm)
+    box.appendChild(chip)
+  }
+}
+
+/**
+ * 加入一個執行時刻：去重並排序
+ */
+export function addTime(value) {
+  if (!TIME_RE.test(value)) return false
+  const list = readTimes()
+  if (!list.includes(value)) {
+    list.push(value)
+    list.sort()
+  }
+  writeTimes(list)
+  return true
+}
+
+/**
+ * 觸發預覽：第一行是白話句，interval 另外把今天實際會跑的時刻列出來，
+ * 讓使用者當場確認「08:30、08:40 … 09:20，共 6 次」而不是自己心算
+ */
+export function updateSchedulePreview(nowMs = Date.now()) {
+  const el = document.getElementById('schedule-preview')
+  if (!el) return
+  const values = getFormData()
+  const errs = validateForm(values)
+  const schedule = buildSchedule(values)
+  const lines = [describeSchedule(schedule)]
+
+  if (errs.times || errs.everyMinutes || errs.window) {
+    lines.push(errs.times || errs.everyMinutes || errs.window)
+  } else if (values.scheduleType === 'interval') {
+    const dayStart = new Date(nowMs)
+    dayStart.setHours(0, 0, 0, 0)
+    const dayEnd = dayStart.getTime() + 24 * 60 * 60 * 1000
+    const hits = []
+    let cursor = dayStart.getTime() - 1
+    // 迭代同一份 nextIntervalRun，不另算一套（算法漂移就會與實際觸發不一致）
+    for (let i = 0; i < 200; i++) {
+      const next = nextIntervalRun({ schedule }, cursor)
+      if (next === null || next >= dayEnd) break
+      hits.push(next)
+      cursor = next
+    }
+    if (hits.length > 0) {
+      const fmt = (ms) => {
+        const d = new Date(ms)
+        return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+      }
+      const head = hits.slice(0, 6).map(fmt).join('、')
+      const tail = hits.length > 6 ? ' …' : ''
+      lines.push(`今天會跑：${head}${tail}（共 ${hits.length} 次）`)
+    } else {
+      lines.push('今天不會執行（星期或時段不符）')
+    }
+  }
+  el.textContent = lines.join('\n')
 }
 
 /**
@@ -1052,6 +1198,39 @@ function bindModeEvents() {
     schedEl.addEventListener('change', syncScheduleFields)
     schedEl._scheduleEventsBound = true
   }
+
+  const addBtn = document.getElementById('time-add')
+  if (addBtn && !addBtn._timeEventsBound) {
+    addBtn.addEventListener('click', () => {
+      const input = document.getElementById('time-input')
+      if (input && addTime(input.value)) input.value = ''
+    })
+    addBtn._timeEventsBound = true
+  }
+
+  const winCb = document.getElementById('window-enabled')
+  if (winCb && !winCb._windowEventsBound) {
+    winCb.addEventListener('change', () => {
+      clearWindowIfDisabled()
+      syncWindowFields()
+      updateSchedulePreview()
+    })
+    winCb._windowEventsBound = true
+  }
+
+  // 任何排程欄位變動都要重算預覽，否則畫面說的與實際排的會不一樣
+  for (const id of ['every-minutes', 'window-from', 'window-to']) {
+    const el = document.getElementById(id)
+    if (el && !el._previewBound) {
+      el.addEventListener('input', () => updateSchedulePreview())
+      el._previewBound = true
+    }
+  }
+  document.querySelectorAll('#weekdays input[type="checkbox"]').forEach(cb => {
+    if (cb._previewBound) return
+    cb.addEventListener('change', () => updateSchedulePreview())
+    cb._previewBound = true
+  })
 }
 
 function populateAlertFieldOptions(select, selectedKey) {

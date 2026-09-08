@@ -1,6 +1,7 @@
 import { getTask, saveTask, deleteTask, getTasks, countRecordsForTask, listDates } from '../../shared/storage.js'
 import { MSG } from '../../shared/messages.js'
 import { buildExport, download } from '../../shared/export.js'
+import { describeSchedule } from '../../shared/describe.js'
 
 let currentTasks = []
 let currentHealth = {}
@@ -211,14 +212,9 @@ function createTaskRow(t) {
 
   const scheduleEl = document.createElement('span')
   scheduleEl.className = 'task-schedule'
-  if (t.schedule?.type === 'daily') {
-    const times = Array.isArray(t.schedule.times) ? t.schedule.times.join(', ') : ''
-    scheduleEl.textContent = `每日 ${times}`
-  } else if (t.schedule?.type === 'interval') {
-    scheduleEl.textContent = `每 ${t.schedule.everyMinutes || 15} 分鐘`
-  } else {
-    scheduleEl.textContent = '未排程'
-  }
+  // 排程白話一律走 shared/describe.js（Picker 摘要卡與 popup 也用同一份，
+  // 各寫一份會讓同一個任務在三個畫面上長得不一樣）
+  scheduleEl.textContent = describeSchedule(t.schedule)
   row.appendChild(scheduleEl)
 
   const nextEl = document.createElement('span')

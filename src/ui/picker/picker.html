@@ -48,7 +48,18 @@
       white-space: nowrap;
       min-height: 1em;
     }
-    #weekdays, #card-types { display: flex; gap: 6px; flex-wrap: wrap; }
+    .chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
+    .time-picker { display: flex; flex-direction: column; gap: 6px; }
+    .time-picker-row { display: flex; align-items: center; gap: 6px; }
+    .time-picker-row input[type="time"] { flex: 1; min-width: 0; }
+    .range-sep { color: var(--text-muted); flex-shrink: 0; }
+    #schedule-preview {
+      font-size: var(--text-xs, 12px);
+      color: var(--text-muted);
+      line-height: 1.5;
+      white-space: pre-line;
+    }
+    #card-types { display: flex; gap: 6px; flex-wrap: wrap; }
     #weekdays label, #card-types label { display: inline-flex; flex-direction: row; align-items: center; cursor: pointer; color: var(--text); }
     #preview {
       padding: var(--space-2, 8px) var(--space-3, 12px);
@@ -240,18 +251,38 @@
           </select>
         </label>
       </fieldset>
-      <fieldset>
-        <legend>排程設定</legend>
+      <fieldset id="schedule-section">
+        <legend>多久抓一次</legend>
         <label>排程類型
           <select id="schedule-type">
             <option value="daily" selected>每日固定時間</option>
             <option value="interval">固定間隔</option>
           </select>
         </label>
-        <label data-schedule-only="daily">執行時間（逗號分隔 HH:mm）<input type="text" id="times" value="09:00" placeholder="09:00, 15:00"></label>
+        <div data-schedule-only="daily" class="time-picker">
+          <label for="time-input">執行時間</label>
+          <div class="time-picker-row">
+            <input type="time" id="time-input" value="09:30">
+            <button type="button" id="time-add">加入</button>
+          </div>
+          <div id="time-chips" class="chip-row" role="list"></div>
+          <!-- 事實來源仍是這個欄位（buildTask 與既有測試都讀它）；
+               上面的 time 選擇器與 chip 只是它的輸入介面，兩邊一律同步 -->
+          <input type="text" id="times" value="09:30" hidden>
+        </div>
         <label data-schedule-only="interval">間隔時間（分鐘）<input type="number" id="every-minutes" value="15" min="1"></label>
+        <div data-schedule-only="interval" id="window-block">
+          <label class="checkbox-label">
+            <input type="checkbox" id="window-enabled">只在某個時段內執行
+          </label>
+          <div id="window-fields" class="time-picker-row" hidden>
+            <input type="time" id="window-from" placeholder="09:00">
+            <span class="range-sep">～</span>
+            <input type="time" id="window-to" placeholder="18:00">
+          </div>
+        </div>
         <label>執行星期</label>
-        <div id="weekdays">
+        <div id="weekdays" class="chip-row">
           <label><input type="checkbox" value="1" checked>一</label>
           <label><input type="checkbox" value="2" checked>二</label>
           <label><input type="checkbox" value="3" checked>三</label>
@@ -260,6 +291,7 @@
           <label><input type="checkbox" value="6">六</label>
           <label><input type="checkbox" value="0">日</label>
         </div>
+        <div id="schedule-preview" role="status"></div>
       </fieldset>
       <fieldset id="preview-section">
         <legend>即時預覽</legend>
@@ -277,8 +309,6 @@
         </label>
         <div id="legacy-strategy-note" class="hint" hidden></div>
       <label>正規表達式<input type="text" id="regex" placeholder="策略為正規表達式時必填"></label>
-        <label data-schedule-only="interval">生效時段起（HH:mm）<input type="text" id="window-from" placeholder="09:00"></label>
-        <label data-schedule-only="interval">生效時段訖（HH:mm）<input type="text" id="window-to" placeholder="18:00"></label>
         <fieldset id="alert-section">
           <legend>告警條件</legend>
           <div class="alert-desc">命中時會發通知，並在報表標記。同一條件 60 分鐘內只通知一次。</div>
