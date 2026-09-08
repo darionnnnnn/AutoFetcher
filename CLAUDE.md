@@ -15,7 +15,8 @@ src/
 │                          frames 目標所在 iframe 的定位唯一入口
 ├── content/             ← 注入頁面:main.js 訊息路由/擷取/填登入/前置動作
 │                          picker-mode.js 選取模式(高亮 overlay、↑↓、右上角工具列三段
-│                          「單格(預設)/整欄/整列」、可互動的已選 chip 面板)
+│                          「單格(預設)/整欄/整列」、可互動的已選 chip 面板、完成/取消鈕;
+│                          點一下選取、Ctrl 加選、Shift 拉範圍、雙擊送出)
 ├── ui/theme.css         ← **顏色的唯一來源**(亮/暗雙軌 + --chart-1~8 圖表調色盤)
 ├── ui/ui.css            ← 擴充功能頁的**共用元件樣式**(按鈕三級/卡片/表單/chip/sticky footer/
 │                          [hidden]/焦點/reduced-motion);只吃 theme.css 變數,零色碼。
@@ -63,7 +64,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1558 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1643 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
