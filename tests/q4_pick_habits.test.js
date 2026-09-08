@@ -360,3 +360,17 @@ test('F-12 點在表格的縫隙之後，hover 標示還會跟著滑鼠走', asy
     '縫隙不該把整張表鎖住，那會讓標示凍結在原地')
   pm.exitPickMode()
 })
+
+// ---------- F-13 鎖定狀態下 ↑↓ 照常運作且維持鎖定 ----------
+
+test('F-13 鎖定後按 ↑ 換目標，鎖要跟過去（面板說明不得消失）', async () => {
+  const { doc, pm, win } = await boot({ initialTarget: null })
+  pick(win, doc.getElementById('plain'))
+  assert.ok(/已鎖定/.test(panelText(doc)), '先確認有鎖定說明')
+  key(doc, win, 'ArrowUp')
+  assert.ok(/已鎖定/.test(panelText(doc)),
+    `↑ 之後滑鼠仍不會跟，說明就不能消失，實得 ${JSON.stringify(panelText(doc))}`)
+  move(win, doc.getElementById('blank'))
+  assert.ok(!/blank/.test(panelText(doc)), '仍然鎖著，滑鼠移動不換目標')
+  pm.exitPickMode()
+})

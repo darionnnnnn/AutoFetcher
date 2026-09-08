@@ -1415,10 +1415,14 @@ function onKeyDown(event) {
     const anchor = frameOfProxy(currentTargetEl) || currentTargetEl
     if (anchor.parentElement) {
       backStack.push(currentTargetEl); setTarget(upgradeTarget(anchor.parentElement))
+      relockAfterMove()
     }
   } else if (event.key === 'ArrowDown') {
     event.preventDefault()
-    if (backStack.length > 0) setTarget(backStack.pop())
+    if (backStack.length > 0) {
+      setTarget(backStack.pop())
+      relockAfterMove()
+    }
   } else if (event.key === 'Tab') {
     if (currentTargetEl && isTableMode(currentTargetEl)) {
       event.preventDefault()
@@ -1436,6 +1440,15 @@ function onKeyDown(event) {
       }
     }
   }
+}
+
+// 鎖定的是「不跟著滑鼠跑」，不是凍結目標：↑↓ 換了目標之後鎖要跟過去，
+// 否則面板的「已鎖定」說明會消失，但滑鼠其實還是動不了。
+// setTarget 內部已經畫過一次面板，所以要在改完之後再畫一次。
+function relockAfterMove() {
+  if (!lockedEl) return
+  lockedEl = currentTargetEl
+  updatePanel(panelEl, currentTargetEl)
 }
 
 function onClick(event) {
