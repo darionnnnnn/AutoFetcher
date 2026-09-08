@@ -56,6 +56,16 @@ test('D2 守門:notify.js 用的圖示檔案真的存在', () => {
   assert.ok(statSync(join(SRC, m[1])).isFile(), `圖示不存在:${m[1]}`)
 })
 
+test('D3b 守門:package.json 與 manifest 的版本號必須一致', () => {
+  // AF-7 收尾才發現 manifest 停在 0.4.0(AF-5 升的)、package.json 還在開案的 0.1.0——
+  // 兩處各自漂了好幾輪都沒人察覺,因為沒有任何地方比對過它們
+  const mf = JSON.parse(read(join(SRC, 'manifest.json')))
+  const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'))
+  assert.match(mf.version, /^\d+\.\d+\.\d+$/, `manifest 版本格式要是 x.y.z,實得 ${mf.version}`)
+  assert.equal(pkg.version, mf.version,
+    `package.json(${pkg.version})與 manifest(${mf.version})的版本號不一致`)
+})
+
 test('D3 守門:manifest 宣告的每個圖示檔案都存在', () => {
   const mf = JSON.parse(read(join(SRC, 'manifest.json')))
   const paths = [

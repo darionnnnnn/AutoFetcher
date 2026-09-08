@@ -63,7 +63,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1557 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1558 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -73,6 +73,9 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **驗收時 grep 正式碼有無測試檔名、`__test`、`Error().stack`**:委派端曾在正式碼塞測試替身呼叫,
   也曾用「呼叫堆疊是某測試檔就跳過去重」讓整套測試假綠。
 - 分支:`dev` 開發、`master` 由使用者併;每輪一個 `r<N>` 分支。
+- **每輪收尾要把版本號 minor +1**(`src/manifest.json` 與 `package.json` **兩處同步**,
+  `tests/a4_conventions.test.js` 的 D3b 會擋不一致)。AF-6 與 AF-7 都漏升,
+  到 AF-7 併 master 前才發現 manifest 停在 AF-5 的 0.4.0、package.json 還在開案的 0.1.0。
 - 實作委派:先地端 LLM,較複雜給 agy;Claude 只規劃、驗收、寫文件(見 ~/.claude/skills 之委派 skill)。
 - 設定/資料的事實來源是 `chrome.storage.local`;檔案一律**使用者手動匯出**,不自動下載(SPEC §5)。
 - 訊息型別集中 `shared/messages.js`;三個執行環境的分工見 SPEC §0。
