@@ -23,6 +23,31 @@
       padding-right: 2px;
     }
     input[readonly] { background: var(--hover); }
+    [data-picker-header] {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      flex-shrink: 0;
+      margin-bottom: var(--space-2, 10px);
+    }
+    #picker-title {
+      margin: 0;
+      font-size: var(--text-md, 15px);
+      font-weight: 700;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #target-host {
+      font-size: var(--text-xs, 12px);
+      color: var(--text-muted);
+      font-family: var(--font-mono, monospace);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-height: 1em;
+    }
     #weekdays, #card-types { display: flex; gap: 6px; flex-wrap: wrap; }
     #weekdays label, #card-types label { display: inline-flex; flex-direction: row; align-items: center; cursor: pointer; color: var(--text); }
     #preview {
@@ -42,6 +67,8 @@
     }
     #errors { color: var(--danger); font-size: var(--text-xs, 12px); white-space: pre-line; }
     #block-summary { font-size: var(--text-xs, 12px); color: var(--text-muted); line-height: 1.4; }
+    #preview[data-state="ok"] { border-color: var(--ok); color: var(--ok); }
+    #preview[data-state="error"] { border-color: var(--danger); color: var(--danger); }
     #field-list { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; counter-reset: field-row; }
     [data-field-row] { display: flex; align-items: center; gap: 6px; counter-increment: field-row; }
     /* 序號用 CSS 計數器自己算：清單是 picker.js 動態產生的，
@@ -145,29 +172,28 @@
       color: var(--text);
       font-size: var(--text-xs, 12px);
     }
-    #save {
-      background: var(--primary);
-      border-color: var(--primary);
-      color: var(--bg);
-      font-weight: 500;
-    }
-    #save:hover { filter: brightness(1.08); }
   </style>
   <script type="module" src="./picker.js"></script>
 </head>
 <body>
-  <h2>設定抓取任務</h2>
+  <div data-picker-header>
+    <h2 id="picker-title">設定抓取任務</h2>
+    <div id="target-host"></div>
+  </div>
   <form id="picker-form" onsubmit="return false;">
     <div class="settings-body">
-      <label>任務名稱<input type="text" id="name" placeholder="請輸入任務名稱"></label>
-      <label>目標網址<input type="text" id="url" readonly></label>
-      <label>數值類型
-        <select id="mode">
-          <option value="number" selected>數字</option>
-          <option value="text">文字</option>
-          <option value="block">表格/清單區塊</option>
-        </select>
-      </label>
+      <fieldset id="target-section">
+        <legend>目標與模式</legend>
+        <label>任務名稱<input type="text" id="name" placeholder="請輸入任務名稱"></label>
+        <label>目標網址<input type="text" id="url" readonly></label>
+        <label>數值類型
+          <select id="mode">
+            <option value="number" selected>數字</option>
+            <option value="text">文字</option>
+            <option value="block">表格/清單區塊</option>
+          </select>
+        </label>
+      </fieldset>
       <fieldset id="block-section" hidden>
         <legend>區塊設定</legend>
         <div id="block-summary"></div>
@@ -203,9 +229,11 @@
           <label><input type="checkbox" value="0">日</label>
         </div>
       </fieldset>
-      <label>即時預覽</label>
-      <div id="preview"></div>
-      <div id="errors"></div>
+      <fieldset id="preview-section">
+        <legend>即時預覽</legend>
+        <div id="preview"></div>
+        <div id="errors"></div>
+      </fieldset>
       <details id="advanced-section">
         <summary>進階設定</summary>
         <label>抓取策略
@@ -246,15 +274,15 @@
           <label><input type="checkbox" value="table">表格</label>
         </div>
       </fieldset>
-      <label class="checkbox-label">
-        <input type="checkbox" id="pin-defaults">將此次設定固定為預設值
-      </label>
     </div>
+    <label class="checkbox-label">
+      <input type="checkbox" id="pin-defaults">將此次設定固定為預設值
+    </label>
     <div id="save-summary" hidden></div>
     <footer>
       <button type="button" id="test-now">立即測試</button>
       <button type="button" id="cancel">取消</button>
-      <button type="button" id="save">儲存</button>
+      <button type="button" id="save" class="btn-primary">儲存</button>
     </footer>
   </form>
 </body>
