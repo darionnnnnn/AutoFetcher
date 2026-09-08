@@ -144,10 +144,20 @@
   網頁沒有載入 `ui/theme.css`。**色碼一律集中在檔頭的 `COLORS` 常數**(值照抄 theme.css 暗色軌),
   其餘程式碼只引用它。外觀是深色系:深底、細邊框、圓角 8px;工具列是分段控制,
   作用中那段主色底;chip 深底淺字、移除鈕用 `×` 字元(不用 emoji);可點高度至少 28px。
-- **擴充功能頁的共用元件樣式在 `ui/ui.css`**(按鈕三級、卡片、表單、chip、sticky footer、
-  `[hidden]`、`:focus-visible`、`prefers-reduced-motion`),**只吃 `theme.css` 變數、零色碼**。
-  `picker.html` 與 `site.html` 都載入它,頁面自己的 `<style>` 只留版面規則;
+- **擴充功能頁的共用元件樣式在 `ui/ui.css`**(主要按鈕、卡片/表單元素、`[hidden]`、
+  `:focus-visible`、`prefers-reduced-motion`),**只吃 `theme.css` 變數、零色碼**,
+  而且**不留沒有任何頁面使用的類別**(選取模式 overlay 注入在別人的網頁上,拿不到這份樣式表,
+  它的 chip 樣式寫在 `content/picker-mode.js`)。
+  `picker.html` 與 `site.html` 都載入它,頁面自己的 `<style>` 只留版面規則,
+  **不得再寫一份共用樣式已有的規則**(主色按鈕掛 `class="btn-primary"`);
   Report 與 popup 尚未沿用(見 BACKLOG)。
+- **Picker 設定視窗的版面**:頂部標題列(`[data-picker-header]`)——
+  `#picker-title` 編輯既有任務時顯示任務名稱、新增時顯示「設定抓取任務」,
+  `#target-host` 顯示目標網址的主機名(次要文字色、等寬字、過長截斷;網址不合法就留空)。
+  內容區(`.settings-body`)的直接子節點**一律是分節容器**(目標與模式/區塊/排程/即時預覽/進階/儀表板),
+  不留裸欄位。`#preview` 是數值卡,測過之後帶 `data-state`(`ok` 綠 / `error` 紅,只用
+  `--ok`/`--danger`),**每次 `render` 都先清掉**,免得換了目標還留著上一次的紅框。
+  底部動作列:儲存(主色)/取消/立即測試,「將此次設定固定為預設值」在動作列上方。
 
 ### §2.1 Picker 表單的預設值
 

@@ -86,26 +86,9 @@ button.btn-primary:hover {
   filter: brightness(1.1);
 }
 
-/* 危險按鈕 */
-.btn-danger,
-button.btn-danger {
-  background: var(--danger);
-  border-color: var(--danger);
-  color: var(--bg);
-  font-weight: 500;
-}
-
-.btn-danger:hover,
-button.btn-danger:hover {
-  background: var(--danger);
-  border-color: var(--danger);
-  filter: brightness(1.1);
-}
-
 /* ============================================================
    卡片 / 分區容器
    ============================================================ */
-.card,
 fieldset {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -120,8 +103,7 @@ fieldset {
   gap: var(--space-2);
 }
 
-legend,
-.card-title {
+legend {
   font-size: var(--text-xs);
   font-weight: 600;
   padding: 0 var(--space-1);
@@ -174,39 +156,13 @@ input[type="radio"] {
   cursor: pointer;
 }
 
-/* ============================================================
-   Chip / Pill（值清單小標籤）
-   ============================================================ */
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: var(--space-1) var(--space-2);
-  background: var(--primary-soft);
-  border: 1px solid var(--border);
-  border-radius: calc(var(--radius) * 2);
-  font-size: var(--text-xs);
-  color: var(--text);
-  line-height: 1;
-}
-
-.chip-remove {
-  cursor: pointer;
-  font-weight: bold;
-  color: var(--text-muted);
-  transition: color 150ms ease;
-  user-select: none;
-}
-
-.chip-remove:hover {
-  color: var(--danger);
-}
+/* 選取模式 overlay 的 chip 不在這裡：它注入在別人的網頁上，
+   拿不到這份樣式表，樣式寫在 content/picker-mode.js（見 SPEC §2）。 */
 
 /* ============================================================
    底部固定動作列（sticky footer）
    ============================================================ */
-footer,
-.sticky-footer {
+footer {
   display: flex;
   justify-content: flex-end;
   gap: var(--space-2);

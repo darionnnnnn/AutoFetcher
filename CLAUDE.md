@@ -62,7 +62,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1541 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1555 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -116,6 +116,8 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   只驗「DOM 元素被移除」的測試抓不到這種殘留,要驗「連續選兩次」的行為。
 - **掃描 + 迴圈型的測試要先斷言掃到的集合不是空的**:對空集合跑 `for` 迴圈一定通過
   (實例:掃 `ui.css` 的 `font-size: Npx`,但它全用 `var(--text-*)`,把 token 改成 8px 也不會紅)。
+- **`ui/ui.css` 不留沒有任何頁面使用的類別**:它只服務 `picker.html` 與 `site.html`
+  (Report 有自己那一份、選取模式 overlay 拿不到樣式表),定義了卻沒人掛的類別就是死規則。
 - **樣式不要用 `content: attr(...)` 指向沒有人設定的屬性**:動態產生的清單不會帶你想像的
   `data-*`,那條規則會永遠是空白的死規則(序號一類用 CSS 計數器)。
 - **不要用任務設定的網址判斷「現在在哪一頁」**:要讀 `chrome.tabs.get(tabId).url`(轉址後的實際位置)。

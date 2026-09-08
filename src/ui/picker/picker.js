@@ -375,8 +375,45 @@ export function buildTask(values, locator, existing, frame) {
   return task
 }
 
+// 標題列：編輯既有任務時顯示它的名稱，新增時顯示通用標題；
+// 副標是目標主機（網址整串太長，只有主機名認得出是哪一站）
+function renderHeader(ctx) {
+  const titleEl = document.getElementById('picker-title')
+  if (titleEl) {
+    const name = ctx?.task?.name
+    titleEl.textContent = (typeof name === 'string' && name.trim()) ? name.trim() : '設定抓取任務'
+  }
+  const hostEl = document.getElementById('target-host')
+  if (hostEl) {
+    let host = ''
+    const url = ctx?.url ?? ctx?.task?.url
+    if (typeof url === 'string' && url.trim()) {
+      try {
+        host = new URL(url).hostname
+      } catch {
+        host = ''
+      }
+    }
+    hostEl.textContent = host
+    hostEl.title = host
+  }
+}
+
+// 預覽的狀態色：只有測過才有狀態（成功綠、失敗紅），還沒測過不上色
+function setPreviewState(state) {
+  const el = document.getElementById('preview')
+  if (!el) return
+  if (state) {
+    el.dataset.state = state
+  } else {
+    delete el.dataset.state
+  }
+}
+
 export function render(ctx) {
   currentCtx = ctx || {}
+  renderHeader(currentCtx)
+  setPreviewState(null)
   const previewEl = document.getElementById('preview')
   if (previewEl) {
     // 比較要正規化成字串：preview 是文字、previewValue 是數字，直接比永遠不相等，
@@ -1337,15 +1374,18 @@ export async function handleTestNow() {
         if (previewEl) previewEl.textContent = res.value !== undefined ? String(res.value) : (res.raw ?? '')
       }
       if (errorsEl) errorsEl.textContent = ''
+      setPreviewState('ok')
     } else {
       const err = res?.error || '找不到目標元素'
       if (errorsEl) errorsEl.textContent = err
       if (previewEl) previewEl.textContent = '—'
+      setPreviewState('error')
     }
   } catch (e) {
     const err = e?.message || '找不到目標元素'
     if (errorsEl) errorsEl.textContent = err
     if (previewEl) previewEl.textContent = '—'
+    setPreviewState('error')
   }
 }
 
