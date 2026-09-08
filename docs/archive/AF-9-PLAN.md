@@ -302,3 +302,7 @@ popup 主要入口與 `chrome://` 提示、版本 0.8.0、SPEC／BACKLOG 更新�
 終檢後手改 commit（`6a707fa`、`9f4d741`）另掃一次：`applyDefaultCardTypes` 守衛與 `styleActionButton` 切換就是在那兩個 commit 引入的，上表第 3、5 條正是從那裡抓到的。
 
 體檢後全量測試:**1748 綠 / 0 紅**;`./run_smoke.sh` Chrome 與 Edge 全部通過。
+
+## 終檢輪
+
+併入 dev 後全量 1748 綠、正式碼 grep 無測試替身與色碼字面值。終檢無新發現。
