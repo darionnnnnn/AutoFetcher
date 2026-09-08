@@ -181,6 +181,35 @@ export function render(ctx) {
     }
   }
 
+  // 最主要的入口：使用者裝好之後第一件想做的事就是「抓這一頁的東西」。
+  // 只靠右鍵選單的話，沒人告訴他要按右鍵（AF-9）
+  const pickBtn = document.getElementById('pick-here')
+  const pickNote = document.getElementById('pick-here-note')
+  if (pickBtn) {
+    pickBtn.onclick = async () => {
+      if (pickNote) pickNote.textContent = ''
+      try {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
+        const tab = tabs?.[0]
+        // 擴充功能頁、chrome:// 這些注入不進去，要說清楚而不是靜靜失敗
+        if (!tab?.id || !/^https?:/i.test(tab.url || '')) {
+          if (pickNote) pickNote.textContent = '這個頁面無法選取，請切換到一般網頁再試'
+          return
+        }
+        await chrome.runtime.sendMessage({
+          type: MSG.ENTER_PICK,
+          purpose: 'task',
+          tabId: tab.id,
+          // 一律從最上層開始：iframe 內的目標由選取模式自己往下鑽
+          frameId: 0
+        })
+        if (typeof window !== 'undefined' && window.close) window.close()
+      } catch {
+        if (pickNote) pickNote.textContent = '這個頁面無法選取，請切換到一般網頁再試'
+      }
+    }
+  }
+
   const openReportBtn = document.getElementById('open-report')
   if (openReportBtn) {
     openReportBtn.onclick = () => {

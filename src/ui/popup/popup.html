@@ -119,6 +119,22 @@
     #open-report:hover {
       filter: brightness(1.08);
     }
+    #pick-here {
+      width: 100%;
+      margin-bottom: 8px;
+      min-height: 32px;
+      font-weight: 600;
+      background: var(--primary);
+      border-color: var(--primary);
+      color: var(--text);
+    }
+    #pick-here-note:empty { display: none; }
+    #pick-here-note {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+      line-height: 1.4;
+    }
   </style>
 </head>
 <body>
@@ -126,6 +142,8 @@
     <span id="status-dot" class="status-dot"></span>
     <span id="status-summary"></span>
   </header>
+  <button type="button" id="pick-here">在這個頁面選取</button>
+  <div id="pick-here-note"></div>
   <div id="task-list"></div>
   <footer>
     <button type="button" id="toggle-all">全部暫停 / 恢復</button>
