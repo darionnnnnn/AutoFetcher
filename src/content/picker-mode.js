@@ -67,6 +67,26 @@ function cellBelongsToTable(cell, tableEl) {
   return tableOf(cell) === tableEl
 }
 
+// 把滑鼠下的元素升級成「它所屬的最內層表格」。
+// 使用者的直覺是「我點的是這一格」，而擷取規格要的是表格容器 + 列欄索引，
+// 兩者之間的轉換只有這一份。只對會挑值的用途升級：前置動作與登入要的是那個元素本身。
+function upgradeTarget(el) {
+  if (!el) return el
+  if (currentPurpose !== 'task' && currentPurpose !== 'repick') return el
+  if (typeof el.closest !== 'function') return el
+  let upgraded = null
+  const cell = el.closest(CELL_SELECTOR)
+  if (cell) upgraded = tableOf(cell)
+  if (!upgraded) upgraded = tableOf(el)
+  if (!upgraded) return el
+  // 已經選了值就鎖在那張表：巢狀小表的索引配外層表的定位會送出錯的規格
+  if (selectedList.length > 0 && pickedTableEl && upgraded !== pickedTableEl &&
+      pickedTableEl.contains(upgraded)) {
+    return pickedTableEl
+  }
+  return upgraded
+}
+
 // 取得列中的格子（只取這一列自己的儲存格，排除巢狀小表格的儲存格）
 function getRowCells(row) {
   if (!row) return []
@@ -1078,13 +1098,13 @@ function onMouseMove(event) {
     }
   }
 
+  const upgraded = upgradeTarget(target)
+  if (upgraded !== currentTargetEl) {
+    backStack = []
+    setTarget(upgraded)
+  }
   if (currentTargetEl && isTableMode(currentTargetEl) && (currentTargetEl === target || currentTargetEl.contains(target))) {
     handleTableMouseMove(target)
-    return
-  }
-  if (target !== currentTargetEl) {
-    backStack = []
-    setTarget(target)
   }
 }
 
@@ -1138,7 +1158,7 @@ function onKeyDown(event) {
     // 指在代理層時往上要走 iframe 的父層；代理層自己的父層是我們的 overlay
     const anchor = frameOfProxy(currentTargetEl) || currentTargetEl
     if (anchor.parentElement) {
-      backStack.push(currentTargetEl); setTarget(anchor.parentElement)
+      backStack.push(currentTargetEl); setTarget(upgradeTarget(anchor.parentElement))
     }
   } else if (event.key === 'ArrowDown') {
     event.preventDefault()
@@ -1443,7 +1463,7 @@ export function enterPickMode(opts) {
 
   document.body.appendChild(overlayEl)
   buildFrameProxies()
-  setTarget(opts?.initialTarget || null)
+  setTarget(upgradeTarget(opts?.initialTarget || null))
 
   if (opts?.preselect && currentTargetEl && isTableMode(currentTargetEl)) {
     applyPreselect(opts.preselect, currentTargetEl)

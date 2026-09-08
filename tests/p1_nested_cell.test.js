@@ -166,7 +166,10 @@ const pickedMsgs = (c) => c.__calls
   .map(x => x.args[0])
   .filter(m => m?.type === 'PICKED')
 
-test('A-3 點內層小表格的數字，送出的是外層表格的那一格', async () => {
+// AF-8 批次 A 推翻 AF-7 的「格子歸屬一律以外層目標表格為準」：
+// 外層那一格的文字是內層小表整串接起來的（這裡是 42MAX:462，實站是 2553039806），
+// 解析出來的數字只是「碰巧第一個」。改成點哪一格就是哪一格，外層仍可用 ↑ 取回。
+test('A-3 點內層小表格的數字，送出的就是內層那一格', async () => {
   const { c, doc, pm, win } = await enterOnMonitor()
   const cell = valueCell(doc)
   assert.equal(cell.textContent.trim(), '42', 'fixture 的第一個內層格子應該是 42')
@@ -176,19 +179,31 @@ test('A-3 點內層小表格的數字，送出的是外層表格的那一格', a
   assert.equal(msgs.length, 1, '要送出一則 PICKED')
   const pick = msgs[0].picks[0]
   assert.ok(pick.cell, `要是單一儲存格，實得 ${JSON.stringify(pick)}`)
-  assert.equal(pick.cell.row.index, FIRST_IP_ROW)
-  assert.equal(pick.cell.row.header, '10.231.1.31')
-  assert.equal(pick.cell.col.index, VALUE_COL)
+  assert.equal(pick.cell.col.index, 0, '內層小表的第一欄')
+  assert.equal(msgs[0].previewValue, 42)
   pm.exitPickMode()
 })
 
-test('A-3 預覽是所選那一格的文字，不是整張表格', async () => {
+test('A-3 預覽是所選那一格的文字，不是整格串接', async () => {
   const { c, doc, pm, win } = await enterOnMonitor()
   fire(win, valueCell(doc), 'mousemove')
   fire(win, valueCell(doc), 'click')
   const msg = pickedMsgs(c)[0]
-  assert.equal(msg.preview, '42MAX:462')
-  assert.equal(msg.previewValue, 42, '整張表格的文字會解析成別的數字')
+  assert.equal(msg.preview, '42', `實得 ${JSON.stringify(msg.preview)}`)
+  assert.equal(msg.previewValue, 42)
+  pm.exitPickMode()
+})
+
+test('A-3 按 ↑ 可以改選外層表格的那一格（保留 AF-7 的用法）', async () => {
+  const { c, doc, pm, win } = await enterOnMonitor()
+  fire(win, valueCell(doc), 'mousemove')
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
+  fire(win, valueCell(doc).closest('table').parentElement, 'mousemove')
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  const msg = pickedMsgs(c)[0]
+  assert.ok(msg.picks[0].cell, `實得 ${JSON.stringify(msg.picks[0])}`)
+  assert.equal(msg.picks[0].cell.row.header, '10.231.1.31', '外層表格才有主機當列標題')
+  assert.equal(msg.picks[0].cell.col.index, VALUE_COL)
   pm.exitPickMode()
 })
 
