@@ -790,6 +790,30 @@ function applyPositionDefaults(ctx) {
   }
 }
 
+// 整欄的「欄」是使用者自己點的、整列的「列」也是，那一軸的位置定位對它沒有意義。
+// 留著能選但選了不生效，就是一個靜默無效的設定；直接停用並說明。
+function syncPosControls() {
+  const rows = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
+  const specs = rows.length > 0
+    ? rows.map(r => (r._spec || fieldSpecs.get(r.dataset.fieldKey || ''))).filter(Boolean)
+    : (currentBlock ? [currentBlock.cell ? { cell: currentBlock.cell } : { block: currentBlock }] : [])
+  const axes = new Set(specs.map(s => s.block?.axis || (s.axis && !s.cell ? s.axis : null)).filter(Boolean))
+  const onlyCol = axes.size === 1 && axes.has('col')
+  const onlyRow = axes.size === 1 && axes.has('row')
+
+  setPosDisabled('col-pos', onlyCol, '整欄的欄是你自己點的，不用位置定位')
+  setPosDisabled('row-pos', onlyRow, '整列的列是你自己點的，不用位置定位')
+}
+
+function setPosDisabled(id, disabled, reason) {
+  const el = document.getElementById(id)
+  if (!el) return
+  if (disabled && el.value !== '') el.value = ''
+  el.disabled = disabled
+  if (disabled) el.setAttribute('title', reason)
+  else el.removeAttribute('title')
+}
+
 function bindPosEvents() {
   for (const id of ['row-pos', 'col-pos']) {
     const el = document.getElementById(id)
@@ -927,6 +951,7 @@ function updateBlockSection() {
   }
 
   section.hidden = false
+  syncPosControls()
   updatePosHint()
   const summaryEl = document.getElementById('block-summary')
   if (!summaryEl) return
@@ -1079,12 +1104,17 @@ function updateFieldListState() {
   // 值的數量也決定預設建哪幾張卡，移除／上下移之後都要重算
   const aggLabel = document.getElementById('block-aggregate')?.closest('label')
   if (aggLabel) {
+    const blockSpecs = n > 0
+      ? rows.map(r => (r._spec || fieldSpecs.get(r.dataset.fieldKey || ''))?.block).filter(Boolean)
+      : ((currentBlock && !currentBlock.cell && currentBlock.axis) ? [currentBlock] : [])
     const hasBlockField = n > 0
-      ? rows.some(r => (r._spec || fieldSpecs.get(r.dataset.fieldKey || ''))?.block)
+      ? blockSpecs.length > 0
       : !(currentBlock && currentBlock.cell)
-    // 有位置定位就是取那一格，沒有東西要聚合
-    const usesPosition = Boolean(posValueOf('row-pos') || posValueOf('col-pos'))
-    aggLabel.hidden = !hasBlockField || usesPosition
+    // 只有「這些聚合真的都被位置取代掉」時才藏聚合下拉。
+    // 整欄的位置來自列定位、整列的來自欄定位——看錯一邊就會藏掉還在生效的設定
+    const allReplaced = blockSpecs.length > 0 && blockSpecs.every(b =>
+      Boolean(b.axis === 'row' ? posValueOf('col-pos') : posValueOf('row-pos')))
+    aggLabel.hidden = !hasBlockField || allReplaced
   }
   applyDefaultCardTypes()
 

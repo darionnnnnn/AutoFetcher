@@ -202,3 +202,39 @@ test('P-6 多值任務的值名稱在用位置時不放會變的列標題', asyn
   assert.deepEqual(names, ['成交金額（最後一列）', '成交股數（最後一列）'],
     `實得 ${JSON.stringify(names)}`)
 })
+
+// ---------- P-7 不留靜默無效的設定 ----------
+
+test('P-7 整欄的值不給選「欄定位」，並說明為什麼', async () => {
+  const { pk, doc } = await fresh()
+  pk.render(ctxFor([{ block: { axis: 'col', index: 2, headerText: '成交金額' } }]))
+  const colPos = $(doc, 'col-pos')
+  assert.equal(colPos.disabled, true, '整欄的欄是使用者自己點的，位置定位對它沒有意義')
+  assert.ok(colPos.getAttribute('title'), '停用要說出理由')
+  assert.equal($(doc, 'row-pos').disabled, false, '列定位才是「整欄的哪一格」')
+})
+
+test('P-7 整列的值不給選「列定位」', async () => {
+  const { pk, doc } = await fresh()
+  pk.render(ctxFor([{ block: { axis: 'row', index: 0, headerText: '115/09/01' } }]))
+  assert.equal($(doc, 'row-pos').disabled, true)
+  assert.equal($(doc, 'col-pos').disabled, false)
+})
+
+test('P-7 整欄設了欄定位不會偷偷藏掉聚合下拉', async () => {
+  const { pk, doc } = await fresh()
+  pk.render(ctxFor([{ block: { axis: 'col', index: 2, headerText: '成交金額' } }]))
+  const aggLabel = $(doc, 'block-aggregate').closest('label')
+  // 停用的欄定位就算被程式塞值也不該影響聚合下拉
+  $(doc, 'col-pos').disabled = false
+  $(doc, 'col-pos').value = 'last'
+  $(doc, 'col-pos').dispatchEvent(new globalThis.window.Event('change', { bubbles: true }))
+  assert.equal(aggLabel.hidden, false, '這個設定不會進規格，聚合仍在生效，就不能藏')
+})
+
+test('P-7 儲存格的值兩個定位都可選', async () => {
+  const { pk, doc } = await fresh()
+  pk.render(ctxFor([cellPick(4, '115/09/07')]))
+  assert.equal($(doc, 'row-pos').disabled, false)
+  assert.equal($(doc, 'col-pos').disabled, false)
+})
