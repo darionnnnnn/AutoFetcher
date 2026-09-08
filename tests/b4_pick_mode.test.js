@@ -230,9 +230,22 @@ test('第二個資料列的索引是 1(列索引與欄索引一樣 0-based)', as
   assert.equal(pm.currentCellIndex(), 1)
 })
 
-test('在表格內移動滑鼠時,整欄被標示為待選', async () => {
+// AF-7 起選取單位預設是「單格」，整欄要先切到工具列的「整欄」。
+const tool = (doc, key) => doc.querySelector(`[data-af-tool="${key}"]`)
+const clickEl = (doc, el) => el.dispatchEvent(new globalThis.MouseEvent('click', { bubbles: true, cancelable: true }))
+
+test('預設是單格模式,移動滑鼠只標示那一格', async () => {
   const { doc, pm } = await setup()
   pm.enterPickMode({ purpose: 'task', initialTarget: $(doc, '#t') })
+  move(doc, $(doc, '#c12'))
+  assert.equal(pm.currentCellIndex(), 1, '第 2 欄(索引 1)')
+  assert.equal(doc.querySelectorAll('[data-af-cell]').length, 1, '單格模式只標滑鼠那一格')
+})
+
+test('切到整欄模式後,同一欄的資料格都要標示', async () => {
+  const { doc, pm } = await setup()
+  pm.enterPickMode({ purpose: 'task', initialTarget: $(doc, '#t') })
+  clickEl(doc, tool(doc, 'col'))
   move(doc, $(doc, '#c12'))
   assert.equal(pm.currentCellIndex(), 1, '第 2 欄(索引 1)')
   const marked = doc.querySelectorAll('[data-af-cell]')
@@ -242,6 +255,7 @@ test('在表格內移動滑鼠時,整欄被標示為待選', async () => {
 test('換到另一欄時,上一欄的標示要先清掉', async () => {
   const { doc, pm } = await setup()
   pm.enterPickMode({ purpose: 'task', initialTarget: $(doc, '#t') })
+  clickEl(doc, tool(doc, 'col'))
   move(doc, $(doc, '#c12'))
   assert.equal(doc.querySelectorAll('[data-af-cell]').length, 2)
   move(doc, $(doc, '#c11'))
@@ -249,13 +263,17 @@ test('換到另一欄時,上一欄的標示要先清掉', async () => {
   assert.equal(pm.currentCellIndex(), 0)
 })
 
-test('Tab 切換成以「列」為軸', async () => {
+test('Tab 在單格→整欄→整列之間循環', async () => {
   const { doc, pm } = await setup()
   pm.enterPickMode({ purpose: 'task', initialTarget: $(doc, '#t') })
   move(doc, $(doc, '#c12'))
   key(doc, 'Tab')
+  assert.equal(tool(doc, 'col').hasAttribute('data-af-active'), true, '第一次 Tab 到整欄')
+  key(doc, 'Tab')
   assert.equal(pm.currentAxis(), 'row')
   assert.equal(pm.currentCellIndex(), 0, '第一個資料列的索引是 0,與欄索引一樣是 0-based')
+  key(doc, 'Tab')
+  assert.equal(tool(doc, 'cell').hasAttribute('data-af-active'), true, '再一次回到單格')
 })
 
 test('在表格格子上點擊 → 送出 blockInfo 的軸、索引與表頭文字', async () => {

@@ -9,8 +9,8 @@ let active = false, currentPurpose = null, currentTaskId = undefined, currentTar
 // 進不去框架時要說出來；代理層是 iframe 的替身（見 frameOfProxy）
 let currentHint = null
 let pendingPreselect = null
-let overlayEl = null, highlightEl = null, panelEl = null, menuEl = null
-let tableAxis = null, cellIndex = null, colIndex = null, rowIndex = null, currentDataRows = [], currentRowEl = null
+let overlayEl = null, highlightEl = null, panelEl = null, toolbarEl = null, menuEl = null
+let pickMode = 'cell', cellIndex = null, colIndex = null, rowIndex = null, currentDataRows = [], currentRowEl = null, currentCellEl = null
 let selectedList = [], maxPicks = 20, limitReached = false, headerChangedNotice = false
 // 已選的值屬於哪一張表格：滑鼠漂出表格不清空，換到另一張表格才清
 let pickedTableEl = null
@@ -132,10 +132,15 @@ function clearMarkedCells(doc) {
   }
 }
 
-// 標示待選欄或列之資料格
-function markCells(dataRows, row, axis, cIdx) {
+// 標示待選格、欄或列之資料格
+function markCells(cell, dataRows, row, mode, cIdx) {
   clearMarkedCells(document)
-  if (axis === 'col' && cIdx !== null && cIdx >= 0 && dataRows) {
+  if (mode === 'cell') {
+    if (cell && !isHeaderCell(cell)) {
+      cell.setAttribute('data-af-cell', '')
+      cell.style.outline = '2px solid #d97706'
+    }
+  } else if (mode === 'col' && cIdx !== null && cIdx >= 0 && dataRows) {
     for (const dRow of dataRows) {
       const targetCell = getRowCells(dRow)[cIdx]
       if (targetCell && !isHeaderCell(targetCell)) {
@@ -143,7 +148,7 @@ function markCells(dataRows, row, axis, cIdx) {
         targetCell.style.outline = '2px solid #d97706'
       }
     }
-  } else if (axis === 'row' && row) {
+  } else if (mode === 'row' && row) {
     for (const c of getRowCells(row)) {
       if (!isHeaderCell(c)) {
         c.setAttribute('data-af-cell', '')
@@ -180,7 +185,9 @@ function applyPickedMarks(tableEl) {
         const cell = cells[pick.cell.col.index]
         if (cell && !isHeaderCell(cell)) {
           cell.setAttribute('data-af-picked', '')
-          cell.style.outline = '2px solid #2563eb'
+          if (!cell.hasAttribute('data-af-cell')) {
+            cell.style.outline = '2px solid #2563eb'
+          }
         }
       }
     } else if (pick.block) {
@@ -190,7 +197,9 @@ function applyPickedMarks(tableEl) {
           const cell = cells[pick.block.index]
           if (cell && !isHeaderCell(cell)) {
             cell.setAttribute('data-af-picked', '')
-            cell.style.outline = '2px solid #2563eb'
+            if (!cell.hasAttribute('data-af-cell')) {
+              cell.style.outline = '2px solid #2563eb'
+            }
           }
         }
       } else if (pick.block.axis === 'row') {
@@ -199,7 +208,9 @@ function applyPickedMarks(tableEl) {
           for (const cell of getRowCells(row)) {
             if (!isHeaderCell(cell)) {
               cell.setAttribute('data-af-picked', '')
-              cell.style.outline = '2px solid #2563eb'
+              if (!cell.hasAttribute('data-af-cell')) {
+                cell.style.outline = '2px solid #2563eb'
+              }
             }
           }
         }
@@ -278,25 +289,141 @@ function buildFrameProxies() {
   }
 }
 
-// 產生說明面板文字
+// 更新工具列狀態（作用中模式與停用狀態）
+function updateToolbar() {
+  if (!toolbarEl) return
+  const isTable = Boolean(currentTargetEl && isTableMode(currentTargetEl))
+  const isTask = currentPurpose === 'task'
+
+  for (const btn of toolbarEl.querySelectorAll('[data-af-tool]')) {
+    const key = btn.getAttribute('data-af-tool')
+    let disabled = false
+    if (!isTable) {
+      disabled = true
+    } else if (!isTask) {
+      if (key === 'col' || key === 'row') disabled = true
+    }
+
+    if (disabled) {
+      btn.setAttribute('aria-disabled', 'true')
+      btn.style.opacity = '0.5'
+      btn.style.cursor = 'not-allowed'
+    } else {
+      btn.removeAttribute('aria-disabled')
+      btn.style.opacity = '1'
+      btn.style.cursor = 'pointer'
+    }
+
+    if (key === pickMode) {
+      btn.setAttribute('data-af-active', '')
+      btn.style.backgroundColor = '#2563eb'
+      btn.style.color = '#ffffff'
+    } else {
+      btn.removeAttribute('data-af-active')
+      btn.style.backgroundColor = '#ffffff'
+      btn.style.color = '#2563eb'
+    }
+  }
+}
+
+// 移除指定序號之已選項
+function removePickAt(index) {
+  if (index < 0 || index >= selectedList.length) return
+  selectedList.splice(index, 1)
+  limitReached = false
+  if (selectedList.length === 0) {
+    pickedTableEl = null
+  }
+  applyPickedMarks(currentTargetEl)
+  updatePanel(panelEl, currentTargetEl)
+}
+
+// 移除最後一項已選項
+function removeLastPick() {
+  if (selectedList.length === 0) return
+  selectedList.pop()
+  limitReached = false
+  if (selectedList.length === 0) {
+    pickedTableEl = null
+  }
+  applyPickedMarks(currentTargetEl)
+  updatePanel(panelEl, currentTargetEl)
+}
+
+// 產生說明面板文字與已選清單
 function updatePanel(panel, el) {
   if (!panel) return
+
+  while (panel.firstChild) {
+    panel.removeChild(panel.firstChild)
+  }
+
   if (selectedList.length > 0) {
-    const count = selectedList.length
-    const names = selectedList.slice(0, 3).map(getPickName)
-    let nameStr = names.join('、')
-    if (selectedList.length > 3) {
-      nameStr += '…'
+    const headerDiv = document.createElement('div')
+    headerDiv.textContent = `已選 ${selectedList.length} 個值:`
+    headerDiv.style.marginBottom = '4px'
+    headerDiv.style.fontWeight = 'bold'
+    panel.appendChild(headerDiv)
+
+    const listDiv = document.createElement('div')
+    listDiv.style.display = 'flex'
+    listDiv.style.flexWrap = 'wrap'
+    listDiv.style.gap = '4px'
+    listDiv.style.marginBottom = '6px'
+
+    for (let i = 0; i < selectedList.length; i++) {
+      const pick = selectedList[i]
+      const chip = document.createElement('div')
+      chip.setAttribute('data-af-chip', String(i))
+      chip.style.display = 'inline-flex'
+      chip.style.alignItems = 'center'
+      chip.style.backgroundColor = 'rgba(255, 255, 255, 0.2)'
+      chip.style.borderRadius = '3px'
+      chip.style.padding = '2px 6px'
+      chip.style.fontSize = '11px'
+
+      const nameSpan = document.createElement('span')
+      nameSpan.textContent = getPickName(pick)
+      chip.appendChild(nameSpan)
+
+      const removeBtn = document.createElement('span')
+      removeBtn.setAttribute('data-af-chip-remove', '')
+      removeBtn.textContent = '×'
+      removeBtn.style.marginLeft = '6px'
+      removeBtn.style.cursor = 'pointer'
+      removeBtn.style.fontWeight = 'bold'
+      chip.appendChild(removeBtn)
+
+      listDiv.appendChild(chip)
     }
-    const lines = [`已選 ${count} 個值: ${nameStr}`]
+    panel.appendChild(listDiv)
+
+    const removeLastBtn = document.createElement('button')
+    removeLastBtn.type = 'button'
+    removeLastBtn.setAttribute('data-af-remove-last', '')
+    removeLastBtn.textContent = '移除最後一項'
+    removeLastBtn.style.padding = '2px 8px'
+    removeLastBtn.style.fontSize = '11px'
+    removeLastBtn.style.backgroundColor = '#ffffff'
+    removeLastBtn.style.color = '#2563eb'
+    removeLastBtn.style.border = 'none'
+    removeLastBtn.style.borderRadius = '3px'
+    removeLastBtn.style.cursor = 'pointer'
+    removeLastBtn.style.marginBottom = '4px'
+    panel.appendChild(removeLastBtn)
+
+    const noticeLines = []
     if (limitReached || selectedList.length >= maxPicks) {
-      lines.push('（已達選取上限）')
+      noticeLines.push('（已達選取上限）')
     }
     if (headerChangedNotice) {
-      lines.push('（位置已變）')
+      noticeLines.push('（位置已變）')
     }
-    lines.push('Shift 點選加選 / 拖曳框選 / 右鍵選單 / Enter 完成 / Esc 取消')
-    panel.textContent = lines.join('\n')
+    noticeLines.push('Shift 點選加選 / 拖曳框選 / 右鍵選單 / Enter 完成 / Esc 取消')
+    const footerDiv = document.createElement('div')
+    footerDiv.textContent = noticeLines.join('\n')
+    footerDiv.style.whiteSpace = 'pre-line'
+    panel.appendChild(footerDiv)
     return
   }
 
@@ -356,25 +483,25 @@ function setTarget(el) {
     pickedTableEl = null
   }
   clearMarkedCells(document)
-  currentTargetEl = el; currentDataRows = []; currentRowEl = null; colIndex = null; rowIndex = null; cellIndex = null
+  currentTargetEl = el; currentDataRows = []; currentRowEl = null; colIndex = null; rowIndex = null; cellIndex = null; currentCellEl = null
   if (!el) {
-    tableAxis = null
     if (highlightEl) highlightEl.style.display = 'none'
+    updateToolbar()
     if (panelEl) updatePanel(panelEl, null)
     return
   }
-  tableAxis = isTableMode(el) ? 'col' : null
   if (highlightEl) {
     highlightEl.style.display = 'block'
     updateHighlight(highlightEl, el)
   }
+  updateToolbar()
   if (panelEl) updatePanel(panelEl, el)
 }
 
 // 取得待選欄或列之表頭文字
 function getHeaderText() {
   if (!currentTargetEl || !isTableMode(currentTargetEl)) return ''
-  if (tableAxis === 'row') return currentRowEl ? rowHeader(currentRowEl) : ''
+  if (pickMode === 'row') return currentRowEl ? rowHeader(currentRowEl) : ''
   if (colIndex === null) return ''
   return columnHeaders(currentTargetEl)[colIndex] || ''
 }
@@ -384,12 +511,13 @@ function handleTableMouseMove(target) {
   if (!currentTargetEl || !isTableMode(currentTargetEl)) return
   const info = resolveCell(target, currentTargetEl)
   if (!info) return
+  currentCellEl = info.cell
   colIndex = info.cIdx
   rowIndex = info.rIdx
-  cellIndex = tableAxis === 'row' ? rowIndex : colIndex
+  cellIndex = pickMode === 'row' ? rowIndex : colIndex
   currentDataRows = info.dataRows
   currentRowEl = info.row
-  markCells(info.dataRows, info.row, tableAxis, colIndex)
+  markCells(currentCellEl, info.dataRows, info.row, pickMode, colIndex)
   applyPickedMarks(currentTargetEl)
 }
 
@@ -505,21 +633,39 @@ function confirmPick() {
     picks = [...selectedList]
   } else {
     if (isTableMode(currentTargetEl)) {
-      if (rowIndex !== null && colIndex !== null) {
-        const dataRows = resolveDataRows(currentTargetEl)
-        const row = dataRows[rowIndex]
+      if (pickMode === 'cell') {
+        if (rowIndex !== null && colIndex !== null) {
+          const dataRows = resolveDataRows(currentTargetEl)
+          const row = dataRows[rowIndex]
+          picks = [{
+            cell: {
+              row: { index: rowIndex, header: row ? rowHeader(row) : '' },
+              col: { index: colIndex, header: columnHeaders(currentTargetEl)[colIndex] || '' }
+            }
+          }]
+        } else {
+          picks = [{
+            block: {
+              axis: 'col',
+              index: currentCellIndex() !== null ? currentCellIndex() : 0,
+              headerText: getHeaderText()
+            }
+          }]
+        }
+      } else if (pickMode === 'row') {
         picks = [{
-          cell: {
-            row: { index: rowIndex, header: row ? rowHeader(row) : '' },
-            col: { index: colIndex, header: columnHeaders(currentTargetEl)[colIndex] || '' }
+          block: {
+            axis: 'row',
+            index: rowIndex !== null ? rowIndex : (currentCellIndex() !== null ? currentCellIndex() : 0),
+            headerText: currentRowEl ? rowHeader(currentRowEl) : getHeaderText()
           }
         }]
       } else {
         picks = [{
           block: {
-            axis: tableAxis || 'col',
-            index: currentCellIndex() !== null ? currentCellIndex() : 0,
-            headerText: getHeaderText()
+            axis: 'col',
+            index: colIndex !== null ? colIndex : (currentCellIndex() !== null ? currentCellIndex() : 0),
+            headerText: colIndex !== null ? (columnHeaders(currentTargetEl)[colIndex] || '') : getHeaderText()
           }
         }]
       }
@@ -534,7 +680,7 @@ function confirmPick() {
 
   const blockInfo = { ...kindOf(currentTargetEl) }
   if (isTableMode(currentTargetEl)) {
-    blockInfo.axis = tableAxis || 'col'
+    blockInfo.axis = pickMode === 'row' ? 'row' : 'col'
     blockInfo.index = currentCellIndex()
     blockInfo.headerText = getHeaderText()
   } else {
@@ -915,6 +1061,11 @@ function onKeyDown(event) {
   if (!active) return
   if (event.key === 'Escape') {
     event.preventDefault(); cancelPick()
+  } else if (event.key === 'Backspace') {
+    event.preventDefault()
+    if (selectedList.length > 0) {
+      removeLastPick()
+    }
   } else if (event.key === 'Enter') {
     if (!currentTargetEl) return
     event.preventDefault(); confirmPick()
@@ -938,12 +1089,14 @@ function onKeyDown(event) {
 
         rowIndex = newR
         colIndex = newC
-        cellIndex = tableAxis === 'row' ? rowIndex : colIndex
+        cellIndex = pickMode === 'row' ? rowIndex : colIndex
         currentRowEl = dataRows[rowIndex]
+        const rowCells = getRowCells(currentRowEl)
+        currentCellEl = rowCells[colIndex] || null
 
         addCellPick(newR, newC, dataRows)
         applyPickedMarks(currentTargetEl)
-        markCells(dataRows, currentRowEl, tableAxis, colIndex)
+        markCells(currentCellEl, dataRows, currentRowEl, pickMode, colIndex)
         updatePanel(panelEl, currentTargetEl)
       }
     }
@@ -961,14 +1114,18 @@ function onKeyDown(event) {
   } else if (event.key === 'Tab') {
     if (currentTargetEl && isTableMode(currentTargetEl)) {
       event.preventDefault()
-      tableAxis = tableAxis === 'col' ? 'row' : 'col'
-      limitReached = false
-      cellIndex = tableAxis === 'row' ? rowIndex : colIndex
-      selectedList = []
-      pickedTableEl = null
-      clearPickedMarks(document)
-      markCells(currentDataRows, currentRowEl, tableAxis, colIndex)
-      updatePanel(panelEl, currentTargetEl)
+      const modes = ['cell', 'col', 'row']
+      const availableModes = currentPurpose !== 'task' ? ['cell'] : modes
+      if (availableModes.length > 1) {
+        const curIdx = availableModes.indexOf(pickMode)
+        const nextIdx = (curIdx + 1) % availableModes.length
+        pickMode = availableModes[nextIdx]
+        cellIndex = pickMode === 'row' ? rowIndex : colIndex
+        updateToolbar()
+        markCells(currentCellEl, currentDataRows, currentRowEl, pickMode, colIndex)
+        applyPickedMarks(currentTargetEl)
+        updatePanel(panelEl, currentTargetEl)
+      }
     }
   }
 }
@@ -981,6 +1138,7 @@ function onClick(event) {
     return
   }
 
+  // 1. 右鍵選單處理
   if (menuEl) {
     const menuItem = event.target && event.target.closest ? event.target.closest('[data-af-menu-item]') : null
     if (menuItem) {
@@ -992,35 +1150,117 @@ function onClick(event) {
     return
   }
 
+  // 2. 工具列按鈕點擊
+  const toolBtn = event.target && event.target.closest ? event.target.closest('[data-af-tool]') : null
+  if (toolBtn) {
+    if (toolBtn.getAttribute('aria-disabled') === 'true') {
+      return
+    }
+    const mode = toolBtn.getAttribute('data-af-tool')
+    if (mode && (mode === 'cell' || mode === 'col' || mode === 'row')) {
+      pickMode = mode
+      cellIndex = pickMode === 'row' ? rowIndex : colIndex
+      updateToolbar()
+      if (currentTargetEl && isTableMode(currentTargetEl)) {
+        markCells(currentCellEl, currentDataRows, currentRowEl, pickMode, colIndex)
+        applyPickedMarks(currentTargetEl)
+        updatePanel(panelEl, currentTargetEl)
+      }
+    }
+    return
+  }
+
+  // 3. 已選清單 chip 移除鈕點擊
+  const chipRemoveBtn = event.target && event.target.closest ? event.target.closest('[data-af-chip-remove]') : null
+  if (chipRemoveBtn) {
+    const chipEl = chipRemoveBtn.closest('[data-af-chip]')
+    if (chipEl) {
+      const idx = parseInt(chipEl.getAttribute('data-af-chip'), 10)
+      if (!isNaN(idx)) {
+        removePickAt(idx)
+      }
+    }
+    return
+  }
+
+  // 4. 面板「移除最後一項」按鈕點擊
+  const removeLastBtn = event.target && event.target.closest ? event.target.closest('[data-af-remove-last]') : null
+  if (removeLastBtn) {
+    removeLastPick()
+    return
+  }
+
+  // 5. 面板或工具列本身的其餘點擊（絕對不可以送出確認）
+  if (panelEl && (event.target === panelEl || panelEl.contains(event.target))) {
+    return
+  }
+  if (toolbarEl && (event.target === toolbarEl || toolbarEl.contains(event.target))) {
+    return
+  }
+  // overlay 自己的點擊（非代理層）也不得送出
+  if (overlayEl && (event.target === overlayEl || (overlayEl.contains(event.target) && !frameOfProxy(event.target)))) {
+    return
+  }
+
   if (!currentTargetEl && event.target && (!overlayEl || (!overlayEl.contains(event.target) && event.target !== overlayEl))) {
     setTarget(event.target)
   }
   if (!currentTargetEl) return
 
+  // 6. 表格內的格子點擊
   if (isTableMode(currentTargetEl) && currentTargetEl.contains(event.target)) {
     handleTableMouseMove(event.target)
     const cellInfo = resolveCell(event.target, currentTargetEl)
-    if (cellInfo && event.shiftKey && currentPurpose === 'task') {
-      togglePick(makeCellPick(cellInfo.rIdx, cellInfo.cIdx, currentTargetEl, cellInfo.dataRows))
-      applyPickedMarks(currentTargetEl)
-      updatePanel(panelEl, currentTargetEl)
-      return
-    }
-
-    if (cellInfo && (!event.shiftKey || currentPurpose !== 'task')) {
-      const rIdx = cellInfo.rIdx
-      const cIdx = cellInfo.cIdx
-      const rHeader = rowHeader(cellInfo.dataRows[rIdx]) || ''
-      const cHeader = columnHeaders(currentTargetEl)[cIdx] || ''
-      selectedList = [{
-        cell: {
-          row: { index: rIdx, header: rHeader },
-          col: { index: cIdx, header: cHeader }
+    if (cellInfo) {
+      let candidate = null
+      if (pickMode === 'cell') {
+        candidate = makeCellPick(cellInfo.rIdx, cellInfo.cIdx, currentTargetEl, cellInfo.dataRows)
+      } else if (pickMode === 'col') {
+        candidate = {
+          block: {
+            axis: 'col',
+            index: cellInfo.cIdx,
+            headerText: columnHeaders(currentTargetEl)[cellInfo.cIdx] || ''
+          }
         }
-      }]
+      } else if (pickMode === 'row') {
+        candidate = {
+          block: {
+            axis: 'row',
+            index: cellInfo.rIdx,
+            headerText: cellInfo.row ? rowHeader(cellInfo.row) : ''
+          }
+        }
+      }
+
+      if (candidate) {
+        const isAlreadySelected = selectedList.some(p => samePick(p, candidate))
+
+        // Shift + 點：切換加選／取消，不送出
+        if (event.shiftKey && currentPurpose === 'task') {
+          togglePick(candidate)
+          applyPickedMarks(currentTargetEl)
+          updatePanel(panelEl, currentTargetEl)
+          return
+        }
+
+        // 點一個已經選過的（同一格／同一欄／同一列）：移除它，不送出
+        if (isAlreadySelected) {
+          togglePick(candidate)
+          applyPickedMarks(currentTargetEl)
+          updatePanel(panelEl, currentTargetEl)
+          return
+        }
+
+        // 點一個沒選過的格子：加入並送出
+        addPick(candidate)
+        confirmPick()
+        return
+      }
     }
   }
 
+  // 非表格模式點擊確認
   confirmPick()
 }
 
@@ -1117,10 +1357,38 @@ export function enterPickMode(opts) {
   highlightEl.style.boxSizing = 'border-box'; highlightEl.style.pointerEvents = 'none'; highlightEl.style.zIndex = '2147483647'
   overlayEl.appendChild(highlightEl)
 
+  // 建立工具列
+  toolbarEl = document.createElement('div')
+  toolbarEl.setAttribute('data-af-toolbar', '')
+  toolbarEl.style.position = 'fixed'; toolbarEl.style.right = '16px'; toolbarEl.style.top = '16px'
+  toolbarEl.style.display = 'flex'; toolbarEl.style.gap = '4px'; toolbarEl.style.pointerEvents = 'auto'
+  toolbarEl.style.zIndex = '2147483647'
+
+  const toolsDef = [
+    { key: 'cell', label: '單格' },
+    { key: 'col', label: '整欄' },
+    { key: 'row', label: '整列' }
+  ]
+
+  for (const def of toolsDef) {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.setAttribute('data-af-tool', def.key)
+    btn.textContent = def.label
+    btn.style.padding = '4px 10px'
+    btn.style.fontSize = '12px'
+    btn.style.borderRadius = '4px'
+    btn.style.border = '1px solid #2563eb'
+    btn.style.cursor = 'pointer'
+    btn.style.fontFamily = 'inherit'
+    toolbarEl.appendChild(btn)
+  }
+  overlayEl.appendChild(toolbarEl)
+
   panelEl = document.createElement('div')
   panelEl.setAttribute('data-af-panel', '')
   panelEl.style.position = 'fixed'; panelEl.style.right = '16px'; panelEl.style.bottom = '16px'
-  panelEl.style.backgroundColor = '#2563eb'; panelEl.style.color = '#ffffff'; panelEl.style.pointerEvents = 'none'; panelEl.style.zIndex = '2147483647'
+  panelEl.style.backgroundColor = '#2563eb'; panelEl.style.color = '#ffffff'; panelEl.style.pointerEvents = 'auto'; panelEl.style.zIndex = '2147483647'
   panelEl.style.padding = '8px 12px'; panelEl.style.borderRadius = '4px'; panelEl.style.fontSize = '12px'; panelEl.style.lineHeight = '1.4'; panelEl.style.whiteSpace = 'pre-line'
   overlayEl.appendChild(panelEl)
 
@@ -1165,7 +1433,8 @@ export function exitPickMode() {
     }
   }
   active = false; currentPurpose = null; currentTaskId = undefined; currentTargetEl = null; backStack = []
-  overlayEl = null; highlightEl = null; panelEl = null; menuEl = null; tableAxis = null; cellIndex = null; colIndex = null; rowIndex = null
+  overlayEl = null; highlightEl = null; panelEl = null; toolbarEl = null; menuEl = null
+  pickMode = 'cell'; cellIndex = null; colIndex = null; rowIndex = null; currentCellEl = null
   currentDataRows = []; currentRowEl = null
   selectedList = []
   maxPicks = 20
@@ -1179,6 +1448,6 @@ export function exitPickMode() {
 
 export function isActive() { return active }
 export function currentTarget() { return currentTargetEl }
-export function currentAxis() { return (!currentTargetEl || !isTableMode(currentTargetEl)) ? null : (tableAxis || 'col') }
+export function currentAxis() { return (!currentTargetEl || !isTableMode(currentTargetEl)) ? null : (pickMode === 'row' ? 'row' : 'col') }
 export function currentCellIndex() { return (!currentTargetEl || !isTableMode(currentTargetEl)) ? null : cellIndex }
 export function selectedCount() { return selectedList.length }
