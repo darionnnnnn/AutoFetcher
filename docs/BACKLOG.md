@@ -23,6 +23,8 @@
 | `picker-mode.js` 自帶的 `getRowCells` / `isHeaderRow` / `getTableRows` 併進 `shared/table.js` | 兩份判準不同(picker-mode 版多認 ARIA role 與 children 退路);合併要連 ARIA 表格的測試一起補,下次動表格解析時做 |
 | 深色模式以外的主題色 | 使用者提出 |
 | 選取工具列加第四段「這一欄每格各一個值」 | 目前留在右鍵選單(工具列三段已夠用,四段會擠);使用者反映右鍵選單不好發現時 |
+| 位置定位的名稱後綴收成一份 | 現在 `picker.js` 的 `singleCellName`/`defaultPickName` 與 `main.js` 的 `defaultFieldName` 各一份（`POS_LABELS`/`POS_NAMES` 兩張同表）；下次動命名規則時搬進 `shared/` 讓兩端 import |
+| 選取模式面板的動作列建一次、只更新文字 | 目前 `updatePanel` 每次 hover 重建「完成／取消」，焦點停在按鈕上會被打斷；要做鍵盤可達時一併改 |
 | 選取模式用 `Tab` 走到面板的「完成／取消」 | 目前 `Tab` 在工具列三段之間循環(既有行為,多處測試依賴),按鈕靠滑鼠點取得焦點;鍵盤使用者已有 `Enter` 送出與 `Esc` 取消。有人反映想用 `Tab` 走到按鈕時再改 |
 | 選取模式的面板可拖曳 | 目前固定在右下角;有使用者反映它擋住要選的內容時 |
 | Report 頁與 popup 沿用 `ui/ui.css` | AF-7 只讓 picker 與 site 走它(Report 樣式量大、風險高);下次動 Report 樣式時順手搬 |

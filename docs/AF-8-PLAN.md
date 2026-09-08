@@ -1,6 +1,6 @@
 # AF-8 第 8 輪規劃：表格模式進入規則、位置定位（第一／最後一筆）、iframe 前置步驟提示
 
-> 狀態：全案完成，待體檢與併 dev（分支 `feature/AF-8`）
+> 狀態：全案完成，已體檢併 dev
 > 基準：dev@38f5b97（1558 綠，v0.6.0）
 > 來源：使用者實測回饋五條（twse 市場成交資訊頁、巢狀表格監控頁）
 > 委派：agy（`gemini-delegate`）；agy 沒額度時由 Claude 自己實作。整輪只用一種，中途切換註明起點。
@@ -411,6 +411,36 @@
 
 文件審查：SPEC 兩處與新語意矛盾的舊句已改寫；PLAN 的執行紀錄當時是空的（現已補）；
 其餘 20 餘條定案逐條核對一致。
+
+## 體檢輪修正（Fable 5.1 獨立體檢；實作方 Opus 5）
+
+以 `dev..feature/AF-8` 全 diff 與四個未經獨立審查的手改 commit（`2d249e4`、`e5b1594`、`e25b752`、`4814c5d`）為對象。
+每條：哪裡 / 症狀 / 修法 / 迴歸測試（`tests/q9_checkup.test.js`）。
+
+1. **`picker-mode.js` Enter 守門**：`e5b1594` 讓 overlay 按鈕拿得到焦點後，點過工具列一次焦點就停在上面
+   （頁面上的 mousedown 都被擋，焦點永遠不離開），而 Enter 守門把 `[data-af-tool]` 也列進去 → 碰過工具列後
+   Enter 永久失效。修：守門只留「完成／取消」，工具列按完即 `blur()`。測：點工具列後 Enter 仍送出。
+2. **`relockAfterMove`**：鎖住表格外的元素後 `↓` 回到表格，鎖跟到表格上，`onMouseMove` 提早 return、
+   `onClick` 表格分支又不清它 → hover 永久凍住。修：走到表格或代理層即放鎖。測：↑ 鎖 wrap → ↓ 回表 → hover 可動。
+3. **`upgradeTarget` 巢狀鎖表只擋單向**：內層已選後 hover 外層格，外層不在內層之內 → 不鎖；接著 Ctrl 點
+   外層格會混進另一張表的索引再以內層 locator 送出。修：兩個包含方向都鎖回已選那張；另在 `onClick` 加
+   「目標鎖在某張表、點到表外一律不動」（原本會落到第 8 段直接送出）。測：內層選一格後 Ctrl 點外層 → 清單不變且不送出。
+4. **表頭 hover 後 Enter**：表頭分支只清 `currentCellEl`，`rowIndex/colIndex` 殘留 → Enter 送出上一格；
+   畫面標的是整欄。修：表頭分支把 `currentCellEl` 設成那個 th、索引清空，Enter 走 `candidateAt` 拿到整欄。
+5. **`picker.js refreshDefaultNames`** 用 `picks[index]` 對列，上下移／移除後名稱錯位。修：以 `row._spec` 為準。
+6. **`handleSave` 無 finally**：`saveTask` 或 `REBUILD_ALARMS` 拋錯 → 永遠「儲存中…」且無錯誤顯示。修：try/catch/finally，錯誤進 `#errors`。
+7. **`syncPosControls`** 單格＋整欄混合時把欄定位也停掉。修：有任何儲存格型的值就兩軸都開。
+8. **`main.js keepPos`**：(a) block 的 pos 是另一軸的位置，整欄↔整列換軸照搬會變意思；(b) 儲存格改整欄時列的位置沒搬；
+   (c) 單值路徑傳進去的是攤平的 block，`nextSpec.block` 永遠 undefined → 單值整欄重選從未保留過 pos。
+   修：同軸才搬、cell→block 搬對應軸、單值路徑包／拆。`posOfTask` 同步支援 block 形狀。
+9. **`extractCrossCell`** 回傳缺 `partial`。修：補上。
+10. **Picker**：停用的定位下拉 `title` 在多數瀏覽器看不到，理由改進 `#pos-hint`；按過「不需要」後 re-render 又跳出框架提示，改記住已關閉。
+
+**審查提出但不採納**：雙擊會繞過「再點一次才取代」——雙擊本身就是兩次點擊的明確手勢，視為刻意。
+**記進 BACKLOG**：pos 後綴命名在 `picker.js` 兩份、`main.js` 一份；面板動作列每次 hover 重建（焦點被打斷）。
+
+文件：SPEC 去掉兩處輪次敘事；CLAUDE.md 加兩條地雷（overlay 按鈕的 mousedown 不擋、新訊息／欄位要有消費端且測到畫面）。
+全量測試 **1677 綠**、煙霧 Chrome + Edge 全過。
 
 ## 體檢交接
 

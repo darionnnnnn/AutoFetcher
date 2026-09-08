@@ -90,8 +90,10 @@ function upgradeTarget(el) {
   if (!upgraded) upgraded = tableOf(el)
   if (!upgraded) return el
   // 已經選了值就鎖在那張表：巢狀小表的索引配外層表的定位會送出錯的規格
+  // 不論是「外層包住已選的表」還是「已選的表包住這張」，都鎖回已選那張——
+  // 只擋其中一個方向的話，內層已選後 Ctrl 點外層格子會混進另一張表的索引，再用內層 locator 送出
   if (selectedList.length > 0 && pickedTableEl && upgraded !== pickedTableEl &&
-      pickedTableEl.contains(upgraded)) {
+      (pickedTableEl.contains(upgraded) || upgraded.contains(pickedTableEl))) {
     return pickedTableEl
   }
   return upgraded
@@ -734,7 +736,9 @@ function handleTableMouseMove(target) {
     setCursor('pointer')
     const cell = typeof target.closest === 'function' ? target.closest(CELL_SELECTOR) : null
     if (cell) markTitle(cell, head.axis === 'col' ? '選整欄' : '選整列')
-    currentCellEl = null
+    // 記住停在表頭上這件事，Enter 的快速路徑才會選到整欄／整列而不是上一格殘留的索引
+    currentCellEl = cell
+    rowIndex = null; colIndex = null; cellIndex = null
     const dataRows = resolveDataRows(currentTargetEl)
     clearMarkedCells(document)
     if (head.axis === 'col') {
@@ -1337,10 +1341,12 @@ function onKeyDown(event) {
   } else if (event.key === 'Enter') {
     // 焦點在面板的按鈕上時，Enter 是「按那顆按鈕」，不是「送出」——
     // 焦點停在「取消」上卻送出，是鍵盤使用者最容易踩到的陷阱
+    // 只有「完成／取消」這兩顆要讓 Enter 交給按鈕（它們本來就會結束流程）；
+    // 工具列與「移除最後一項」不能列進來——點過它們焦點就留在上面（頁面上的 mousedown
+    // 都被擋掉，焦點永遠不會離開），列進來等於碰過工具列之後 Enter 就再也不能送出
     const focused = document?.activeElement
     if (focused && typeof focused.closest === 'function' &&
-        (focused.closest('[data-af-cancel]') || focused.closest('[data-af-done]') ||
-         focused.closest('[data-af-tool]') || focused.closest('[data-af-remove-last]'))) {
+        (focused.closest('[data-af-cancel]') || focused.closest('[data-af-done]'))) {
       return
     }
     if (!currentTargetEl) return
@@ -1450,7 +1456,13 @@ function onKeyDown(event) {
 // setTarget 內部已經畫過一次面板，所以要在改完之後再畫一次。
 function relockAfterMove() {
   if (!lockedEl) return
-  lockedEl = currentTargetEl
+  // 鎖只對非表格元素有意義：走到表格或代理層上就放掉，否則 onMouseMove 一直提早 return、
+  // onClick 的表格分支又不會清它，hover 標示從此凍住
+  if (currentTargetEl && (isTableMode(currentTargetEl) || iframeOf(currentTargetEl))) {
+    lockedEl = null
+  } else {
+    lockedEl = currentTargetEl
+  }
   updatePanel(panelEl, currentTargetEl)
 }
 
@@ -1480,6 +1492,8 @@ function onClick(event) {
     if (toolBtn.getAttribute('aria-disabled') === 'true') {
       return
     }
+    // 焦點不留在工具列上：留著的話之後的 Enter／Space 會再按一次同一顆
+    if (typeof toolBtn.blur === 'function') toolBtn.blur()
     const mode = toolBtn.getAttribute('data-af-tool')
     if (mode && (mode === 'cell' || mode === 'col' || mode === 'row')) {
       pickMode = mode
@@ -1542,6 +1556,13 @@ function onClick(event) {
     setTarget(event.target)
   }
   if (!currentTargetEl) return
+
+  // 已選值後目標被鎖在某張表，點到那張表以外（例如外層表的格子）：什麼都不做。
+  // 往下落會走到第 8 段直接送出，等於點外層一下就把內層的已選送走了
+  if (isTableMode(currentTargetEl) && isMultiPickPurpose() &&
+      !currentTargetEl.contains(event.target) && !frameOfProxy(event.target)) {
+    return
+  }
 
   // 6. 表格內的點擊：選取，不送出（送出走雙擊、Enter 或「完成」鈕）
   if (isTableMode(currentTargetEl) && currentTargetEl.contains(event.target)) {

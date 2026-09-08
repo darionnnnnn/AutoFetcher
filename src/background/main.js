@@ -68,8 +68,12 @@ function posOfTask(task) {
   const first = Array.isArray(task?.spec?.fields) && task.spec.fields.length > 0
     ? task.spec.fields[0]
     : task?.spec?.block
-  const cell = first?.cell
-  return { rowPos: cell?.row?.pos || '', colPos: cell?.col?.pos || '' }
+  if (!first) return { rowPos: '', colPos: '' }
+  if (first.cell) return { rowPos: first.cell.row?.pos || '', colPos: first.cell.col?.pos || '' }
+  // 整欄／整列的 pos 掛在另一軸上：整欄的 pos 是列的位置、整列的 pos 是欄的位置
+  const b = first.block || first
+  if (!b.pos) return { rowPos: '', colPos: '' }
+  return b.axis === 'row' ? { rowPos: '', colPos: b.pos } : { rowPos: b.pos, colPos: '' }
 }
 // 重選只換位置與標題，使用者原本設的「定位方式」（依標題／第一筆／最後一筆）要留著，
 // 不然重選一次就默默退回依標題，每天新增列的表格隔天就抓不到了。
@@ -81,7 +85,12 @@ function keepPos(nextSpec, prevSpec) {
       if (pos && nextSpec.cell[axis]) nextSpec.cell[axis].pos = pos
     }
   } else if (nextSpec.block && prevSpec.block && prevSpec.block.pos) {
-    nextSpec.block.pos = prevSpec.block.pos
+    // block 的 pos 是「另一軸」的位置：整欄的 pos 指列、整列的 pos 指欄；換軸就不能照搬
+    if (nextSpec.block.axis === prevSpec.block.axis) nextSpec.block.pos = prevSpec.block.pos
+  } else if (nextSpec.block && prevSpec.cell) {
+    // 儲存格改成整欄／整列：把對應那一軸的位置搬過去（整欄要的是列的位置）
+    const carry = nextSpec.block.axis === 'row' ? prevSpec.cell.col?.pos : prevSpec.cell.row?.pos
+    if (carry) nextSpec.block.pos = carry
   }
   return nextSpec
 }
@@ -97,10 +106,13 @@ function applyRepick(task, picks) {
     task.spec = { ...(task.spec || {}), mode: 'block' }
     delete task.spec.fields
     const prev = task.spec?.block
-    const next = spec.cell
+    // keepPos 吃的是 {cell} / {block} 兩種包裝，單值的 spec.block 是攤平的，進出都要包／拆
+    const nextWrapped = spec.cell
       ? { cell: spec.cell }
-      : { ...spec.block, aggregate: task.spec?.block?.aggregate || 'sum' }
-    task.spec.block = keepPos(next, prev && prev.cell ? { cell: prev.cell } : { block: prev })
+      : { block: { ...spec.block, aggregate: task.spec?.block?.aggregate || 'sum' } }
+    const prevWrapped = prev ? (prev.cell ? { cell: prev.cell } : { block: prev }) : null
+    const kept = keepPos(nextWrapped, prevWrapped)
+    task.spec.block = kept.cell ? { cell: kept.cell } : kept.block
     return
   }
   const aggregate = task.spec?.block?.aggregate

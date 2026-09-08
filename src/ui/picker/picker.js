@@ -707,13 +707,15 @@ export function render(ctx) {
 
 // 目標在 iframe 裡時提醒使用者可能要先點個什麼：那個框架常常是點了頁籤或按鈕才出現，
 // 而排程是開一個乾淨的新分頁，不會沿用現在畫面上的狀態。
+let frameHintDismissedFor = null
 function updateFrameHint(ctx) {
   const hint = document.getElementById('frame-hint')
   if (!hint) return
   const textEl = document.getElementById('frame-hint-text')
   const hasPreActions = Array.isArray(ctx?.task?.preActions) && ctx.task.preActions.length > 0
   // 編輯既有任務不提示：使用者已經決定過要不要加了
-  const show = Boolean(ctx?.frameUrl) && !ctx?.task && !hasPreActions
+  // 使用者按過「不需要」之後，同一個框架的任何一次 re-render 都不該再跳出來
+  const show = Boolean(ctx?.frameUrl) && !ctx?.task && !hasPreActions && frameHintDismissedFor !== ctx.frameUrl
   hint.hidden = !show
   if (!show) return
 
@@ -748,6 +750,7 @@ function bindFrameHintEvents() {
     dismissBtn.addEventListener('click', () => {
       const hint = document.getElementById('frame-hint')
       if (hint) hint.hidden = true
+      frameHintDismissedFor = currentCtx?.frameUrl || null
     })
     dismissBtn._frameHintBound = true
   }
@@ -797,9 +800,11 @@ function syncPosControls() {
   const specs = rows.length > 0
     ? rows.map(r => (r._spec || fieldSpecs.get(r.dataset.fieldKey || ''))).filter(Boolean)
     : (currentBlock ? [currentBlock.cell ? { cell: currentBlock.cell } : { block: currentBlock }] : [])
+  const hasCell = specs.some(s => s.cell)
   const axes = new Set(specs.map(s => s.block?.axis || (s.axis && !s.cell ? s.axis : null)).filter(Boolean))
-  const onlyCol = axes.size === 1 && axes.has('col')
-  const onlyRow = axes.size === 1 && axes.has('row')
+  // 有任何一個儲存格型的值，兩軸的定位就都有意義（儲存格的欄不是使用者「點欄」得來的）
+  const onlyCol = !hasCell && axes.size === 1 && axes.has('col')
+  const onlyRow = !hasCell && axes.size === 1 && axes.has('row')
 
   setPosDisabled('col-pos', onlyCol, '整欄的欄是你自己點的，不用位置定位')
   setPosDisabled('row-pos', onlyRow, '整列的列是你自己點的，不用位置定位')
@@ -838,7 +843,8 @@ function refreshDefaultNames() {
     const input = row.querySelector('input[data-field-name]')
     if (!input) return
     if (input._afAutoName !== undefined && input.value !== input._afAutoName) return
-    const pick = picks[index] || (row._spec ? { ...row._spec } : null)
+    // 列會被上下移／移除，picks[index] 對不上；列自己帶的 spec 才跟著列走
+    const pick = row._spec ? { ...row._spec } : (picks[index] || null)
     if (!pick) return
     const next = defaultPickName(pick, index)
     input.value = next
@@ -931,10 +937,16 @@ function updatePosHint() {
   if (!hintEl) return
   const rowPos = posValueOf('row-pos')
   const colPos = posValueOf('col-pos')
-  hintEl.textContent = (rowPos || colPos)
+  let text = (rowPos || colPos)
     ? '每次抓取都重算位置，表格新增資料時會自動跟著走。最後一列若是合計，改選「倒數第二筆」。'
     : '表格每天在最後加一列（例如每日成交資訊）→ 列定位改選「最後一筆」；'
       + '最後一列是合計 → 選「倒數第二筆」。標題不會變的表格維持「依標題」即可。'
+  // 停用的下拉在多數瀏覽器不會顯示 title，理由要寫在看得到的地方
+  for (const id of ['row-pos', 'col-pos']) {
+    const el = document.getElementById(id)
+    if (el?.disabled && el.getAttribute('title')) text += `（${el.getAttribute('title')}）`
+  }
+  hintEl.textContent = text
 }
 
 // 摘要那一行：說出這次會抓哪一格；還沒設定位置但看起來用得上時給建議
@@ -1547,6 +1559,9 @@ export async function handleSave() {
     return
   }
 
+  // 儲存到關窗之間任何一步失敗（storage 配額、service worker 被殺），按鈕都要還回去、錯誤要看得到，
+  // 否則使用者只看到永遠的「儲存中…」
+  try {
   const task = buildTask(values, currentCtx?.locator, currentCtx?.task, currentCtx?.frameUrl ? { url: currentCtx.frameUrl } : undefined)
   await saveTask(task)
   if (globalThis.chrome?.runtime?.sendMessage) {
@@ -1619,7 +1634,12 @@ export async function handleSave() {
     }
   }
 
-  busySave()
+  } catch (e) {
+    if (errorsEl) errorsEl.textContent = `儲存失敗：${e?.message || e}`
+    return
+  } finally {
+    busySave()
+  }
   if (typeof window !== 'undefined' && window.close) {
     window.close()
   }

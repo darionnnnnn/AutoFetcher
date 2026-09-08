@@ -272,7 +272,7 @@ function extractCrossCell(table, block, specOpts, dataRows) {
     : { row: { pos: block.pos }, col: { index: block.index, header: block.headerText } }
   const res = extractCellFromTable(table, dataRows || [], cellSpec, specOpts)
   if (!res.ok) return res
-  return { ...res, used: 1, skipped: 0, strategyUsed: 'block' }
+  return { ...res, used: 1, skipped: 0, strategyUsed: 'block', partial: Boolean(table.partial) }
 }
 
 // 從已解析的表格中聚合欄或列

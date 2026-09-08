@@ -64,7 +64,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1666 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1677 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -145,3 +145,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - 不要在 UI 直接讀 `chrome.storage`(一律經 `shared/storage`),也不要自己解析 alarm 名稱
   (下次執行時間問 background 的 `GET_NEXT_RUNS`,它已排除預檢與重試 alarm)。
 - 不要每次渲染就 `addEventListener` 到不會被替換的容器(監聽會累加;用 `onclick` 指派或先移除)。
+- **選取模式的 `mousedown` 不得對 overlay 自己的按鈕 `preventDefault`**:擋掉的話按鈕永遠拿不到焦點,
+  焦點環就是畫了也沒人到得了的死規則;只擋頁面上的 `mousedown`(點到連結會讓頁面跑掉)。
+- **新增的錯誤訊息或紀錄欄位要有消費端,而且測試要從產生端一路斷言到畫面**:
+  `extract.js` 的指路訊息曾經產生後無人讀,刪掉整個函式測試全綠;`label` 只驗到回傳值,紀錄與畫面兩端零訊號。
