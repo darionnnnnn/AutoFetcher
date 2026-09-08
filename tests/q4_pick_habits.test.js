@@ -67,7 +67,7 @@ test('F-1 再點另一格＝取代，清單仍只有一個', async () => {
   pick(win, doc.getElementById('a1'))
   pick(win, doc.getElementById('b2'))
   assert.equal(chips(doc).length, 1, '點一下是取代不是加選')
-  assert.ok(/0\.22/.test(panelText(doc)), `chip 要換成新那格，實得 ${JSON.stringify(panelText(doc))}`)
+  assert.ok(/日圓 · 賣出/.test(panelText(doc)), `chip 要換成新那格，實得 ${JSON.stringify(panelText(doc))}`)
   pm.exitPickMode()
 })
 
@@ -306,6 +306,22 @@ test('F-9 帶 preselect 進來時，點一下不會直接洗掉多個已選', as
   assert.ok(/取代/.test(panelText(doc)), `面板要提示，實得 ${JSON.stringify(panelText(doc))}`)
   pick(win, doc.getElementById('a2'))
   assert.equal(chips(doc).length, 1, '再點一次才真的取代')
+  pm.exitPickMode()
+})
+
+// ---------- F-9b 拖曳框選之後補的點擊不該湊成雙擊 ----------
+
+test('F-9b 拖曳框選放開後的雙擊不送出', async () => {
+  const { c, doc, pm, win } = await boot()
+  const down = (el) => el.dispatchEvent(new win.MouseEvent('mousedown', { bubbles: true, button: 0 }))
+  const up = (el) => el.dispatchEvent(new win.MouseEvent('mouseup', { bubbles: true, button: 0 }))
+  move(win, doc.getElementById('a1'))
+  down(doc.getElementById('a1'))
+  doc.getElementById('b2').dispatchEvent(new win.MouseEvent('mousemove', { bubbles: true, buttons: 1 }))
+  up(doc.getElementById('b2'))
+  assert.equal(chips(doc).length, 4, `2 列 × 2 欄要 4 格，實得 ${chips(doc).length}`)
+  dblclick(win, doc.getElementById('b2'))
+  assert.equal(picked(c).length, 0, '剛拖曳完的那個雙擊是瀏覽器補的，不是使用者要送出')
   pm.exitPickMode()
 })
 

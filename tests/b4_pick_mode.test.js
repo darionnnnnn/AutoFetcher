@@ -185,13 +185,17 @@ test('Enter 確認:送出 locator、預覽與型別,並收掉 overlay', async ()
   assert.equal(overlay(doc), null)
 })
 
-test('點擊也算確認,而且不會把點擊傳給頁面本身', async () => {
+// AF-8：點一下改成「選取」，送出走雙擊；兩者都不得把事件傳給頁面
+test('雙擊算確認,而且不會把點擊傳給頁面本身', async () => {
   const { c, doc, pm } = await setup()
   let pageSaw = false
   $(doc, '#title').addEventListener('click', () => { pageSaw = true })
+  $(doc, '#title').addEventListener('dblclick', () => { pageSaw = true })
   pm.enterPickMode({ purpose: 'task', initialTarget: $(doc, '#title') })
   $(doc, '#title').dispatchEvent(new globalThis.MouseEvent('click', { bubbles: true, cancelable: true }))
-  assert.equal(picked(c).length, 1, '點擊要確認選取')
+  assert.equal(picked(c).length, 0, '點一下只是選取,不送出')
+  $(doc, '#title').dispatchEvent(new globalThis.MouseEvent('dblclick', { bubbles: true, cancelable: true }))
+  assert.equal(picked(c).length, 1, '雙擊要確認選取')
   assert.equal(pageSaw, false, '不得讓頁面收到這一下點擊(可能是連結或按鈕)')
 })
 
@@ -276,11 +280,11 @@ test('Tab 在單格→整欄→整列之間循環', async () => {
   assert.equal(tool(doc, 'cell').hasAttribute('data-af-active'), true, '再一次回到單格')
 })
 
-test('在表格格子上點擊 → 送出 blockInfo 的軸、索引與表頭文字', async () => {
+test('在表格格子上雙擊 → 送出 blockInfo 的軸、索引與表頭文字', async () => {
   const { c, doc, pm } = await setup()
   pm.enterPickMode({ purpose: 'task', initialTarget: $(doc, '#t') })
   move(doc, $(doc, '#c12'))
-  $(doc, '#c12').dispatchEvent(new globalThis.MouseEvent('click', { bubbles: true, cancelable: true }))
+  $(doc, '#c12').dispatchEvent(new globalThis.MouseEvent('dblclick', { bubbles: true, cancelable: true }))
   const m = picked(c)[0]
   assert.equal(m.blockInfo.kind, 'table')
   assert.equal(m.blockInfo.axis, 'col')

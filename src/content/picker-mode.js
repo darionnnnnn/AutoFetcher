@@ -27,6 +27,12 @@ let pendingPreselect = null
 let overlayEl = null, highlightEl = null, panelEl = null, toolbarEl = null, menuEl = null
 let pickMode = 'cell', cellIndex = null, colIndex = null, rowIndex = null, currentDataRows = [], currentRowEl = null, currentCellEl = null
 let selectedList = [], maxPicks = 20, limitReached = false, headerChangedNotice = false
+// 非表格元素被「點一下鎖定」後不再跟著滑鼠跑（檔案總管點一下選取的習慣）
+let lockedEl = null
+// 帶 preselect 進來的多個已選值，第一次「點一下取代」只提示、再點一次才真的換掉
+let preselectPristine = false, replaceConfirmPending = null
+// 拖曳框選放開後瀏覽器會補一個 click，接著可能被當成雙擊；短時間內的雙擊要吃掉
+let lastDragEndAt = 0
 // 已選的值屬於哪一張表格：滑鼠漂出表格不清空，換到另一張表格才清
 let pickedTableEl = null
 let originalUserSelect = '', dragStart = null, isDragging = false, suppressClick = false, menuTargetContext = null
@@ -151,6 +157,47 @@ function resolveCell(target, tableEl) {
   if (rIdx < 0) rIdx = null
   if (rIdx === null || cIdx === null) return null
   return { row, cell, rIdx, cIdx, dataRows }
+}
+
+// 會挑多個值的用途：新任務與重選。前置動作與登入一次只選一個元素，維持點一下就送出。
+function isMultiPickPurpose() {
+  return currentPurpose === 'task' || currentPurpose === 'repick'
+}
+
+// 滑鼠下的是表頭格嗎？表頭列的 th ＝ 整欄，資料列的 th（列標題）＝ 整列。
+// 試算表點欄標題選整欄、點列首選整列是共通習慣，這是它的唯一一份判定。
+function resolveHeaderTarget(target, tableEl) {
+  if (!tableEl || !isTableMode(tableEl) || !target || typeof target.closest !== 'function') return null
+  const cell = target.closest(CELL_SELECTOR)
+  if (!cell || !cellBelongsToTable(cell, tableEl) || !isHeaderCell(cell)) return null
+  const row = cell.closest('tr, [role="row"]')
+  if (!row || !tableEl.contains(row)) return null
+  const cells = getRowCells(row)
+  const idx = cells.indexOf(cell)
+  if (idx < 0) return null
+  if (isHeaderRow(row)) {
+    return { axis: 'col', index: idx, headerText: columnHeaders(tableEl)[idx] || (cell.textContent || '').trim() }
+  }
+  const dataRows = resolveDataRows(tableEl)
+  const rIdx = dataRows.indexOf(row)
+  if (rIdx < 0) return null
+  return { axis: 'row', index: rIdx, headerText: rowHeader(row) }
+}
+
+// 把滑鼠下的位置換算成「點下去會選到什麼」，點擊與雙擊共用同一份
+function candidateAt(target) {
+  if (!currentTargetEl || !isTableMode(currentTargetEl)) return null
+  const head = resolveHeaderTarget(target, currentTargetEl)
+  if (head) return { block: { axis: head.axis, index: head.index, headerText: head.headerText } }
+  const info = resolveCell(target, currentTargetEl)
+  if (!info) return null
+  if (pickMode === 'col') {
+    return { block: { axis: 'col', index: info.cIdx, headerText: columnHeaders(currentTargetEl)[info.cIdx] || '' } }
+  }
+  if (pickMode === 'row') {
+    return { block: { axis: 'row', index: info.rIdx, headerText: info.row ? rowHeader(info.row) : '' } }
+  }
+  return makeCellPick(info.rIdx, info.cIdx, currentTargetEl, info.dataRows)
 }
 
 // 清除所有標記為待選之表格格子
@@ -328,7 +375,7 @@ function buildFrameProxies() {
 function updateToolbar() {
   if (!toolbarEl) return
   const isTable = Boolean(currentTargetEl && isTableMode(currentTargetEl))
-  const isTask = currentPurpose === 'task'
+  const isTask = isMultiPickPurpose()
 
   for (const btn of toolbarEl.querySelectorAll('[data-af-tool]')) {
     const key = btn.getAttribute('data-af-tool')
@@ -460,11 +507,15 @@ function updatePanel(panel, el) {
     if (headerChangedNotice) {
       noticeLines.push('（位置已變）')
     }
-    noticeLines.push('Shift 點選加選 / 拖曳框選 / 右鍵選單 / Enter 完成 / Esc 取消')
+    if (replaceConfirmPending) {
+      noticeLines.push(`（再點一次會取代這 ${selectedList.length} 個已選值）`)
+    }
+    noticeLines.push('雙擊或 Enter 完成 · Ctrl／⌘ 點加選或取消 · Backspace 移除最後一項')
     const footerDiv = document.createElement('div')
     footerDiv.textContent = noticeLines.join('\n')
     footerDiv.style.whiteSpace = 'pre-line'
     panel.appendChild(footerDiv)
+    appendPanelActions(panel, el)
     return
   }
 
@@ -478,8 +529,9 @@ function updatePanel(panel, el) {
     if (host) lines.push(host)
     lines.push('確認即進入這個框架選取')
     if (currentHint === 'frame_not_found') lines.push('無法進入這個框架')
-    lines.push('Enter 進入 / Esc 取消')
-    panel.textContent = lines.join('\n')
+    lines.push('點一下即進入這個框架')
+    appendPanelText(panel, lines)
+    appendPanelActions(panel, el)
     return
   }
 
@@ -488,8 +540,9 @@ function updatePanel(panel, el) {
     if (currentHint === 'frame_not_found') lines.push('無法進入這個框架')
     if (limitReached || selectedList.length >= maxPicks) lines.push('（已達選取上限）')
     if (headerChangedNotice) lines.push('（位置已變）')
-    lines.push('↑ 放大 ↓ 縮小 / Shift 點選加選 / 拖曳框選 / 右鍵選單 / Enter 確認 Esc 取消')
-    panel.textContent = lines.join('\n')
+    lines.push('把滑鼠移到要抓的內容上')
+    appendPanelText(panel, lines)
+    appendPanelActions(panel, el)
     return
   }
   const tagDesc = (el.tagName ? el.tagName.toLowerCase() : '') + (el.id ? `#${el.id}` : '')
@@ -508,8 +561,73 @@ function updatePanel(panel, el) {
   if (currentHint === 'frame_not_found') lines.push('無法進入這個框架')
   if (limitReached || selectedList.length >= maxPicks) lines.push('（已達選取上限）')
   if (headerChangedNotice) lines.push('（位置已變）')
-  lines.push('↑ 放大 ↓ 縮小 / Shift 點選加選 / 拖曳框選 / 右鍵選單 / Enter 確認 Esc 取消')
-  panel.textContent = lines.join('\n')
+  if (lockedEl && el === lockedEl) lines.push('（已鎖定：滑鼠移開也不會換目標，點別處解除）')
+  lines.push(isTableMode(el)
+    ? '點一格選取 · Ctrl／⌘ 加選 · Shift 拉範圍 · 點表頭選整欄 · 雙擊或 Enter 完成'
+    : '點一下鎖定這個元素 · 雙擊或 Enter 完成 · ↑ 放大 ↓ 縮小')
+  appendPanelText(panel, lines)
+  appendPanelActions(panel, el)
+}
+
+// 面板的文字段落（動作列是真的按鈕，所以文字不能再用 panel.textContent 整包覆蓋）
+function appendPanelText(panel, lines) {
+  const div = document.createElement('div')
+  div.style.whiteSpace = 'pre-line'
+  div.textContent = lines.join('\n')
+  panel.appendChild(div)
+}
+
+// 面板底部的動作列：畫面上看得見的「完成／取消」，不必先知道 Enter 與 Esc
+function appendPanelActions(panel, el) {
+  const bar = document.createElement('div')
+  bar.style.display = 'flex'
+  bar.style.gap = '8px'
+  bar.style.marginTop = '8px'
+
+  const done = document.createElement('button')
+  done.type = 'button'
+  done.setAttribute('data-af-done', '')
+  const n = selectedList.length
+  if (n > 0) {
+    done.textContent = `完成（${n} 個值）`
+  } else if (iframeOf(el)) {
+    done.textContent = '進入這個框架'
+  } else if (!el || isTableMode(el)) {
+    // 表格上還沒選任何一格：沒有東西可以完成，說出來比讓它送出空值好
+    done.textContent = '完成'
+    done.setAttribute('aria-disabled', 'true')
+  } else {
+    done.textContent = '完成（這個元素）'
+  }
+  const disabled = done.getAttribute('aria-disabled') === 'true'
+  done.style.padding = '4px 12px'
+  done.style.fontSize = '12px'
+  done.style.fontFamily = 'inherit'
+  done.style.minHeight = '28px'
+  done.style.borderRadius = '4px'
+  done.style.border = 'none'
+  done.style.cursor = disabled ? 'not-allowed' : 'pointer'
+  done.style.opacity = disabled ? '0.5' : '1'
+  done.style.backgroundColor = COLORS.primary
+  done.style.color = COLORS.text
+  bar.appendChild(done)
+
+  const cancel = document.createElement('button')
+  cancel.type = 'button'
+  cancel.setAttribute('data-af-cancel', '')
+  cancel.textContent = '取消'
+  cancel.style.padding = '4px 12px'
+  cancel.style.fontSize = '12px'
+  cancel.style.fontFamily = 'inherit'
+  cancel.style.minHeight = '28px'
+  cancel.style.borderRadius = '4px'
+  cancel.style.border = `1px solid ${COLORS.border}`
+  cancel.style.cursor = 'pointer'
+  cancel.style.backgroundColor = COLORS.surface
+  cancel.style.color = COLORS.textMuted
+  bar.appendChild(cancel)
+
+  panel.appendChild(bar)
 }
 
 // 設定當前目標元素
@@ -552,6 +670,20 @@ function getHeaderText() {
 // 處理表格內滑鼠移動
 function handleTableMouseMove(target) {
   if (!currentTargetEl || !isTableMode(currentTargetEl)) return
+  // 滑鼠在表頭上：先讓使用者看到點下去會選到整欄（或整列），再決定點不點
+  const head = resolveHeaderTarget(target, currentTargetEl)
+  if (head) {
+    currentCellEl = null
+    const dataRows = resolveDataRows(currentTargetEl)
+    clearMarkedCells(document)
+    if (head.axis === 'col') {
+      markCells(null, dataRows, null, 'col', head.index)
+    } else {
+      markCells(null, dataRows, dataRows[head.index], 'row', null)
+    }
+    applyPickedMarks(currentTargetEl)
+    return
+  }
   const info = resolveCell(target, currentTargetEl)
   // 滑鼠停在格子以外（表格的縫隙、表頭列）時要放掉記住的那一格，
   // 否則之後切換模式會把標示畫回一個滑鼠早就離開的位置
@@ -724,7 +856,8 @@ function confirmPick() {
     }
   }
 
-  if (currentPurpose !== 'task' && picks.length > 1) {
+  // 一次只選一個的用途（登入、前置動作）才截斷；重選要能改多值（SPEC §8.4）
+  if (!isMultiPickPurpose() && picks.length > 1) {
     picks = picks.slice(0, 1)
   }
 
@@ -1098,6 +1231,9 @@ function onMouseMove(event) {
     }
   }
 
+  // 鎖定中：目標不再跟著滑鼠跑（點一下選取之後滑鼠移開，選的還是那一個）
+  if (lockedEl) return
+
   const upgraded = upgradeTarget(target)
   if (upgraded !== currentTargetEl) {
     backStack = []
@@ -1120,9 +1256,44 @@ function onKeyDown(event) {
     }
   } else if (event.key === 'Enter') {
     if (!currentTargetEl) return
-    event.preventDefault(); confirmPick()
+    event.preventDefault()
+    // 還沒選就按 Enter：把滑鼠停著的那一個選起來再送（鍵盤使用者不必先點一下）
+    if (selectedList.length === 0 && isTableMode(currentTargetEl) && currentCellEl) {
+      const candidate = candidateAt(currentCellEl)
+      if (candidate) addPick(candidate)
+    }
+    confirmPick()
+  } else if ((event.ctrlKey || event.metaKey) && (event.key === 'a' || event.key === 'A')) {
+    // Ctrl／⌘＋A：全選這張表的資料格
+    if (!isMultiPickPurpose() || !currentTargetEl || !isTableMode(currentTargetEl)) return
+    event.preventDefault()
+    const dataRows = resolveDataRows(currentTargetEl)
+    if (dataRows.length === 0) return
+    clearPickedMarks(document)
+    selectedList = []
+    limitReached = false
+    pickedTableEl = null
+    for (let r = 0; r < dataRows.length; r++) {
+      const cells = getRowCells(dataRows[r])
+      for (let c = 0; c < cells.length; c++) {
+        // 列標題那一格不是資料（它是這一列的名字），全選不該把它算進來
+        if (isHeaderCell(cells[c])) continue
+        addPick(makeCellPick(r, c, currentTargetEl, dataRows))
+        if (limitReached) break
+      }
+      if (limitReached) break
+    }
+    preselectPristine = false
+    replaceConfirmPending = null
+    applyPickedMarks(currentTargetEl)
+    updatePanel(panelEl, currentTargetEl)
+  } else if ((event.ctrlKey || event.metaKey) && (event.key === 'z' || event.key === 'Z')) {
+    // Ctrl／⌘＋Z：復原＝移除最後一項；沒東西可移除就把按鍵放給頁面
+    if (selectedList.length === 0) return
+    event.preventDefault()
+    removeLastPick()
   } else if (event.shiftKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
-    if (currentTargetEl && isTableMode(currentTargetEl) && currentPurpose === 'task') {
+    if (currentTargetEl && isTableMode(currentTargetEl) && isMultiPickPurpose()) {
       event.preventDefault()
       const dataRows = resolveDataRows(currentTargetEl)
       if (dataRows.length > 0) {
@@ -1167,7 +1338,7 @@ function onKeyDown(event) {
     if (currentTargetEl && isTableMode(currentTargetEl)) {
       event.preventDefault()
       const modes = ['cell', 'col', 'row']
-      const availableModes = currentPurpose !== 'task' ? ['cell'] : modes
+      const availableModes = isMultiPickPurpose() ? modes : ['cell']
       if (availableModes.length > 1) {
         const curIdx = availableModes.indexOf(pickMode)
         const nextIdx = (curIdx + 1) % availableModes.length
@@ -1242,6 +1413,18 @@ function onClick(event) {
     return
   }
 
+  // 4b. 面板的「完成」與「取消」：畫面上看得見的出口
+  const doneBtn = event.target && event.target.closest ? event.target.closest('[data-af-done]') : null
+  if (doneBtn) {
+    if (doneBtn.getAttribute('aria-disabled') !== 'true') confirmPick()
+    return
+  }
+  const cancelBtn = event.target && event.target.closest ? event.target.closest('[data-af-cancel]') : null
+  if (cancelBtn) {
+    cancelPick()
+    return
+  }
+
   // 5. 面板或工具列本身的其餘點擊（絕對不可以送出確認）
   if (panelEl && (event.target === panelEl || panelEl.contains(event.target))) {
     return
@@ -1259,53 +1442,13 @@ function onClick(event) {
   }
   if (!currentTargetEl) return
 
-  // 6. 表格內的格子點擊
+  // 6. 表格內的點擊：選取，不送出（送出走雙擊、Enter 或「完成」鈕）
   if (isTableMode(currentTargetEl) && currentTargetEl.contains(event.target)) {
     handleTableMouseMove(event.target)
-    const cellInfo = resolveCell(event.target, currentTargetEl)
-    if (cellInfo) {
-      let candidate = null
-      if (pickMode === 'cell') {
-        candidate = makeCellPick(cellInfo.rIdx, cellInfo.cIdx, currentTargetEl, cellInfo.dataRows)
-      } else if (pickMode === 'col') {
-        candidate = {
-          block: {
-            axis: 'col',
-            index: cellInfo.cIdx,
-            headerText: columnHeaders(currentTargetEl)[cellInfo.cIdx] || ''
-          }
-        }
-      } else if (pickMode === 'row') {
-        candidate = {
-          block: {
-            axis: 'row',
-            index: cellInfo.rIdx,
-            headerText: cellInfo.row ? rowHeader(cellInfo.row) : ''
-          }
-        }
-      }
-
-      if (candidate) {
-        const isAlreadySelected = selectedList.some(p => samePick(p, candidate))
-
-        // Shift + 點：切換加選／取消，不送出
-        if (event.shiftKey && currentPurpose === 'task') {
-          togglePick(candidate)
-          applyPickedMarks(currentTargetEl)
-          updatePanel(panelEl, currentTargetEl)
-          return
-        }
-
-        // 點一個已經選過的（同一格／同一欄／同一列）：移除它，不送出
-        if (isAlreadySelected) {
-          togglePick(candidate)
-          applyPickedMarks(currentTargetEl)
-          updatePanel(panelEl, currentTargetEl)
-          return
-        }
-
-        // 點一個沒選過的格子：加入並送出。
-        // 加不進去（已達上限）就停在原地提示，不能靜靜送出前面那幾個、把使用者剛點的丟掉
+    const candidate = candidateAt(event.target)
+    if (candidate) {
+      // 一次只選一個的用途（前置動作、登入）：維持點一下就送出
+      if (!isMultiPickPurpose()) {
         if (!addPick(candidate)) {
           applyPickedMarks(currentTargetEl)
           updatePanel(panelEl, currentTargetEl)
@@ -1314,10 +1457,109 @@ function onClick(event) {
         confirmPick()
         return
       }
+
+      const additive = event.ctrlKey || event.metaKey
+      if (additive) {
+        // Ctrl／⌘ 點：加選或取消這一個（檔案總管的複選習慣）
+        togglePick(candidate)
+        preselectPristine = false
+        replaceConfirmPending = null
+      } else if (event.shiftKey && lastCellPick() && candidate.cell) {
+        // Shift 點：從上一個已選的格子拉出矩形範圍
+        addRange(lastCellPick(), candidate.cell)
+        preselectPristine = false
+        replaceConfirmPending = null
+      } else {
+        // 點一下：選取並取代目前已選。
+        // 帶著多個 preselect 進來時（編輯既有任務重選）先提示一次，免得一個誤點清光整批
+        const key = pickKey(candidate)
+        if (preselectPristine && selectedList.length >= 2 && replaceConfirmPending !== key) {
+          replaceConfirmPending = key
+          applyPickedMarks(currentTargetEl)
+          updatePanel(panelEl, currentTargetEl)
+          return
+        }
+        replaceSelection(candidate)
+        preselectPristine = false
+        replaceConfirmPending = null
+      }
+      applyPickedMarks(currentTargetEl)
+      updatePanel(panelEl, currentTargetEl)
+      return
     }
   }
 
-  // 非表格模式點擊確認
+  // 7. 非表格：點一下鎖定這個元素（再點別處解除），不送出
+  if (isMultiPickPurpose() && !iframeOf(currentTargetEl)) {
+    if (lockedEl) {
+      lockedEl = null
+      if (event.target && (!overlayEl || !overlayEl.contains(event.target))) setTarget(event.target)
+    } else {
+      lockedEl = currentTargetEl
+    }
+    updatePanel(panelEl, currentTargetEl)
+    return
+  }
+
+  // 8. iframe 代理層與一次一個的用途：點一下就送出（鑽進框架是導覽，不是選取）
+  confirmPick()
+}
+
+// 已選清單中最後一個「儲存格」型的值（Shift 拉範圍的錨點）
+function lastCellPick() {
+  for (let i = selectedList.length - 1; i >= 0; i--) {
+    if (selectedList[i].cell) return selectedList[i].cell
+  }
+  return null
+}
+
+// 兩個值是不是同一個（面板提示用的字串鍵，判定本身仍走 samePick）
+function pickKey(pick) {
+  if (pick.cell) return `c:${pick.cell.row.index},${pick.cell.col.index}`
+  if (pick.block) return `b:${pick.block.axis},${pick.block.index}`
+  return 'x'
+}
+
+// 取代目前已選：點一下就是「只選這一個」
+function replaceSelection(candidate) {
+  clearPickedMarks(document)
+  selectedList = []
+  limitReached = false
+  pickedTableEl = null
+  addPick(candidate)
+}
+
+// 從錨點格到目標格的矩形範圍一次加進來（Shift 點的行為）
+function addRange(anchorCell, targetCell) {
+  const dataRows = resolveDataRows(currentTargetEl)
+  const minR = Math.min(anchorCell.row.index, targetCell.row.index)
+  const maxR = Math.max(anchorCell.row.index, targetCell.row.index)
+  const minC = Math.min(anchorCell.col.index, targetCell.col.index)
+  const maxC = Math.max(anchorCell.col.index, targetCell.col.index)
+  for (let r = minR; r <= maxR; r++) {
+    for (let c = minC; c <= maxC; c++) {
+      addPick(makeCellPick(r, c, currentTargetEl, dataRows))
+      if (limitReached) return
+    }
+  }
+}
+
+// 雙擊＝選這一個並送出（檔案總管開啟檔案的習慣）
+function onDblClick(event) {
+  if (!active) return
+  event.preventDefault(); event.stopPropagation()
+  // 拖曳框選放開的瞬間瀏覽器會補 click，兩下拖曳就會湊成 dblclick，那不是使用者要送出
+  if (Date.now() - lastDragEndAt < 200) return
+  if (menuEl) return
+  // overlay 自己的元素（工具列、面板、chip）雙擊不送出；代理層是例外，它就是要被點的
+  if (overlayEl && overlayEl.contains(event.target) && !frameOfProxy(event.target)) return
+  if (!currentTargetEl) return
+
+  // 還沒選任何值就直接雙擊：把滑鼠下的那一個選起來再送
+  if (selectedList.length === 0 && isTableMode(currentTargetEl) && currentTargetEl.contains(event.target)) {
+    const candidate = candidateAt(event.target)
+    if (candidate) addPick(candidate)
+  }
   confirmPick()
 }
 
@@ -1367,6 +1609,9 @@ function onMouseUp(event) {
 
     suppressClick = true
     setTimeout(() => { suppressClick = false }, 0)
+    lastDragEndAt = Date.now()
+    preselectPristine = false
+    replaceConfirmPending = null
     applyPickedMarks(currentTargetEl)
     updatePanel(panelEl, currentTargetEl)
   }
@@ -1395,6 +1640,10 @@ export function enterPickMode(opts) {
   suppressClick = false
   menuTargetContext = null
   backStack = []
+  lockedEl = null
+  replaceConfirmPending = null
+  preselectPristine = false
+  lastDragEndAt = 0
   currentHint = opts?.hint || null
   // 下鑽之後要把原本要勾回的值一起帶過去
   pendingPreselect = opts?.preselect || null
@@ -1467,6 +1716,8 @@ export function enterPickMode(opts) {
 
   if (opts?.preselect && currentTargetEl && isTableMode(currentTargetEl)) {
     applyPreselect(opts.preselect, currentTargetEl)
+    // 勾回來的值還沒被使用者動過：這時「點一下取代」要先問一次，不然一個誤點就清光整批
+    preselectPristine = selectedList.length >= 2
     applyPickedMarks(currentTargetEl)
     updatePanel(panelEl, currentTargetEl)
   }
@@ -1476,6 +1727,7 @@ export function enterPickMode(opts) {
   document.addEventListener('click', onClick, true)
   document.addEventListener('mousedown', onMouseDown, true)
   document.addEventListener('mouseup', onMouseUp, true)
+  document.addEventListener('dblclick', onDblClick, true)
   document.addEventListener('contextmenu', onContextMenu, true)
 }
 
@@ -1487,6 +1739,7 @@ export function exitPickMode() {
     document.removeEventListener('click', onClick, true)
     document.removeEventListener('mousedown', onMouseDown, true)
     document.removeEventListener('mouseup', onMouseUp, true)
+    document.removeEventListener('dblclick', onDblClick, true)
     document.removeEventListener('contextmenu', onContextMenu, true)
     clearMarkedCells(document)
     clearPickedMarks(document)
@@ -1515,6 +1768,11 @@ export function exitPickMode() {
   isDragging = false
   suppressClick = false
   menuTargetContext = null
+  // 這幾個漏清會讓下一次選取還鎖在上一個元素、或還停在「再點一次才取代」的半途
+  lockedEl = null
+  replaceConfirmPending = null
+  preselectPristine = false
+  lastDragEndAt = 0
 }
 
 export function isActive() { return active }

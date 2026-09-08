@@ -102,22 +102,26 @@ test('C-2 切換模式不得清空已選（本輪推翻 SPEC §2 舊規則）', 
 
 // ---------- C-3 點已選的格子等於取消 ----------
 
-test('C-3 不按 Shift 點已選的格子＝取消它，而且不送出', async () => {
+// AF-8：點一下＝選取並取代；取消單一項改用 Ctrl／⌘（試算表與檔案總管的習慣）
+test('C-3 Ctrl 點已選的格子＝取消它，而且不送出', async () => {
   const { c, doc, pm, win } = await enter()
   move(win, doc.getElementById('a1'))
-  click(win, doc.getElementById('a1'), { shiftKey: true })
+  click(win, doc.getElementById('a1'), { ctrlKey: true })
   assert.equal(pm.selectedCount(), 1)
   move(win, doc.getElementById('a1'))
-  click(win, doc.getElementById('a1'))
+  click(win, doc.getElementById('a1'), { ctrlKey: true })
   assert.equal(pm.selectedCount(), 0, '再點一次就是取消')
   assert.equal(picked(c).length, 0, '取消不得順手送出')
   pm.exitPickMode()
 })
 
-test('C-3 點沒選過的格子仍是「選它並送出」', async () => {
+test('C-3 點沒選過的格子＝選它，但不送出', async () => {
   const { c, doc, pm, win } = await enter()
   move(win, doc.getElementById('a1'))
   click(win, doc.getElementById('a1'))
+  assert.equal(picked(c).length, 0, '送出要等雙擊或完成鈕')
+  assert.equal(pm.selectedCount(), 1)
+  doc.getElementById('a1').dispatchEvent(new win.MouseEvent('dblclick', { bubbles: true }))
   assert.equal(picked(c).length, 1)
   assert.ok(picked(c)[0].picks[0].cell)
   pm.exitPickMode()
@@ -187,6 +191,7 @@ test('C-6 整欄模式點一格＝整欄聚合', async () => {
   click(win, tools(doc).find(el => el.getAttribute('data-af-tool') === 'col'))
   move(win, doc.getElementById('b1'))
   click(win, doc.getElementById('b1'))
+  doc.getElementById('b1').dispatchEvent(new win.MouseEvent('dblclick', { bubbles: true }))
   const pick = picked(c)[0].picks[0]
   assert.ok(pick.block, `要是聚合，實得 ${JSON.stringify(pick)}`)
   assert.equal(pick.block.axis, 'col')
@@ -200,6 +205,7 @@ test('C-6 整列模式點一格＝整列聚合', async () => {
   click(win, tools(doc).find(el => el.getAttribute('data-af-tool') === 'row'))
   move(win, doc.getElementById('b1'))
   click(win, doc.getElementById('b1'))
+  doc.getElementById('b1').dispatchEvent(new win.MouseEvent('dblclick', { bubbles: true }))
   const pick = picked(c)[0].picks[0]
   assert.ok(pick.block)
   assert.equal(pick.block.axis, 'row')
@@ -210,14 +216,23 @@ test('C-6 整列模式點一格＝整列聚合', async () => {
 
 // ---------- C-7 非 task 用途 ----------
 
-test('C-7 重選／前置動作／登入只選一個元素，整欄整列要停用', async () => {
-  const { doc, pm, win } = await enter({ purpose: 'repick' })
+// AF-8：重選改與新任務同一套（會帶 preselect 回來、也要能改多值，SPEC §8.4）；
+// 只有登入與前置動作是「一次一個」，那時整欄整列才停用。
+test('C-7 前置動作／登入只選一個元素，整欄整列要停用', async () => {
+  const { doc, pm, win } = await enter({ purpose: 'preaction' })
   const col = tools(doc).find(el => el.getAttribute('data-af-tool') === 'col')
   assert.equal(col.getAttribute('aria-disabled'), 'true')
   click(win, col)
   assert.equal(pm.currentAxis(), 'col', '停用時不得切換（單格模式對外仍報 col 軸）')
   const active = tools(doc).filter(el => el.hasAttribute('data-af-active')).map(el => el.getAttribute('data-af-tool'))
   assert.deepEqual(active, ['cell'], '仍停在單格')
+  pm.exitPickMode()
+})
+
+test('C-7 重選的整欄整列可用', async () => {
+  const { doc, pm } = await enter({ purpose: 'repick', taskId: 't1' })
+  const col = tools(doc).find(el => el.getAttribute('data-af-tool') === 'col')
+  assert.notEqual(col.getAttribute('aria-disabled'), 'true', '重選要能改成整欄聚合')
   pm.exitPickMode()
 })
 

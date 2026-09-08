@@ -175,6 +175,7 @@ test('A-3 點內層小表格的數字，送出的就是內層那一格', async (
   assert.equal(cell.textContent.trim(), '42', 'fixture 的第一個內層格子應該是 42')
   fire(win, cell, 'mousemove')
   fire(win, cell, 'click')
+  fire(win, cell, 'dblclick')
   const msgs = pickedMsgs(c)
   assert.equal(msgs.length, 1, '要送出一則 PICKED')
   const pick = msgs[0].picks[0]
@@ -188,6 +189,7 @@ test('A-3 預覽是所選那一格的文字，不是整格串接', async () => {
   const { c, doc, pm, win } = await enterOnMonitor()
   fire(win, valueCell(doc), 'mousemove')
   fire(win, valueCell(doc), 'click')
+  fire(win, valueCell(doc), 'dblclick')
   const msg = pickedMsgs(c)[0]
   assert.equal(msg.preview, '42', `實得 ${JSON.stringify(msg.preview)}`)
   assert.equal(msg.previewValue, 42)
