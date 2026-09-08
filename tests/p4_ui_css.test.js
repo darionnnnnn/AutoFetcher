@@ -77,10 +77,18 @@ test('D-2 ui.css 尊重 prefers-reduced-motion', () => {
   assert.match(UI_CSS, /@media\s*\(prefers-reduced-motion:\s*reduce\)/)
 })
 
-test('D-2 ui.css 的字級不得小於 12px', () => {
+test('D-2 字級不得小於 12px（含 theme.css 的 --text-* token）', () => {
   const px = [...UI_CSS.matchAll(/font-size:\s*(\d+(?:\.\d+)?)px/g)].map(m => Number(m[1]))
   for (const v of px) {
-    assert.ok(v >= 12, `字級 ${v}px 太小`)
+    assert.ok(v >= 12, `ui.css 字級 ${v}px 太小`)
+  }
+  // ui.css 一律用 var(--text-*)，真正決定大小的是 theme.css 的 token；
+  // 只掃 ui.css 的話這條是對空集合跑迴圈，把 token 改成 8px 也不會紅
+  const tokens = [...THEME_CSS.matchAll(/--text-(xs|sm|md|lg|xl):\s*([\d.]+)(px|rem)/g)]
+  assert.ok(tokens.length >= 5, `theme.css 要定義 --text-* token，實得 ${tokens.length}`)
+  for (const [, name, num, unit] of tokens) {
+    const px2 = unit === 'rem' ? Number(num) * 16 : Number(num)
+    assert.ok(px2 >= 12, `--text-${name} 換算後是 ${px2}px，小於 12px`)
   }
 })
 
@@ -143,6 +151,11 @@ test('D-5 content: attr() 引用的屬性必須真的有人寫進 DOM', () => {
       sources.includes(`${attr}=`)
     assert.ok(written, `${attr} 沒有任何地方設定，這條樣式永遠是空白的`)
   }
+  // 正向斷言：值清單的序號要真的算得出來。少了這一條，上面的迴圈在
+  // 「一個 attr() 都沒有」時是對空集合跑零圈，等於沒有守門
+  assert.match(PICKER_HTML, /counter-reset:\s*field-row/, '值清單要有計數器起點')
+  assert.match(PICKER_HTML, /counter-increment:\s*field-row/, '每一列要遞增')
+  assert.match(PICKER_HTML, /content:\s*counter\(field-row\)/, '序號要印得出來')
 })
 
 // ---------- D-6 選取模式 overlay 實際套用的樣式 ----------

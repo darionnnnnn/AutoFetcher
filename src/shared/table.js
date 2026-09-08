@@ -89,6 +89,12 @@ export function innermostTable(el) {
     if (cellsWithTable.length !== 1) break
 
     const tableCell = cellsWithTable[0]
+    // 含表格的那一格，除了內層表格之外不能還有自己的文字
+    // （`<td>總計<table>…</table></td>` 的「總計」是外層的資料，鑽進去就丟了）
+    const innerText = cleanText(tableCell.querySelector('table')?.textContent)
+    const cellText = cleanText(tableCell.textContent)
+    if (cellText !== innerText) break
+
     const otherCellsEmpty = ownCells.every((cell) => {
       if (cell === tableCell) return true
       return cleanText(cell.textContent) === ''

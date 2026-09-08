@@ -379,7 +379,10 @@ export function render(ctx) {
   currentCtx = ctx || {}
   const previewEl = document.getElementById('preview')
   if (previewEl) {
-    if (ctx?.preview !== undefined && ctx?.previewValue !== undefined && ctx.preview !== ctx.previewValue) {
+    // 比較要正規化成字串：preview 是文字、previewValue 是數字，直接比永遠不相等，
+    // 純數值的格子會顯示成「42 (42)」
+    if (ctx?.preview !== undefined && ctx?.previewValue !== undefined &&
+        String(ctx.preview).trim() !== String(ctx.previewValue)) {
       previewEl.textContent = `${ctx.preview} (${ctx.previewValue})`
     } else if (ctx?.preview !== undefined) {
       previewEl.textContent = String(ctx.preview)

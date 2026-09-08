@@ -483,6 +483,8 @@ function updatePanel(panel, el) {
   const lines = [tagDesc]
   if (preview) lines.push(preview)
   lines.push(typeDesc)
+  // 非表格沒有欄／列可挑，工具列會整排停用；要說出為什麼，不然使用者只看到點不動
+  if (!isTableMode(el)) lines.push('非表格：抓整個元素')
   if (currentHint === 'frame_not_found') lines.push('無法進入這個框架')
   if (limitReached || selectedList.length >= maxPicks) lines.push('（已達選取上限）')
   if (headerChangedNotice) lines.push('（位置已變）')
@@ -531,7 +533,14 @@ function getHeaderText() {
 function handleTableMouseMove(target) {
   if (!currentTargetEl || !isTableMode(currentTargetEl)) return
   const info = resolveCell(target, currentTargetEl)
-  if (!info) return
+  // 滑鼠停在格子以外（表格的縫隙、表頭列）時要放掉記住的那一格，
+  // 否則之後切換模式會把標示畫回一個滑鼠早就離開的位置
+  if (!info) {
+    currentCellEl = null
+    clearMarkedCells(document)
+    applyPickedMarks(currentTargetEl)
+    return
+  }
   currentCellEl = info.cell
   colIndex = info.cIdx
   rowIndex = info.rIdx
@@ -1084,8 +1093,9 @@ function onKeyDown(event) {
   if (event.key === 'Escape') {
     event.preventDefault(); cancelPick()
   } else if (event.key === 'Backspace') {
-    event.preventDefault()
+    // 沒有東西可移除就放給頁面：選取模式可能開在有輸入框的頁面上（例如站台登入設定）
     if (selectedList.length > 0) {
+      event.preventDefault()
       removeLastPick()
     }
   } else if (event.key === 'Enter') {
@@ -1274,8 +1284,13 @@ function onClick(event) {
           return
         }
 
-        // 點一個沒選過的格子：加入並送出
-        addPick(candidate)
+        // 點一個沒選過的格子：加入並送出。
+        // 加不進去（已達上限）就停在原地提示，不能靜靜送出前面那幾個、把使用者剛點的丟掉
+        if (!addPick(candidate)) {
+          applyPickedMarks(currentTargetEl)
+          updatePanel(panelEl, currentTargetEl)
+          return
+        }
         confirmPick()
         return
       }
@@ -1471,6 +1486,8 @@ export function exitPickMode() {
   pickMode = 'cell'; cellIndex = null; colIndex = null; rowIndex = null; currentCellEl = null
   currentDataRows = []; currentRowEl = null
   selectedList = []
+  // 這一個漏清會讓下一次選取沿用上一張表的 locator，配上新表的列欄索引送出去（AF-7 體檢）
+  pickedTableEl = null
   maxPicks = 20
   limitReached = false
   headerChangedNotice = false

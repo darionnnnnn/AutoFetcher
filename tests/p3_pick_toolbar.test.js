@@ -238,6 +238,9 @@ test('C-8 目標不是表格時工具列停用並說明', async () => {
   for (const el of tools(doc)) {
     assert.equal(el.getAttribute('aria-disabled'), 'true', '非表格沒有欄列可選')
   }
+  const panel = doc.querySelector('[data-af-panel]')
+  assert.ok(/非表格/.test(panel.textContent),
+    `要說出為什麼點不動，實得 ${JSON.stringify(panel.textContent)}`)
   pm.exitPickMode()
 })
 

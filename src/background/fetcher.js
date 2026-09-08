@@ -18,6 +18,18 @@ function sleep(ms) {
 }
 
 // 解析 URL 取得 origin
+// 兩個網址是不是同一個目標頁（query 常帶 token 或時戳，只比 origin + path）
+function sameTarget(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false
+  try {
+    const ua = new URL(a)
+    const ub = new URL(b)
+    return ua.origin === ub.origin && ua.pathname === ub.pathname
+  } catch {
+    return false
+  }
+}
+
 function getOrigin(url) {
   try {
     return new URL(url).origin
@@ -321,7 +333,9 @@ export async function runTask(task, opts = {}) {
       if (opts.tabId !== undefined && opts.tabId !== null) {
         try {
           const tab = await chrome.tabs.get(opts.tabId)
-          if (tab !== undefined && tab !== null) {
+          // 那個分頁可能已經被使用者導去別的網站；讀它現在的網址核對過才用，
+          // 否則會在不相干的頁面上定位與擷取（對不上就退回原本的找分頁流程）
+          if (tab !== undefined && tab !== null && sameTarget(tab.url, task.url)) {
             tabId = tab.id
           }
         } catch {}

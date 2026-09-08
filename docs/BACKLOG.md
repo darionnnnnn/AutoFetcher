@@ -16,8 +16,11 @@
 | 折線超過 8 條的上限收成一份 | 目前 `drop-rules.MAX_CHART_SERIES` 與 `dashboard`、`trend-popover` 的硬編碼 `8` 三處並存;下次動到圖表上限時一併收成一份 |
 | 卡片 TSV 不再掛在 `dataset.tsv` | 目前為了讓測試讀得到而序列化進 DOM 屬性;找到別的驗證方式時 |
 | 多值任務的 Picker `ctx` 改走 `storage.session` | 目前走 URL 參數(20 個值約 6KB,遠低於限制);值的數量成長到讓網址過長時 |
+| 「哪些列／格屬於這張表」的判準收成一份(現在 `shared/table.js`、`shared/block-detect.js`、`content/picker-mode.js` 各一份,謂詞還不一致:table.js 只認 `<table>`,另兩份含 ARIA) | AF-7 體檢發現;下次動表格解析時一起合併,屆時連 ARIA 表格的測試一起補 |
 | `picker-mode.js` 自帶的 `getRowCells` / `isHeaderRow` / `getTableRows` 併進 `shared/table.js` | 兩份判準不同(picker-mode 版多認 ARIA role 與 children 退路);合併要連 ARIA 表格的測試一起補,下次動表格解析時做 |
 | 深色模式以外的主題色 | 使用者提出 |
+| 選取工具列加第四段「這一欄每格各一個值」 | 目前留在右鍵選單(工具列三段已夠用,四段會擠);使用者反映右鍵選單不好發現時 |
+| 選取模式的面板可拖曳 | 目前固定在右下角;有使用者反映它擋住要選的內容時 |
 | Report 頁與 popup 沿用 `ui/ui.css` | AF-7 只讓 picker 與 site 走它(Report 樣式量大、風險高);下次動 Report 樣式時順手搬 |
 | 「立即測試」對編輯既有任務開放 | AF-7 改走 background 後技術上已可行(它會自己開分頁定位);使用者反映編輯時也想先試抓時 |
 | 秒級抓取 | 目前最小 1 分鐘;alarms 下限 30 秒,再快要常駐分頁 |

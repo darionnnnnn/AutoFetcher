@@ -15,9 +15,15 @@ function isTableLike(el) {
 function getRows(el) {
   if (typeof el.querySelectorAll !== 'function') return []
   const allRows = Array.from(el.querySelectorAll('tr, [role="row"]'))
-  const rows = allRows.filter(
-    (row) => typeof row.closest !== 'function' || row.closest('table, [role="grid"], [role="table"]') === el
-  )
+  // 只留「這張表自己的」列，排除巢狀小表格的列。
+  // 容器是 role="table" 而裡面包著真的 <table> 時，closest 會停在內層那張表，
+  // 用它當判準會把每一列都濾掉、列數歸零，所以改成「往上找到的第一張表就是 el 或 el 裡的那一張」。
+  const owner = el.tagName === 'TABLE' ? el : (typeof el.querySelector === 'function' ? el.querySelector('table') : null)
+  const rows = allRows.filter((row) => {
+    if (typeof row.closest !== 'function') return true
+    const host = row.closest('table, [role="grid"], [role="table"]')
+    return host === el || (owner !== null && host === owner)
+  })
   if (rows.length > 0) return rows
   return Array.from(el.children || []).filter(
     (child) => child.getAttribute && child.getAttribute('role') === 'row'
