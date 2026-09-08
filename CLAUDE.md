@@ -48,7 +48,8 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   `<任務id>#<值key>`;任何地方都不得自己 split 字串。父任務 id 與序列 id 各用在哪見 SPEC §7 的分工表,
   記錯會讓冪等失效或畫面永遠空白。
 - **UI 監看資料變動的唯一入口**:`shared/storage` 的 `subscribe`(UI 不得自己碰 `chrome.storage.onChanged`)。
-- **frame 定位只有一份**:`background/frames.js`(`listFrames` / `matchFrameByUrl` / `locateFrame`);
+- **frame 定位只有一份**:`background/frames.js`(`listFrames` / `matchFrameByUrl` / `locateFrame`,
+  以及「同一個目標頁」的判定 `sameOriginPath`——立即測試核對分頁網址也用它,不得各比一次);
   任務存的是 `frame: { url }`,**`frameId` 存不得**(每次載入都不同),見 SPEC §3。
 - **health 一律經 `background/health.js` 的 `setTaskHealth` 寫**(fetcher / precheck / sitecheck 三個呼叫端);
   抓取結果 → 狀態的算法只有 `fetcher.js` 的 `healthFromRecords` 那一份。
@@ -62,7 +63,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1555 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1557 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。

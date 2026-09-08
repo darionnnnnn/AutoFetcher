@@ -183,7 +183,8 @@
   ——找分頁、等載入、登入檢查、`locateFrame` 重新定位 iframe、`injectContent` 重新注入、`EXTRACT`——
   結果原樣回傳,**不寫紀錄、不進帳本、不存任務**。
   自己直送會在目標頁重新整理後拿到「Could not establish connection」:content script 已經不在、
-  `frameId` 也換了。`runTask` 的 `opts.tabId` 指定分頁存在**且它現在的網址(`origin + pathname`)仍是任務那一頁**才沿用;
+  `frameId` 也換了。`runTask` 的 `opts.tabId` 指定分頁存在**且它現在的網址仍是任務那一頁**(用 §3 的 `sameOriginPath`,
+  不另寫一份判定)才沿用;
   使用者把分頁導去別的網站時退回原本的找分頁流程,不能在不相干的頁面上定位與擷取。
   失敗時錯誤只放 `#errors`、`#preview` 顯示 `—`(同一句話不重複顯示兩次)。
 
@@ -203,7 +204,7 @@
 定位只有一份實作:`background/frames.js` 的 `locateFrame`,三層,**第一個「唯一」命中為準**:
 
 1. 網址完全相同
-2. `origin + pathname` 相同(query 常帶 token 或時戳)
+2. `origin + pathname` 相同(query 常帶 token 或時戳;判定是 `frames.js` 的 `sameOriginPath`,唯一一份)
 3. 逐個候選 frame 送 `RESOLVE_LOCATOR`(只判定不擷取),唯一 `found` 的那個
 
 任一層命中兩個以上 → 進下一層;**第 3 層多重命中或全部失敗 → 判失敗**

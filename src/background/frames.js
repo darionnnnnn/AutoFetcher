@@ -2,6 +2,19 @@
 import { MSG } from '../shared/messages.js'
 import { injectContent } from './inject.js'
 
+// 兩個網址是不是同一個目標頁：query 常帶 token 或時戳，只比 origin + pathname。
+// frame 定位的第二層與「立即測試」核對分頁網址都走這一份，不得各寫一次。
+export function sameOriginPath(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false
+  try {
+    const ua = new URL(a)
+    const ub = new URL(b)
+    return ua.origin === ub.origin && ua.pathname === ub.pathname
+  } catch {
+    return false
+  }
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -36,27 +49,8 @@ export function matchFrameByUrl(frames, frameUrl) {
   }
 
   // 第二層：origin + pathname
-  let targetKey = null
-  try {
-    const u = new URL(frameUrl)
-    targetKey = `${u.origin}${u.pathname}`
-  } catch {
-    return null
-  }
-
-  const pathMatches = []
-  for (const f of frames) {
-    if (!f || typeof f.url !== 'string') continue
-    try {
-      const u = new URL(f.url)
-      const key = `${u.origin}${u.pathname}`
-      if (key === targetKey) {
-        pathMatches.push(f)
-      }
-    } catch {
-      // 網址不合法跳過
-    }
-  }
+  // frameUrl 本身不合法時 sameOriginPath 一律 false，等於沒有任何命中
+  const pathMatches = frames.filter((f) => f && typeof f.url === 'string' && sameOriginPath(f.url, frameUrl))
 
   if (pathMatches.length === 1) {
     return { frameId: pathMatches[0].frameId }

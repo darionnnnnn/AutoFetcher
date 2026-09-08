@@ -131,13 +131,20 @@ test('E-3 狀態色只用 theme.css 的語意變數', () => {
 
 // ---------- E-4 不得與共用樣式表重複 ----------
 
-test('E-4 儲存鈕用共用樣式表的主要按鈕，不得自己再寫一份', () => {
-  const doc = new JSDOM(PICKER_HTML).window.document
-  const save = doc.getElementById('save')
-  assert.ok(save.className.split(/\s+/).includes('btn-primary'),
-    '要掛共用類別')
-  assert.ok(!/#save\s*\{[^}]*background:\s*var\(--primary\)/.test(PICKER_HTML),
-    'picker.html 不得再寫一份主色按鈕樣式')
+test('E-4 兩個視窗的儲存鈕都用共用樣式表的主要按鈕，不得自己再寫一份', () => {
+  // 體檢抓到：picker 修了、site 沒修，同型只修一半
+  for (const [name, html, id] of [['picker', PICKER_HTML, 'save'], ['site', SITE_HTML, 'site-save']]) {
+    const doc = new JSDOM(html).window.document
+    const save = doc.getElementById(id)
+    assert.ok(save.className.split(/\s+/).includes('btn-primary'), `${name} 的儲存鈕要掛共用類別`)
+    assert.ok(!new RegExp(`#${id}\\s*\\{[^}]*background:\\s*var\\(--primary\\)`).test(html),
+      `${name}.html 不得再寫一份主色按鈕樣式`)
+  }
+})
+
+test('E-4 兩個視窗的 HTML 都以換行結尾', () => {
+  assert.ok(PICKER_HTML.endsWith('\n'), 'picker.html 檔尾要有換行')
+  assert.ok(SITE_HTML.endsWith('\n'), 'site.html 檔尾要有換行')
 })
 
 test('E-4 共用樣式表裡不得有沒人使用的類別', () => {
@@ -146,7 +153,24 @@ test('E-4 共用樣式表裡不得有沒人使用的類別', () => {
   const noComments = UI_CSS.replace(/\/\*[\s\S]*?\*\//g, '')
   const selectors = [...noComments.matchAll(/([^{}]+)\{/g)].map(m => m[1])
   const defined = selectors.flatMap(sel => [...sel.matchAll(/\.([a-z][a-z0-9-]*)/g)].map(m => m[1]))
-  const used = PICKER_HTML + SITE_HTML
-  const dead = [...new Set(defined)].filter(cls => !new RegExp(`class="[^"]*\\b${cls}\\b`).test(used))
+  // 用「類別 token」精確比對：`class="btn-primary"` 不能讓 `.btn` 算成有人用
+  const usedTokens = new Set()
+  for (const m of (PICKER_HTML + SITE_HTML).matchAll(/class="([^"]*)"/g)) {
+    for (const tok of m[1].split(/\s+/)) if (tok) usedTokens.add(tok)
+  }
+  const dead = [...new Set(defined)].filter(cls => !usedTokens.has(cls))
   assert.deepEqual(dead, [], `這些類別沒有任何頁面用到，是死規則：${JSON.stringify(dead)}`)
+})
+
+// ---------- E-5 同一個判定只留一份 ----------
+
+test('E-5 「同一個目標頁」的判定只有 frames.js 那一份', async () => {
+  const { sameOriginPath } = await import('../src/background/frames.js?t=' + Math.random())
+  assert.equal(sameOriginPath('https://a.test/p?x=1#h', 'https://a.test/p?x=2'), true, 'query 與 hash 不算')
+  assert.equal(sameOriginPath('https://a.test/p', 'https://a.test/q'), false)
+  assert.equal(sameOriginPath('https://a.test/p', 'https://b.test/p'), false)
+  assert.equal(sameOriginPath('not a url', 'https://a.test/p'), false, '不合法一律不相同')
+  const fetcherSrc = readFileSync(new URL('../src/background/fetcher.js', import.meta.url), 'utf8')
+  assert.ok(!/\.pathname/.test(fetcherSrc), 'fetcher.js 不得自己再比一次 pathname，要用 frames.js 的那一份')
+  assert.ok(/sameOriginPath\(tab\.url, task\.url\)/.test(fetcherSrc), '立即測試核對分頁網址要走它')
 })

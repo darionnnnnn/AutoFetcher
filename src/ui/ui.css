@@ -47,8 +47,7 @@ h2 {
    ============================================================ */
 
 /* 基礎按鈕（次要 / ghost 風格）*/
-button,
-.btn {
+button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -65,8 +64,7 @@ button,
   user-select: none;
 }
 
-button:hover,
-.btn:hover {
+button:hover {
   background: var(--hover);
 }
 
@@ -90,17 +88,14 @@ button.btn-primary:hover {
    卡片 / 分區容器
    ============================================================ */
 fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: var(--space-2);
   margin: 0;
-}
-
-fieldset {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
 }
 
 legend {

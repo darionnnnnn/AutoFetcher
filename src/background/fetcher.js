@@ -9,7 +9,7 @@ import { evaluateAlerts } from '../shared/alerts.js'
 import { isSuccess, healthStatusOf } from '../shared/record-status.js'
 import { setTaskHealth, refreshBadge } from './health.js'
 import { ensureLoggedIn } from './login.js'
-import { locateFrame } from './frames.js'
+import { locateFrame, sameOriginPath } from './frames.js'
 import * as diag from '../shared/diag.js'
 
 // 短暫等待輔助函式（非排程）
@@ -18,18 +18,6 @@ function sleep(ms) {
 }
 
 // 解析 URL 取得 origin
-// 兩個網址是不是同一個目標頁（query 常帶 token 或時戳，只比 origin + path）
-function sameTarget(a, b) {
-  if (typeof a !== 'string' || typeof b !== 'string') return false
-  try {
-    const ua = new URL(a)
-    const ub = new URL(b)
-    return ua.origin === ub.origin && ua.pathname === ub.pathname
-  } catch {
-    return false
-  }
-}
-
 function getOrigin(url) {
   try {
     return new URL(url).origin
@@ -335,7 +323,7 @@ export async function runTask(task, opts = {}) {
           const tab = await chrome.tabs.get(opts.tabId)
           // 那個分頁可能已經被使用者導去別的網站；讀它現在的網址核對過才用，
           // 否則會在不相干的頁面上定位與擷取（對不上就退回原本的找分頁流程）
-          if (tab !== undefined && tab !== null && sameTarget(tab.url, task.url)) {
+          if (tab !== undefined && tab !== null && sameOriginPath(tab.url, task.url)) {
             tabId = tab.id
           }
         } catch {}
