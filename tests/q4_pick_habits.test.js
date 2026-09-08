@@ -347,3 +347,16 @@ test('F-11 鎖定狀態不會殘留到下一次選取', async () => {
   assert.ok(/blank/.test(panelText(doc)), '新的一次選取不該還鎖在上一個元素上')
   pm.exitPickMode()
 })
+
+// ---------- F-12 點在表格的縫隙不得把整張表鎖住 ----------
+
+test('F-12 點在表格的縫隙之後，hover 標示還會跟著滑鼠走', async () => {
+  const { doc, pm, win } = await boot()
+  move(win, doc.getElementById('a1'))
+  // 直接點表格容器本身（格子與格子之間的縫）
+  click(win, doc.getElementById('t'))
+  move(win, doc.getElementById('c2'))
+  assert.equal(doc.getElementById('c2').hasAttribute('data-af-cell'), true,
+    '縫隙不該把整張表鎖住，那會讓標示凍結在原地')
+  pm.exitPickMode()
+})

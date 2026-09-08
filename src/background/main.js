@@ -42,19 +42,34 @@ function stripPos(spec) {
     delete out.cell.row?.pos
     delete out.cell.col?.pos
   }
-  if (out.block) delete out.block.pos
   return out
 }
 function sameSpec(a, b) {
   return JSON.stringify(stripPos(pickSpecOf(a))) === JSON.stringify(stripPos(pickSpecOf(b)))
 }
-function defaultFieldName(pick, n) {
+const POS_NAMES = { first: '第一', last: '最後一', 'last-1': '倒數第二' }
+function defaultFieldName(pick, n, pos = {}) {
   if (pick?.cell) {
-    const r = pick.cell.row?.header || ''
-    const c = pick.cell.col?.header || ''
-    return (r && c) ? `${r} · ${c}` : (r || c || `值 ${n}`)
+    // 用位置定位的軸不能把標題寫進名稱：每天取最後一列的話，那個日期明天就變了
+    const r = pos.rowPos ? '' : (pick.cell.row?.header || '')
+    const c = pos.colPos ? '' : (pick.cell.col?.header || '')
+    const suffix = [
+      pos.rowPos ? `${POS_NAMES[pos.rowPos]}列` : '',
+      pos.colPos ? `${POS_NAMES[pos.colPos]}欄` : ''
+    ].filter(Boolean).join('、')
+    const base = (r && c) ? `${r} · ${c}` : (r || c || (suffix ? '值' : `值 ${n}`))
+    return suffix ? `${base}（${suffix}）` : base
   }
   return pick?.block?.headerText || `值 ${n}`
+}
+
+// 任務目前用的定位方式（重選新增的值要跟著它命名）
+function posOfTask(task) {
+  const first = Array.isArray(task?.spec?.fields) && task.spec.fields.length > 0
+    ? task.spec.fields[0]
+    : task?.spec?.block
+  const cell = first?.cell
+  return { rowPos: cell?.row?.pos || '', colPos: cell?.col?.pos || '' }
 }
 // 重選只換位置與標題，使用者原本設的「定位方式」（依標題／第一筆／最後一筆）要留著，
 // 不然重選一次就默默退回依標題，每天新增列的表格隔天就抓不到了。
@@ -91,6 +106,7 @@ function applyRepick(task, picks) {
   const aggregate = task.spec?.block?.aggregate
     || (task.spec?.fields || []).find(f => f.block?.aggregate)?.block?.aggregate
     || 'sum'
+  const taskPos = posOfTask(task)
   const oldSpecs = task.spec?.fields || []
   const oldNames = new Map((task.fields || []).map(f => [f.key, f.name]))
   const fields = []
@@ -100,7 +116,7 @@ function applyRepick(task, picks) {
     if (!spec) return
     const kept = oldSpecs.find(f => sameSpec(f, pick))
     const key = kept ? kept.key : crypto.randomUUID().slice(0, 8)
-    const name = kept ? (oldNames.get(kept.key) || defaultFieldName(pick, i + 1)) : defaultFieldName(pick, i + 1)
+    const name = kept ? (oldNames.get(kept.key) || defaultFieldName(pick, i + 1, taskPos)) : defaultFieldName(pick, i + 1, taskPos)
     fields.push({ key, name })
     const nextSpec = spec.cell ? { cell: spec.cell } : { block: { ...spec.block, aggregate } }
     const prevSpec = kept ? (kept.cell ? { cell: kept.cell } : { block: kept.block }) : null

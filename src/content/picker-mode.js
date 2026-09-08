@@ -704,13 +704,19 @@ function setCursor(kind) {
 function markTitle(el, text) {
   if (!el || typeof el.setAttribute !== 'function') return
   if (el.getAttribute('title') === text) return
-  if (!el.hasAttribute('title')) titledEls.push(el)
+  // 頁面自己的 title（例如「點此排序」）要記下來還原，直接覆蓋等於永久弄壞人家的網頁
+  if (!titledEls.some(e => e.el === el)) {
+    titledEls.push({ el, prev: el.hasAttribute('title') ? el.getAttribute('title') : null })
+  }
   el.setAttribute('title', text)
 }
 
 function clearTitles() {
-  for (const el of titledEls) {
-    try { el.removeAttribute('title') } catch {}
+  for (const { el, prev } of titledEls) {
+    try {
+      if (prev === null) el.removeAttribute('title')
+      else el.setAttribute('title', prev)
+    } catch {}
   }
   titledEls = []
 }
@@ -1326,6 +1332,14 @@ function onKeyDown(event) {
       removeLastPick()
     }
   } else if (event.key === 'Enter') {
+    // 焦點在面板的按鈕上時，Enter 是「按那顆按鈕」，不是「送出」——
+    // 焦點停在「取消」上卻送出，是鍵盤使用者最容易踩到的陷阱
+    const focused = document?.activeElement
+    if (focused && typeof focused.closest === 'function' &&
+        (focused.closest('[data-af-cancel]') || focused.closest('[data-af-done]') ||
+         focused.closest('[data-af-tool]') || focused.closest('[data-af-remove-last]'))) {
+      return
+    }
     if (!currentTargetEl) return
     event.preventDefault()
     // 還沒選就按 Enter：把滑鼠停著的那一個選起來再送（鍵盤使用者不必先點一下）
@@ -1558,13 +1572,18 @@ function onClick(event) {
       updatePanel(panelEl, currentTargetEl)
       return
     }
+    // 點在表格內但不是任何一格（格子之間的縫、表格的邊）：什麼都不做。
+    // 送出會把使用者沒選的東西存起來，鎖定會讓 hover 標示凍在原地，兩個都不對
+    if (isMultiPickPurpose()) return
   }
 
-  // 7. 非表格：點一下鎖定這個元素（再點別處解除），不送出
-  if (isMultiPickPurpose() && !iframeOf(currentTargetEl)) {
+  // 7. 非表格：點一下鎖定這個元素（再點別處解除），不送出。
+  // 表格不走這條——點在表格的縫隙（格子解析不出來）不該把整張表鎖住，
+  // 那會讓 hover 標示凍結在原地，看起來像整個選取模式壞了
+  if (isMultiPickPurpose() && !isTableMode(currentTargetEl) && !iframeOf(currentTargetEl)) {
     if (lockedEl) {
       lockedEl = null
-      if (event.target && (!overlayEl || !overlayEl.contains(event.target))) setTarget(event.target)
+      if (event.target && (!overlayEl || !overlayEl.contains(event.target))) setTarget(upgradeTarget(event.target))
     } else {
       lockedEl = currentTargetEl
     }
@@ -1645,6 +1664,10 @@ function onMouseDown(event) {
     return
   }
   if (event.button !== 0) return
+  // overlay 自己的按鈕（工具列、完成／取消、chip）要讓瀏覽器照常處理這一下 mousedown，
+  // 否則它們永遠拿不到焦點，焦點環就是畫了也沒人看得到的死規則
+  const onOwnControl = overlayEl && overlayEl.contains(event.target) && !frameOfProxy(event.target)
+  if (onOwnControl) return
   event.preventDefault()
   if (currentTargetEl && isTableMode(currentTargetEl)) {
     const info = resolveCell(event.target, currentTargetEl)

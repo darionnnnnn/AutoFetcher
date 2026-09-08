@@ -161,7 +161,18 @@ test('P-6 改了定位方式之後，沒手改過的名稱會跟著重算', asyn
   assert.equal($(doc, 'name').value, '成交金額')
   $(doc, 'row-pos').value = 'last'
   $(doc, 'row-pos').dispatchEvent(new globalThis.window.Event('change', { bubbles: true }))
-  assert.equal($(doc, 'name').value, '成交金額', '欄標題沒有變')
+  assert.equal($(doc, 'name').value, '成交金額（最後一列）',
+    '單值與多值要用同一套命名，否則在 Report 上分不出定位方式')
+})
+
+test('P-6 單值只有列標題時，改定位方式會換掉那個會過期的標題', async () => {
+  const { pk, doc } = await fresh()
+  pk.render(ctxFor([{ cell: { row: { index: 4, header: '115/09/07' }, col: { index: 2, header: '' } } }]))
+  assert.equal($(doc, 'name').value, '115/09/07')
+  $(doc, 'row-pos').value = 'last'
+  $(doc, 'row-pos').dispatchEvent(new globalThis.window.Event('change', { bubbles: true }))
+  assert.ok(!/115\/09\/07/.test($(doc, 'name').value),
+    `會變的日期不該留在名稱裡，實得 ${JSON.stringify($(doc, 'name').value)}`)
 })
 
 test('P-6 手改過的名稱不會被重算蓋掉', async () => {

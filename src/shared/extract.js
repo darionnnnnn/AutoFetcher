@@ -263,7 +263,7 @@ function extractCellFromTable(table, dataRows, cellSpec, specOpts = {}) {
 
 // 整欄／整列再加上位置＝那一格（「成交金額」× 最後一列）。
 // 有位置就沒有東西要聚合，aggregate 一律忽略。
-function extractCrossCell(table, block, specOpts, colCount, dataRows) {
+function extractCrossCell(table, block, specOpts, dataRows) {
   const isRow = block.axis === 'row'
   const cellSpec = isRow
     // 整列 + 位置：列照原本的表頭定位，欄用位置
@@ -282,15 +282,10 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
   let status = 'ok'
   let values = []
 
-  let colCount = (table.headers || []).length
-  for (const row of table.cells) {
-    if (row.length > colCount) colCount = row.length
-  }
-
   // 這一軸挑好了之後，另一軸還帶著位置＝只要那一格，不是整欄整列聚合
   const crossPos = positionOf(block)
   if (crossPos) {
-    return extractCrossCell(table, block, specOpts, colCount, dataRows)
+    return extractCrossCell(table, block, specOpts, dataRows)
   }
 
   if (block.axis === 'row') {
@@ -411,7 +406,8 @@ export function extractValue(el, spec = {}) {
             resultFields[key] = {
               ok: false,
               error: res.error,
-              ...(res.raw !== undefined ? { raw: res.raw } : {})
+              ...(res.raw !== undefined ? { raw: res.raw } : {}),
+              ...(res.message !== undefined ? { message: res.message } : {})
             }
           }
         } else if (field.block) {
@@ -430,7 +426,8 @@ export function extractValue(el, spec = {}) {
             resultFields[key] = {
               ok: false,
               error: res.error,
-              ...(res.raw !== undefined ? { raw: res.raw } : {})
+              ...(res.raw !== undefined ? { raw: res.raw } : {}),
+              ...(res.message !== undefined ? { message: res.message } : {})
             }
           }
         } else {

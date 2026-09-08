@@ -474,6 +474,9 @@ export async function runTask(task, opts = {}) {
               if (r?.raw !== undefined) {
                 rec.raw = r.raw
               }
+              if (r?.message !== undefined) {
+                rec.error = r.message
+              }
             }
             if (res.partial === true) {
               rec.partial = true
@@ -598,7 +601,10 @@ export async function runTask(task, opts = {}) {
           slot,
           capturedAt: new Date().toISOString(),
           status: 'not_found',
-          snippet: res.snippet
+          snippet: res.snippet,
+          // 「標題找不到，改用位置定位」這種訊息要留在紀錄裡，
+          // 只寫 not_found 的話使用者看到的永遠是同一句沒有解法的話
+          ...(res.message !== undefined ? { error: res.message } : {})
         }, { parentId: task.id, skipLedger: isManual })
       }
 

@@ -59,6 +59,7 @@ test('A-1 滑鼠移到 td 上即進入表格模式，工具列可用', async () 
   const { doc, pm, win } = await boot(FLAT)
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.body })
   move(win, doc.getElementById('a2'))
+  assert.equal(tools(doc).length, 3, '工具列沒建出來的話，下面的斷言會真空成立')
   const disabled = tools(doc).filter(el => el.getAttribute('aria-disabled') === 'true')
   assert.equal(disabled.length, 0, `滑鼠在格子上時三段都要能點，實得停用 ${disabled.length} 段`)
   assert.equal(doc.querySelectorAll('[data-af-cell]').length, 1, '待選標記落在那一格')
@@ -88,6 +89,7 @@ test('A-1 滑鼠停在格子內的 span 上也算那一格', async () => {
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.body })
   move(win, doc.getElementById('a2s'))
   assert.equal(doc.getElementById('a2').hasAttribute('data-af-cell'), true, '標記要落在祖先儲存格上')
+  assert.equal(tools(doc).length, 3)
   assert.equal(tools(doc).filter(el => el.getAttribute('aria-disabled') === 'true').length, 0)
   pm.exitPickMode()
 })
@@ -95,6 +97,7 @@ test('A-1 滑鼠停在格子內的 span 上也算那一格', async () => {
 test('A-1 右鍵預選的元素是格子時，一進入就是表格模式', async () => {
   const { doc, pm } = await boot(FLAT)
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('a1') })
+  assert.equal(tools(doc).length, 3)
   assert.equal(tools(doc).filter(el => el.getAttribute('aria-disabled') === 'true').length, 0,
     '右鍵在格子上進來就該是表格模式')
   pm.exitPickMode()
@@ -156,6 +159,7 @@ test('A-3 前置動作用途不升級目標，仍指向原始元素', async () =
   const { doc, pm, win } = await boot(FLAT)
   pm.enterPickMode({ purpose: 'preaction', initialTarget: doc.body })
   move(win, doc.getElementById('a1'))
+  assert.equal(tools(doc).length, 3, '工具列要在，只是整排停用')
   assert.equal(tools(doc).every(el => el.getAttribute('aria-disabled') === 'true'), true,
     '前置動作要點的是那個元素本身，不是表格')
   assert.ok(/非表格/.test(panelText(doc)), '面板要說明為什麼點不動')

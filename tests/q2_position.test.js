@@ -181,3 +181,17 @@ test('C-6 多值任務每個值各自帶位置與 label', () => {
   assert.equal(res.fields.vol.value, 11024)
   assert.equal(res.fields.amt.label, '115/09/07')
 })
+
+// ---------- C-7 錯誤訊息要一路走到使用者眼前 ----------
+
+test('C-7 多值任務的失敗值也帶著可行動的訊息', () => {
+  const gone = [['美金', '30', '31'], ['歐元', '33', '34']]
+  const res = extractValue(currencyTable(gone), {
+    mode: 'block',
+    fields: [{ key: 'jpy', block: { axis: 'row', index: 1, headerText: '日圓', aggregate: 'sum' } }]
+  })
+  assert.equal(res.ok, true, '表格解析得出來就不是暫時性失敗')
+  assert.equal(res.fields.jpy.ok, false)
+  assert.ok(/日圓/.test(res.fields.jpy.message || ''),
+    `每個值各自的失敗也要說出是哪個標題，實得 ${JSON.stringify(res.fields.jpy.message)}`)
+})

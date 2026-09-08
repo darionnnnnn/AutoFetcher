@@ -129,7 +129,7 @@ export function getFormData() {
 // 表格每天在最前或最後新增一筆時，「第幾筆」比會變動的標題可靠。
 // 位置是任務層級的設定，寫進規格時每個值的同一軸各帶一份。
 const POS_VALUES = ['first', 'last', 'last-1']
-export const POS_LABELS = { first: '第一', last: '最後一', 'last-1': '倒數第二' }
+const POS_LABELS = { first: '第一', last: '最後一', 'last-1': '倒數第二' }
 
 function posValueOf(id) {
   const v = document.getElementById(id)?.value || ''
@@ -465,6 +465,9 @@ function setPreviewState(state) {
 
 export function render(ctx) {
   currentCtx = ctx || {}
+  // 位置定位要最先決定：預設名稱會用到它，而且同一個視窗可能 render 第二次
+  //（下鑽 iframe 回來、重選回填），殘留在下拉裡的舊值會算出錯的名稱
+  applyPositionDefaults(currentCtx)
   renderHeader(currentCtx)
   setPreviewState(null)
   const previewEl = document.getElementById('preview')
@@ -567,9 +570,6 @@ export function render(ctx) {
       }
     }
   }
-
-  // 位置要先決定：值的名稱會用到它（「成交金額（最後一列）」）
-  applyPositionDefaults(currentCtx)
 
   const isMulti = Boolean((ctx?.picks && Array.isArray(ctx.picks) && ctx.picks.length >= 2) || (ctx?.task && Array.isArray(ctx.task.fields) && ctx.task.fields.length > 0))
   if (isMulti) {
@@ -848,20 +848,30 @@ function refreshDefaultNames() {
   if (rows.length === 0 && picks.length === 1 && picks[0].cell) {
     const nameEl = document.getElementById('name')
     if (nameEl && (nameEl._afAutoName === undefined || nameEl.value === nameEl._afAutoName)) {
-      const next = singleCellName(picks[0].cell) || nameEl.value
+      // 位置定位把唯一的標題吃掉時（那個標題正是會過期的那個），退回表格名稱，
+      // 與第一次 render 的順序一致；不能留著舊名字，它就是那個明天會過期的日期
+      const next = singleCellName(picks[0].cell) ||
+        String(currentCtx?.nameHint || '').trim() || nameEl.value
       nameEl.value = next
       nameEl._afAutoName = next
     }
   }
 }
 
-// 單值儲存格的預設任務名稱：使用者選的是那一欄，名稱就用欄標題
+// 單值儲存格的預設任務名稱：使用者選的是那一欄，名稱就用欄標題。
+// 後綴（最後一列…）與多值那份共用，否則同一張表的單值與多值在 Report 上分不出定位方式。
 function singleCellName(cell) {
   const rowPos = posValueOf('row-pos')
   const colPos = posValueOf('col-pos')
   const colH = colPos ? '' : String(cell?.col?.header || '').trim()
   const rowH = rowPos ? '' : String(cell?.row?.header || '').trim()
-  return colH || rowH || ''
+  const base = colH || rowH
+  if (!base) return ''
+  const suffix = [
+    rowPos ? `${POS_LABELS[rowPos]}列` : '',
+    colPos ? `${POS_LABELS[colPos]}欄` : ''
+  ].filter(Boolean).join('、')
+  return suffix ? `${base}（${suffix}）` : base
 }
 
 // 多值任務裡每個值的預設名稱；用位置定位的那一軸不放會變動的標題
@@ -1644,7 +1654,7 @@ export async function handleTestNow() {
             const val = fieldRes.value !== undefined ? String(fieldRes.value) : (fieldRes.raw ?? '')
             return `${f.name}: ${val}`
           } else {
-            const err = fieldRes?.error || '抓取失敗'
+            const err = fieldRes?.message || fieldRes?.error || '抓取失敗'
             return `${f.name}: ${err}`
           }
         })
@@ -1662,7 +1672,8 @@ export async function handleTestNow() {
         noteEl.textContent = '這次測試在目前分頁執行；排程會開新分頁，若那個框架要先點才會出現，請加入前置動作。'
       }
     } else {
-      const err = res?.error || '找不到目標元素'
+      // 有解法的訊息優先：'not_found' 只說了失敗，沒說使用者能怎麼辦
+      const err = res?.message || res?.error || '找不到目標元素'
       if (errorsEl) errorsEl.textContent = err
       if (previewEl) previewEl.textContent = '—'
       setPreviewState('error')
