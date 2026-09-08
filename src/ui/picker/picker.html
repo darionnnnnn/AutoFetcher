@@ -8,7 +8,9 @@
   <style>
     body {
       padding: var(--space-3, 12px);
-      width: 360px;
+      /* 視窗自己決定寬度：寫死寬度會讓右側空出一條、捲軸卡在畫面中間 */
+      width: 100%;
+      box-sizing: border-box;
       height: 100vh;
       display: flex;
       flex-direction: column;
@@ -48,6 +50,52 @@
       white-space: nowrap;
       min-height: 1em;
     }
+    #saved-feedback {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2, 8px);
+      align-items: flex-start;
+      padding: var(--space-3, 12px);
+      color: var(--text);
+      font-size: var(--text-md, 15px);
+    }
+    .rename-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .rename-row button { font-size: var(--text-xs, 12px); min-height: 28px; }
+    .field-where {
+      font-size: var(--text-xs, 12px);
+      color: var(--text-muted);
+      max-width: 96px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .field-result {
+      font-family: var(--font-mono, monospace);
+      font-size: var(--text-xs, 12px);
+      color: var(--text-muted);
+      min-width: 56px;
+      text-align: right;
+      flex-shrink: 0;
+    }
+    .field-result[data-state="ok"] { color: var(--ok); }
+    .field-result[data-state="error"] { color: var(--danger); }
+    .field-label { font-size: var(--text-xs, 12px); color: var(--text-muted); }
+    #setup-summary {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      margin-top: var(--space-2, 8px);
+      padding: var(--space-2, 8px) var(--space-3, 12px);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--primary);
+      border-radius: var(--radius);
+      font-size: var(--text-xs, 12px);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    #setup-summary > div:empty { display: none; }
     .chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
     .time-picker { display: flex; flex-direction: column; gap: 6px; }
     .time-picker-row { display: flex; align-items: center; gap: 6px; }
@@ -205,25 +253,25 @@
   <div data-picker-header>
     <h2 id="picker-title">設定抓取任務</h2>
     <div id="target-host"></div>
+    <label for="name" class="field-label">任務名稱</label>
+    <input type="text" id="name" placeholder="替這個任務取個名字">
+    <div id="setup-summary" role="status">
+      <div id="summary-target"></div>
+      <div id="summary-schedule"></div>
+      <div id="summary-dashboard"></div>
+    </div>
   </div>
   <form id="picker-form" onsubmit="return false;">
     <div class="settings-body">
-      <fieldset id="target-section">
-        <legend>目標與模式</legend>
-        <label>任務名稱<input type="text" id="name" placeholder="請輸入任務名稱"></label>
-        <label>目標網址<input type="text" id="url" readonly></label>
-        <label>數值類型
-          <select id="mode">
-            <option value="number" selected>數字</option>
-            <option value="text">文字</option>
-            <option value="block">表格/清單區塊</option>
-          </select>
-        </label>
-      </fieldset>
       <fieldset id="block-section" hidden>
-        <legend>區塊設定</legend>
+        <legend>抓什麼</legend>
         <div id="block-summary" role="status"></div>
         <div id="field-list"></div>
+        <div id="field-rename" class="rename-row">
+          <span class="field-label">一鍵命名</span>
+          <button type="button" id="rename-col">用欄標題</button>
+          <button type="button" id="rename-cell">用「列 · 欄」</button>
+        </div>
         <label for="row-pos">列定位
           <select id="row-pos">
             <option value="" selected>依列標題</option>
@@ -250,6 +298,12 @@
             <option value="count">筆數</option>
           </select>
         </label>
+      </fieldset>
+      <fieldset id="preview-section">
+        <legend>先試抓看看</legend>
+        <div id="preview"></div>
+        <div id="errors" role="alert"></div>
+        <div id="test-note" role="status"></div>
       </fieldset>
       <fieldset id="schedule-section">
         <legend>多久抓一次</legend>
@@ -293,14 +347,31 @@
         </div>
         <div id="schedule-preview" role="status"></div>
       </fieldset>
-      <fieldset id="preview-section">
-        <legend>即時預覽</legend>
-        <div id="preview"></div>
-        <div id="errors" role="alert"></div>
-        <div id="test-note" role="status"></div>
+      <fieldset id="add-to-dashboard">
+        <legend>抓完放哪裡</legend>
+        <label>目標儀表板
+          <select id="dashboard-select">
+            <option value="none">不加入</option>
+          </select>
+        </label>
+        <label>卡片型別</label>
+        <div id="card-types">
+          <label><input type="checkbox" value="number">數字</label>
+          <label><input type="checkbox" value="line">折線</label>
+          <label><input type="checkbox" value="bar">長條</label>
+          <label><input type="checkbox" value="table">表格</label>
+        </div>
       </fieldset>
       <details id="advanced-section">
         <summary>進階設定</summary>
+        <label>目標網址<input type="text" id="url" readonly></label>
+        <label>數值類型
+          <select id="mode">
+            <option value="number" selected>數字</option>
+            <option value="text">文字</option>
+            <option value="block">表格/清單區塊</option>
+          </select>
+        </label>
         <label>抓取策略
           <select id="strategy">
             <option value="auto" selected>自動</option>
@@ -329,21 +400,6 @@
           <button type="button" id="preaction-add">新增動作</button>
         </div>
       </details>
-      <fieldset id="add-to-dashboard">
-        <legend>加入儀表板</legend>
-        <label>目標儀表板
-          <select id="dashboard-select">
-            <option value="none">不加入</option>
-          </select>
-        </label>
-        <label>卡片型別</label>
-        <div id="card-types">
-          <label><input type="checkbox" value="number">數字</label>
-          <label><input type="checkbox" value="line">折線</label>
-          <label><input type="checkbox" value="bar">長條</label>
-          <label><input type="checkbox" value="table">表格</label>
-        </div>
-      </fieldset>
     </div>
     <label class="checkbox-label">
       <input type="checkbox" id="pin-defaults">將此次設定固定為預設值

@@ -65,14 +65,37 @@ test('E-1 網址不合法時不得讓標題列爆掉', async () => {
 
 // ---------- E-2 卡片分節：目標與模式那一組也要有容器 ----------
 
-test('E-2 任務名稱、目標網址、數值類型收在同一張卡片裡', () => {
+// AF-9：版面改成回答三個問題（抓什麼／多久抓一次／抓完放哪裡）。
+// 任務名稱升到標題列（打開就能改），目標網址與數值類型是程式已經知道的事實，
+// 收進進階，畫面上由摘要卡用一句話交代。
+test('E-2 任務名稱在標題列，網址與數值類型收進進階', () => {
   const doc = new JSDOM(PICKER_HTML).window.document
-  const card = doc.getElementById('target-section')
-  assert.ok(card, '要有「目標與模式」的分節容器')
-  for (const id of ['name', 'url', 'mode']) {
-    assert.ok(card.querySelector(`#${id}`), `#${id} 要在這張卡片裡`)
+  const header = doc.querySelector('[data-picker-header]')
+  assert.ok(header.querySelector('#name'), '任務名稱要在標題列，開窗就能改')
+  const adv = doc.getElementById('advanced-section')
+  for (const id of ['url', 'mode']) {
+    assert.ok(adv.querySelector(`#${id}`), `#${id} 應該收在進階`)
   }
-  assert.ok(card.querySelector('legend'), '分節要有標題')
+})
+
+test('E-2 三張卡各自回答一個問題，順序是抓什麼→多久抓→放哪裡', () => {
+  const doc = new JSDOM(PICKER_HTML).window.document
+  const legends = [...doc.querySelectorAll('.settings-body > fieldset > legend')].map(l => l.textContent.trim())
+  assert.ok(legends.length >= 3, '至少三張卡')
+  assert.deepEqual(
+    legends.filter(t => ['抓什麼', '多久抓一次', '抓完放哪裡'].includes(t)),
+    ['抓什麼', '多久抓一次', '抓完放哪裡']
+  )
+})
+
+test('E-2 摘要卡三行都在標題列裡，且各有自己的容器', () => {
+  const doc = new JSDOM(PICKER_HTML).window.document
+  const box = doc.getElementById('setup-summary')
+  assert.ok(box, '要有摘要卡')
+  assert.equal(box.getAttribute('role'), 'status', '內容會即時變動，要讓輔助技術讀得到')
+  for (const id of ['summary-target', 'summary-schedule', 'summary-dashboard']) {
+    assert.ok(box.querySelector(`#${id}`), `摘要要有 #${id}`)
+  }
 })
 
 test('E-2 內容區的每個直接子節點都是分節容器，不得有裸欄位', () => {

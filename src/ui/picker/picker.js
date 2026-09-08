@@ -2,7 +2,7 @@ import { saveTask, getTask, getSettings, saveSettings } from '../../shared/stora
 import { MSG } from '../../shared/messages.js'
 import { getLayout, addCard } from '../../shared/layout-store.js'
 import { seriesIdOf } from '../../shared/series-index.js'
-import { describeSchedule } from '../../shared/describe.js'
+import { describeSchedule, describeTarget, describeDashboard } from '../../shared/describe.js'
 import { nextIntervalRun } from '../../shared/schedule-math.js'
 
 let currentCtx = null
@@ -946,7 +946,9 @@ function applyDefaultCardTypes() {
     } else if (modeVal === 'text') {
       cb.checked = (cb.value === 'table')
     } else {
-      cb.checked = (cb.value === 'number')
+      // 數字卡看「現在多少」，折線看「趨勢」——只給數字卡的話，
+      // 使用者存完會看到一張沒有脈絡的數字，不知道要自己去加折線（AF-9 定案）
+      cb.checked = (cb.value === 'number' || cb.value === 'line')
     }
   }
 }
@@ -1042,6 +1044,43 @@ function updateBlockSection() {
     summaryEl.textContent = `${prefix}取${targetDesc}`
   } else {
     summaryEl.textContent = '請回到目標頁面重新選取，並在表格上點一欄或一列'
+  }
+}
+
+/**
+ * 頂部摘要卡：把「抓什麼／多久抓一次／抓完放哪裡」三個問題各用一句白話回答。
+ * 使用者不必把散在各區的欄位在腦中組起來，久沒用回來也一眼看得出這個任務在做什麼。
+ * 文字一律走 shared/describe.js，與任務頁、popup 同一份。
+ */
+export function updateSetupSummary() {
+  const box = document.getElementById('setup-summary')
+  if (!box) return
+  const values = getFormData()
+  const fieldRows = document.querySelectorAll('#field-list [data-field-row]')
+
+  const targetEl = document.getElementById('summary-target')
+  if (targetEl) {
+    const first = values.fields?.[0]
+    targetEl.textContent = describeTarget({
+      url: values.url || currentCtx?.url || '',
+      mode: values.fields ? 'block' : values.mode,
+      fieldCount: fieldRows.length,
+      cell: values.block?.cell || first?.cell,
+      block: values.block?.axis ? values.block : first?.block,
+      rowPos: document.getElementById('row-pos')?.value || '',
+      colPos: document.getElementById('col-pos')?.value || ''
+    })
+  }
+
+  const schedEl = document.getElementById('summary-schedule')
+  if (schedEl) schedEl.textContent = describeSchedule(buildSchedule(values))
+
+  const dashEl = document.getElementById('summary-dashboard')
+  if (dashEl) {
+    const sel = document.getElementById('dashboard-select')
+    const name = (sel && sel.value !== 'none') ? (sel.selectedOptions?.[0]?.textContent || '') : ''
+    const types = Array.from(document.querySelectorAll('#card-types input[type="checkbox"]:checked')).map(cb => cb.value)
+    dashEl.textContent = describeDashboard(name, types)
   }
 }
 
@@ -1179,6 +1218,8 @@ export function updateSchedulePreview(nowMs = Date.now()) {
     }
   }
   el.textContent = lines.join('\n')
+  // 排程一動，頂部摘要卡的第二行也要跟著變（畫面上只有一個事實來源）
+  updateSetupSummary()
 }
 
 /**
@@ -1197,6 +1238,30 @@ function bindModeEvents() {
   if (schedEl && !schedEl._scheduleEventsBound) {
     schedEl.addEventListener('change', syncScheduleFields)
     schedEl._scheduleEventsBound = true
+  }
+
+  for (const [id, style] of [['rename-col', 'col'], ['rename-cell', 'cell']]) {
+    const btn = document.getElementById(id)
+    if (btn && !btn._renameBound) {
+      btn.addEventListener('click', () => renameFields(style))
+      btn._renameBound = true
+    }
+  }
+
+  const dashSel = document.getElementById('dashboard-select')
+  if (dashSel && !dashSel._summaryBound) {
+    dashSel.addEventListener('change', () => updateSetupSummary())
+    dashSel._summaryBound = true
+  }
+  document.querySelectorAll('#card-types input[type="checkbox"]').forEach(cb => {
+    if (cb._summaryBound) return
+    cb.addEventListener('change', () => updateSetupSummary())
+    cb._summaryBound = true
+  })
+  const nameEl = document.getElementById('name')
+  if (nameEl && !nameEl._summaryBound) {
+    nameEl.addEventListener('input', () => updateSetupSummary())
+    nameEl._summaryBound = true
   }
 
   const addBtn = document.getElementById('time-add')
@@ -1337,6 +1402,76 @@ function updateFieldListState() {
   updateBlockSection()
 }
 
+// 一個值在表格裡的位置說明（「美金 · 買入」／「買入 整欄」）
+function fieldWhereText(spec) {
+  if (!spec) return ''
+  if (spec.cell) {
+    const r = spec.cell.row?.header || (spec.cell.row?.pos ? POS_LABEL[spec.cell.row.pos] : '')
+    const c = spec.cell.col?.header || (spec.cell.col?.pos ? POS_LABEL[spec.cell.col.pos] : '')
+    return [r, c].filter(Boolean).join(' · ')
+  }
+  if (spec.block) {
+    const axis = spec.block.axis === 'row' ? '整列' : '整欄'
+    return spec.block.headerText ? `${spec.block.headerText} ${axis}` : axis
+  }
+  return ''
+}
+
+const POS_LABEL = { first: '第一筆', last: '最後一筆', 'last-1': '倒數第二筆' }
+
+/**
+ * 立即測試的逐值結果就地顯示在該列。
+ * 名稱重複時依序對應（fields 的順序就是列的順序）。
+ */
+export function applyFieldResults(fields, res) {
+  const rows = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
+  rows.forEach((row, i) => {
+    const cell = row.querySelector('[data-field-result]')
+    if (!cell) return
+    const f = fields?.[i]
+    const r = f ? res?.fields?.[f.key] : null
+    if (r && r.ok) {
+      cell.textContent = r.value !== undefined ? String(r.value) : (r.raw ?? '')
+      cell.setAttribute('data-state', 'ok')
+      cell.removeAttribute('title')
+    } else if (r) {
+      // 缺值一律 —，原因放 title（SPEC §8.6）
+      cell.textContent = '—'
+      cell.setAttribute('data-state', 'error')
+      cell.title = r.message || r.error || '抓取失敗'
+    } else {
+      cell.textContent = '—'
+      cell.removeAttribute('data-state')
+      cell.removeAttribute('title')
+    }
+  })
+}
+
+/**
+ * 一鍵重新命名：只動「沒有被使用者手改過」的列（_afAutoName 就是自動填的基準值）。
+ * @param {'col'|'cell'} style 用欄標題，或用「列 · 欄」
+ */
+export function renameFields(style) {
+  const rows = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
+  for (const row of rows) {
+    const input = row.querySelector('input[data-field-name]')
+    if (!input) continue
+    if (input.value !== input._afAutoName) continue
+    const spec = row._spec || fieldSpecs.get(row.dataset.fieldKey || '')
+    let next = ''
+    if (style === 'col') {
+      next = spec?.cell?.col?.header || spec?.block?.headerText || ''
+    } else {
+      next = fieldWhereText(spec)
+    }
+    if (!next) continue
+    input.value = next
+    input._afAutoName = next
+  }
+  updateAlertRowsFields()
+  updateSetupSummary()
+}
+
 function createFieldRow({ key, name, spec }) {
   const row = document.createElement('div')
   row.className = 'field-row'
@@ -1354,6 +1489,19 @@ function createFieldRow({ key, name, spec }) {
   input.addEventListener('input', () => {
     updateAlertRowsFields()
   })
+
+  // 這個值在表格的哪個位置：使用者改了名字之後，還看得出它抓的是哪一格
+  const whereEl = document.createElement('span')
+  whereEl.setAttribute('data-field-where', '')
+  whereEl.className = 'field-where'
+  whereEl.textContent = fieldWhereText(spec)
+  whereEl.title = whereEl.textContent
+
+  // 立即測試回來的逐值結果就地顯示，不必到別的地方對照
+  const resultEl = document.createElement('span')
+  resultEl.setAttribute('data-field-result', '')
+  resultEl.className = 'field-result'
+  resultEl.textContent = '—'
 
   const upBtn = document.createElement('button')
   upBtn.type = 'button'
@@ -1389,6 +1537,8 @@ function createFieldRow({ key, name, spec }) {
   })
 
   row.appendChild(input)
+  row.appendChild(whereEl)
+  row.appendChild(resultEl)
   row.appendChild(upBtn)
   row.appendChild(downBtn)
   row.appendChild(removeBtn)
@@ -1740,11 +1890,20 @@ export async function handleSave() {
 
   // 儲存到關窗之間任何一步失敗（storage 配額、service worker 被殺），按鈕都要還回去、錯誤要看得到，
   // 否則使用者只看到永遠的「儲存中…」
+  let savedTask = null
+  let savedNextRun = null
   try {
   const task = buildTask(values, currentCtx?.locator, currentCtx?.task, currentCtx?.frameUrl ? { url: currentCtx.frameUrl } : undefined)
   await saveTask(task)
+  savedTask = task
   if (globalThis.chrome?.runtime?.sendMessage) {
     await chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS })
+    // 排程重建之後才問得到實際的下次觸發時間；這一步要留在「儲存中」期間，
+    // 放到按鈕還原之後會讓「儲存中不可連按」出現空窗
+    try {
+      const runs = await chrome.runtime.sendMessage({ type: MSG.GET_NEXT_RUNS })
+      savedNextRun = runs?.nextRuns?.[task.id] ?? null
+    } catch {}
   }
 
   // 只有新建任務才記住預設值
@@ -1819,8 +1978,56 @@ export async function handleSave() {
   } finally {
     busySave()
   }
-  if (typeof window !== 'undefined' && window.close) {
-    window.close()
+  await showSavedFeedback(savedTask, { nextRunMs: savedNextRun })
+}
+
+/**
+ * 儲存成功之後不要無聲關窗：說出「存好了、下次什麼時候抓」，
+ * 並給一條去看結果的路。1.5 秒後自動關，使用者也可以自己點。
+ */
+export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs = 1500 } = {}) {
+  const form = document.getElementById('picker-form')
+  if (!form || !task) return
+  let when = ''
+  if (nextRunMs) {
+    const d = new Date(nextRunMs)
+    when = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  }
+
+  const box = document.createElement('div')
+  box.id = 'saved-feedback'
+  box.setAttribute('role', 'status')
+  const line = document.createElement('div')
+  // 問不到實際 alarm 就退回白話句，不要讓這裡空著
+  line.textContent = when
+    ? `已儲存。下次抓取：${when}`
+    : `已儲存。${describeSchedule(task.schedule)}`
+  box.appendChild(line)
+
+  const openBtn = document.createElement('button')
+  openBtn.type = 'button'
+  openBtn.id = 'saved-open-report'
+  openBtn.className = 'btn-primary'
+  openBtn.textContent = '開啟報表'
+  openBtn.addEventListener('click', () => {
+    try {
+      const url = typeof chrome?.runtime?.getURL === 'function'
+        ? chrome.runtime.getURL('ui/report/report.html')
+        : 'ui/report/report.html'
+      chrome.tabs.create({ url })
+    } catch {}
+    if (typeof window !== 'undefined' && window.close) window.close()
+  })
+  box.appendChild(openBtn)
+
+  form.replaceChildren(box)
+  if (typeof setTimeout === 'function') {
+    // 記住是「哪一個視窗」：延遲期間全域的 window 可能已經換人，
+    // 關掉別人的視窗比不關還糟
+    const myWindow = typeof window !== 'undefined' ? window : null
+    setTimeout(() => {
+      if (myWindow && globalThis.window === myWindow && myWindow.close) myWindow.close()
+    }, closeDelayMs)
   }
 }
 
@@ -1858,6 +2065,8 @@ export async function handleTestNow() {
           }
         })
         if (previewEl) previewEl.textContent = lines.join('\n')
+        // 逐值結果也要回到各自那一列，使用者才不必在預覽區裡對照名字
+        applyFieldResults(values.fields, res)
       } else {
         if (previewEl) previewEl.textContent = res.value !== undefined ? String(res.value) : (res.raw ?? '')
       }

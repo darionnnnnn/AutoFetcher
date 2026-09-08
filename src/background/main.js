@@ -453,8 +453,8 @@ export async function handleMessage(msg, sender) {
         await chrome.windows.create({
           url: `${base}?ctx=${ctx}`,
           type: 'popup',
-          width: 480,
-          height: 760
+          width: 600,
+          height: 820
         })
         return { ok: true }
       }
@@ -643,8 +643,8 @@ export async function handleContextMenu(info, tab) {
       await chrome.windows.create({
         url: `${base}?origin=${encodeURIComponent(origin)}&tabId=${tab.id}`,
         type: 'popup',
-        width: 480,
-        height: 760
+        width: 600,
+        height: 820
       })
       await injectContent(tab.id, { frameId: 0 })
       await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'login-user' }, { frameId: 0 })
