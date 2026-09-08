@@ -41,11 +41,12 @@ test('B1 同一頁連續選兩次，第二次不得沿用上一次那張表的�
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('t1') })
   fire(win, doc.getElementById('a1'), 'mousemove')
   fire(win, doc.getElementById('a1'), 'click')
+  fire(win, doc.getElementById('a1'), 'dblclick')
   assert.equal(picked(c)[0].locator.css, '#t1')
 
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('t2') })
   fire(win, doc.getElementById('b1'), 'mousemove')
-  fire(win, doc.getElementById('b1'), 'click', { shiftKey: true })
+  fire(win, doc.getElementById('b1'), 'click', { ctrlKey: true })
   key(doc, win, 'Enter')
 
   const second = picked(c)[1]
@@ -82,11 +83,11 @@ test('B2 已達選取上限時再點一格，不得丟掉那一格就送出', as
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('t'), maxPicks: 2 })
   for (const id of ['x1', 'x2']) {
     fire(win, doc.getElementById(id), 'mousemove')
-    fire(win, doc.getElementById(id), 'click', { shiftKey: true })
+    fire(win, doc.getElementById(id), 'click', { ctrlKey: true })
   }
   assert.equal(pm.selectedCount(), 2)
   fire(win, doc.getElementById('x3'), 'mousemove')
-  fire(win, doc.getElementById('x3'), 'click')
+  fire(win, doc.getElementById('x3'), 'click', { ctrlKey: true })
   assert.equal(picked(c).length, 0, '加不進去就不該送出，否則使用者點的那一格被無聲丟掉')
   const panel = doc.querySelector('[data-af-panel]')
   assert.ok(/上限/.test(panel.textContent), '要說出已達上限')

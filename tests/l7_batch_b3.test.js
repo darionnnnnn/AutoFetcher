@@ -40,6 +40,12 @@ const clickCell = (doc, id, opts = {}) => {
   el.dispatchEvent(new globalThis.MouseEvent('click', { bubbles: true, ...opts }))
 }
 
+// AF-8：送出改走雙擊（點一下只選取）
+const pickAndConfirm = (doc, id, opts = {}) => {
+  clickCell(doc, id, opts)
+  doc.getElementById(id).dispatchEvent(new globalThis.MouseEvent('dblclick', { bubbles: true }))
+}
+
 const hover = (doc, id) =>
   doc.getElementById(id).dispatchEvent(new globalThis.MouseEvent('mousemove', { bubbles: true }))
 
@@ -53,10 +59,10 @@ const enter = (doc, tid = 'rate') => {
 
 // ---- 單擊仍是「選一個就確認」----
 
-test('沒按 Shift 的單擊維持原本行為：選一格就確認', async () => {
+test('點一格再雙擊＝選那一格並確認', async () => {
   const { c, pm, doc } = await setup()
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('rate') })
-  clickCell(doc, 'c0-3')
+  pickAndConfirm(doc, 'c0-3')
   const msg = lastMsg(c)
   assert.equal(msg.type, 'PICKED')
   assert.equal(msg.picks.length, 1)
@@ -66,7 +72,7 @@ test('沒按 Shift 的單擊維持原本行為：選一格就確認', async () =
 test('確認送出的是儲存格，帶列與欄的表頭', async () => {
   const { c, pm, doc } = await setup()
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('rate') })
-  clickCell(doc, 'c0-3')
+  pickAndConfirm(doc, 'c0-3')
   const pick = lastMsg(c).picks[0]
   assert.ok(pick.cell, '預設一格就是一個值')
   assert.equal(pick.cell.col.index, 3)
@@ -91,20 +97,20 @@ test('Shift 點擊會加選而不是確認', async () => {
   assert.deepEqual(picks.map(p => p.cell.col.index), [3, 4], '順序照選取順序')
 })
 
-test('Shift 再點一次同一格是取消選取', async () => {
+test('Ctrl 再點一次同一格是取消選取', async () => {
   const { pm, doc } = await setup()
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('rate') })
-  clickCell(doc, 'c0-3', { shiftKey: true })
-  clickCell(doc, 'c0-3', { shiftKey: true })
+  clickCell(doc, 'c0-3', { ctrlKey: true })
+  clickCell(doc, 'c0-3', { ctrlKey: true })
   assert.equal(pm.selectedCount(), 0)
 })
 
 test('已選的格子有標記，取消後標記消失', async () => {
   const { pm, doc } = await setup()
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('rate') })
-  clickCell(doc, 'c0-3', { shiftKey: true })
+  clickCell(doc, 'c0-3', { ctrlKey: true })
   assert.ok(doc.getElementById('c0-3').hasAttribute('data-af-picked'))
-  clickCell(doc, 'c0-3', { shiftKey: true })
+  clickCell(doc, 'c0-3', { ctrlKey: true })
   assert.ok(!doc.getElementById('c0-3').hasAttribute('data-af-picked'))
 })
 
@@ -297,11 +303,13 @@ test('表格被重畫之後標記能重新貼上', async () => {
 
 // ---- 其他用途不支援多選 ----
 
-test('重選、登入欄位、前置動作只送單一目標', async () => {
-  for (const purpose of ['repick', 'login-user', 'preaction']) {
+// AF-8：重選改與新任務同一套（它會帶 preselect 進來、也要能改多值，SPEC §8.4）；
+// 登入與前置動作維持「一次一個、點一下就送」。
+test('登入欄位、前置動作只送單一目標', async () => {
+  for (const purpose of ['login-user', 'preaction']) {
     const { c, pm, doc } = await setup()
     pm.enterPickMode({ purpose, initialTarget: doc.getElementById('rate') })
-    clickCell(doc, 'c0-3', { shiftKey: true })
+    clickCell(doc, 'c0-3')
     const msg = lastMsg(c)
     assert.equal(msg.purpose, purpose)
     assert.ok(!msg.picks || msg.picks.length <= 1, `${purpose} 不支援多選`)
@@ -309,10 +317,21 @@ test('重選、登入欄位、前置動作只送單一目標', async () => {
   }
 })
 
+test('重選可以多選，雙擊才送出', async () => {
+  const { c, pm, doc } = await setup()
+  pm.enterPickMode({ purpose: 'repick', taskId: 't1', initialTarget: doc.getElementById('rate') })
+  clickCell(doc, 'c0-3')
+  assert.equal(pm.isActive(), true, '重選點一下不送出')
+  clickCell(doc, 'c0-4', { ctrlKey: true })
+  assert.equal(pm.selectedCount(), 2)
+  doc.getElementById('c0-4').dispatchEvent(new globalThis.MouseEvent('dblclick', { bubbles: true }))
+  assert.equal(lastMsg(c).picks.length, 2)
+})
+
 test('確認訊息仍帶著舊的 blockInfo 欄位', async () => {
   const { c, pm, doc } = await setup()
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('rate') })
-  clickCell(doc, 'c0-3')
+  pickAndConfirm(doc, 'c0-3')
   const msg = lastMsg(c)
   assert.ok(msg.blockInfo, '既有消費端還在讀它')
   assert.ok(msg.locator, '定位資訊不可少')

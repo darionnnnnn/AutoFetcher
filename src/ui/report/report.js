@@ -594,6 +594,11 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
     if (isFailed) classNames.push('failed')
     if (hasAlert) classNames.push('has-alert')
     const tr = createTableRow(cells, false, { className: classNames.join(' ') })
+    // 位置定位（每次取最後一列那種）抓到的值要看得出來源是哪一列，
+    // 不然「今天早上網站還沒更新」跟「抓錯了」在畫面上長得一樣
+    if (record.label) {
+      tr.setAttribute('title', `來源列：${record.label}`)
+    }
 
     tr.addEventListener('click', () => {
       const next = tr.nextElementSibling
@@ -614,6 +619,9 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
         ['排定時間 (slot)', record.slot ?? '—'], ['擷取時間 (capturedAt)', record.capturedAt ?? '—'],
         ['時間差 (diff)', diffText]
       ]
+      if (record.label) {
+        detailItems.push(['來源列 (label)', record.label])
+      }
       if (record.strategyUsed === 'block') {
         detailItems.push(['聚合格數 (used)', record.used ?? '—'])
         detailItems.push(['略過格數 (skipped)', record.skipped ?? 0])

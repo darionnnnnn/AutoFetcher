@@ -81,6 +81,8 @@ export function getFormData() {
   })
 
   const aggregateValue = document.getElementById('block-aggregate')?.value || 'sum'
+  const rowPos = posValueOf('row-pos')
+  const colPos = posValueOf('col-pos')
   const fieldRows = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
   let fields = undefined
   if (fieldRows.length > 0) {
@@ -90,10 +92,10 @@ export function getFormData() {
       const name = rawName || `值 ${index + 1}`
       const spec = row._spec || fieldSpecs.get(key) || {}
       const item = { key, name }
-      if (spec.cell) item.cell = spec.cell
+      if (spec.cell) item.cell = applyPosToCell(spec.cell, rowPos, colPos)
       // 整欄／整列的值要聚合，聚合方式來自表單（全任務一份）；
       // 少了這一行，抓取端會拿不到設定而預設成加總，下拉等於裝飾品
-      if (spec.block) item.block = { ...spec.block, aggregate: aggregateValue }
+      if (spec.block) item.block = applyPosToBlock({ ...spec.block, aggregate: aggregateValue }, rowPos, colPos)
       return item
     })
   }
@@ -108,19 +110,70 @@ export function getFormData() {
     data.fields = fields
   } else if (mode === 'block') {
     if (currentBlock && currentBlock.cell) {
-      data.block = { cell: currentBlock.cell }
+      data.block = { cell: applyPosToCell(currentBlock.cell, rowPos, colPos) }
     } else {
       const agg = document.getElementById('block-aggregate')?.value || 'sum'
-      data.block = {
+      data.block = applyPosToBlock({
         axis: currentBlock?.axis,
         index: currentBlock?.index,
         headerText: currentBlock?.headerText,
         aggregate: agg
-      }
+      }, rowPos, colPos)
     }
   }
 
   return data
+}
+
+// ---- 位置定位（第一筆／最後一筆／倒數第二筆）----
+// 表格每天在最前或最後新增一筆時，「第幾筆」比會變動的標題可靠。
+// 位置是任務層級的設定，寫進規格時每個值的同一軸各帶一份。
+const POS_VALUES = ['first', 'last', 'last-1']
+const POS_LABELS = { first: '第一', last: '最後一', 'last-1': '倒數第二' }
+
+function posValueOf(id) {
+  const v = document.getElementById(id)?.value || ''
+  return POS_VALUES.includes(v) ? v : ''
+}
+
+// 有位置就不看索引與標題；沒有就把 pos 拿掉（改回依標題定位）
+function withPos(axisSpec, pos) {
+  const next = { ...(axisSpec || {}) }
+  if (pos) next.pos = pos
+  else delete next.pos
+  return next
+}
+
+function applyPosToCell(cell, rowPos, colPos) {
+  return {
+    row: withPos(cell?.row, rowPos),
+    col: withPos(cell?.col, colPos)
+  }
+}
+
+// 整欄／整列加上「另一軸的位置」＝只取那一格：整欄配列的位置、整列配欄的位置
+function applyPosToBlock(block, rowPos, colPos) {
+  const cross = block?.axis === 'row' ? colPos : rowPos
+  const next = { ...(block || {}) }
+  if (cross) next.pos = cross
+  else delete next.pos
+  return next
+}
+
+// 從既有規格把位置帶回下拉（多值任務取第一個值，位置本來就是全任務一份）
+function posFromSpec(spec) {
+  if (!spec) return { rowPos: '', colPos: '' }
+  const first = Array.isArray(spec.fields) && spec.fields.length > 0 ? spec.fields[0] : spec.block
+  if (!first) return { rowPos: '', colPos: '' }
+  if (first.cell) {
+    return { rowPos: first.cell.row?.pos || '', colPos: first.cell.col?.pos || '' }
+  }
+  if (first.block || first.axis) {
+    const b = first.block || first
+    if (!b.pos) return { rowPos: '', colPos: '' }
+    return b.axis === 'row' ? { rowPos: '', colPos: b.pos } : { rowPos: b.pos, colPos: '' }
+  }
+  return { rowPos: '', colPos: '' }
 }
 
 export function validateForm(values) {
@@ -412,6 +465,9 @@ function setPreviewState(state) {
 
 export function render(ctx) {
   currentCtx = ctx || {}
+  // 位置定位要最先決定：預設名稱會用到它，而且同一個視窗可能 render 第二次
+  //（下鑽 iframe 回來、重選回填），殘留在下拉裡的舊值會算出錯的名稱
+  applyPositionDefaults(currentCtx)
   renderHeader(currentCtx)
   setPreviewState(null)
   const previewEl = document.getElementById('preview')
@@ -492,7 +548,15 @@ export function render(ctx) {
     const nameEl = document.getElementById('name')
     if (nameEl && !nameEl.value.trim()) {
       let defaultName = ''
-      if (ctx?.nameHint && String(ctx.nameHint).trim()) {
+      // 單值儲存格：使用者選的是「成交金額」那一格，名稱就用欄標題。
+      // 用整張表的標題（nameHint）或左邊那格的文字（anchor.text）都不是他選的東西。
+      const soleCell = (Array.isArray(ctx?.picks) && ctx.picks.length === 1 && ctx.picks[0].cell)
+        ? ctx.picks[0].cell
+        : null
+      const cellName = soleCell ? singleCellName(soleCell) : ''
+      if (cellName) {
+        defaultName = cellName
+      } else if (ctx?.nameHint && String(ctx.nameHint).trim()) {
         defaultName = String(ctx.nameHint).trim()
       } else if (ctx?.locator?.anchor?.text && String(ctx.locator.anchor.text).trim()) {
         defaultName = String(ctx.locator.anchor.text).trim()
@@ -501,6 +565,8 @@ export function render(ctx) {
       }
       if (defaultName) {
         nameEl.value = defaultName
+        // 記下自動填的值：使用者之後改了定位方式時，只重算他沒有手動改過的名稱
+        nameEl._afAutoName = defaultName
       }
     }
   }
@@ -552,22 +618,8 @@ export function render(ctx) {
       }
       usedKeys.add(key)
 
-      let rawName = ''
-      if (pick.cell) {
-        const rowH = pick.cell.row?.header?.trim() || ''
-        const colH = pick.cell.col?.header?.trim() || ''
-        if (rowH && colH) {
-          rawName = `${rowH} · ${colH}`
-        } else if (rowH || colH) {
-          rawName = rowH || colH
-        } else {
-          rawName = `值 ${index + 1}`
-        }
-      } else if (pick.block) {
-        rawName = pick.block.headerText?.trim() || `值 ${index + 1}`
-      } else {
-        rawName = `值 ${index + 1}`
-      }
+      // 名稱與定位方式綁在一起（用位置的軸不放會變的標題），只有這一份
+      const rawName = defaultPickName(pick, index)
 
       const count = (nameCounts.get(rawName) || 0) + 1
       nameCounts.set(rawName, count)
@@ -648,7 +700,205 @@ export function render(ctx) {
   bindAlertEvents()
   bindPreActionEvents()
   bindPreActionMessageListener()
+  bindPosEvents()
+  updateFrameHint(currentCtx)
   updateBlockSection()
+}
+
+// 目標在 iframe 裡時提醒使用者可能要先點個什麼：那個框架常常是點了頁籤或按鈕才出現，
+// 而排程是開一個乾淨的新分頁，不會沿用現在畫面上的狀態。
+let frameHintDismissedFor = null
+function updateFrameHint(ctx) {
+  const hint = document.getElementById('frame-hint')
+  if (!hint) return
+  const textEl = document.getElementById('frame-hint-text')
+  const hasPreActions = Array.isArray(ctx?.task?.preActions) && ctx.task.preActions.length > 0
+  // 編輯既有任務不提示：使用者已經決定過要不要加了
+  // 使用者按過「不需要」之後，同一個框架的任何一次 re-render 都不該再跳出來
+  const show = Boolean(ctx?.frameUrl) && !ctx?.task && !hasPreActions && frameHintDismissedFor !== ctx.frameUrl
+  hint.hidden = !show
+  if (!show) return
+
+  let host = ctx.frameUrl
+  try {
+    host = new URL(ctx.frameUrl).hostname || ctx.frameUrl
+  } catch {}
+  if (textEl) {
+    textEl.textContent = `目標在框架（${host}）內。若這個框架要先點頁籤或按鈕才會出現，`
+      + '請加入「點元素」前置動作；排程抓取是開新分頁，不會沿用你現在看到的畫面。'
+  }
+  const advSection = document.getElementById('advanced-section')
+  if (advSection) advSection.setAttribute('open', '')
+
+  bindFrameHintEvents()
+}
+
+function bindFrameHintEvents() {
+  const addBtn = document.getElementById('frame-hint-add')
+  if (addBtn && !addBtn._frameHintBound) {
+    addBtn.addEventListener('click', () => {
+      const row = addPreActionRow({ type: 'click' })
+      const hint = document.getElementById('frame-hint')
+      if (hint) hint.hidden = true
+      // 直接開始選：讓使用者自己再去找一次「在頁面上選取」是多餘的一步
+      row?.querySelector('[data-action="preaction-pick"]')?.click()
+    })
+    addBtn._frameHintBound = true
+  }
+  const dismissBtn = document.getElementById('frame-hint-dismiss')
+  if (dismissBtn && !dismissBtn._frameHintBound) {
+    dismissBtn.addEventListener('click', () => {
+      const hint = document.getElementById('frame-hint')
+      if (hint) hint.hidden = true
+      frameHintDismissedFor = currentCtx?.frameUrl || null
+    })
+    dismissBtn._frameHintBound = true
+  }
+}
+
+// 使用者點的是第一列或最後一列時「建議」改用位置定位，但**不替他改設定**：
+// 兩列的匯率表點第一列（美金）跟每日成交表點最後一列，在資料上長得一模一樣，
+// 猜錯就是默默換掉定位方式。建議寫在摘要那一行，決定權留給使用者。
+let posSuggestion = ''
+function applyPositionDefaults(ctx) {
+  posSuggestion = ''
+  const rowEl = document.getElementById('row-pos')
+  const colEl = document.getElementById('col-pos')
+  if (!rowEl || !colEl) return
+
+  // 編輯既有任務：一律從規格回填
+  if (ctx?.task?.spec) {
+    const { rowPos, colPos } = posFromSpec(ctx.task.spec)
+    rowEl.value = rowPos
+    colEl.value = colPos
+    return
+  }
+
+  rowEl.value = ''
+  colEl.value = ''
+
+  const rows = Number(ctx?.blockInfo?.rows)
+  const picks = Array.isArray(ctx?.picks) ? ctx.picks : []
+  const cellPicks = picks.filter(p => p?.cell)
+  if (!Number.isFinite(rows) || rows <= 1 || cellPicks.length === 0) return
+  const indices = new Set(cellPicks.map(p => Number(p.cell.row?.index)))
+  if (indices.size !== 1) return
+  const idx = [...indices][0]
+  if (idx === rows - 1) {
+    posSuggestion = '你選的是最後一列。若這張表每天在最後新增一列，把「列定位」改成「最後一筆」'
+      + '就會每次都抓新的那筆；最後一列若是合計，選「倒數第二筆」。'
+  } else if (idx === 0) {
+    posSuggestion = '你選的是第一列。若這張表每天在最前面新增一列，把「列定位」改成「第一筆」'
+      + '就會每次都抓新的那筆。'
+  }
+}
+
+// 整欄的「欄」是使用者自己點的、整列的「列」也是，那一軸的位置定位對它沒有意義。
+// 留著能選但選了不生效，就是一個靜默無效的設定；直接停用並說明。
+function syncPosControls() {
+  const rows = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
+  const specs = rows.length > 0
+    ? rows.map(r => (r._spec || fieldSpecs.get(r.dataset.fieldKey || ''))).filter(Boolean)
+    : (currentBlock ? [currentBlock.cell ? { cell: currentBlock.cell } : { block: currentBlock }] : [])
+  const hasCell = specs.some(s => s.cell)
+  const axes = new Set(specs.map(s => s.block?.axis || (s.axis && !s.cell ? s.axis : null)).filter(Boolean))
+  // 有任何一個儲存格型的值，兩軸的定位就都有意義（儲存格的欄不是使用者「點欄」得來的）
+  const onlyCol = !hasCell && axes.size === 1 && axes.has('col')
+  const onlyRow = !hasCell && axes.size === 1 && axes.has('row')
+
+  setPosDisabled('col-pos', onlyCol, '整欄的欄是你自己點的，不用位置定位')
+  setPosDisabled('row-pos', onlyRow, '整列的列是你自己點的，不用位置定位')
+}
+
+function setPosDisabled(id, disabled, reason) {
+  const el = document.getElementById(id)
+  if (!el) return
+  if (disabled && el.value !== '') el.value = ''
+  el.disabled = disabled
+  if (disabled) el.setAttribute('title', reason)
+  else el.removeAttribute('title')
+}
+
+function bindPosEvents() {
+  for (const id of ['row-pos', 'col-pos']) {
+    const el = document.getElementById(id)
+    if (!el || el._posEventsBound) continue
+    el.addEventListener('change', () => {
+      // 改了定位方式就不再顯示建議，並把還沒被手動改過的名稱重算
+      posSuggestion = ''
+      refreshDefaultNames()
+      updateBlockSection()
+      updateFieldListState()
+    })
+    el._posEventsBound = true
+  }
+}
+
+// 定位方式一改，預設名稱的意義就變了（「115/09/07 · 成交金額」→「成交金額（最後一列）」）。
+// 只重算使用者沒有手動改過的那些，手改過的一律尊重。
+function refreshDefaultNames() {
+  const picks = Array.isArray(currentCtx?.picks) ? currentCtx.picks : []
+  const rows = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
+  rows.forEach((row, index) => {
+    const input = row.querySelector('input[data-field-name]')
+    if (!input) return
+    if (input._afAutoName !== undefined && input.value !== input._afAutoName) return
+    // 列會被上下移／移除，picks[index] 對不上；列自己帶的 spec 才跟著列走
+    const pick = row._spec ? { ...row._spec } : (picks[index] || null)
+    if (!pick) return
+    const next = defaultPickName(pick, index)
+    input.value = next
+    input._afAutoName = next
+  })
+
+  if (rows.length === 0 && picks.length === 1 && picks[0].cell) {
+    const nameEl = document.getElementById('name')
+    if (nameEl && (nameEl._afAutoName === undefined || nameEl.value === nameEl._afAutoName)) {
+      // 位置定位把唯一的標題吃掉時（那個標題正是會過期的那個），退回表格名稱，
+      // 與第一次 render 的順序一致；不能留著舊名字，它就是那個明天會過期的日期
+      const next = singleCellName(picks[0].cell) ||
+        String(currentCtx?.nameHint || '').trim() || nameEl.value
+      nameEl.value = next
+      nameEl._afAutoName = next
+    }
+  }
+}
+
+// 單值儲存格的預設任務名稱：使用者選的是那一欄，名稱就用欄標題。
+// 後綴（最後一列…）與多值那份共用，否則同一張表的單值與多值在 Report 上分不出定位方式。
+function singleCellName(cell) {
+  const rowPos = posValueOf('row-pos')
+  const colPos = posValueOf('col-pos')
+  const colH = colPos ? '' : String(cell?.col?.header || '').trim()
+  const rowH = rowPos ? '' : String(cell?.row?.header || '').trim()
+  const base = colH || rowH
+  if (!base) return ''
+  const suffix = [
+    rowPos ? `${POS_LABELS[rowPos]}列` : '',
+    colPos ? `${POS_LABELS[colPos]}欄` : ''
+  ].filter(Boolean).join('、')
+  return suffix ? `${base}（${suffix}）` : base
+}
+
+// 多值任務裡每個值的預設名稱；用位置定位的那一軸不放會變動的標題
+function defaultPickName(pick, index) {
+  if (pick?.cell) {
+    const rowPos = posValueOf('row-pos')
+    const colPos = posValueOf('col-pos')
+    const rowH = rowPos ? '' : (pick.cell.row?.header?.trim() || '')
+    const colH = colPos ? '' : (pick.cell.col?.header?.trim() || '')
+    const suffix = [
+      rowPos ? `${POS_LABELS[rowPos]}列` : '',
+      colPos ? `${POS_LABELS[colPos]}欄` : ''
+    ].filter(Boolean).join('、')
+    let base
+    if (rowH && colH) base = `${rowH} · ${colH}`
+    else if (rowH || colH) base = rowH || colH
+    else base = suffix ? '值' : `值 ${index + 1}`
+    return suffix ? `${base}（${suffix}）` : base
+  }
+  if (pick?.block) return pick.block.headerText?.trim() || `值 ${index + 1}`
+  return `值 ${index + 1}`
 }
 
 // 卡片型別對應的預設尺寸
@@ -681,6 +931,35 @@ function applyDefaultCardTypes() {
   }
 }
 
+// 位置定位的白話說明：講使用者的情境，不是講欄位名稱
+function updatePosHint() {
+  const hintEl = document.getElementById('pos-hint')
+  if (!hintEl) return
+  const rowPos = posValueOf('row-pos')
+  const colPos = posValueOf('col-pos')
+  let text = (rowPos || colPos)
+    ? '每次抓取都重算位置，表格新增資料時會自動跟著走。最後一列若是合計，改選「倒數第二筆」。'
+    : '表格每天在最後加一列（例如每日成交資訊）→ 列定位改選「最後一筆」；'
+      + '最後一列是合計 → 選「倒數第二筆」。標題不會變的表格維持「依標題」即可。'
+  // 停用的下拉在多數瀏覽器不會顯示 title，理由要寫在看得到的地方
+  for (const id of ['row-pos', 'col-pos']) {
+    const el = document.getElementById(id)
+    if (el?.disabled && el.getAttribute('title')) text += `（${el.getAttribute('title')}）`
+  }
+  hintEl.textContent = text
+}
+
+// 摘要那一行：說出這次會抓哪一格；還沒設定位置但看起來用得上時給建議
+function positionSummaryText() {
+  const rowPos = posValueOf('row-pos')
+  const colPos = posValueOf('col-pos')
+  if (!rowPos && !colPos) return posSuggestion
+  const parts = []
+  if (rowPos) parts.push(`${POS_LABELS[rowPos]}列`)
+  if (colPos) parts.push(`${POS_LABELS[colPos]}欄`)
+  return `每次抓取取${parts.join('的')}，不看標題`
+}
+
 /**
  * 更新區塊設定區顯示與說明文字
  */
@@ -694,16 +973,22 @@ function updateBlockSection() {
   }
 
   section.hidden = false
+  syncPosControls()
+  updatePosHint()
   const summaryEl = document.getElementById('block-summary')
   if (!summaryEl) return
 
+  const posNote = positionSummaryText()
   const hasFields = document.querySelectorAll('#field-list [data-field-row]').length > 0
   if (hasFields) {
-    if (currentBlock && currentBlock.rows !== undefined && currentBlock.cols !== undefined) {
-      summaryEl.textContent = `表格 ${currentBlock.rows} 列 × ${currentBlock.cols} 欄`
-    } else {
-      summaryEl.textContent = ''
-    }
+    const base = (currentBlock && currentBlock.rows !== undefined && currentBlock.cols !== undefined)
+      ? `表格 ${currentBlock.rows} 列 × ${currentBlock.cols} 欄`
+      : ''
+    summaryEl.textContent = [base, posNote].filter(Boolean).join('\n')
+    return
+  }
+  if (posNote) {
+    summaryEl.textContent = posNote
     return
   }
 
@@ -841,10 +1126,17 @@ function updateFieldListState() {
   // 值的數量也決定預設建哪幾張卡，移除／上下移之後都要重算
   const aggLabel = document.getElementById('block-aggregate')?.closest('label')
   if (aggLabel) {
+    const blockSpecs = n > 0
+      ? rows.map(r => (r._spec || fieldSpecs.get(r.dataset.fieldKey || ''))?.block).filter(Boolean)
+      : ((currentBlock && !currentBlock.cell && currentBlock.axis) ? [currentBlock] : [])
     const hasBlockField = n > 0
-      ? rows.some(r => (r._spec || fieldSpecs.get(r.dataset.fieldKey || ''))?.block)
+      ? blockSpecs.length > 0
       : !(currentBlock && currentBlock.cell)
-    aggLabel.hidden = !hasBlockField
+    // 只有「這些聚合真的都被位置取代掉」時才藏聚合下拉。
+    // 整欄的位置來自列定位、整列的來自欄定位——看錯一邊就會藏掉還在生效的設定
+    const allReplaced = blockSpecs.length > 0 && blockSpecs.every(b =>
+      Boolean(b.axis === 'row' ? posValueOf('col-pos') : posValueOf('row-pos')))
+    aggLabel.hidden = !hasBlockField || allReplaced
   }
   applyDefaultCardTypes()
 
@@ -877,6 +1169,8 @@ function createFieldRow({ key, name, spec }) {
   input.type = 'text'
   input.setAttribute('data-field-name', '')
   input.value = name
+  // 自動填的基準值：改定位方式時只重算沒被手動改過的名稱
+  input._afAutoName = name
   input.placeholder = '值名稱'
   input.addEventListener('input', () => {
     updateAlertRowsFields()
@@ -1252,6 +1546,7 @@ export async function renderDashboardSection(task) {
 export async function handleSave() {
   const errorsEl = document.getElementById('errors')
   if (errorsEl) errorsEl.textContent = ''
+  const busySave = setBusy('save', '儲存中…')
 
   const values = getFormData()
   if (!values.url && currentCtx?.url) values.url = currentCtx.url
@@ -1259,9 +1554,14 @@ export async function handleSave() {
   const validation = validateForm(values)
   if (!validation.ok) {
     if (errorsEl) errorsEl.textContent = Object.values(validation.errors).join('\n')
+    // 表單沒過就把按鈕還回去，不然使用者改完也按不下去
+    busySave()
     return
   }
 
+  // 儲存到關窗之間任何一步失敗（storage 配額、service worker 被殺），按鈕都要還回去、錯誤要看得到，
+  // 否則使用者只看到永遠的「儲存中…」
+  try {
   const task = buildTask(values, currentCtx?.locator, currentCtx?.task, currentCtx?.frameUrl ? { url: currentCtx.frameUrl } : undefined)
   await saveTask(task)
   if (globalThis.chrome?.runtime?.sendMessage) {
@@ -1334,6 +1634,12 @@ export async function handleSave() {
     }
   }
 
+  } catch (e) {
+    if (errorsEl) errorsEl.textContent = `儲存失敗：${e?.message || e}`
+    return
+  } finally {
+    busySave()
+  }
   if (typeof window !== 'undefined' && window.close) {
     window.close()
   }
@@ -1343,6 +1649,9 @@ export async function handleTestNow() {
   const previewEl = document.getElementById('preview')
   const errorsEl = document.getElementById('errors')
   if (errorsEl) errorsEl.textContent = ''
+  const noteAtStart = document.getElementById('test-note')
+  if (noteAtStart) noteAtStart.textContent = ''
+  const busy = setBusy('test-now', '測試中…')
 
   const values = getFormData()
   if (!values.url && currentCtx?.url) values.url = currentCtx.url
@@ -1365,7 +1674,7 @@ export async function handleTestNow() {
             const val = fieldRes.value !== undefined ? String(fieldRes.value) : (fieldRes.raw ?? '')
             return `${f.name}: ${val}`
           } else {
-            const err = fieldRes?.error || '抓取失敗'
+            const err = fieldRes?.message || fieldRes?.error || '抓取失敗'
             return `${f.name}: ${err}`
           }
         })
@@ -1375,8 +1684,16 @@ export async function handleTestNow() {
       }
       if (errorsEl) errorsEl.textContent = ''
       setPreviewState('ok')
+      // 這次測試是在使用者眼前這個分頁跑的，iframe 已經開著；排程是開新分頁，
+      // 兩者會不一樣，成功不代表排程也會成功
+      const noPreActions = !Array.isArray(values.preActions) || values.preActions.length === 0
+      const noteEl = document.getElementById('test-note')
+      if (noteEl && currentCtx?.frameUrl && noPreActions) {
+        noteEl.textContent = '這次測試在目前分頁執行；排程會開新分頁，若那個框架要先點才會出現，請加入前置動作。'
+      }
     } else {
-      const err = res?.error || '找不到目標元素'
+      // 有解法的訊息優先：'not_found' 只說了失敗，沒說使用者能怎麼辦
+      const err = res?.message || res?.error || '找不到目標元素'
       if (errorsEl) errorsEl.textContent = err
       if (previewEl) previewEl.textContent = '—'
       setPreviewState('error')
@@ -1386,6 +1703,22 @@ export async function handleTestNow() {
     if (errorsEl) errorsEl.textContent = err
     if (previewEl) previewEl.textContent = '—'
     setPreviewState('error')
+  } finally {
+    busy()
+  }
+}
+
+// 按下之後到結果回來之間，按鈕要看得出正在做事，而且不能被連按
+function setBusy(id, label) {
+  const btn = document.getElementById(id)
+  if (!btn) return () => {}
+  const prevText = btn.textContent
+  const prevDisabled = btn.disabled
+  btn.textContent = label
+  btn.disabled = true
+  return () => {
+    btn.textContent = prevText
+    btn.disabled = prevDisabled
   }
 }
 

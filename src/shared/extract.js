@@ -143,20 +143,62 @@ function getTableRowHeaders(tableCells, dataRows) {
   return headers
 }
 
-// 依表頭定位索引（欄與列同一套規則：表頭對得上就照用，搬家了跟著表頭走並標記備援）
-function locateByHeader(headers, spec) {
+// 位置定位：表格每天在最前或最後新增一筆時，用「第幾筆」比用會變動的標題可靠。
+// count 是當下的資料列數（或欄數），每次擷取都重算。
+export function resolveByPosition(pos, count) {
+  if (typeof count !== 'number' || count <= 0) return -1
+  if (pos === 'first') return 0
+  if (pos === 'last') return count - 1
+  if (pos === 'last-1') return count >= 2 ? count - 2 : -1
+  return -1
+}
+
+// 這個軸是不是用位置定位（有 pos 就不看 index 與 header）
+function positionOf(spec) {
+  const pos = spec && typeof spec.pos === 'string' ? spec.pos : ''
+  return (pos === 'first' || pos === 'last' || pos === 'last-1') ? pos : ''
+}
+
+// 依表頭定位索引（欄與列同一套規則：表頭對得上就照用，搬家了跟著表頭走並標記備援）；
+// 帶 pos 的軸走位置定位，count 是當下這個軸有幾筆。
+function locateByHeader(headers, spec, count) {
   const s = spec || {}
+  const pos = positionOf(s)
+  if (pos) {
+    const index = resolveByPosition(pos, typeof count === 'number' ? count : (headers || []).length)
+    if (index < 0) return { ok: false, error: 'not_found', message: positionShortage(pos) }
+    return { ok: true, index, status: 'ok', pos }
+  }
   const header = typeof s.header === 'string' ? s.header.trim() : ''
   if (!header) {
     return { ok: true, index: s.index, status: 'ok' }
   }
   const foundIndex = findClosestIndex(headers || [], header, s.index)
   if (foundIndex === -1) {
-    return { ok: false, error: 'not_found' }
+    return { ok: false, error: 'not_found', message: headerGoneMessage(header) }
   }
   return foundIndex === s.index
     ? { ok: true, index: s.index, status: 'ok' }
     : { ok: true, index: foundIndex, status: 'fallback' }
+}
+
+// 標題不見時的錯誤訊息要指向解法，不然使用者只看到「找不到」
+function headerGoneMessage(header) {
+  return `標題「${header}」找不到；若這張表每天新增一列，請到任務設定改用位置定位（第一筆／最後一筆／倒數第二筆）`
+}
+
+function positionShortage(pos) {
+  const name = pos === 'first' ? '第一筆' : pos === 'last' ? '最後一筆' : '倒數第二筆'
+  return `表格的資料筆數不足，取不到${name}`
+}
+
+// 位置定位抓到的值要能追溯是哪一列（每天最後一筆會變，光看數字看不出是哪一天）
+function labelOf(rowLoc, colLoc, rowHeaders, colHeaders) {
+  const parts = []
+  if (rowLoc.pos) parts.push((rowHeaders || [])[rowLoc.index] || '')
+  if (colLoc.pos) parts.push((colHeaders || [])[colLoc.index] || '')
+  const text = parts.filter(Boolean).join(' · ')
+  return text || undefined
 }
 
 // 從已解析的表格中擷取單一儲存格數值
@@ -165,12 +207,17 @@ function extractCellFromTable(table, dataRows, cellSpec, specOpts = {}) {
     return { ok: false, error: 'not_found' }
   }
 
-  const colLoc = locateByHeader(table.headers, cellSpec.col)
-  if (!colLoc.ok) return { ok: false, error: 'not_found' }
+  // 欄數以最寬的那一列為準（位置定位的「最後一欄」要看實際格數，不是表頭數）
+  let colCount = (table.headers || []).length
+  for (const row of table.cells) {
+    if (row.length > colCount) colCount = row.length
+  }
+  const colLoc = locateByHeader(table.headers, cellSpec.col, colCount)
+  if (!colLoc.ok) return { ok: false, error: 'not_found', message: colLoc.message }
 
   const rowHeaders = getTableRowHeaders(table.cells, dataRows)
-  const rowLoc = locateByHeader(rowHeaders, cellSpec.row)
-  if (!rowLoc.ok) return { ok: false, error: 'not_found' }
+  const rowLoc = locateByHeader(rowHeaders, cellSpec.row, table.cells.length)
+  if (!rowLoc.ok) return { ok: false, error: 'not_found', message: rowLoc.message }
 
   const targetRow = rowLoc.index
   const targetCol = colLoc.index
@@ -203,24 +250,54 @@ function extractCellFromTable(table, dataRows, cellSpec, specOpts = {}) {
     value = 0
   }
 
+  const label = labelOf(rowLoc, colLoc, rowHeaders, table.headers)
   return {
     ok: true,
     value,
     raw,
     status,
-    strategyUsed: 'cell'
+    strategyUsed: 'cell',
+    ...(label !== undefined ? { label } : {})
   }
 }
 
+// 整欄／整列再加上位置＝那一格（「成交金額」× 最後一列）。
+// 有位置就沒有東西要聚合，aggregate 一律忽略。
+function extractCrossCell(table, block, specOpts, dataRows) {
+  const isRow = block.axis === 'row'
+  const cellSpec = isRow
+    // 整列 + 位置：列照原本的表頭定位，欄用位置
+    ? { row: { index: block.index, header: block.headerText }, col: { pos: block.pos } }
+    // 整欄 + 位置：欄照原本的表頭定位，列用位置
+    : { row: { pos: block.pos }, col: { index: block.index, header: block.headerText } }
+  const res = extractCellFromTable(table, dataRows || [], cellSpec, specOpts)
+  if (!res.ok) return res
+  return { ...res, used: 1, skipped: 0, strategyUsed: 'block', partial: Boolean(table.partial) }
+}
+
 // 從已解析的表格中聚合欄或列
-function extractBlockFromTable(table, blockSpec, specOpts = {}) {
+function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
   const block = blockSpec || {}
   let targetIndex = block.index
   let status = 'ok'
   let values = []
 
+  // 這一軸挑好了之後，另一軸還帶著位置＝只要那一格，不是整欄整列聚合
+  const crossPos = positionOf(block)
+  if (crossPos) {
+    return extractCrossCell(table, block, specOpts, dataRows)
+  }
+
   if (block.axis === 'row') {
-    // 列模式：直接依 index 取整列
+    // 列模式：欄與列同一套規則，列標題對得上照用、搬家跟著標題走（AF-8 修：原本只吃 index）
+    const rowHeaders = getTableRowHeaders(table.cells, dataRows || [])
+    const rowLoc = locateByHeader(rowHeaders, {
+      index: targetIndex,
+      header: typeof block.headerText === 'string' ? block.headerText : ''
+    }, table.cells.length)
+    if (!rowLoc.ok) return { ok: false, error: 'not_found', message: rowLoc.message }
+    targetIndex = rowLoc.index
+    status = rowLoc.status
     if (typeof targetIndex !== 'number' || targetIndex < 0 || targetIndex >= table.cells.length) {
       return { ok: false, error: 'not_found' }
     }
@@ -231,7 +308,7 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}) {
     if (headerText) {
       const foundIndex = findClosestIndex(table.headers || [], headerText, targetIndex)
       if (foundIndex === -1) {
-        return { ok: false, error: 'not_found' }
+        return { ok: false, error: 'not_found', message: headerGoneMessage(headerText) }
       }
       if (foundIndex !== targetIndex) {
         targetIndex = foundIndex
@@ -322,17 +399,19 @@ export function extractValue(el, spec = {}) {
               ok: true,
               value: res.value,
               raw: res.raw,
-              status: res.status
+              status: res.status,
+              ...(res.label !== undefined ? { label: res.label } : {})
             }
           } else {
             resultFields[key] = {
               ok: false,
               error: res.error,
-              ...(res.raw !== undefined ? { raw: res.raw } : {})
+              ...(res.raw !== undefined ? { raw: res.raw } : {}),
+              ...(res.message !== undefined ? { message: res.message } : {})
             }
           }
         } else if (field.block) {
-          const res = extractBlockFromTable(table, field.block, field)
+          const res = extractBlockFromTable(table, field.block, field, dataRows)
           if (res.ok) {
             resultFields[key] = {
               ok: true,
@@ -340,13 +419,15 @@ export function extractValue(el, spec = {}) {
               raw: res.raw,
               status: res.status,
               used: res.used,
-              skipped: res.skipped
+              skipped: res.skipped,
+              ...(res.label !== undefined ? { label: res.label } : {})
             }
           } else {
             resultFields[key] = {
               ok: false,
               error: res.error,
-              ...(res.raw !== undefined ? { raw: res.raw } : {})
+              ...(res.raw !== undefined ? { raw: res.raw } : {}),
+              ...(res.message !== undefined ? { message: res.message } : {})
             }
           }
         } else {
@@ -369,7 +450,8 @@ export function extractValue(el, spec = {}) {
         return {
           ok: false,
           error: res.error,
-          ...(res.raw !== undefined ? { raw: res.raw } : {})
+          ...(res.raw !== undefined ? { raw: res.raw } : {}),
+          ...(res.message !== undefined ? { message: res.message } : {})
         }
       }
       return {
@@ -377,12 +459,13 @@ export function extractValue(el, spec = {}) {
         value: res.value,
         raw: res.raw,
         status: res.status,
-        strategyUsed: 'cell'
+        strategyUsed: 'cell',
+        ...(res.label !== undefined ? { label: res.label } : {})
       }
     }
 
     // (c) opts.block: 現有的欄/列聚合
-    return extractBlockFromTable(table, block, opts)
+    return extractBlockFromTable(table, block, opts, dataRows)
   }
 
   // 文字模式不執行策略鏈

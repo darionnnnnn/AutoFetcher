@@ -95,3 +95,28 @@ test('iframe 的 src 是相對路徑時，下鑽要送絕對網址', async () =>
   assert.equal(last.type, 'DESCEND_FRAME')
   assert.equal(last.src, 'https://a.test/inner.html')
 })
+
+// AF-8：新的點擊語意下，代理層維持「點一下就進去」——那是導覽不是選取
+test('點一下代理層就下鑽（不是先選再確認）', async () => {
+  const { c, doc, win, pm } = await setup(WITH_FRAME)
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('v') })
+  const proxy = doc.querySelector('[data-af-frame-proxy]')
+  proxy.dispatchEvent(new win.MouseEvent('mousemove', { bubbles: true }))
+  proxy.dispatchEvent(new win.MouseEvent('click', { bubbles: true }))
+  const last = runtimeMsgs(c).at(-1)
+  assert.equal(last?.type, 'DESCEND_FRAME', '點框架要直接進去，要求使用者再雙擊一次很沒道理')
+  assert.equal(last.src, 'https://b.example/w.html?token=abc')
+  assert.equal(pm.isActive(), false, '下鑽之後這一層的選取模式要收掉')
+})
+
+test('指到代理層時完成鈕說的是「進入這個框架」', async () => {
+  const { doc, win, pm } = await setup(WITH_FRAME)
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('v') })
+  const proxy = doc.querySelector('[data-af-frame-proxy]')
+  proxy.dispatchEvent(new win.MouseEvent('mousemove', { bubbles: true }))
+  const done = doc.querySelector('[data-af-done]')
+  assert.equal(done.textContent, '進入這個框架',
+    `按鈕要說出按下去會發生什麼，實得 ${JSON.stringify(done.textContent)}`)
+  assert.notEqual(done.getAttribute('aria-disabled'), 'true')
+  pm.exitPickMode()
+})

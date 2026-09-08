@@ -464,10 +464,18 @@ export async function runTask(task, opts = {}) {
               if (r.skipped !== undefined) {
                 rec.skipped = r.skipped
               }
+              // 位置定位抓到的值要記下是哪一列：每天的最後一筆會變，
+              // 光看數字看不出抓的是今天還是昨天那一列
+              if (r.label !== undefined) {
+                rec.label = r.label
+              }
             } else {
               rec.status = r?.error || 'error'
               if (r?.raw !== undefined) {
                 rec.raw = r.raw
+              }
+              if (r?.message !== undefined) {
+                rec.error = r.message
               }
             }
             if (res.partial === true) {
@@ -557,6 +565,9 @@ export async function runTask(task, opts = {}) {
         if (res.skipped !== undefined) {
           record.skipped = res.skipped
         }
+        if (res.label !== undefined) {
+          record.label = res.label
+        }
         if (res.partial === true) {
           record.partial = true
         }
@@ -590,7 +601,10 @@ export async function runTask(task, opts = {}) {
           slot,
           capturedAt: new Date().toISOString(),
           status: 'not_found',
-          snippet: res.snippet
+          snippet: res.snippet,
+          // 「標題找不到，改用位置定位」這種訊息要留在紀錄裡，
+          // 只寫 not_found 的話使用者看到的永遠是同一句沒有解法的話
+          ...(res.message !== undefined ? { error: res.message } : {})
         }, { parentId: task.id, skipLedger: isManual })
       }
 

@@ -264,6 +264,49 @@ try {
     console.log(`${browserName}:選取模式進出正常 (面板:${pickResult.during.panel.split('\n')[0]})`)
   }
 
+  // 5c. 真實滑鼠:點一下只選取、雙擊才送出（AF-8 批次 F1 的核心行為，jsdom 測不到真的滑鼠）
+  const targetPage = (await browser.pages()).find(p => p.url().startsWith('http://127.0.0.1:48123/'))
+  if (targetPage) {
+    await ext2.evaluate(async () => {
+      const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/*' })
+      await chrome.tabs.sendMessage(tabs[0].id, { type: 'ENTER_PICK', purpose: 'task' })
+    })
+    const box = await targetPage.evaluate(() => {
+      const td = document.querySelector('table td')
+      if (!td) return null
+      const r = td.getBoundingClientRect()
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+    })
+    if (!box) {
+      console.log(`${browserName}:SKIP 真實滑鼠選取(測試頁沒有表格)`)
+    } else {
+      // 用座標驅動滑鼠：ElementHandle.click 會先呼叫捲動進畫面的頁面函式，
+      // 而選取模式把 body 的文字選取關掉之後那個呼叫會卡住
+      await targetPage.mouse.move(box.x, box.y)
+      await targetPage.mouse.click(box.x, box.y)
+      const afterClick = await targetPage.evaluate(() => ({
+        picked: document.querySelectorAll('[data-af-picked]').length,
+        overlay: !!document.querySelector('[data-af-overlay]'),
+        done: document.querySelector('[data-af-done]')?.textContent || ''
+      }))
+      if (afterClick.picked !== 1) errors.push(`點一下要選起來一格,實得 ${afterClick.picked}`)
+      if (!afterClick.overlay) errors.push('點一下不該送出並關掉選取模式')
+      if (!/1/.test(afterClick.done)) errors.push(`完成鈕要顯示已選數量,實得 ${afterClick.done}`)
+
+      await targetPage.mouse.click(box.x, box.y, { clickCount: 2 })
+      const afterDbl = await targetPage.evaluate(() =>
+        ({ overlay: !!document.querySelector('[data-af-overlay]') }))
+      if (afterDbl.overlay) errors.push('雙擊要送出並離開選取模式')
+      if (afterClick.picked === 1 && !afterDbl.overlay) {
+        console.log(`${browserName}:真實滑鼠 點一下選取 / 雙擊送出 正常`)
+      }
+      await ext2.evaluate(async () => {
+        const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/*' })
+        if (tabs[0]) await chrome.tabs.sendMessage(tabs[0].id, { type: 'EXIT_PICK' }).catch(() => {})
+      })
+    }
+  }
+
   // 5d. 自動登入:content 真的填得進欄位並按得到送出鈕
   const loginPage = await browser.newPage()
   await loginPage.goto('http://127.0.0.1:48123/login', { waitUntil: 'load' })

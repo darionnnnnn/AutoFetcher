@@ -33,17 +33,68 @@ function pickSpecOf(pick) {
   if (pick?.block) return { block: { axis: pick.block.axis, index: pick.block.index, headerText: pick.block.headerText } }
   return null
 }
-function sameSpec(a, b) {
-  return JSON.stringify(pickSpecOf(a)) === JSON.stringify(pickSpecOf(b))
+// 比對「是不是同一個值」時要忽略定位方式：重選送回來的 pick 沒有 pos，
+// 帶著 pos 去比會永遠不相等，於是 key 重生、歷史紀錄的序列就斷了
+function stripPos(spec) {
+  if (!spec) return spec
+  const out = JSON.parse(JSON.stringify(spec))
+  if (out.cell) {
+    delete out.cell.row?.pos
+    delete out.cell.col?.pos
+  }
+  return out
 }
-function defaultFieldName(pick, n) {
+function sameSpec(a, b) {
+  return JSON.stringify(stripPos(pickSpecOf(a))) === JSON.stringify(stripPos(pickSpecOf(b)))
+}
+const POS_NAMES = { first: '第一', last: '最後一', 'last-1': '倒數第二' }
+function defaultFieldName(pick, n, pos = {}) {
   if (pick?.cell) {
-    const r = pick.cell.row?.header || ''
-    const c = pick.cell.col?.header || ''
-    return (r && c) ? `${r} · ${c}` : (r || c || `值 ${n}`)
+    // 用位置定位的軸不能把標題寫進名稱：每天取最後一列的話，那個日期明天就變了
+    const r = pos.rowPos ? '' : (pick.cell.row?.header || '')
+    const c = pos.colPos ? '' : (pick.cell.col?.header || '')
+    const suffix = [
+      pos.rowPos ? `${POS_NAMES[pos.rowPos]}列` : '',
+      pos.colPos ? `${POS_NAMES[pos.colPos]}欄` : ''
+    ].filter(Boolean).join('、')
+    const base = (r && c) ? `${r} · ${c}` : (r || c || (suffix ? '值' : `值 ${n}`))
+    return suffix ? `${base}（${suffix}）` : base
   }
   return pick?.block?.headerText || `值 ${n}`
 }
+
+// 任務目前用的定位方式（重選新增的值要跟著它命名）
+function posOfTask(task) {
+  const first = Array.isArray(task?.spec?.fields) && task.spec.fields.length > 0
+    ? task.spec.fields[0]
+    : task?.spec?.block
+  if (!first) return { rowPos: '', colPos: '' }
+  if (first.cell) return { rowPos: first.cell.row?.pos || '', colPos: first.cell.col?.pos || '' }
+  // 整欄／整列的 pos 掛在另一軸上：整欄的 pos 是列的位置、整列的 pos 是欄的位置
+  const b = first.block || first
+  if (!b.pos) return { rowPos: '', colPos: '' }
+  return b.axis === 'row' ? { rowPos: '', colPos: b.pos } : { rowPos: b.pos, colPos: '' }
+}
+// 重選只換位置與標題，使用者原本設的「定位方式」（依標題／第一筆／最後一筆）要留著，
+// 不然重選一次就默默退回依標題，每天新增列的表格隔天就抓不到了。
+function keepPos(nextSpec, prevSpec) {
+  if (!nextSpec || !prevSpec) return nextSpec
+  if (nextSpec.cell && prevSpec.cell) {
+    for (const axis of ['row', 'col']) {
+      const pos = prevSpec.cell[axis]?.pos
+      if (pos && nextSpec.cell[axis]) nextSpec.cell[axis].pos = pos
+    }
+  } else if (nextSpec.block && prevSpec.block && prevSpec.block.pos) {
+    // block 的 pos 是「另一軸」的位置：整欄的 pos 指列、整列的 pos 指欄；換軸就不能照搬
+    if (nextSpec.block.axis === prevSpec.block.axis) nextSpec.block.pos = prevSpec.block.pos
+  } else if (nextSpec.block && prevSpec.cell) {
+    // 儲存格改成整欄／整列：把對應那一軸的位置搬過去（整欄要的是列的位置）
+    const carry = nextSpec.block.axis === 'row' ? prevSpec.cell.col?.pos : prevSpec.cell.row?.pos
+    if (carry) nextSpec.block.pos = carry
+  }
+  return nextSpec
+}
+
 function applyRepick(task, picks) {
   if (picks.length === 0) return
   const hadFields = Array.isArray(task.fields) && task.fields.length > 0
@@ -54,14 +105,20 @@ function applyRepick(task, picks) {
     task.mode = 'block'
     task.spec = { ...(task.spec || {}), mode: 'block' }
     delete task.spec.fields
-    task.spec.block = spec.cell
+    const prev = task.spec?.block
+    // keepPos 吃的是 {cell} / {block} 兩種包裝，單值的 spec.block 是攤平的，進出都要包／拆
+    const nextWrapped = spec.cell
       ? { cell: spec.cell }
-      : { ...spec.block, aggregate: task.spec?.block?.aggregate || 'sum' }
+      : { block: { ...spec.block, aggregate: task.spec?.block?.aggregate || 'sum' } }
+    const prevWrapped = prev ? (prev.cell ? { cell: prev.cell } : { block: prev }) : null
+    const kept = keepPos(nextWrapped, prevWrapped)
+    task.spec.block = kept.cell ? { cell: kept.cell } : kept.block
     return
   }
   const aggregate = task.spec?.block?.aggregate
     || (task.spec?.fields || []).find(f => f.block?.aggregate)?.block?.aggregate
     || 'sum'
+  const taskPos = posOfTask(task)
   const oldSpecs = task.spec?.fields || []
   const oldNames = new Map((task.fields || []).map(f => [f.key, f.name]))
   const fields = []
@@ -71,9 +128,12 @@ function applyRepick(task, picks) {
     if (!spec) return
     const kept = oldSpecs.find(f => sameSpec(f, pick))
     const key = kept ? kept.key : crypto.randomUUID().slice(0, 8)
-    const name = kept ? (oldNames.get(kept.key) || defaultFieldName(pick, i + 1)) : defaultFieldName(pick, i + 1)
+    const name = kept ? (oldNames.get(kept.key) || defaultFieldName(pick, i + 1, taskPos)) : defaultFieldName(pick, i + 1, taskPos)
     fields.push({ key, name })
-    specFields.push(spec.cell ? { key, cell: spec.cell } : { key, block: { ...spec.block, aggregate } })
+    const nextSpec = spec.cell ? { cell: spec.cell } : { block: { ...spec.block, aggregate } }
+    const prevSpec = kept ? (kept.cell ? { cell: kept.cell } : { block: kept.block }) : null
+    const withPos = prevSpec ? keepPos(nextSpec, prevSpec) : nextSpec
+    specFields.push(withPos.cell ? { key, cell: withPos.cell } : { key, block: withPos.block })
   })
   task.mode = 'block'
   task.fields = fields
