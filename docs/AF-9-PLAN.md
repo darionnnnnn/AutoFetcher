@@ -1,6 +1,6 @@
 # AF-9 第 9 輪規劃：零學習曲線的設定流程
 
-> 狀態：實作與終檢完成，待併 dev
+> 狀態：實作完成，待體檢（**尚未併 dev**）
 > 基準：dev@5ea5914（1677 綠，v0.7.0）
 > 來源：使用者回饋五項（設定視窗版面、工具列選不到、iframe 流程、間隔時段、設定可視化）
 > ＋ 以「第一次使用不看說明就會、三個月後回來不用重學」為目標的流程重整。
@@ -225,6 +225,22 @@
 
 ## 體檢交接
 
+- **實作模型：Claude Opus 5**（原規劃要委派 agy，使用者告知額度用盡後改為自行實作）。
+  依 `project-closeout` 紀律，**體檢必須換一個模型做**，本輪尚未體檢。
+- 已做的自我驗證：每個作業各自的突變測試、兩份獨立 Explore 終檢（程式碼 + 文件）並逐項處理、
+  全量測試、Chrome 與 Edge 煙霧測試。
+- **自己最沒把握的五個地方**（給體檢方的優先順序，但不要只看這幾處）：
+  1. `picker.js` 的 `updateSetupSummary`：摘要卡的觸發點是逐一綁上去的，
+     可能還有沒綁到的欄位；而且它與既有的 `updateBlockSection` / `positionSummaryText` /
+     `fieldWhereText` 是四份描述文字，詳略不同，有沒有互相矛盾沒有全面比對過。
+  2. `picker-mode.js` 的 `pendingMode`：這是規劃外新增的機制，
+     與 `lockedEl`、`upgradeTarget`、`setTarget` 的互動只用測試覆蓋，沒有窮舉狀態組合。
+  3. `showSavedFeedback` 用 `form.replaceChildren` 換掉整個表單，
+     若儲存後還有其他非同步流程要碰表單元素，會拿到已被移除的節點。
+  4. 排程區把 `#times` 當事實來源、chip 當介面，兩邊同步點分散在
+     `addTime` / `writeTimes` / `renderTimeChips` / `syncScheduleFields`，可能有漏同步的路徑。
+  5. `applyDefaultCardTypes` 的 `_afTouched` 守衛掛在 DOM 節點上，
+     `render` 重新渲染時這個旗標的生命週期沒有明確定義。
 - 全量測試:**1744 綠 / 0 紅**(基準 dev@5ea5914 為 1677，本輪 +67)。
 - 真實瀏覽器煙霧測試:`./run_smoke.sh` **Chrome 與 Edge 全部通過**。
 - 版本:0.8.0(`manifest.json` 與 `package.json` 同步)。
