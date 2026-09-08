@@ -701,7 +701,56 @@ export function render(ctx) {
   bindPreActionEvents()
   bindPreActionMessageListener()
   bindPosEvents()
+  updateFrameHint(currentCtx)
   updateBlockSection()
+}
+
+// 目標在 iframe 裡時提醒使用者可能要先點個什麼：那個框架常常是點了頁籤或按鈕才出現，
+// 而排程是開一個乾淨的新分頁，不會沿用現在畫面上的狀態。
+function updateFrameHint(ctx) {
+  const hint = document.getElementById('frame-hint')
+  if (!hint) return
+  const textEl = document.getElementById('frame-hint-text')
+  const hasPreActions = Array.isArray(ctx?.task?.preActions) && ctx.task.preActions.length > 0
+  // 編輯既有任務不提示：使用者已經決定過要不要加了
+  const show = Boolean(ctx?.frameUrl) && !ctx?.task && !hasPreActions
+  hint.hidden = !show
+  if (!show) return
+
+  let host = ctx.frameUrl
+  try {
+    host = new URL(ctx.frameUrl).hostname || ctx.frameUrl
+  } catch {}
+  if (textEl) {
+    textEl.textContent = `目標在框架（${host}）內。若這個框架要先點頁籤或按鈕才會出現，`
+      + '請加入「點元素」前置動作；排程抓取是開新分頁，不會沿用你現在看到的畫面。'
+  }
+  const advSection = document.getElementById('advanced-section')
+  if (advSection) advSection.setAttribute('open', '')
+
+  bindFrameHintEvents()
+}
+
+function bindFrameHintEvents() {
+  const addBtn = document.getElementById('frame-hint-add')
+  if (addBtn && !addBtn._frameHintBound) {
+    addBtn.addEventListener('click', () => {
+      const row = addPreActionRow({ type: 'click' })
+      const hint = document.getElementById('frame-hint')
+      if (hint) hint.hidden = true
+      // 直接開始選：讓使用者自己再去找一次「在頁面上選取」是多餘的一步
+      row?.querySelector('[data-action="preaction-pick"]')?.click()
+    })
+    addBtn._frameHintBound = true
+  }
+  const dismissBtn = document.getElementById('frame-hint-dismiss')
+  if (dismissBtn && !dismissBtn._frameHintBound) {
+    dismissBtn.addEventListener('click', () => {
+      const hint = document.getElementById('frame-hint')
+      if (hint) hint.hidden = true
+    })
+    dismissBtn._frameHintBound = true
+  }
 }
 
 // 使用者點的是第一列或最後一列時「建議」改用位置定位，但**不替他改設定**：
@@ -1445,6 +1494,7 @@ export async function renderDashboardSection(task) {
 export async function handleSave() {
   const errorsEl = document.getElementById('errors')
   if (errorsEl) errorsEl.textContent = ''
+  const busySave = setBusy('save', '儲存中…')
 
   const values = getFormData()
   if (!values.url && currentCtx?.url) values.url = currentCtx.url
@@ -1452,6 +1502,8 @@ export async function handleSave() {
   const validation = validateForm(values)
   if (!validation.ok) {
     if (errorsEl) errorsEl.textContent = Object.values(validation.errors).join('\n')
+    // 表單沒過就把按鈕還回去，不然使用者改完也按不下去
+    busySave()
     return
   }
 
@@ -1527,6 +1579,7 @@ export async function handleSave() {
     }
   }
 
+  busySave()
   if (typeof window !== 'undefined' && window.close) {
     window.close()
   }
@@ -1536,6 +1589,9 @@ export async function handleTestNow() {
   const previewEl = document.getElementById('preview')
   const errorsEl = document.getElementById('errors')
   if (errorsEl) errorsEl.textContent = ''
+  const noteAtStart = document.getElementById('test-note')
+  if (noteAtStart) noteAtStart.textContent = ''
+  const busy = setBusy('test-now', '測試中…')
 
   const values = getFormData()
   if (!values.url && currentCtx?.url) values.url = currentCtx.url
@@ -1568,6 +1624,13 @@ export async function handleTestNow() {
       }
       if (errorsEl) errorsEl.textContent = ''
       setPreviewState('ok')
+      // 這次測試是在使用者眼前這個分頁跑的，iframe 已經開著；排程是開新分頁，
+      // 兩者會不一樣，成功不代表排程也會成功
+      const noPreActions = !Array.isArray(values.preActions) || values.preActions.length === 0
+      const noteEl = document.getElementById('test-note')
+      if (noteEl && currentCtx?.frameUrl && noPreActions) {
+        noteEl.textContent = '這次測試在目前分頁執行；排程會開新分頁，若那個框架要先點才會出現，請加入前置動作。'
+      }
     } else {
       const err = res?.error || '找不到目標元素'
       if (errorsEl) errorsEl.textContent = err
@@ -1579,6 +1642,22 @@ export async function handleTestNow() {
     if (errorsEl) errorsEl.textContent = err
     if (previewEl) previewEl.textContent = '—'
     setPreviewState('error')
+  } finally {
+    busy()
+  }
+}
+
+// 按下之後到結果回來之間，按鈕要看得出正在做事，而且不能被連按
+function setBusy(id, label) {
+  const btn = document.getElementById(id)
+  if (!btn) return () => {}
+  const prevText = btn.textContent
+  const prevDisabled = btn.disabled
+  btn.textContent = label
+  btn.disabled = true
+  return () => {
+    btn.textContent = prevText
+    btn.disabled = prevDisabled
   }
 }
 

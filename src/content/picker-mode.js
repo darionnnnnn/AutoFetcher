@@ -33,6 +33,10 @@ let lockedEl = null
 let preselectPristine = false, replaceConfirmPending = null
 // 拖曳框選放開後瀏覽器會補一個 click，接著可能被當成雙擊；短時間內的雙擊要吃掉
 let lastDragEndAt = 0
+// 指標與表頭提示都是我們加在頁面上的，離開時要原樣還回去
+let originalCursor = ''
+let titledEls = []
+let reduceMotion = false
 // 已選的值屬於哪一張表格：滑鼠漂出表格不清空，換到另一張表格才清
 let pickedTableEl = null
 let originalUserSelect = '', dragStart = null, isDragging = false, suppressClick = false, menuTargetContext = null
@@ -221,6 +225,7 @@ function markCells(cell, dataRows, row, mode, cIdx) {
     if (cell && !isHeaderCell(cell)) {
       cell.setAttribute('data-af-cell', '')
       cell.style.outline = `2px solid ${COLORS.warn}`
+      cell.style.transition = markTransition()
     }
   } else if (mode === 'col' && cIdx !== null && cIdx >= 0 && dataRows) {
     for (const dRow of dataRows) {
@@ -466,7 +471,7 @@ function updatePanel(panel, el) {
       chip.style.padding = '2px 6px'
       chip.style.fontSize = '12px'
       chip.style.minHeight = '28px'
-      chip.style.transition = 'background-color 150ms ease'
+      chip.style.transition = reduceMotion ? '' : 'background-color 150ms ease'
 
       const nameSpan = document.createElement('span')
       nameSpan.textContent = getPickName(pick)
@@ -475,6 +480,7 @@ function updatePanel(panel, el) {
       const removeBtn = document.createElement('span')
       removeBtn.setAttribute('data-af-chip-remove', '')
       removeBtn.textContent = '\u00d7'
+      removeBtn.setAttribute('title', '移除')
       removeBtn.style.marginLeft = '6px'
       removeBtn.style.cursor = 'pointer'
       removeBtn.style.fontWeight = 'bold'
@@ -497,7 +503,8 @@ function updatePanel(panel, el) {
     removeLastBtn.style.cursor = 'pointer'
     removeLastBtn.style.minHeight = '28px'
     removeLastBtn.style.marginBottom = '4px'
-    removeLastBtn.style.transition = 'background-color 150ms ease'
+    removeLastBtn.style.transition = reduceMotion ? '' : 'background-color 150ms ease'
+    addFocusRing(removeLastBtn)
     panel.appendChild(removeLastBtn)
 
     const noticeLines = []
@@ -610,6 +617,7 @@ function appendPanelActions(panel, el) {
   done.style.opacity = disabled ? '0.5' : '1'
   done.style.backgroundColor = COLORS.primary
   done.style.color = COLORS.text
+  addFocusRing(done)
   bar.appendChild(done)
 
   const cancel = document.createElement('button')
@@ -625,6 +633,7 @@ function appendPanelActions(panel, el) {
   cancel.style.cursor = 'pointer'
   cancel.style.backgroundColor = COLORS.surface
   cancel.style.color = COLORS.textMuted
+  addFocusRing(cancel)
   bar.appendChild(cancel)
 
   panel.appendChild(bar)
@@ -655,6 +664,8 @@ function setTarget(el) {
     highlightEl.style.display = 'block'
     updateHighlight(highlightEl, el)
   }
+  // 非表格是「抓整個元素」，用十字指標；表格的格子與表頭由 handleTableMouseMove 各自設
+  if (!isTableMode(el)) setCursor('crosshair')
   updateToolbar()
   if (panelEl) updatePanel(panelEl, el)
 }
@@ -668,11 +679,55 @@ function getHeaderText() {
 }
 
 // 處理表格內滑鼠移動
+// overlay 的按鈕拿不到樣式表（注入在別人的網頁上），焦點環只能自己畫。
+// 沒有它，用鍵盤的人完全看不出焦點在哪一顆。
+function addFocusRing(btn) {
+  if (!btn || btn._afFocusBound) return
+  btn.addEventListener('focus', () => {
+    btn.style.outline = `2px solid ${COLORS.primary}`
+    btn.style.outlineOffset = '2px'
+  })
+  btn.addEventListener('blur', () => {
+    btn.style.outline = ''
+    btn.style.outlineOffset = ''
+  })
+  btn._afFocusBound = true
+}
+
+// 指標形狀就是「這裡能做什麼」的說明：試算表用 cell 表示可選格、pointer 表示可點
+function setCursor(kind) {
+  if (typeof document === 'undefined' || !document.body) return
+  document.body.style.cursor = kind
+}
+
+// 表頭要說出點下去會發生什麼；提示是我們加的，離開選取模式要收乾淨
+function markTitle(el, text) {
+  if (!el || typeof el.setAttribute !== 'function') return
+  if (el.getAttribute('title') === text) return
+  if (!el.hasAttribute('title')) titledEls.push(el)
+  el.setAttribute('title', text)
+}
+
+function clearTitles() {
+  for (const el of titledEls) {
+    try { el.removeAttribute('title') } catch {}
+  }
+  titledEls = []
+}
+
+// 標示的狀態切換要看得出來，但使用者要求減少動態時一律不加
+function markTransition() {
+  return reduceMotion ? '' : 'outline-color 100ms ease, background-color 100ms ease'
+}
+
 function handleTableMouseMove(target) {
   if (!currentTargetEl || !isTableMode(currentTargetEl)) return
   // 滑鼠在表頭上：先讓使用者看到點下去會選到整欄（或整列），再決定點不點
   const head = resolveHeaderTarget(target, currentTargetEl)
   if (head) {
+    setCursor('pointer')
+    const cell = typeof target.closest === 'function' ? target.closest(CELL_SELECTOR) : null
+    if (cell) markTitle(cell, head.axis === 'col' ? '選整欄' : '選整列')
     currentCellEl = null
     const dataRows = resolveDataRows(currentTargetEl)
     clearMarkedCells(document)
@@ -693,6 +748,7 @@ function handleTableMouseMove(target) {
     applyPickedMarks(currentTargetEl)
     return
   }
+  setCursor('cell')
   currentCellEl = info.cell
   colIndex = info.cIdx
   rowIndex = info.rIdx
@@ -1666,6 +1722,10 @@ export function enterPickMode(opts) {
 
   originalUserSelect = document.body.style.userSelect || ''
   document.body.style.userSelect = 'none'
+  originalCursor = document.body.style.cursor || ''
+  reduceMotion = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? Boolean(window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+    : false
 
   overlayEl = document.createElement('div')
   overlayEl.setAttribute('data-af-overlay', '')
@@ -1709,7 +1769,8 @@ export function enterPickMode(opts) {
     btn.style.cursor = 'pointer'
     btn.style.fontFamily = 'inherit'
     btn.style.minHeight = '28px'
-    btn.style.transition = 'background-color 150ms ease, color 150ms ease'
+    btn.style.transition = reduceMotion ? '' : 'background-color 150ms ease, color 150ms ease'
+    addFocusRing(btn)
     toolbarEl.appendChild(btn)
   }
   // 移除最後一個按鈕的右邊框
@@ -1761,6 +1822,8 @@ export function exitPickMode() {
     closeMenu()
     if (document.body) {
       document.body.style.userSelect = originalUserSelect
+      document.body.style.cursor = originalCursor
+      clearTitles()
     }
     for (const el of (document.querySelectorAll ? document.querySelectorAll('[data-af-overlay]') : [])) {
       el.remove()

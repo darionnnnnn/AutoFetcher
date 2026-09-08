@@ -66,6 +66,7 @@
       justify-content: center;
     }
     #errors { color: var(--danger); font-size: var(--text-xs, 12px); white-space: pre-line; }
+    #test-note { color: var(--text-muted); font-size: var(--text-xs, 12px); line-height: 1.4; }
     #block-summary { font-size: var(--text-xs, 12px); color: var(--text-muted); line-height: 1.4; }
     #preview[data-state="ok"] { border-color: var(--ok); color: var(--ok); }
     #preview[data-state="error"] { border-color: var(--danger); color: var(--danger); }
@@ -147,6 +148,19 @@
     }
     .preaction-target { font-size: var(--text-xs, 12px); color: var(--text-muted); font-family: var(--font-mono, monospace); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 90px; }
     #preaction-add { align-self: flex-start; }
+    #frame-hint {
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--primary);
+      border-radius: var(--radius);
+      padding: var(--space-2, 8px);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      background: var(--hover);
+    }
+    #frame-hint-text { font-size: var(--text-xs, 12px); color: var(--text); line-height: 1.5; }
+    #frame-hint-actions { display: flex; gap: 6px; }
+    #frame-hint-actions button { font-size: var(--text-xs, 12px); min-height: 28px; }
     details#advanced-section {
       border: 1px solid var(--border);
       border-radius: var(--radius);
@@ -250,7 +264,8 @@
       <fieldset id="preview-section">
         <legend>即時預覽</legend>
         <div id="preview"></div>
-        <div id="errors"></div>
+        <div id="errors" role="alert"></div>
+        <div id="test-note" role="status"></div>
       </fieldset>
       <details id="advanced-section">
         <summary>進階設定</summary>
@@ -273,6 +288,13 @@
         <div id="preaction-section">
           <div class="preaction-title">前置動作</div>
           <div class="preaction-desc">抓取前依序執行，例如先關掉彈窗、或等圖表載入完成。</div>
+          <div id="frame-hint" role="status" hidden>
+            <div id="frame-hint-text"></div>
+            <div id="frame-hint-actions">
+              <button type="button" id="frame-hint-add">加入點擊步驟</button>
+              <button type="button" id="frame-hint-dismiss">不需要</button>
+            </div>
+          </div>
           <div id="preaction-list"></div>
           <button type="button" id="preaction-add">新增動作</button>
         </div>
