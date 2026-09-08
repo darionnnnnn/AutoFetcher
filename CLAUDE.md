@@ -14,8 +14,12 @@ src/
 │                          health 燈號 / notify 通知唯一入口 / inject 注入唯一入口
 │                          frames 目標所在 iframe 的定位唯一入口
 ├── content/             ← 注入頁面:main.js 訊息路由/擷取/填登入/前置動作
-│                          picker-mode.js 選取模式(高亮 overlay、↑↓、表格點欄列)
+│                          picker-mode.js 選取模式(高亮 overlay、↑↓、右上角工具列三段
+│                          「單格(預設)/整欄/整列」、可互動的已選 chip 面板)
 ├── ui/theme.css         ← **顏色的唯一來源**(亮/暗雙軌 + --chart-1~8 圖表調色盤)
+├── ui/ui.css            ← 擴充功能頁的**共用元件樣式**(按鈕三級/卡片/表單/chip/sticky footer/
+│                          [hidden]/焦點/reduced-motion);只吃 theme.css 變數,零色碼。
+│                          picker 與 site 都載入它;report/popup 尚未沿用
 ├── ui/picker/           ← 選取完成後的設定視窗(命名、時間、模式、區塊、告警、前置動作、儀表板)
 ├── ui/site/             ← 站台登入設定視窗(右鍵「設定此站台登入」)
 ├── ui/popup/            ← 工具列 popup(燈號摘要)
@@ -58,7 +62,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1464 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1541 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -105,6 +109,15 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **不要在 `src/` 寫色碼字面值**:只有兩處豁免,都是拿不到 CSS 變數的執行環境——
   `content/picker-mode.js`(注入在網頁上,網頁沒載入 theme.css)與
   `background/health.js`(`setBadgeBackgroundColor` 只吃色碼字串)。
+  **`picker-mode.js` 的色碼只能出現在檔頭的 `COLORS` 常數裡**(值照抄 theme.css 暗色軌),
+  其餘程式碼一律引用它;連檔頭註解都不要列舉色碼(`tests/p4_ui_css.test.js` 會擋)。
+- **選取模式的模組狀態要在 `exitPickMode` 全部重設**:漏一個(例如「已選屬於哪張表」)
+  會讓同一頁的下一次選取沿用上一張表的 locator、配上新表的列欄索引送出,抓到的永遠是錯的值。
+  只驗「DOM 元素被移除」的測試抓不到這種殘留,要驗「連續選兩次」的行為。
+- **掃描 + 迴圈型的測試要先斷言掃到的集合不是空的**:對空集合跑 `for` 迴圈一定通過
+  (實例:掃 `ui.css` 的 `font-size: Npx`,但它全用 `var(--text-*)`,把 token 改成 8px 也不會紅)。
+- **樣式不要用 `content: attr(...)` 指向沒有人設定的屬性**:動態產生的清單不會帶你想像的
+  `data-*`,那條規則會永遠是空白的死規則(序號一類用 CSS 計數器)。
 - **不要用任務設定的網址判斷「現在在哪一頁」**:要讀 `chrome.tabs.get(tabId).url`(轉址後的實際位置)。
 - **不要把每日排程算出來的時間直接當 alarm**:算出來若已經過去(例如現在剛好在預檢與抓取之間),
   Chrome 會立刻觸發、alarm 隨即消失,要跳過這一輪排到下一次。

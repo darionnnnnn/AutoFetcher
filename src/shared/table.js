@@ -60,6 +60,71 @@ function getAriaRows(el) {
 }
 
 /**
+ * 取得元素實際的資料表（若為純包裝表格則遞迴鑽進內層）。
+ * @param {Element} el 表格元素
+ * @returns {Element} 實際的資料表元素
+ */
+export function innermostTable(el) {
+  if (!el || el.tagName !== 'TABLE') return el
+
+  let current = el
+  const visited = new Set()
+
+  while (current && current.tagName === 'TABLE' && !visited.has(current)) {
+    visited.add(current)
+
+    const allCells = typeof current.querySelectorAll === 'function'
+      ? Array.from(current.querySelectorAll('td, th'))
+      : []
+    const ownCells = allCells.filter(
+      (cell) => typeof cell.closest !== 'function' || cell.closest('table') === current
+    )
+
+    if (ownCells.length === 0) break
+
+    const cellsWithTable = ownCells.filter(
+      (cell) => typeof cell.querySelector === 'function' && Boolean(cell.querySelector('table'))
+    )
+
+    if (cellsWithTable.length !== 1) break
+
+    const tableCell = cellsWithTable[0]
+    // 含表格的那一格，除了內層表格之外不能還有自己的文字
+    // （`<td>總計<table>…</table></td>` 的「總計」是外層的資料，鑽進去就丟了）
+    const innerText = cleanText(tableCell.querySelector('table')?.textContent)
+    const cellText = cleanText(tableCell.textContent)
+    if (cellText !== innerText) break
+
+    const otherCellsEmpty = ownCells.every((cell) => {
+      if (cell === tableCell) return true
+      return cleanText(cell.textContent) === ''
+    })
+
+    if (!otherCellsEmpty) break
+
+    const inner = tableCell.querySelector('table')
+    if (!inner) break
+
+    current = inner
+  }
+
+  return current
+}
+
+/**
+ * 取得元素背後的 HTML 表格：自己就是表格、或它包著一張表格都算。
+ * 選取模式常把外層容器（<div>）當目標，少了這條退路欄名與資料列都會變成空的。
+ * @param {Element} el 元素
+ * @returns {Element|null} 表格元素，找不到回 null
+ */
+function resolveHtmlTable(el) {
+  if (!el) return null
+  if (el.tagName === 'TABLE') return innermostTable(el)
+  const inner = typeof el.querySelector === 'function' ? el.querySelector('table') : null
+  return inner ? innermostTable(inner) : null
+}
+
+/**
  * 取得與資料欄一一對齊的表頭字串陣列。
  * @param {Element} el 表格元素
  * @returns {string[]} 表頭字串陣列
@@ -70,13 +135,8 @@ export function columnHeaders(el) {
   let headerRows = []
 
   // 1. HTML <table>
-  if (el.tagName === 'TABLE' || (typeof el.querySelector === 'function' && el.querySelector('table'))) {
-    let table = el
-    while (typeof table.querySelector === 'function') {
-      const inner = table.querySelector('table')
-      if (!inner) break
-      table = inner
-    }
+  const table = resolveHtmlTable(el)
+  if (table) {
     const rows = getTableRows(table)
     // 只認 thead 裡的列，或表格開頭連續的表頭列。
     // 表格中段常有整列 th 的分組標題（「亞洲貨幣」那種），
@@ -209,13 +269,8 @@ export function rowHeader(row) {
  */
 export function getDataRows(el) {
   if (!el) return []
-  let table = el
-  if (table.tagName === 'TABLE' || (typeof table.querySelector === 'function' && table.querySelector('table'))) {
-    while (typeof table.querySelector === 'function') {
-      const inner = table.querySelector('table')
-      if (!inner) break
-      table = inner
-    }
+  const table = resolveHtmlTable(el)
+  if (table) {
     const rows = getTableRows(table)
     const dataRows = []
     for (const row of rows) {
@@ -253,13 +308,7 @@ export function getDataRows(el) {
 
 // 解析 HTML <table> 元素
 function parseHtmlTable(el) {
-  // 巢狀 table 取最內層
-  let table = el
-  while (typeof table.querySelector === 'function') {
-    const inner = table.querySelector('table')
-    if (!inner) break
-    table = inner
-  }
+  const table = innermostTable(el)
 
   const rows = getTableRows(table)
   const headers = columnHeaders(table)

@@ -157,22 +157,34 @@ test('編輯既有任務時原本的 frame 要留著', async () => {
 })
 
 // ---------- 立即測試 ----------
+// AF-7 起「立即測試」不再自己對頁面送 EXTRACT：頁面可能已經重新整理，
+// content script 不在、frameId 也會換。改交給 background 走與正式抓取同一條路徑。
 
-test('「立即測試」要對目標所在的 frame 擷取，不是對整個分頁廣播', async () => {
-  const { c, pk } = await freshPicker()
+test('「立即測試」把目標所在的 frame 交給背景，不自己對頁面送訊息', async () => {
+  const { c, pk, doc } = await freshPicker()
   pk.render({ tabId: 3, frameId: 7, frameUrl: 'https://b.example/w.html', locator: LOCATOR })
-  c.__setTabResponder(() => ({ ok: true, value: 1, raw: '1' }))
+  doc.getElementById('name').value = '測試'
+  c.__setRuntimeResponder(() => ({ ok: true, value: 1, raw: '1' }))
   await pk.handleTestNow()
-  const [tabId, msg, options] = sent(c).at(-1)
-  assert.equal(tabId, 3)
-  assert.equal(msg.type, 'EXTRACT')
-  assert.deepEqual(options, { frameId: 7 })
+  assert.equal(sent(c).length, 0, '不得自己 tabs.sendMessage')
+  const msg = c.__calls
+    .filter(x => x.api === 'runtime.sendMessage')
+    .map(x => x.args[0])
+    .find(m => m?.type === 'TEST_TASK')
+  assert.ok(msg, '要送 TEST_TASK 給背景')
+  assert.equal(msg.tabId, 3)
+  assert.deepEqual(msg.task.frame, { url: 'https://b.example/w.html' })
 })
 
-test('目標在最上層時「立即測試」帶 frameId 0', async () => {
-  const { c, pk } = await freshPicker()
+test('目標在最上層時「立即測試」送出的任務沒有 frame 欄位', async () => {
+  const { c, pk, doc } = await freshPicker()
   pk.render({ tabId: 3, locator: LOCATOR })
-  c.__setTabResponder(() => ({ ok: true, value: 1, raw: '1' }))
+  doc.getElementById('name').value = '測試'
+  c.__setRuntimeResponder(() => ({ ok: true, value: 1, raw: '1' }))
   await pk.handleTestNow()
-  assert.deepEqual(sent(c).at(-1)[2], { frameId: 0 })
+  const msg = c.__calls
+    .filter(x => x.api === 'runtime.sendMessage')
+    .map(x => x.args[0])
+    .find(m => m?.type === 'TEST_TASK')
+  assert.equal('frame' in msg.task, false)
 })

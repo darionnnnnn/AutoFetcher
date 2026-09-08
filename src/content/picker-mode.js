@@ -1,16 +1,31 @@
-// 豁免說明：此檔案在網頁 isolated world 執行，網頁未載入 ui/theme.css，因此為全專案唯一允許寫色碼字面值之檔案。色碼源自 ui/theme.css 亮色：主色 #2563eb、白 #ffffff、警示 #d97706。
+// 豁免說明：此檔案在網頁 isolated world 執行，網頁未載入 ui/theme.css，
+// 因此為全專案唯一允許寫色碼字面值之檔案。所有色碼集中在下方 COLORS 常數，
+// 其餘程式碼一律引用 COLORS 的屬性。
 import { MSG } from '../shared/messages.js'
 import { describe } from '../shared/selector.js'
 import { detectKind } from '../shared/block-detect.js'
 import { parseNumber } from '../shared/extract.js'
 import { columnHeaders, rowHeader } from '../shared/table.js'
 
+// 顏色常數（對應 theme.css 暗色軌）——這是本檔唯一允許出現色碼字面值的地方
+const COLORS = {
+  bg: '#0f172a',
+  surface: '#1e293b',
+  border: '#334155',
+  text: '#f8fafc',
+  textMuted: '#94a3b8',
+  primary: '#3b82f6',
+  warn: '#fbbf24',
+  ok: '#22c55e',
+  danger: '#ef4444'
+}
+
 let active = false, currentPurpose = null, currentTaskId = undefined, currentTargetEl = null, backStack = []
 // 進不去框架時要說出來；代理層是 iframe 的替身（見 frameOfProxy）
 let currentHint = null
 let pendingPreselect = null
-let overlayEl = null, highlightEl = null, panelEl = null, menuEl = null
-let tableAxis = null, cellIndex = null, colIndex = null, rowIndex = null, currentDataRows = [], currentRowEl = null
+let overlayEl = null, highlightEl = null, panelEl = null, toolbarEl = null, menuEl = null
+let pickMode = 'cell', cellIndex = null, colIndex = null, rowIndex = null, currentDataRows = [], currentRowEl = null, currentCellEl = null
 let selectedList = [], maxPicks = 20, limitReached = false, headerChangedNotice = false
 // 已選的值屬於哪一張表格：滑鼠漂出表格不清空，換到另一張表格才清
 let pickedTableEl = null
@@ -40,10 +55,24 @@ function isHeaderCell(c) {
   return c?.tagName === 'TH' || c?.getAttribute?.('role') === 'columnheader'
 }
 
-// 取得列中的格子
+const CELL_SELECTOR = 'td, th, [role="cell"], [role="gridcell"], [role="columnheader"]'
+
+// 取得元素所屬的最近表格
+function tableOf(el) {
+  return el && typeof el.closest === 'function' ? el.closest('table, [role="grid"], [role="table"]') : null
+}
+
+// 判定儲存格是否屬於指定表格
+function cellBelongsToTable(cell, tableEl) {
+  return tableOf(cell) === tableEl
+}
+
+// 取得列中的格子（只取這一列自己的儲存格，排除巢狀小表格的儲存格）
 function getRowCells(row) {
   if (!row) return []
-  const cells = row.querySelectorAll ? Array.from(row.querySelectorAll('td, th, [role="cell"], [role="gridcell"], [role="columnheader"]')) : []
+  const rowTable = tableOf(row)
+  const raw = row.querySelectorAll ? Array.from(row.querySelectorAll(CELL_SELECTOR)) : []
+  const cells = rowTable ? raw.filter(c => cellBelongsToTable(c, rowTable)) : raw
   return cells.length > 0 ? cells : Array.from(row.children || [])
 }
 
@@ -57,7 +86,7 @@ function isHeaderRow(r) {
 // 取得表格的所有列
 function getTableRows(tableEl) {
   if (!tableEl) return []
-  const rows = tableEl.querySelectorAll ? Array.from(tableEl.querySelectorAll('tr, [role="row"]')).filter(r => r.closest('table, [role="grid"], [role="table"]') === tableEl) : []
+  const rows = tableEl.querySelectorAll ? Array.from(tableEl.querySelectorAll('tr, [role="row"]')).filter(r => tableOf(r) === tableEl) : []
   return rows.length > 0 ? rows : Array.from(tableEl.children || []).filter(c => c?.getAttribute?.('role') === 'row')
 }
 
@@ -76,8 +105,15 @@ function resolveCell(target, tableEl) {
   const isTable = kindOf(tableEl).kind === 'table'
   let row = null, cell = null, dataRows = []
   if (isTable) {
-    cell = target.closest ? target.closest('td, th, [role="cell"], [role="gridcell"], [role="columnheader"]') : null
-    if (!cell || !tableEl.contains(cell)) return null
+    let curr = target
+    while (curr && curr !== tableEl) {
+      if (curr.matches && curr.matches(CELL_SELECTOR) && cellBelongsToTable(curr, tableEl)) {
+        cell = curr
+        break
+      }
+      curr = curr.parentElement
+    }
+    if (!cell) return null
     row = cell.closest ? cell.closest('tr, [role="row"]') : null
     if (!row || !tableEl.contains(row)) return null
     dataRows = getTableRows(tableEl).filter(r => !isHeaderRow(r))
@@ -104,29 +140,34 @@ function clearMarkedCells(doc) {
   for (const cell of d.querySelectorAll('[data-af-cell]')) {
     cell.removeAttribute('data-af-cell')
     if (cell.hasAttribute('data-af-picked')) {
-      cell.style.outline = '2px solid #2563eb'
+      cell.style.outline = `2px solid ${COLORS.primary}`
     } else {
       cell.style.outline = ''
     }
   }
 }
 
-// 標示待選欄或列之資料格
-function markCells(dataRows, row, axis, cIdx) {
+// 標示待選格、欄或列之資料格
+function markCells(cell, dataRows, row, mode, cIdx) {
   clearMarkedCells(document)
-  if (axis === 'col' && cIdx !== null && cIdx >= 0 && dataRows) {
+  if (mode === 'cell') {
+    if (cell && !isHeaderCell(cell)) {
+      cell.setAttribute('data-af-cell', '')
+      cell.style.outline = `2px solid ${COLORS.warn}`
+    }
+  } else if (mode === 'col' && cIdx !== null && cIdx >= 0 && dataRows) {
     for (const dRow of dataRows) {
       const targetCell = getRowCells(dRow)[cIdx]
       if (targetCell && !isHeaderCell(targetCell)) {
         targetCell.setAttribute('data-af-cell', '')
-        targetCell.style.outline = '2px solid #d97706'
+        targetCell.style.outline = `2px solid ${COLORS.warn}`
       }
     }
-  } else if (axis === 'row' && row) {
+  } else if (mode === 'row' && row) {
     for (const c of getRowCells(row)) {
       if (!isHeaderCell(c)) {
         c.setAttribute('data-af-cell', '')
-        c.style.outline = '2px solid #d97706'
+        c.style.outline = `2px solid ${COLORS.warn}`
       }
     }
   }
@@ -139,7 +180,7 @@ function clearPickedMarks(doc) {
   for (const cell of d.querySelectorAll('[data-af-picked]')) {
     cell.removeAttribute('data-af-picked')
     if (cell.hasAttribute('data-af-cell')) {
-      cell.style.outline = '2px solid #d97706'
+      cell.style.outline = `2px solid ${COLORS.warn}`
     } else {
       cell.style.outline = ''
     }
@@ -159,7 +200,9 @@ function applyPickedMarks(tableEl) {
         const cell = cells[pick.cell.col.index]
         if (cell && !isHeaderCell(cell)) {
           cell.setAttribute('data-af-picked', '')
-          cell.style.outline = '2px solid #2563eb'
+          if (!cell.hasAttribute('data-af-cell')) {
+            cell.style.outline = `2px solid ${COLORS.primary}`
+          }
         }
       }
     } else if (pick.block) {
@@ -169,7 +212,9 @@ function applyPickedMarks(tableEl) {
           const cell = cells[pick.block.index]
           if (cell && !isHeaderCell(cell)) {
             cell.setAttribute('data-af-picked', '')
-            cell.style.outline = '2px solid #2563eb'
+            if (!cell.hasAttribute('data-af-cell')) {
+              cell.style.outline = `2px solid ${COLORS.primary}`
+            }
           }
         }
       } else if (pick.block.axis === 'row') {
@@ -178,7 +223,9 @@ function applyPickedMarks(tableEl) {
           for (const cell of getRowCells(row)) {
             if (!isHeaderCell(cell)) {
               cell.setAttribute('data-af-picked', '')
-              cell.style.outline = '2px solid #2563eb'
+              if (!cell.hasAttribute('data-af-cell')) {
+                cell.style.outline = `2px solid ${COLORS.primary}`
+              }
             }
           }
         }
@@ -257,25 +304,147 @@ function buildFrameProxies() {
   }
 }
 
-// 產生說明面板文字
+// 更新工具列狀態（作用中模式與停用狀態）
+function updateToolbar() {
+  if (!toolbarEl) return
+  const isTable = Boolean(currentTargetEl && isTableMode(currentTargetEl))
+  const isTask = currentPurpose === 'task'
+
+  for (const btn of toolbarEl.querySelectorAll('[data-af-tool]')) {
+    const key = btn.getAttribute('data-af-tool')
+    let disabled = false
+    if (!isTable) {
+      disabled = true
+    } else if (!isTask) {
+      if (key === 'col' || key === 'row') disabled = true
+    }
+
+    if (disabled) {
+      btn.setAttribute('aria-disabled', 'true')
+      btn.style.opacity = '0.5'
+      btn.style.cursor = 'not-allowed'
+    } else {
+      btn.removeAttribute('aria-disabled')
+      btn.style.opacity = '1'
+      btn.style.cursor = 'pointer'
+    }
+
+    if (key === pickMode) {
+      btn.setAttribute('data-af-active', '')
+      btn.style.backgroundColor = COLORS.primary
+      btn.style.color = COLORS.text
+    } else {
+      btn.removeAttribute('data-af-active')
+      btn.style.backgroundColor = COLORS.surface
+      btn.style.color = COLORS.primary
+    }
+  }
+}
+
+// 移除指定序號之已選項
+function removePickAt(index) {
+  if (index < 0 || index >= selectedList.length) return
+  selectedList.splice(index, 1)
+  limitReached = false
+  if (selectedList.length === 0) {
+    pickedTableEl = null
+  }
+  applyPickedMarks(currentTargetEl)
+  updatePanel(panelEl, currentTargetEl)
+}
+
+// 移除最後一項已選項
+function removeLastPick() {
+  if (selectedList.length === 0) return
+  selectedList.pop()
+  limitReached = false
+  if (selectedList.length === 0) {
+    pickedTableEl = null
+  }
+  applyPickedMarks(currentTargetEl)
+  updatePanel(panelEl, currentTargetEl)
+}
+
+// 產生說明面板文字與已選清單
 function updatePanel(panel, el) {
   if (!panel) return
+
+  while (panel.firstChild) {
+    panel.removeChild(panel.firstChild)
+  }
+
   if (selectedList.length > 0) {
-    const count = selectedList.length
-    const names = selectedList.slice(0, 3).map(getPickName)
-    let nameStr = names.join('、')
-    if (selectedList.length > 3) {
-      nameStr += '…'
+    const headerDiv = document.createElement('div')
+    headerDiv.textContent = `已選 ${selectedList.length} 個值:`
+    headerDiv.style.marginBottom = '4px'
+    headerDiv.style.fontWeight = 'bold'
+    panel.appendChild(headerDiv)
+
+    const listDiv = document.createElement('div')
+    listDiv.style.display = 'flex'
+    listDiv.style.flexWrap = 'wrap'
+    listDiv.style.gap = '4px'
+    listDiv.style.marginBottom = '6px'
+
+    for (let i = 0; i < selectedList.length; i++) {
+      const pick = selectedList[i]
+      const chip = document.createElement('div')
+      chip.setAttribute('data-af-chip', String(i))
+      chip.style.display = 'inline-flex'
+      chip.style.alignItems = 'center'
+      chip.style.backgroundColor = COLORS.surface
+      chip.style.color = COLORS.text
+      chip.style.border = `1px solid ${COLORS.border}`
+      chip.style.borderRadius = '3px'
+      chip.style.padding = '2px 6px'
+      chip.style.fontSize = '12px'
+      chip.style.minHeight = '28px'
+      chip.style.transition = 'background-color 150ms ease'
+
+      const nameSpan = document.createElement('span')
+      nameSpan.textContent = getPickName(pick)
+      chip.appendChild(nameSpan)
+
+      const removeBtn = document.createElement('span')
+      removeBtn.setAttribute('data-af-chip-remove', '')
+      removeBtn.textContent = '\u00d7'
+      removeBtn.style.marginLeft = '6px'
+      removeBtn.style.cursor = 'pointer'
+      removeBtn.style.fontWeight = 'bold'
+      chip.appendChild(removeBtn)
+
+      listDiv.appendChild(chip)
     }
-    const lines = [`已選 ${count} 個值: ${nameStr}`]
+    panel.appendChild(listDiv)
+
+    const removeLastBtn = document.createElement('button')
+    removeLastBtn.type = 'button'
+    removeLastBtn.setAttribute('data-af-remove-last', '')
+    removeLastBtn.textContent = '移除最後一項'
+    removeLastBtn.style.padding = '2px 8px'
+    removeLastBtn.style.fontSize = '12px'
+    removeLastBtn.style.backgroundColor = COLORS.surface
+    removeLastBtn.style.color = COLORS.primary
+    removeLastBtn.style.border = `1px solid ${COLORS.border}`
+    removeLastBtn.style.borderRadius = '3px'
+    removeLastBtn.style.cursor = 'pointer'
+    removeLastBtn.style.minHeight = '28px'
+    removeLastBtn.style.marginBottom = '4px'
+    removeLastBtn.style.transition = 'background-color 150ms ease'
+    panel.appendChild(removeLastBtn)
+
+    const noticeLines = []
     if (limitReached || selectedList.length >= maxPicks) {
-      lines.push('（已達選取上限）')
+      noticeLines.push('（已達選取上限）')
     }
     if (headerChangedNotice) {
-      lines.push('（位置已變）')
+      noticeLines.push('（位置已變）')
     }
-    lines.push('Shift 點選加選 / 拖曳框選 / 右鍵選單 / Enter 完成 / Esc 取消')
-    panel.textContent = lines.join('\n')
+    noticeLines.push('Shift 點選加選 / 拖曳框選 / 右鍵選單 / Enter 完成 / Esc 取消')
+    const footerDiv = document.createElement('div')
+    footerDiv.textContent = noticeLines.join('\n')
+    footerDiv.style.whiteSpace = 'pre-line'
+    panel.appendChild(footerDiv)
     return
   }
 
@@ -314,6 +483,8 @@ function updatePanel(panel, el) {
   const lines = [tagDesc]
   if (preview) lines.push(preview)
   lines.push(typeDesc)
+  // 非表格沒有欄／列可挑，工具列會整排停用；要說出為什麼，不然使用者只看到點不動
+  if (!isTableMode(el)) lines.push('非表格：抓整個元素')
   if (currentHint === 'frame_not_found') lines.push('無法進入這個框架')
   if (limitReached || selectedList.length >= maxPicks) lines.push('（已達選取上限）')
   if (headerChangedNotice) lines.push('（位置已變）')
@@ -326,7 +497,7 @@ function setTarget(el) {
   // 換到另一張表格（或離開表格）時，先前選的列欄索引就沒有意義了；
   // 不清掉會把 A 表的索引配上 B 表的定位一起送出去
   // 滑鼠落在「另一張表格」裡（不論停在表格本身或它的某一格）才算換表
-  const hostTable = el && typeof el.closest === 'function' ? el.closest('table, [role="grid"], [role="table"]') : null
+  const hostTable = tableOf(el)
   if (selectedList.length > 0 && pickedTableEl && hostTable && hostTable !== pickedTableEl &&
       !pickedTableEl.contains(hostTable) && !hostTable.contains(pickedTableEl)) {
     clearPickedMarks(document)
@@ -335,25 +506,25 @@ function setTarget(el) {
     pickedTableEl = null
   }
   clearMarkedCells(document)
-  currentTargetEl = el; currentDataRows = []; currentRowEl = null; colIndex = null; rowIndex = null; cellIndex = null
+  currentTargetEl = el; currentDataRows = []; currentRowEl = null; colIndex = null; rowIndex = null; cellIndex = null; currentCellEl = null
   if (!el) {
-    tableAxis = null
     if (highlightEl) highlightEl.style.display = 'none'
+    updateToolbar()
     if (panelEl) updatePanel(panelEl, null)
     return
   }
-  tableAxis = isTableMode(el) ? 'col' : null
   if (highlightEl) {
     highlightEl.style.display = 'block'
     updateHighlight(highlightEl, el)
   }
+  updateToolbar()
   if (panelEl) updatePanel(panelEl, el)
 }
 
 // 取得待選欄或列之表頭文字
 function getHeaderText() {
   if (!currentTargetEl || !isTableMode(currentTargetEl)) return ''
-  if (tableAxis === 'row') return currentRowEl ? rowHeader(currentRowEl) : ''
+  if (pickMode === 'row') return currentRowEl ? rowHeader(currentRowEl) : ''
   if (colIndex === null) return ''
   return columnHeaders(currentTargetEl)[colIndex] || ''
 }
@@ -362,13 +533,21 @@ function getHeaderText() {
 function handleTableMouseMove(target) {
   if (!currentTargetEl || !isTableMode(currentTargetEl)) return
   const info = resolveCell(target, currentTargetEl)
-  if (!info) return
+  // 滑鼠停在格子以外（表格的縫隙、表頭列）時要放掉記住的那一格，
+  // 否則之後切換模式會把標示畫回一個滑鼠早就離開的位置
+  if (!info) {
+    currentCellEl = null
+    clearMarkedCells(document)
+    applyPickedMarks(currentTargetEl)
+    return
+  }
+  currentCellEl = info.cell
   colIndex = info.cIdx
   rowIndex = info.rIdx
-  cellIndex = tableAxis === 'row' ? rowIndex : colIndex
+  cellIndex = pickMode === 'row' ? rowIndex : colIndex
   currentDataRows = info.dataRows
   currentRowEl = info.row
-  markCells(info.dataRows, info.row, tableAxis, colIndex)
+  markCells(currentCellEl, info.dataRows, info.row, pickMode, colIndex)
   applyPickedMarks(currentTargetEl)
 }
 
@@ -427,6 +606,39 @@ function computeNameHint(el) {
   return undefined
 }
 
+// 取得單一儲存格的文字內容
+function getCellText(cellSpec, tableEl) {
+  if (!tableEl || !cellSpec || !cellSpec.row || !cellSpec.col) return ''
+  const dataRows = resolveDataRows(tableEl)
+  const rowEl = dataRows[cellSpec.row.index]
+  if (!rowEl) return ''
+  const cells = getRowCells(rowEl)
+  const cellEl = cells[cellSpec.col.index]
+  return (cellEl && cellEl.textContent ? cellEl.textContent : '').trim()
+}
+
+// 取得整欄或整列聚合的描述文字
+function getBlockPreview(blockSpec, tableEl) {
+  if (!tableEl || !blockSpec) return ''
+  const isRow = blockSpec.axis === 'row'
+  const axisName = isRow ? '列' : '欄'
+  const dataRows = resolveDataRows(tableEl)
+  let n = 0
+  const idx = (blockSpec.index !== null && blockSpec.index !== undefined) ? blockSpec.index : 0
+  if (isRow) {
+    const rowEl = dataRows[idx]
+    n = rowEl ? getRowCells(rowEl).length : 0
+  } else {
+    for (const r of dataRows) {
+      const cells = getRowCells(r)
+      if (idx >= 0 && idx < cells.length) n++
+    }
+  }
+  const header = typeof blockSpec.headerText === 'string' ? blockSpec.headerText.trim() : ''
+  const label = header ? `「${header}」` : `第 ${Number(idx) + 1} ${axisName}`
+  return `${label}整${axisName} ${n} 格`
+}
+
 // 送出確認訊息並離開
 function confirmPick() {
   // 已選了值就以那張表格為準：滑鼠可能正停在表格外的一段文字上
@@ -446,44 +658,44 @@ function confirmPick() {
     return
   }
 
-  const preview = (currentTargetEl.textContent || '').trim()
-  const previewValue = parseNumber(preview)
-  const blockInfo = { ...kindOf(currentTargetEl) }
-  if (isTableMode(currentTargetEl)) {
-    blockInfo.axis = tableAxis || 'col'
-    blockInfo.index = currentCellIndex()
-    blockInfo.headerText = getHeaderText()
-  } else {
-    delete blockInfo.axis
-    delete blockInfo.index
-  }
-  const msg = { type: MSG.PICKED, purpose: currentPurpose, locator: describe(currentTargetEl), preview, previewValue, blockInfo }
-  if (isTableMode(currentTargetEl)) {
-    const nameHint = computeNameHint(currentTargetEl)
-    if (nameHint) msg.nameHint = nameHint
-  }
-  if (currentTaskId !== undefined) msg.taskId = currentTaskId
-
   let picks = []
   if (selectedList.length > 0) {
     picks = [...selectedList]
   } else {
     if (isTableMode(currentTargetEl)) {
-      if (rowIndex !== null && colIndex !== null) {
-        const dataRows = resolveDataRows(currentTargetEl)
-        const row = dataRows[rowIndex]
+      if (pickMode === 'cell') {
+        if (rowIndex !== null && colIndex !== null) {
+          const dataRows = resolveDataRows(currentTargetEl)
+          const row = dataRows[rowIndex]
+          picks = [{
+            cell: {
+              row: { index: rowIndex, header: row ? rowHeader(row) : '' },
+              col: { index: colIndex, header: columnHeaders(currentTargetEl)[colIndex] || '' }
+            }
+          }]
+        } else {
+          picks = [{
+            block: {
+              axis: 'col',
+              index: currentCellIndex() !== null ? currentCellIndex() : 0,
+              headerText: getHeaderText()
+            }
+          }]
+        }
+      } else if (pickMode === 'row') {
         picks = [{
-          cell: {
-            row: { index: rowIndex, header: row ? rowHeader(row) : '' },
-            col: { index: colIndex, header: columnHeaders(currentTargetEl)[colIndex] || '' }
+          block: {
+            axis: 'row',
+            index: rowIndex !== null ? rowIndex : (currentCellIndex() !== null ? currentCellIndex() : 0),
+            headerText: currentRowEl ? rowHeader(currentRowEl) : getHeaderText()
           }
         }]
       } else {
         picks = [{
           block: {
-            axis: tableAxis || 'col',
-            index: currentCellIndex() !== null ? currentCellIndex() : 0,
-            headerText: getHeaderText()
+            axis: 'col',
+            index: colIndex !== null ? colIndex : (currentCellIndex() !== null ? currentCellIndex() : 0),
+            headerText: colIndex !== null ? (columnHeaders(currentTargetEl)[colIndex] || '') : getHeaderText()
           }
         }]
       }
@@ -495,7 +707,55 @@ function confirmPick() {
   if (currentPurpose !== 'task' && picks.length > 1) {
     picks = picks.slice(0, 1)
   }
-  msg.picks = picks
+
+  const blockInfo = { ...kindOf(currentTargetEl) }
+  if (isTableMode(currentTargetEl)) {
+    blockInfo.axis = pickMode === 'row' ? 'row' : 'col'
+    blockInfo.index = currentCellIndex()
+    blockInfo.headerText = getHeaderText()
+  } else {
+    delete blockInfo.axis
+    delete blockInfo.index
+  }
+
+  const msg = {
+    type: MSG.PICKED,
+    purpose: currentPurpose,
+    locator: describe(currentTargetEl),
+    blockInfo,
+    picks
+  }
+
+  if (isTableMode(currentTargetEl)) {
+    const nameHint = computeNameHint(currentTargetEl)
+    if (nameHint) msg.nameHint = nameHint
+  }
+  if (currentTaskId !== undefined) msg.taskId = currentTaskId
+
+  if (!isTableMode(currentTargetEl)) {
+    msg.preview = (currentTargetEl.textContent || '').trim()
+    msg.previewValue = parseNumber(msg.preview)
+  } else if (picks.length > 1) {
+    const firstText = picks[0].cell
+      ? getCellText(picks[0].cell, currentTargetEl)
+      : (picks[0].block ? getBlockPreview(picks[0].block, currentTargetEl) : (currentTargetEl.textContent || '').trim())
+    msg.preview = `${firstText}（共 ${picks.length} 個值）`
+  } else if (picks.length === 1 && picks[0].cell) {
+    const cellText = getCellText(picks[0].cell, currentTargetEl)
+    msg.preview = cellText
+    const num = parseNumber(cellText)
+    if (num !== null) {
+      msg.previewValue = num
+    }
+  } else if (picks.length === 1 && picks[0].block) {
+    msg.preview = getBlockPreview(picks[0].block, currentTargetEl)
+  } else {
+    msg.preview = (currentTargetEl.textContent || '').trim()
+    const num = parseNumber(msg.preview)
+    if (num !== null) {
+      msg.previewValue = num
+    }
+  }
 
   chrome.runtime.sendMessage(msg)
   exitPickMode()
@@ -522,7 +782,7 @@ function closeMenu() {
 function openMenu(event) {
   const target = event.target
   const tableEl = (currentTargetEl && isTableMode(currentTargetEl)) ? currentTargetEl
-    : (target && target.closest ? target.closest('table, [role="grid"], [role="table"]') : null)
+    : tableOf(target)
   const isTable = Boolean(tableEl && isTableMode(tableEl))
 
   if (!menuEl) {
@@ -535,11 +795,11 @@ function openMenu(event) {
   menuEl.style.position = 'fixed'
   menuEl.style.left = `${event.clientX || 0}px`
   menuEl.style.top = `${event.clientY || 0}px`
-  menuEl.style.backgroundColor = '#ffffff'
-  menuEl.style.border = '1px solid #2563eb'
+  menuEl.style.backgroundColor = COLORS.surface
+  menuEl.style.border = `1px solid ${COLORS.border}`
   menuEl.style.borderRadius = '4px'
   menuEl.style.padding = '4px 0'
-  menuEl.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.15)'
+  menuEl.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.4)'
   menuEl.style.zIndex = '2147483647'
   menuEl.style.pointerEvents = 'auto'
 
@@ -572,9 +832,10 @@ function openMenu(event) {
     el.style.padding = '6px 16px'
     el.style.cursor = 'pointer'
     el.style.fontSize = '12px'
-    el.style.color = '#2563eb'
-    el.style.backgroundColor = '#ffffff'
+    el.style.color = COLORS.text
+    el.style.backgroundColor = COLORS.surface
     el.style.userSelect = 'none'
+    el.style.transition = 'background-color 150ms ease'
     menuEl.appendChild(el)
   }
 }
@@ -831,6 +1092,12 @@ function onKeyDown(event) {
   if (!active) return
   if (event.key === 'Escape') {
     event.preventDefault(); cancelPick()
+  } else if (event.key === 'Backspace') {
+    // 沒有東西可移除就放給頁面：選取模式可能開在有輸入框的頁面上（例如站台登入設定）
+    if (selectedList.length > 0) {
+      event.preventDefault()
+      removeLastPick()
+    }
   } else if (event.key === 'Enter') {
     if (!currentTargetEl) return
     event.preventDefault(); confirmPick()
@@ -854,12 +1121,14 @@ function onKeyDown(event) {
 
         rowIndex = newR
         colIndex = newC
-        cellIndex = tableAxis === 'row' ? rowIndex : colIndex
+        cellIndex = pickMode === 'row' ? rowIndex : colIndex
         currentRowEl = dataRows[rowIndex]
+        const rowCells = getRowCells(currentRowEl)
+        currentCellEl = rowCells[colIndex] || null
 
         addCellPick(newR, newC, dataRows)
         applyPickedMarks(currentTargetEl)
-        markCells(dataRows, currentRowEl, tableAxis, colIndex)
+        markCells(currentCellEl, dataRows, currentRowEl, pickMode, colIndex)
         updatePanel(panelEl, currentTargetEl)
       }
     }
@@ -877,14 +1146,18 @@ function onKeyDown(event) {
   } else if (event.key === 'Tab') {
     if (currentTargetEl && isTableMode(currentTargetEl)) {
       event.preventDefault()
-      tableAxis = tableAxis === 'col' ? 'row' : 'col'
-      limitReached = false
-      cellIndex = tableAxis === 'row' ? rowIndex : colIndex
-      selectedList = []
-      pickedTableEl = null
-      clearPickedMarks(document)
-      markCells(currentDataRows, currentRowEl, tableAxis, colIndex)
-      updatePanel(panelEl, currentTargetEl)
+      const modes = ['cell', 'col', 'row']
+      const availableModes = currentPurpose !== 'task' ? ['cell'] : modes
+      if (availableModes.length > 1) {
+        const curIdx = availableModes.indexOf(pickMode)
+        const nextIdx = (curIdx + 1) % availableModes.length
+        pickMode = availableModes[nextIdx]
+        cellIndex = pickMode === 'row' ? rowIndex : colIndex
+        updateToolbar()
+        markCells(currentCellEl, currentDataRows, currentRowEl, pickMode, colIndex)
+        applyPickedMarks(currentTargetEl)
+        updatePanel(panelEl, currentTargetEl)
+      }
     }
   }
 }
@@ -897,6 +1170,7 @@ function onClick(event) {
     return
   }
 
+  // 1. 右鍵選單處理
   if (menuEl) {
     const menuItem = event.target && event.target.closest ? event.target.closest('[data-af-menu-item]') : null
     if (menuItem) {
@@ -908,35 +1182,122 @@ function onClick(event) {
     return
   }
 
+  // 2. 工具列按鈕點擊
+  const toolBtn = event.target && event.target.closest ? event.target.closest('[data-af-tool]') : null
+  if (toolBtn) {
+    if (toolBtn.getAttribute('aria-disabled') === 'true') {
+      return
+    }
+    const mode = toolBtn.getAttribute('data-af-tool')
+    if (mode && (mode === 'cell' || mode === 'col' || mode === 'row')) {
+      pickMode = mode
+      cellIndex = pickMode === 'row' ? rowIndex : colIndex
+      updateToolbar()
+      if (currentTargetEl && isTableMode(currentTargetEl)) {
+        markCells(currentCellEl, currentDataRows, currentRowEl, pickMode, colIndex)
+        applyPickedMarks(currentTargetEl)
+        updatePanel(panelEl, currentTargetEl)
+      }
+    }
+    return
+  }
+
+  // 3. 已選清單 chip 移除鈕點擊
+  const chipRemoveBtn = event.target && event.target.closest ? event.target.closest('[data-af-chip-remove]') : null
+  if (chipRemoveBtn) {
+    const chipEl = chipRemoveBtn.closest('[data-af-chip]')
+    if (chipEl) {
+      const idx = parseInt(chipEl.getAttribute('data-af-chip'), 10)
+      if (!isNaN(idx)) {
+        removePickAt(idx)
+      }
+    }
+    return
+  }
+
+  // 4. 面板「移除最後一項」按鈕點擊
+  const removeLastBtn = event.target && event.target.closest ? event.target.closest('[data-af-remove-last]') : null
+  if (removeLastBtn) {
+    removeLastPick()
+    return
+  }
+
+  // 5. 面板或工具列本身的其餘點擊（絕對不可以送出確認）
+  if (panelEl && (event.target === panelEl || panelEl.contains(event.target))) {
+    return
+  }
+  if (toolbarEl && (event.target === toolbarEl || toolbarEl.contains(event.target))) {
+    return
+  }
+  // overlay 自己的點擊（非代理層）也不得送出
+  if (overlayEl && (event.target === overlayEl || (overlayEl.contains(event.target) && !frameOfProxy(event.target)))) {
+    return
+  }
+
   if (!currentTargetEl && event.target && (!overlayEl || (!overlayEl.contains(event.target) && event.target !== overlayEl))) {
     setTarget(event.target)
   }
   if (!currentTargetEl) return
 
+  // 6. 表格內的格子點擊
   if (isTableMode(currentTargetEl) && currentTargetEl.contains(event.target)) {
     handleTableMouseMove(event.target)
     const cellInfo = resolveCell(event.target, currentTargetEl)
-    if (cellInfo && event.shiftKey && currentPurpose === 'task') {
-      togglePick(makeCellPick(cellInfo.rIdx, cellInfo.cIdx, currentTargetEl, cellInfo.dataRows))
-      applyPickedMarks(currentTargetEl)
-      updatePanel(panelEl, currentTargetEl)
-      return
-    }
-
-    if (cellInfo && (!event.shiftKey || currentPurpose !== 'task')) {
-      const rIdx = cellInfo.rIdx
-      const cIdx = cellInfo.cIdx
-      const rHeader = rowHeader(cellInfo.dataRows[rIdx]) || ''
-      const cHeader = columnHeaders(currentTargetEl)[cIdx] || ''
-      selectedList = [{
-        cell: {
-          row: { index: rIdx, header: rHeader },
-          col: { index: cIdx, header: cHeader }
+    if (cellInfo) {
+      let candidate = null
+      if (pickMode === 'cell') {
+        candidate = makeCellPick(cellInfo.rIdx, cellInfo.cIdx, currentTargetEl, cellInfo.dataRows)
+      } else if (pickMode === 'col') {
+        candidate = {
+          block: {
+            axis: 'col',
+            index: cellInfo.cIdx,
+            headerText: columnHeaders(currentTargetEl)[cellInfo.cIdx] || ''
+          }
         }
-      }]
+      } else if (pickMode === 'row') {
+        candidate = {
+          block: {
+            axis: 'row',
+            index: cellInfo.rIdx,
+            headerText: cellInfo.row ? rowHeader(cellInfo.row) : ''
+          }
+        }
+      }
+
+      if (candidate) {
+        const isAlreadySelected = selectedList.some(p => samePick(p, candidate))
+
+        // Shift + 點：切換加選／取消，不送出
+        if (event.shiftKey && currentPurpose === 'task') {
+          togglePick(candidate)
+          applyPickedMarks(currentTargetEl)
+          updatePanel(panelEl, currentTargetEl)
+          return
+        }
+
+        // 點一個已經選過的（同一格／同一欄／同一列）：移除它，不送出
+        if (isAlreadySelected) {
+          togglePick(candidate)
+          applyPickedMarks(currentTargetEl)
+          updatePanel(panelEl, currentTargetEl)
+          return
+        }
+
+        // 點一個沒選過的格子：加入並送出。
+        // 加不進去（已達上限）就停在原地提示，不能靜靜送出前面那幾個、把使用者剛點的丟掉
+        if (!addPick(candidate)) {
+          applyPickedMarks(currentTargetEl)
+          updatePanel(panelEl, currentTargetEl)
+          return
+        }
+        confirmPick()
+        return
+      }
     }
   }
 
+  // 非表格模式點擊確認
   confirmPick()
 }
 
@@ -1029,15 +1390,55 @@ export function enterPickMode(opts) {
 
   highlightEl = document.createElement('div')
   highlightEl.setAttribute('data-af-highlight', '')
-  highlightEl.style.position = 'absolute'; highlightEl.style.border = '2px solid #2563eb'
+  highlightEl.style.position = 'absolute'; highlightEl.style.border = `2px solid ${COLORS.primary}`
   highlightEl.style.boxSizing = 'border-box'; highlightEl.style.pointerEvents = 'none'; highlightEl.style.zIndex = '2147483647'
   overlayEl.appendChild(highlightEl)
+
+  // 建立工具列（三段相連，作用中段用主色底）
+  toolbarEl = document.createElement('div')
+  toolbarEl.setAttribute('data-af-toolbar', '')
+  toolbarEl.style.position = 'fixed'; toolbarEl.style.right = '16px'; toolbarEl.style.top = '16px'
+  toolbarEl.style.display = 'flex'; toolbarEl.style.gap = '0'; toolbarEl.style.pointerEvents = 'auto'
+  toolbarEl.style.zIndex = '2147483647'
+  toolbarEl.style.backgroundColor = COLORS.surface
+  toolbarEl.style.border = `1px solid ${COLORS.border}`
+  toolbarEl.style.borderRadius = '8px'
+  toolbarEl.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.4)'
+  toolbarEl.style.overflow = 'hidden'
+
+  const toolsDef = [
+    { key: 'cell', label: '單格' },
+    { key: 'col', label: '整欄' },
+    { key: 'row', label: '整列' }
+  ]
+
+  for (const def of toolsDef) {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.setAttribute('data-af-tool', def.key)
+    btn.textContent = def.label
+    btn.style.padding = '4px 10px'
+    btn.style.fontSize = '12px'
+    btn.style.borderRadius = '0'
+    btn.style.border = 'none'
+    btn.style.borderRight = `1px solid ${COLORS.border}`
+    btn.style.cursor = 'pointer'
+    btn.style.fontFamily = 'inherit'
+    btn.style.minHeight = '28px'
+    btn.style.transition = 'background-color 150ms ease, color 150ms ease'
+    toolbarEl.appendChild(btn)
+  }
+  // 移除最後一個按鈕的右邊框
+  if (toolbarEl.lastChild) toolbarEl.lastChild.style.borderRight = 'none'
+  overlayEl.appendChild(toolbarEl)
 
   panelEl = document.createElement('div')
   panelEl.setAttribute('data-af-panel', '')
   panelEl.style.position = 'fixed'; panelEl.style.right = '16px'; panelEl.style.bottom = '16px'
-  panelEl.style.backgroundColor = '#2563eb'; panelEl.style.color = '#ffffff'; panelEl.style.pointerEvents = 'none'; panelEl.style.zIndex = '2147483647'
-  panelEl.style.padding = '8px 12px'; panelEl.style.borderRadius = '4px'; panelEl.style.fontSize = '12px'; panelEl.style.lineHeight = '1.4'; panelEl.style.whiteSpace = 'pre-line'
+  panelEl.style.backgroundColor = COLORS.surface; panelEl.style.color = COLORS.textMuted; panelEl.style.pointerEvents = 'auto'; panelEl.style.zIndex = '2147483647'
+  panelEl.style.border = `1px solid ${COLORS.border}`
+  panelEl.style.padding = '8px 12px'; panelEl.style.borderRadius = '8px'; panelEl.style.fontSize = '12px'; panelEl.style.lineHeight = '1.4'; panelEl.style.whiteSpace = 'pre-line'
+  panelEl.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.4)'
   overlayEl.appendChild(panelEl)
 
   document.body.appendChild(overlayEl)
@@ -1081,9 +1482,12 @@ export function exitPickMode() {
     }
   }
   active = false; currentPurpose = null; currentTaskId = undefined; currentTargetEl = null; backStack = []
-  overlayEl = null; highlightEl = null; panelEl = null; menuEl = null; tableAxis = null; cellIndex = null; colIndex = null; rowIndex = null
+  overlayEl = null; highlightEl = null; panelEl = null; toolbarEl = null; menuEl = null
+  pickMode = 'cell'; cellIndex = null; colIndex = null; rowIndex = null; currentCellEl = null
   currentDataRows = []; currentRowEl = null
   selectedList = []
+  // 這一個漏清會讓下一次選取沿用上一張表的 locator，配上新表的列欄索引送出去（AF-7 體檢）
+  pickedTableEl = null
   maxPicks = 20
   limitReached = false
   headerChangedNotice = false
@@ -1095,6 +1499,6 @@ export function exitPickMode() {
 
 export function isActive() { return active }
 export function currentTarget() { return currentTargetEl }
-export function currentAxis() { return (!currentTargetEl || !isTableMode(currentTargetEl)) ? null : (tableAxis || 'col') }
+export function currentAxis() { return (!currentTargetEl || !isTableMode(currentTargetEl)) ? null : (pickMode === 'row' ? 'row' : 'col') }
 export function currentCellIndex() { return (!currentTargetEl || !isTableMode(currentTargetEl)) ? null : cellIndex }
 export function selectedCount() { return selectedList.length }

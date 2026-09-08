@@ -255,7 +255,11 @@ test('fallback 與 late 在各處都算成功', async () => {
 
 test('fallback 紀錄在數字卡片顯示值而不是破折號', async () => {
   const { st, ls, db, doc } = await fresh()
-  await st.appendRecord('2026-09-06', rec('t1', '2026-09-06T09:00', 42, 'fallback'))
+  // 日期要跟著今天走：寫死日期的話，儀表板的預設範圍會在幾天後把這筆紀錄濾掉，
+  // 測試就會在某一天突然變紅（AF-7 遇過一次）
+  const today = new Date()
+  const ymd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  await st.appendRecord(ymd, rec('t1', `${ymd}T09:00`, 42, 'fallback'))
   const did = (await ls.getLayout()).dashboards[0].id
   await ls.addCard(did, card())
   await db.renderDashboard(did)

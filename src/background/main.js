@@ -89,7 +89,10 @@ function preselectOf(task) {
       .map(f => (f?.cell ? { cell: f.cell } : (f?.block ? { block: f.block } : null)))
       .filter(Boolean)
   }
-  if (task.spec.block) return [{ block: task.spec.block }]
+  if (task.spec.block) {
+    if (task.spec.block.cell) return [{ cell: task.spec.block.cell }]
+    return [{ block: task.spec.block }]
+  }
   return undefined
 }
 
@@ -286,6 +289,14 @@ function frameIdentityOf(sender) {
 export async function handleMessage(msg, sender) {
   try {
     if (!msg || typeof msg !== 'object') return undefined
+
+    if (msg.type === MSG.TEST_TASK) {
+      const task = msg.task
+      if (!task || typeof task !== 'object' || !task.url || !task.locator || !task.spec) {
+        return { ok: false, error: '任務設定不完整' }
+      }
+      return await runTask(task, { dryRun: true, reason: 'manual', tabId: msg.tabId })
+    }
 
     if (msg.type === MSG.RUN_TASK) {
       const { task } = await getValidTask(msg.taskId)

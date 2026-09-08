@@ -1,6 +1,6 @@
 // AutoFetcher 區塊型別偵測（選取模式面板與 §7 區塊聚合共用同一份判定）
 import { parseNumber } from './extract.js'
-import { columnHeaders } from './table.js'
+import { columnHeaders, innermostTable } from './table.js'
 
 const CELL_SELECTOR = 'td, th, [role="cell"], [role="gridcell"], [role="columnheader"]'
 
@@ -14,7 +14,16 @@ function isTableLike(el) {
 // 取得表格的列元素；ARIA 表格可能沒有 tr
 function getRows(el) {
   if (typeof el.querySelectorAll !== 'function') return []
-  const rows = Array.from(el.querySelectorAll('tr, [role="row"]'))
+  const allRows = Array.from(el.querySelectorAll('tr, [role="row"]'))
+  // 只留「這張表自己的」列，排除巢狀小表格的列。
+  // 容器是 role="table" 而裡面包著真的 <table> 時，closest 會停在內層那張表，
+  // 用它當判準會把每一列都濾掉、列數歸零，所以改成「往上找到的第一張表就是 el 或 el 裡的那一張」。
+  const owner = el.tagName === 'TABLE' ? el : (typeof el.querySelector === 'function' ? el.querySelector('table') : null)
+  const rows = allRows.filter((row) => {
+    if (typeof row.closest !== 'function') return true
+    const host = row.closest('table, [role="grid"], [role="table"]')
+    return host === el || (owner !== null && host === owner)
+  })
   if (rows.length > 0) return rows
   return Array.from(el.children || []).filter(
     (child) => child.getAttribute && child.getAttribute('role') === 'row'
@@ -28,7 +37,10 @@ function describeTable(el) {
 
   for (const row of rows) {
     if (typeof row.querySelectorAll !== 'function') continue
-    const cells = row.querySelectorAll(CELL_SELECTOR)
+    const allCells = Array.from(row.querySelectorAll(CELL_SELECTOR))
+    const cells = allCells.filter(
+      (cell) => typeof cell.closest !== 'function' || cell.closest('tr, [role="row"]') === row
+    )
     if (cells.length > cols) cols = cells.length
   }
 
@@ -44,11 +56,9 @@ function describeTable(el) {
 export function detectKind(el) {
   if (!el) return { kind: 'text', value: null }
 
-  // 1. 表格：巢狀表格取最內層（排版用表格常把真正的資料表包在裡面）
+  // 1. 表格：巢狀表格只在純包裝時取內層
   if (isTableLike(el)) {
-    const inner = typeof el.querySelector === 'function' ? el.querySelector('table') : null
-    if (inner) return describeTable(inner)
-    return describeTable(el)
+    return describeTable(innermostTable(el))
   }
 
   // 2. 清單

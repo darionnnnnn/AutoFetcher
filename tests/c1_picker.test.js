@@ -171,24 +171,29 @@ test('儲存:成功時寫入 storage 並請 background 重建排程', async () =
   assert.equal(msg.args[0].type, 'REBUILD_ALARMS')
 })
 
-test('立即測試:送 EXTRACT 到目標分頁並顯示結果,不寫入 storage', async () => {
+// AF-7 起改交給 background 走與正式抓取同一條路徑（重新定位 frame、重新注入），
+// 不再自己對頁面送 EXTRACT——頁面刷新後 content script 已經不在了。
+test('立即測試:交給背景執行並顯示結果,不寫入 storage', async () => {
   const { c, st, pk, doc } = await fresh()
-  c.__setTabResponder(() => ({ ok: true, value: 42, raw: '42', status: 'ok', strategyUsed: 'auto' }))
+  c.__setRuntimeResponder(() => ({ ok: true, value: 42, raw: '42', status: 'ok', strategyUsed: 'auto' }))
   pk.render({ locator: LOCATOR, preview: '1', previewValue: 1, url: 'https://a.test/p', tabId: 7 })
   doc.getElementById('name').value = '總量'
   await pk.handleTestNow()
-  const sent = c.__calls.find(x => x.api === 'tabs.sendMessage')
-  assert.ok(sent, '應向目標分頁要值')
-  assert.equal(sent.args[0], 7)
-  assert.equal(sent.args[1].type, 'EXTRACT')
+  const sent = c.__calls
+    .filter(x => x.api === 'runtime.sendMessage')
+    .map(x => x.args[0])
+    .find(m => m?.type === 'TEST_TASK')
+  assert.ok(sent, '應交給背景執行')
+  assert.equal(sent.tabId, 7)
+  assert.equal(c.__calls.filter(x => x.api === 'tabs.sendMessage').length, 0, '不得自己對頁面送訊息')
   assert.match(doc.getElementById('preview').textContent, /42/)
   assert.equal((await st.getTasks()).length, 0, '測試不得建立任務')
 })
 
 test('立即測試:抓不到時顯示原因', async () => {
   const { c, pk, doc } = await fresh()
-  c.__setTabResponder(() => ({ ok: false, error: 'not_found' }))
+  c.__setRuntimeResponder(() => ({ ok: false, error: 'not_found' }))
   pk.render({ locator: LOCATOR, preview: '1', previewValue: 1, url: 'https://a.test/p', tabId: 7 })
   await pk.handleTestNow()
-  assert.match(doc.getElementById('preview').textContent + doc.getElementById('errors').textContent, /not_found|找不到/)
+  assert.match(doc.getElementById('errors').textContent, /not_found|找不到/)
 })

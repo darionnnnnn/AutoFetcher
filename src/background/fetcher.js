@@ -18,6 +18,18 @@ function sleep(ms) {
 }
 
 // 解析 URL 取得 origin
+// 兩個網址是不是同一個目標頁（query 常帶 token 或時戳，只比 origin + path）
+function sameTarget(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false
+  try {
+    const ua = new URL(a)
+    const ub = new URL(b)
+    return ua.origin === ub.origin && ua.pathname === ub.pathname
+  } catch {
+    return false
+  }
+}
+
 function getOrigin(url) {
   try {
     return new URL(url).origin
@@ -316,24 +328,37 @@ export async function runTask(task, opts = {}) {
         } catch {}
       }
 
-      // 5. 分頁檢查：已存在則沿用，無則建立分頁
-      const tabs = await chrome.tabs.query({ url: task.url })
+      // 5. 分頁檢查：指定分頁存在則直接用，無則沿用既有網址分頁或新建
       let tabId
-      if (tabs.length > 0) {
-        tabId = tabs[0].id
-        if (task.foreground === true) {
-          try {
-            await chrome.tabs.update(tabId, { active: true })
-          } catch {}
+      if (opts.tabId !== undefined && opts.tabId !== null) {
+        try {
+          const tab = await chrome.tabs.get(opts.tabId)
+          // 那個分頁可能已經被使用者導去別的網站；讀它現在的網址核對過才用，
+          // 否則會在不相干的頁面上定位與擷取（對不上就退回原本的找分頁流程）
+          if (tab !== undefined && tab !== null && sameTarget(tab.url, task.url)) {
+            tabId = tab.id
+          }
+        } catch {}
+      }
+
+      if (tabId === undefined) {
+        const tabs = await chrome.tabs.query({ url: task.url })
+        if (tabs.length > 0) {
+          tabId = tabs[0].id
+          if (task.foreground === true) {
+            try {
+              await chrome.tabs.update(tabId, { active: true })
+            } catch {}
+          }
+        } else {
+          const newTab = await chrome.tabs.create({
+            url: task.url,
+            active: task.foreground === true,
+            autoDiscardable: false
+          })
+          tabId = newTab.id
+          queueCtx.createdTabs.add(tabId)
         }
-      } else {
-        const newTab = await chrome.tabs.create({
-          url: task.url,
-          active: task.foreground === true,
-          autoDiscardable: false
-        })
-        tabId = newTab.id
-        queueCtx.createdTabs.add(tabId)
       }
 
       // 6. 檢查分頁是否已被丟棄，若是則重新載入
