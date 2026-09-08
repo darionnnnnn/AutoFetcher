@@ -464,6 +464,11 @@ export async function runTask(task, opts = {}) {
               if (r.skipped !== undefined) {
                 rec.skipped = r.skipped
               }
+              // 位置定位抓到的值要記下是哪一列：每天的最後一筆會變，
+              // 光看數字看不出抓的是今天還是昨天那一列
+              if (r.label !== undefined) {
+                rec.label = r.label
+              }
             } else {
               rec.status = r?.error || 'error'
               if (r?.raw !== undefined) {
@@ -556,6 +561,9 @@ export async function runTask(task, opts = {}) {
         }
         if (res.skipped !== undefined) {
           record.skipped = res.skipped
+        }
+        if (res.label !== undefined) {
+          record.label = res.label
         }
         if (res.partial === true) {
           record.partial = true

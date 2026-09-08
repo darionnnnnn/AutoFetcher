@@ -412,3 +412,65 @@ test('在 iframe 裡右鍵選的目標，frame 身分要一路傳到任務裡', 
   )
   assert.deepEqual(task.frame, { url: 'https://b.example/widget.html?token=abc' })
 })
+
+// ---- AF-8:位置定位要從選取一路走到擷取、匯出與再匯入 ----
+
+test('位置定位從 Picker 一路走到 extractValue 都還在', async () => {
+  const { pk, doc } = await freshPicker()
+  pk.render({
+    url: 'https://twse.test/p',
+    locator: { css: '#t' },
+    nameHint: '市場成交資訊',
+    blockInfo: { kind: 'table', rows: 3, cols: 3 },
+    picks: [{ cell: { row: { index: 2, header: '115/09/03' }, col: { index: 2, header: '成交金額' } } }]
+  })
+  doc.getElementById('row-pos').value = 'last'
+  doc.getElementById('row-pos').dispatchEvent(new globalThis.window.Event('change', { bubbles: true }))
+
+  const values = pk.getFormData()
+  const spec = pk.buildSpec(values)
+  assert.equal(spec.block.cell.row.pos, 'last', 'Picker 要把位置寫進規格')
+
+  const task = pk.buildTask(values, { css: '#t' })
+  assert.equal(task.spec.block.cell.row.pos, 'last', '存進任務時不得掉了')
+
+  const { extractValue } = await import('../src/shared/extract.js?t=' + Math.random())
+  const jd = new JSDOM(`<!doctype html><body><table id="t">
+    <thead><tr><th>日期</th><th>成交股數</th><th>成交金額</th></tr></thead>
+    <tbody>
+      <tr><td>115/09/01</td><td>1</td><td>111</td></tr>
+      <tr><td>115/09/02</td><td>2</td><td>222</td></tr>
+      <tr><td>115/09/03</td><td>3</td><td>333</td></tr>
+      <tr><td>115/09/04</td><td>4</td><td>444</td></tr>
+    </tbody></table></body>`)
+  const res = extractValue(jd.window.document.getElementById('t'), task.spec)
+  assert.equal(res.value, 444, '擷取端要用當下的最後一列，不是規格裡那個索引')
+  assert.equal(res.label, '115/09/04', '紀錄要能追溯抓的是哪一列')
+})
+
+test('位置定位經過設定匯出再匯入還在', async () => {
+  const { c, st, pk } = await freshPicker()
+  const task = pk.buildTask(
+    {
+      name: '成交金額', url: 'https://twse.test/p', mode: 'block', strategy: 'auto',
+      scheduleType: 'daily', times: ['09:30'], weekdays: [1],
+      block: { cell: { row: { pos: 'last' }, col: { index: 2, header: '成交金額' } } }
+    },
+    { css: '#t' }
+  )
+  await st.saveTask(task)
+
+  const sio = await import('../src/shared/settings-io.js?t=' + Math.random())
+  const dump = await sio.exportSettings()
+  const json = typeof dump === 'string' ? dump : JSON.stringify(dump)
+
+  resetChromeMock()
+  installChromeMock()
+  const st2 = await import('../src/shared/storage.js?t=' + Math.random())
+  await st2.init()
+  const sio2 = await import('../src/shared/settings-io.js?t=' + Math.random())
+  await sio2.importSettings(json)
+  const back = await st2.getTask(task.id)
+  assert.equal(back?.spec?.block?.cell?.row?.pos, 'last', '匯出入不得把定位方式弄丟')
+  void c
+})

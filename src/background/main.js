@@ -33,8 +33,20 @@ function pickSpecOf(pick) {
   if (pick?.block) return { block: { axis: pick.block.axis, index: pick.block.index, headerText: pick.block.headerText } }
   return null
 }
+// 比對「是不是同一個值」時要忽略定位方式：重選送回來的 pick 沒有 pos，
+// 帶著 pos 去比會永遠不相等，於是 key 重生、歷史紀錄的序列就斷了
+function stripPos(spec) {
+  if (!spec) return spec
+  const out = JSON.parse(JSON.stringify(spec))
+  if (out.cell) {
+    delete out.cell.row?.pos
+    delete out.cell.col?.pos
+  }
+  if (out.block) delete out.block.pos
+  return out
+}
 function sameSpec(a, b) {
-  return JSON.stringify(pickSpecOf(a)) === JSON.stringify(pickSpecOf(b))
+  return JSON.stringify(stripPos(pickSpecOf(a))) === JSON.stringify(stripPos(pickSpecOf(b)))
 }
 function defaultFieldName(pick, n) {
   if (pick?.cell) {
@@ -44,6 +56,21 @@ function defaultFieldName(pick, n) {
   }
   return pick?.block?.headerText || `值 ${n}`
 }
+// 重選只換位置與標題，使用者原本設的「定位方式」（依標題／第一筆／最後一筆）要留著，
+// 不然重選一次就默默退回依標題，每天新增列的表格隔天就抓不到了。
+function keepPos(nextSpec, prevSpec) {
+  if (!nextSpec || !prevSpec) return nextSpec
+  if (nextSpec.cell && prevSpec.cell) {
+    for (const axis of ['row', 'col']) {
+      const pos = prevSpec.cell[axis]?.pos
+      if (pos && nextSpec.cell[axis]) nextSpec.cell[axis].pos = pos
+    }
+  } else if (nextSpec.block && prevSpec.block && prevSpec.block.pos) {
+    nextSpec.block.pos = prevSpec.block.pos
+  }
+  return nextSpec
+}
+
 function applyRepick(task, picks) {
   if (picks.length === 0) return
   const hadFields = Array.isArray(task.fields) && task.fields.length > 0
@@ -54,9 +81,11 @@ function applyRepick(task, picks) {
     task.mode = 'block'
     task.spec = { ...(task.spec || {}), mode: 'block' }
     delete task.spec.fields
-    task.spec.block = spec.cell
+    const prev = task.spec?.block
+    const next = spec.cell
       ? { cell: spec.cell }
       : { ...spec.block, aggregate: task.spec?.block?.aggregate || 'sum' }
+    task.spec.block = keepPos(next, prev && prev.cell ? { cell: prev.cell } : { block: prev })
     return
   }
   const aggregate = task.spec?.block?.aggregate
@@ -73,7 +102,10 @@ function applyRepick(task, picks) {
     const key = kept ? kept.key : crypto.randomUUID().slice(0, 8)
     const name = kept ? (oldNames.get(kept.key) || defaultFieldName(pick, i + 1)) : defaultFieldName(pick, i + 1)
     fields.push({ key, name })
-    specFields.push(spec.cell ? { key, cell: spec.cell } : { key, block: { ...spec.block, aggregate } })
+    const nextSpec = spec.cell ? { cell: spec.cell } : { block: { ...spec.block, aggregate } }
+    const prevSpec = kept ? (kept.cell ? { cell: kept.cell } : { block: kept.block }) : null
+    const withPos = prevSpec ? keepPos(nextSpec, prevSpec) : nextSpec
+    specFields.push(withPos.cell ? { key, cell: withPos.cell } : { key, block: withPos.block })
   })
   task.mode = 'block'
   task.fields = fields

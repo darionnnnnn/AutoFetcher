@@ -4,7 +4,7 @@
 import { MSG } from '../shared/messages.js'
 import { describe } from '../shared/selector.js'
 import { detectKind } from '../shared/block-detect.js'
-import { parseNumber } from '../shared/extract.js'
+import { parseNumber, resolveByPosition } from '../shared/extract.js'
 import { columnHeaders, rowHeader } from '../shared/table.js'
 
 // 顏色常數（對應 theme.css 暗色軌）——這是本檔唯一允許出現色碼字面值的地方
@@ -1125,6 +1125,14 @@ function addCellPick(r, c, dataRows) {
 }
 
 // 套用預選項
+// 位置定位（第一筆／最後一筆／倒數第二筆）換算成當下的索引；不是位置定位就回 null。
+// 判定與 shared/extract.js 的 resolveByPosition 同一套規則。
+function posIndexOf(pos, count) {
+  if (pos !== 'first' && pos !== 'last' && pos !== 'last-1') return null
+  const idx = resolveByPosition(pos, count)
+  return idx >= 0 ? idx : null
+}
+
 function applyPreselect(preselect, tableEl) {
   if (!Array.isArray(preselect) || !tableEl || !isTableMode(tableEl)) return
   const dataRows = resolveDataRows(tableEl)
@@ -1141,6 +1149,13 @@ function applyPreselect(preselect, tableEl) {
       let rHeader = item.cell.row ? item.cell.row.header : ''
       let cIdx = item.cell.col ? item.cell.col.index : null
       let cHeader = item.cell.col ? item.cell.col.header : ''
+
+      // 用位置定位的軸要以當下的筆數重算索引，不比對標題
+      // （標題正是因為會變才改用位置的）
+      const rPos = posIndexOf(item.cell.row?.pos, dataRows.length)
+      if (rPos !== null) { rIdx = rPos; rHeader = '' }
+      const cPos = posIndexOf(item.cell.col?.pos, colHeaders.length)
+      if (cPos !== null) { cIdx = cPos; cHeader = '' }
 
       if (cHeader) {
         const found = colHeaders.indexOf(cHeader)

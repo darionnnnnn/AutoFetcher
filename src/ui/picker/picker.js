@@ -81,6 +81,8 @@ export function getFormData() {
   })
 
   const aggregateValue = document.getElementById('block-aggregate')?.value || 'sum'
+  const rowPos = posValueOf('row-pos')
+  const colPos = posValueOf('col-pos')
   const fieldRows = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
   let fields = undefined
   if (fieldRows.length > 0) {
@@ -90,10 +92,10 @@ export function getFormData() {
       const name = rawName || `值 ${index + 1}`
       const spec = row._spec || fieldSpecs.get(key) || {}
       const item = { key, name }
-      if (spec.cell) item.cell = spec.cell
+      if (spec.cell) item.cell = applyPosToCell(spec.cell, rowPos, colPos)
       // 整欄／整列的值要聚合，聚合方式來自表單（全任務一份）；
       // 少了這一行，抓取端會拿不到設定而預設成加總，下拉等於裝飾品
-      if (spec.block) item.block = { ...spec.block, aggregate: aggregateValue }
+      if (spec.block) item.block = applyPosToBlock({ ...spec.block, aggregate: aggregateValue }, rowPos, colPos)
       return item
     })
   }
@@ -108,19 +110,70 @@ export function getFormData() {
     data.fields = fields
   } else if (mode === 'block') {
     if (currentBlock && currentBlock.cell) {
-      data.block = { cell: currentBlock.cell }
+      data.block = { cell: applyPosToCell(currentBlock.cell, rowPos, colPos) }
     } else {
       const agg = document.getElementById('block-aggregate')?.value || 'sum'
-      data.block = {
+      data.block = applyPosToBlock({
         axis: currentBlock?.axis,
         index: currentBlock?.index,
         headerText: currentBlock?.headerText,
         aggregate: agg
-      }
+      }, rowPos, colPos)
     }
   }
 
   return data
+}
+
+// ---- 位置定位（第一筆／最後一筆／倒數第二筆）----
+// 表格每天在最前或最後新增一筆時，「第幾筆」比會變動的標題可靠。
+// 位置是任務層級的設定，寫進規格時每個值的同一軸各帶一份。
+const POS_VALUES = ['first', 'last', 'last-1']
+export const POS_LABELS = { first: '第一', last: '最後一', 'last-1': '倒數第二' }
+
+function posValueOf(id) {
+  const v = document.getElementById(id)?.value || ''
+  return POS_VALUES.includes(v) ? v : ''
+}
+
+// 有位置就不看索引與標題；沒有就把 pos 拿掉（改回依標題定位）
+function withPos(axisSpec, pos) {
+  const next = { ...(axisSpec || {}) }
+  if (pos) next.pos = pos
+  else delete next.pos
+  return next
+}
+
+function applyPosToCell(cell, rowPos, colPos) {
+  return {
+    row: withPos(cell?.row, rowPos),
+    col: withPos(cell?.col, colPos)
+  }
+}
+
+// 整欄／整列加上「另一軸的位置」＝只取那一格：整欄配列的位置、整列配欄的位置
+function applyPosToBlock(block, rowPos, colPos) {
+  const cross = block?.axis === 'row' ? colPos : rowPos
+  const next = { ...(block || {}) }
+  if (cross) next.pos = cross
+  else delete next.pos
+  return next
+}
+
+// 從既有規格把位置帶回下拉（多值任務取第一個值，位置本來就是全任務一份）
+function posFromSpec(spec) {
+  if (!spec) return { rowPos: '', colPos: '' }
+  const first = Array.isArray(spec.fields) && spec.fields.length > 0 ? spec.fields[0] : spec.block
+  if (!first) return { rowPos: '', colPos: '' }
+  if (first.cell) {
+    return { rowPos: first.cell.row?.pos || '', colPos: first.cell.col?.pos || '' }
+  }
+  if (first.block || first.axis) {
+    const b = first.block || first
+    if (!b.pos) return { rowPos: '', colPos: '' }
+    return b.axis === 'row' ? { rowPos: '', colPos: b.pos } : { rowPos: b.pos, colPos: '' }
+  }
+  return { rowPos: '', colPos: '' }
 }
 
 export function validateForm(values) {
@@ -492,7 +545,15 @@ export function render(ctx) {
     const nameEl = document.getElementById('name')
     if (nameEl && !nameEl.value.trim()) {
       let defaultName = ''
-      if (ctx?.nameHint && String(ctx.nameHint).trim()) {
+      // 單值儲存格：使用者選的是「成交金額」那一格，名稱就用欄標題。
+      // 用整張表的標題（nameHint）或左邊那格的文字（anchor.text）都不是他選的東西。
+      const soleCell = (Array.isArray(ctx?.picks) && ctx.picks.length === 1 && ctx.picks[0].cell)
+        ? ctx.picks[0].cell
+        : null
+      const cellName = soleCell ? singleCellName(soleCell) : ''
+      if (cellName) {
+        defaultName = cellName
+      } else if (ctx?.nameHint && String(ctx.nameHint).trim()) {
         defaultName = String(ctx.nameHint).trim()
       } else if (ctx?.locator?.anchor?.text && String(ctx.locator.anchor.text).trim()) {
         defaultName = String(ctx.locator.anchor.text).trim()
@@ -501,9 +562,14 @@ export function render(ctx) {
       }
       if (defaultName) {
         nameEl.value = defaultName
+        // 記下自動填的值：使用者之後改了定位方式時，只重算他沒有手動改過的名稱
+        nameEl._afAutoName = defaultName
       }
     }
   }
+
+  // 位置要先決定：值的名稱會用到它（「成交金額（最後一列）」）
+  applyPositionDefaults(currentCtx)
 
   const isMulti = Boolean((ctx?.picks && Array.isArray(ctx.picks) && ctx.picks.length >= 2) || (ctx?.task && Array.isArray(ctx.task.fields) && ctx.task.fields.length > 0))
   if (isMulti) {
@@ -552,22 +618,8 @@ export function render(ctx) {
       }
       usedKeys.add(key)
 
-      let rawName = ''
-      if (pick.cell) {
-        const rowH = pick.cell.row?.header?.trim() || ''
-        const colH = pick.cell.col?.header?.trim() || ''
-        if (rowH && colH) {
-          rawName = `${rowH} · ${colH}`
-        } else if (rowH || colH) {
-          rawName = rowH || colH
-        } else {
-          rawName = `值 ${index + 1}`
-        }
-      } else if (pick.block) {
-        rawName = pick.block.headerText?.trim() || `值 ${index + 1}`
-      } else {
-        rawName = `值 ${index + 1}`
-      }
+      // 名稱與定位方式綁在一起（用位置的軸不放會變的標題），只有這一份
+      const rawName = defaultPickName(pick, index)
 
       const count = (nameCounts.get(rawName) || 0) + 1
       nameCounts.set(rawName, count)
@@ -648,7 +700,116 @@ export function render(ctx) {
   bindAlertEvents()
   bindPreActionEvents()
   bindPreActionMessageListener()
+  bindPosEvents()
   updateBlockSection()
+}
+
+// 使用者點的是第一列或最後一列時「建議」改用位置定位，但**不替他改設定**：
+// 兩列的匯率表點第一列（美金）跟每日成交表點最後一列，在資料上長得一模一樣，
+// 猜錯就是默默換掉定位方式。建議寫在摘要那一行，決定權留給使用者。
+let posSuggestion = ''
+function applyPositionDefaults(ctx) {
+  posSuggestion = ''
+  const rowEl = document.getElementById('row-pos')
+  const colEl = document.getElementById('col-pos')
+  if (!rowEl || !colEl) return
+
+  // 編輯既有任務：一律從規格回填
+  if (ctx?.task?.spec) {
+    const { rowPos, colPos } = posFromSpec(ctx.task.spec)
+    rowEl.value = rowPos
+    colEl.value = colPos
+    return
+  }
+
+  rowEl.value = ''
+  colEl.value = ''
+
+  const rows = Number(ctx?.blockInfo?.rows)
+  const picks = Array.isArray(ctx?.picks) ? ctx.picks : []
+  const cellPicks = picks.filter(p => p?.cell)
+  if (!Number.isFinite(rows) || rows <= 1 || cellPicks.length === 0) return
+  const indices = new Set(cellPicks.map(p => Number(p.cell.row?.index)))
+  if (indices.size !== 1) return
+  const idx = [...indices][0]
+  if (idx === rows - 1) {
+    posSuggestion = '你選的是最後一列。若這張表每天在最後新增一列，把「列定位」改成「最後一筆」'
+      + '就會每次都抓新的那筆；最後一列若是合計，選「倒數第二筆」。'
+  } else if (idx === 0) {
+    posSuggestion = '你選的是第一列。若這張表每天在最前面新增一列，把「列定位」改成「第一筆」'
+      + '就會每次都抓新的那筆。'
+  }
+}
+
+function bindPosEvents() {
+  for (const id of ['row-pos', 'col-pos']) {
+    const el = document.getElementById(id)
+    if (!el || el._posEventsBound) continue
+    el.addEventListener('change', () => {
+      // 改了定位方式就不再顯示建議，並把還沒被手動改過的名稱重算
+      posSuggestion = ''
+      refreshDefaultNames()
+      updateBlockSection()
+      updateFieldListState()
+    })
+    el._posEventsBound = true
+  }
+}
+
+// 定位方式一改，預設名稱的意義就變了（「115/09/07 · 成交金額」→「成交金額（最後一列）」）。
+// 只重算使用者沒有手動改過的那些，手改過的一律尊重。
+function refreshDefaultNames() {
+  const picks = Array.isArray(currentCtx?.picks) ? currentCtx.picks : []
+  const rows = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
+  rows.forEach((row, index) => {
+    const input = row.querySelector('input[data-field-name]')
+    if (!input) return
+    if (input._afAutoName !== undefined && input.value !== input._afAutoName) return
+    const pick = picks[index] || (row._spec ? { ...row._spec } : null)
+    if (!pick) return
+    const next = defaultPickName(pick, index)
+    input.value = next
+    input._afAutoName = next
+  })
+
+  if (rows.length === 0 && picks.length === 1 && picks[0].cell) {
+    const nameEl = document.getElementById('name')
+    if (nameEl && (nameEl._afAutoName === undefined || nameEl.value === nameEl._afAutoName)) {
+      const next = singleCellName(picks[0].cell) || nameEl.value
+      nameEl.value = next
+      nameEl._afAutoName = next
+    }
+  }
+}
+
+// 單值儲存格的預設任務名稱：使用者選的是那一欄，名稱就用欄標題
+function singleCellName(cell) {
+  const rowPos = posValueOf('row-pos')
+  const colPos = posValueOf('col-pos')
+  const colH = colPos ? '' : String(cell?.col?.header || '').trim()
+  const rowH = rowPos ? '' : String(cell?.row?.header || '').trim()
+  return colH || rowH || ''
+}
+
+// 多值任務裡每個值的預設名稱；用位置定位的那一軸不放會變動的標題
+function defaultPickName(pick, index) {
+  if (pick?.cell) {
+    const rowPos = posValueOf('row-pos')
+    const colPos = posValueOf('col-pos')
+    const rowH = rowPos ? '' : (pick.cell.row?.header?.trim() || '')
+    const colH = colPos ? '' : (pick.cell.col?.header?.trim() || '')
+    const suffix = [
+      rowPos ? `${POS_LABELS[rowPos]}列` : '',
+      colPos ? `${POS_LABELS[colPos]}欄` : ''
+    ].filter(Boolean).join('、')
+    let base
+    if (rowH && colH) base = `${rowH} · ${colH}`
+    else if (rowH || colH) base = rowH || colH
+    else base = suffix ? '值' : `值 ${index + 1}`
+    return suffix ? `${base}（${suffix}）` : base
+  }
+  if (pick?.block) return pick.block.headerText?.trim() || `值 ${index + 1}`
+  return `值 ${index + 1}`
 }
 
 // 卡片型別對應的預設尺寸
@@ -681,6 +842,29 @@ function applyDefaultCardTypes() {
   }
 }
 
+// 位置定位的白話說明：講使用者的情境，不是講欄位名稱
+function updatePosHint() {
+  const hintEl = document.getElementById('pos-hint')
+  if (!hintEl) return
+  const rowPos = posValueOf('row-pos')
+  const colPos = posValueOf('col-pos')
+  hintEl.textContent = (rowPos || colPos)
+    ? '每次抓取都重算位置，表格新增資料時會自動跟著走。最後一列若是合計，改選「倒數第二筆」。'
+    : '表格每天在最後加一列（例如每日成交資訊）→ 列定位改選「最後一筆」；'
+      + '最後一列是合計 → 選「倒數第二筆」。標題不會變的表格維持「依標題」即可。'
+}
+
+// 摘要那一行：說出這次會抓哪一格；還沒設定位置但看起來用得上時給建議
+function positionSummaryText() {
+  const rowPos = posValueOf('row-pos')
+  const colPos = posValueOf('col-pos')
+  if (!rowPos && !colPos) return posSuggestion
+  const parts = []
+  if (rowPos) parts.push(`${POS_LABELS[rowPos]}列`)
+  if (colPos) parts.push(`${POS_LABELS[colPos]}欄`)
+  return `每次抓取取${parts.join('的')}，不看標題`
+}
+
 /**
  * 更新區塊設定區顯示與說明文字
  */
@@ -694,16 +878,21 @@ function updateBlockSection() {
   }
 
   section.hidden = false
+  updatePosHint()
   const summaryEl = document.getElementById('block-summary')
   if (!summaryEl) return
 
+  const posNote = positionSummaryText()
   const hasFields = document.querySelectorAll('#field-list [data-field-row]').length > 0
   if (hasFields) {
-    if (currentBlock && currentBlock.rows !== undefined && currentBlock.cols !== undefined) {
-      summaryEl.textContent = `表格 ${currentBlock.rows} 列 × ${currentBlock.cols} 欄`
-    } else {
-      summaryEl.textContent = ''
-    }
+    const base = (currentBlock && currentBlock.rows !== undefined && currentBlock.cols !== undefined)
+      ? `表格 ${currentBlock.rows} 列 × ${currentBlock.cols} 欄`
+      : ''
+    summaryEl.textContent = [base, posNote].filter(Boolean).join('\n')
+    return
+  }
+  if (posNote) {
+    summaryEl.textContent = posNote
     return
   }
 
@@ -844,7 +1033,9 @@ function updateFieldListState() {
     const hasBlockField = n > 0
       ? rows.some(r => (r._spec || fieldSpecs.get(r.dataset.fieldKey || ''))?.block)
       : !(currentBlock && currentBlock.cell)
-    aggLabel.hidden = !hasBlockField
+    // 有位置定位就是取那一格，沒有東西要聚合
+    const usesPosition = Boolean(posValueOf('row-pos') || posValueOf('col-pos'))
+    aggLabel.hidden = !hasBlockField || usesPosition
   }
   applyDefaultCardTypes()
 
@@ -877,6 +1068,8 @@ function createFieldRow({ key, name, spec }) {
   input.type = 'text'
   input.setAttribute('data-field-name', '')
   input.value = name
+  // 自動填的基準值：改定位方式時只重算沒被手動改過的名稱
+  input._afAutoName = name
   input.placeholder = '值名稱'
   input.addEventListener('input', () => {
     updateAlertRowsFields()
