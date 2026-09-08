@@ -27,7 +27,7 @@ let pendingPreselect = null
 let overlayEl = null, highlightEl = null, panelEl = null, toolbarEl = null, menuEl = null
 // 面板拆兩層：內文每次重建，動作列建一次只更新文字——
 // 每次 hover 重建按鈕會把焦點與正在按下的那一顆整個換掉，使用者會覺得「完成鈕點了沒反應」
-let panelBodyEl = null, panelActionsEl = null, panelDoneEl = null, panelUndoEl = null
+let panelBodyEl = null, panelDoneEl = null, panelUndoEl = null
 // 「取代」前的已選清單快照：取代是最容易誤觸的動作，要留一步可以反悔
 let undoSnapshot = null
 // 面板固定在右下角，但游標靠近時要閃到左下角，否則它就擋在使用者要選的內容上
@@ -458,7 +458,7 @@ function removeLastPick() {
 // 產生說明面板文字與已選清單
 function updatePanel(panel, el) {
   if (!panel) return
-  // 動作列在 panelActionsEl，不能跟著內文一起被清掉
+  // 動作列是 panelBodyEl 的兄弟節點，不能跟著內文一起被清掉
   const body = panelBodyEl && panel.contains(panelBodyEl) ? panelBodyEl : panel
   while (body.firstChild) {
     body.removeChild(body.firstChild)
@@ -662,7 +662,6 @@ function buildPanelActions() {
   undo.hidden = true
   bar.appendChild(undo)
 
-  panelActionsEl = bar
   panelDoneEl = done
   panelUndoEl = undo
   return bar
@@ -698,10 +697,11 @@ function updatePanelActions(el) {
     done.textContent = '完成（這個元素）'
   }
   const disabled = done.getAttribute('aria-disabled') === 'true'
+  // 有東西可以完成時才是主要動作（未選時長得跟「取消」一樣重會誘導誤按）；
+  // 樣式先套，游標與透明度後蓋，否則停用時的 not-allowed 會被 pointer 洗掉
+  styleActionButton(done, n > 0 || !disabled)
   done.style.cursor = disabled ? 'not-allowed' : 'pointer'
   done.style.opacity = disabled ? '0.5' : '1'
-  // 有東西可以完成時才是主要動作（未選時長得跟「取消」一樣重會誘導誤按）
-  styleActionButton(done, n > 0 || !disabled)
 
   if (panelUndoEl) panelUndoEl.hidden = !undoSnapshot
 }
@@ -718,6 +718,8 @@ function setTarget(el) {
     selectedList = []
     limitReached = false
     pickedTableEl = null
+    // 快照裡是上一張表的列欄索引，留著會被 Ctrl+Z 配上這張表的定位送出去（AF-7 同型缺陷）
+    undoSnapshot = null
   }
   clearMarkedCells(document)
   currentTargetEl = el; currentDataRows = []; currentRowEl = null; colIndex = null; rowIndex = null; cellIndex = null; currentCellEl = null
@@ -1239,6 +1241,8 @@ function samePick(a, b) {
 
 // 加入一個值：去重與上限的判斷只有這一份，所有加選路徑都走它
 function addPick(pick) {
+  // 任何加選都讓復原快照失效（取代之後又加了東西，就沒有「上一步」可回了）
+  clearUndoSnapshot()
   if (selectedList.some(p => samePick(p, pick))) return false
   if (selectedList.length >= maxPicks) {
     limitReached = true
@@ -1812,23 +1816,19 @@ function upgradeLastPickTo(mode) {
   const index = axis === 'row' ? last.cell.row.index : last.cell.col.index
   const headerText = (axis === 'row' ? last.cell.row.header : last.cell.col.header) || ''
   const upgraded = { block: { axis, index, headerText } }
+  const previous = selectedList.slice()
   if (selectedList.some(p => samePick(p, upgraded))) {
     // 已經選過同一欄／列了，只要把那一格拿掉就好
-    saveUndoSnapshot()
     selectedList = selectedList.slice(0, -1)
   } else {
-    saveUndoSnapshot()
     selectedList = selectedList.slice(0, -1).concat([upgraded])
   }
+  // 取代前留一步反悔：復原快照只活到下一個動作為止
+  undoSnapshot = previous
   limitReached = selectedList.length >= maxPicks
   clearPickedMarks(document)
   applyPickedMarks(currentTargetEl)
   return true
-}
-
-// 取代前留一步反悔：復原快照只活到下一個動作為止
-function saveUndoSnapshot() {
-  undoSnapshot = selectedList.slice()
 }
 
 // 加選、移除、送出都讓快照失效——留著會在幾步之後莫名其妙跳回舊的一批
@@ -1852,17 +1852,18 @@ function undoReplace() {
 
 // 取代目前已選：點一下就是「只選這一個」
 function replaceSelection(candidate) {
-  saveUndoSnapshot()
+  // 空清單沒有東西可復原：第一次點格不能長出「復原」鈕與「已換成」提示
+  const previous = selectedList.length > 0 ? selectedList.slice() : null
   clearPickedMarks(document)
   selectedList = []
   limitReached = false
   pickedTableEl = null
   addPick(candidate)
+  undoSnapshot = previous
 }
 
 // 從錨點格到目標格的矩形範圍一次加進來（Shift 點的行為）
 function addRange(anchorCell, targetCell) {
-  clearUndoSnapshot()
   const dataRows = resolveDataRows(currentTargetEl)
   const minR = Math.min(anchorCell.row.index, targetCell.row.index)
   const maxR = Math.max(anchorCell.row.index, targetCell.row.index)
@@ -2126,7 +2127,6 @@ export function exitPickMode() {
   toolbarNotice = null
   pendingMode = null
   panelBodyEl = null
-  panelActionsEl = null
   panelDoneEl = null
   panelUndoEl = null
   panelCorner = 'right'

@@ -165,6 +165,32 @@ test('C11-3 升級成整欄之後也能復原回原本那一格', async () => {
   assert.equal(pm.selectedPicks()[0].cell?.col.index, 1)
 })
 
+test('C11-3b 第一次點格（清單原本是空的）不算取代：不得長出復原鈕與「已換成」提示', async () => {
+  const { doc, win } = await enter()
+  move(win, doc.getElementById('a1'))
+  click(win, doc.getElementById('a1'))
+
+  assert.equal(doc.querySelector('[data-af-undo]').hidden, true, '空清單沒有東西可以復原')
+  assert.doesNotMatch(panelText(doc), /已換成/, '沒有換掉任何東西就不該說「已換成」')
+})
+
+test('C11-3c 換到另一張表之後，上一張表的復原快照要作廢（否則 Ctrl+Z 會把舊索引配上新表送出）', async () => {
+  const { doc, win, pm, c } = await enter()
+  doc.body.insertAdjacentHTML('beforeend', `
+    <table id="t2"><thead><tr><th>c</th><th>d</th><th>e</th></tr></thead>
+    <tbody><tr><td>7</td><td>8</td><td id="y3">9</td></tr><tr><td>7</td><td>8</td><td>9</td></tr></tbody></table>`)
+  move(win, doc.getElementById('a1'))
+  click(win, doc.getElementById('a1'))
+  move(win, doc.getElementById('a2'))
+  click(win, doc.getElementById('a2')) // 取代，快照＝第一張表的 a1
+  move(win, doc.getElementById('y3')) // 換表：清單清空
+  assert.equal(pm.selectedCount(), 0)
+
+  key(doc, win, 'z', { ctrlKey: true })
+  assert.equal(pm.selectedCount(), 0, '不得把第一張表的索引還原到第二張表上')
+  assert.equal(doc.querySelector('[data-af-undo]').hidden, true)
+})
+
 test('C11-4 有可復原的取代時，面板上要有「復原」鈕；沒有就不顯示', async () => {
   const { doc, win } = await enter()
   const undo = doc.querySelector('[data-af-undo]')
@@ -214,6 +240,13 @@ test('C12b 「完成」只有在真的有東西可完成時才是主要動作', 
   click(win, doc.getElementById('a1'))
   assert.notEqual(doc.querySelector('[data-af-done]').style.backgroundColor, plain,
     '選了之後「完成」要變成主色，否則使用者看不出哪一顆是接下來要按的')
+})
+
+test('C12c 「完成」停用時游標要是 not-allowed（樣式套用順序）', async () => {
+  const { doc } = await enter()
+  const done = doc.querySelector('[data-af-done]')
+  assert.equal(done.getAttribute('aria-disabled'), 'true')
+  assert.equal(done.style.cursor, 'not-allowed')
 })
 
 test('C13-1 面板閃避：游標靠近時換到另一角', async () => {

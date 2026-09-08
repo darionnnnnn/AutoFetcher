@@ -1,6 +1,6 @@
 # AF-9 第 9 輪規劃：零學習曲線的設定流程
 
-> 狀態：實作完成，待體檢（**尚未併 dev**）
+> 狀態：全案完成已併 dev
 > 基準：dev@5ea5914（1677 綠，v0.7.0）
 > 來源：使用者回饋五項（設定視窗版面、工具列選不到、iframe 流程、間隔時段、設定可視化）
 > ＋ 以「第一次使用不看說明就會、三個月後回來不用重學」為目標的流程重整。
@@ -241,7 +241,7 @@
      `addTime` / `writeTimes` / `renderTimeChips` / `syncScheduleFields`，可能有漏同步的路徑。
   5. `applyDefaultCardTypes` 的 `_afTouched` 守衛掛在 DOM 節點上，
      `render` 重新渲染時這個旗標的生命週期沒有明確定義。
-- 全量測試:**1744 綠 / 0 紅**(基準 dev@5ea5914 為 1677，本輪 +67)。
+- 實作輪全量測試:**1745 綠 / 0 紅**(基準 dev@5ea5914 為 1677)。
 - 真實瀏覽器煙霧測試:`./run_smoke.sh` **Chrome 與 Edge 全部通過**。
 - 版本:0.8.0(`manifest.json` 與 `package.json` 同步)。
 - 尚未實機操作驗證(使用者實測)，建議先看:設定視窗版面與摘要卡、選取模式點整欄、
@@ -280,3 +280,25 @@ popup 主要入口與 `chrome://` 提示、版本 0.8.0、SPEC／BACKLOG 更新�
 | 星期 `aria-pressed` chip | 只做 CSS chip 化 | 見作業 B 定案，保留原生 checkbox 語意 |
 
 比對後全量測試：**1745 綠 / 0 紅**。
+
+## 體檢輪修正（Fable 5.1 獨立體檢，實作為 Opus 5）
+
+以 `dev..feature/AF-9` 全部 diff 逐檔親讀，疑點先用真實情境腳本重現再修：
+
+| 哪裡 | 症狀 | 修法 | 迴歸測試 |
+|---|---|---|---|
+| `picker-mode.js` `setTarget` 換表清空段 | **真 bug**：A 表點兩格（產生復原快照）→ 滑鼠移到 B 表（清單清空但快照沒清）→ `Ctrl+Z` 把 A 表的列欄索引還原到 B 表上 → 送出的 `PICKED` 是 B 表的 locator 配 A 表的索引。腳本重現：`locator=#t2`、`picks` 是 t1 的 (0,0)。與 AF-7 體檢抓到的 `pickedTableEl` 是同一型 | 換表時連 `undoSnapshot` 一起清 | r3 C11-3c；突變（拿掉那一行）紅 |
+| `replaceSelection` | 清單原本是空的也存快照（`[]` 是 truthy）→ 第一次點格就長出「復原」鈕與「已換成新的選取」提示 | 空清單不存快照；快照改在 `addPick` 之後才設（`addPick` 現在一律清快照，`addRange`／`Ctrl+A`／`Shift`+方向鍵都經它，不必散在各呼叫端） | r3 C11-3b；突變紅 |
+| `updatePanelActions` | `styleActionButton` 在設定游標之後才呼叫，把停用時的 `not-allowed` 洗回 `pointer` | 先套樣式再蓋游標與透明度 | r3 C12c；突變紅 |
+| `picker-mode.js` `panelActionsEl` | 只寫不讀的死變數 | 刪除 | — |
+| `picker.js` `applyDefaultCardTypes({ force })` | `force` 沒有任何呼叫端，是為想像中的需求留的參數 | 刪除參數 | 既有測試 |
+| `picker.js` `POS_LABEL` | 與 `describe.js` 的 `POS_TEXT` 逐字相同，位置定位的白話表變成第四份 | `describe.js` 匯出 `POS_TEXT`，picker 直接用 | 既有測試 |
+| `picker.html` `#field-rename` | 單值任務也露出「一鍵命名」兩顆鈕，沒有東西可批次改 | 兩個值以上才顯示 | 既有 r4 A3 |
+| `docs/BACKLOG.md` | 「面板可拖曳」新舊兩條並存；「選取模式的星期／時刻 chip」寫錯位置（chip 在 Picker） | 刪舊條、改措辭 | — |
+| `docs/SPEC.md` | 摘要卡「任何欄位變動」一句沒改到（終檢輪的取代字串沒命中）；快照失效條件漏「換表」；一鍵命名漏「兩值以上」 | 三處補上 | — |
+
+規劃比對：實作輪的「規劃項目逐條比對」節與程式碼相符，刻意偏離的七條理由成立，無「明確不做」的東西混進來。
+架構契合：`describe.js`／`schedule-math.js` 各只有一份實作且呼叫端都接上；`CLAUDE.md`「不要做」未被踩（色碼只在 `COLORS`、無 `innerHTML`、監聽都有 `_xxxBound` 守衛、`[hidden]` 規則在）。
+終檢後手改 commit（`6a707fa`、`9f4d741`）另掃一次：`applyDefaultCardTypes` 守衛與 `styleActionButton` 切換就是在那兩個 commit 引入的，上表第 3、5 條正是從那裡抓到的。
+
+體檢後全量測試:**1748 綠 / 0 紅**;`./run_smoke.sh` Chrome 與 Edge 全部通過。

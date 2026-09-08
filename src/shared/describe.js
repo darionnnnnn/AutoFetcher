@@ -83,7 +83,8 @@ const AGG_TEXT = {
   count: '筆數'
 }
 
-const POS_TEXT = {
+// 位置定位的白話（Picker 的值清單也用這一份，不要再抄一張）
+export const POS_TEXT = {
   first: '第一筆',
   last: '最後一筆',
   'last-1': '倒數第二筆'

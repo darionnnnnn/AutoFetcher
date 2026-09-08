@@ -2,7 +2,7 @@ import { saveTask, getTask, getSettings, saveSettings } from '../../shared/stora
 import { MSG } from '../../shared/messages.js'
 import { getLayout, addCard } from '../../shared/layout-store.js'
 import { seriesIdOf } from '../../shared/series-index.js'
-import { describeSchedule, describeTarget, describeDashboard } from '../../shared/describe.js'
+import { describeSchedule, describeTarget, describeDashboard, POS_TEXT } from '../../shared/describe.js'
 import { nextIntervalRun } from '../../shared/schedule-math.js'
 
 let currentCtx = null
@@ -933,13 +933,13 @@ const CARD_SIZES = {
 /**
  * 依目前模式套用預設勾選
  */
-function applyDefaultCardTypes({ force = false } = {}) {
+function applyDefaultCardTypes() {
   const modeVal = document.getElementById('mode')?.value || 'number'
   const cardTypes = document.getElementById('card-types')
   if (!cardTypes) return
   // 使用者自己動過卡片型別之後就不要再覆蓋：移除一個值、上下移、改定位都會
   // 走到這裡，無聲把他的選擇改回預設是最難察覺的一種「東西自己變了」
-  if (!force && cardTypes._afTouched) return
+  if (cardTypes._afTouched) return
   // 多個值用一張樞紐表加一張折線就看得完；一個值長兩張卡會被當成重複
   const multi = document.querySelectorAll('#field-list [data-field-row]').length >= 2
   const checkboxes = cardTypes.querySelectorAll('input[type="checkbox"]')
@@ -1373,6 +1373,9 @@ function updateAlertRowsFields() {
 function updateFieldListState() {
   const rows = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
   const n = rows.length
+  // 只有一個值時「一鍵命名」沒有東西可批次改，露出來只是多兩顆按鈕
+  const renameRow = document.getElementById('field-rename')
+  if (renameRow) renameRow.hidden = n < 2
   rows.forEach((r, i) => {
     const upBtn = r.querySelector('[data-field-up]')
     const downBtn = r.querySelector('[data-field-down]')
@@ -1420,8 +1423,8 @@ function updateFieldListState() {
 function fieldWhereText(spec) {
   if (!spec) return ''
   if (spec.cell) {
-    const r = spec.cell.row?.header || (spec.cell.row?.pos ? POS_LABEL[spec.cell.row.pos] : '')
-    const c = spec.cell.col?.header || (spec.cell.col?.pos ? POS_LABEL[spec.cell.col.pos] : '')
+    const r = spec.cell.row?.header || (spec.cell.row?.pos ? POS_TEXT[spec.cell.row.pos] : '')
+    const c = spec.cell.col?.header || (spec.cell.col?.pos ? POS_TEXT[spec.cell.col.pos] : '')
     return [r, c].filter(Boolean).join(' · ')
   }
   if (spec.block) {
@@ -1430,8 +1433,6 @@ function fieldWhereText(spec) {
   }
   return ''
 }
-
-const POS_LABEL = { first: '第一筆', last: '最後一筆', 'last-1': '倒數第二筆' }
 
 /**
  * 立即測試的逐值結果就地顯示在該列。

@@ -68,7 +68,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1744 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1748 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -134,6 +134,8 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   `applyDefaultCardTypes` 曾在移除一個值、上下移、改定位時把使用者勾的卡片型別改回預設。
 - **延遲關窗前要確認 `globalThis.window` 還是自己那一個**:jsdom 測試共用全域 window,
   也可能關到別人的視窗。
+- **會跨表格殘留的狀態，在「換表清空」那一段也要一起清**:AF-7 是 `pickedTableEl`、AF-9 是復原快照 `undoSnapshot`,
+  兩次都是「清單清了、旁邊那份索引沒清」,`Ctrl+Z` 或送出就把 A 表的索引配上 B 表的定位。
 - **選取模式的模組狀態要在 `exitPickMode` 全部重設**:漏一個(例如「已選屬於哪張表」)
   會讓同一頁的下一次選取沿用上一張表的 locator、配上新表的列欄索引送出,抓到的永遠是錯的值。
   只驗「DOM 元素被移除」的測試抓不到這種殘留,要驗「連續選兩次」的行為。
