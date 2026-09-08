@@ -101,11 +101,15 @@ test('F-2 macOS 的 Cmd 等同 Ctrl', async () => {
 
 // ---------- F-3 Shift 範圍 ----------
 
-test('F-3 Shift＋點從上一個已選格拉出矩形範圍', async () => {
-  const { doc, pm, win } = await boot()
+test('F-3 Shift＋點從上一個已選格拉出矩形範圍，順序列優先', async () => {
+  const { c, doc, pm, win } = await boot()
   pick(win, doc.getElementById('a1'))
   pick(win, doc.getElementById('c2'), { shiftKey: true })
   assert.equal(chips(doc).length, 6, `3 列 × 2 欄要 6 格，實得 ${chips(doc).length}`)
+  dblclick(win, doc.getElementById('c2'))
+  const order = picked(c)[0].picks.map(p => [p.cell.row.index, p.cell.col.index])
+  assert.deepEqual(order, [[0, 1], [0, 2], [1, 1], [1, 2], [2, 1], [2, 2]],
+    '值的順序就是之後每個值的順序，要一列一列走')
   pm.exitPickMode()
 })
 
@@ -345,6 +349,17 @@ test('F-11 鎖定狀態不會殘留到下一次選取', async () => {
   pm.enterPickMode({ purpose: 'task', initialTarget: null })
   move(win, doc.getElementById('blank'))
   assert.ok(/blank/.test(panelText(doc)), '新的一次選取不該還鎖在上一個元素上')
+  pm.exitPickMode()
+})
+
+// ---------- F-11b chip 的移除鈕要說出自己是做什麼的 ----------
+
+test('F-11b chip 的 × 有 title', async () => {
+  const { doc, pm, win } = await boot()
+  pick(win, doc.getElementById('a1'))
+  const x = doc.querySelector('[data-af-chip-remove]')
+  assert.ok(x, '要有移除鈕')
+  assert.equal(x.getAttribute('title'), '移除', '一個 × 字元看不出是移除還是關閉')
   pm.exitPickMode()
 })
 

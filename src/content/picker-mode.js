@@ -820,7 +820,10 @@ function computeNameHint(el) {
   return undefined
 }
 
-// 取得單一儲存格的文字內容
+// 取得單一儲存格的文字內容。
+// 這裡**不需要處理位置定位**：它吃的一律是已選清單裡的項目，而已選清單只存索引——
+// 選取當下建立的 pick 本來就沒有 pos（pos 是之後在 Picker 設的），
+// 帶 pos 的 preselect 也在 applyPreselect 就換算成當下的索引了。加一條走不到的分支只是死碼。
 function getCellText(cellSpec, tableEl) {
   if (!tableEl || !cellSpec || !cellSpec.row || !cellSpec.col) return ''
   const dataRows = resolveDataRows(tableEl)

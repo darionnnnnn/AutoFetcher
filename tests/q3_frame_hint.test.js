@@ -141,3 +141,32 @@ test('D-3 目標在框架內且沒有前置動作時，測試成功要說明排�
     `實得 ${JSON.stringify($(doc, 'test-note').textContent)}`)
   assert.equal($(doc, 'errors').textContent, '', '這是說明不是錯誤，不該染紅')
 })
+
+test('D-3 儲存按下後也要停用並顯示進行中', async () => {
+  const { pk, doc } = await fresh()
+  pk.render(baseCtx({ tabId: 9 }))
+  $(doc, 'name').value = '總量'
+  $(doc, 'times').value = '09:30'
+  for (const cb of doc.querySelectorAll('#weekdays input[type="checkbox"]')) cb.checked = true
+  const btn = $(doc, 'save')
+  let sawDisabled = false
+  let sawLabel = ''
+  globalThis.chrome.runtime.sendMessage = async () => {
+    sawDisabled = btn.disabled
+    sawLabel = btn.textContent
+    return { ok: true }
+  }
+  await pk.handleSave()
+  assert.equal(sawDisabled, true, '儲存中不得讓使用者連按（會建出兩個任務）')
+  assert.ok(/儲存中/.test(sawLabel), `按鈕要說出正在做事，實得 ${JSON.stringify(sawLabel)}`)
+})
+
+test('D-3 表單驗證沒過時，儲存鈕要還回去', async () => {
+  const { pk, doc } = await fresh()
+  pk.render(baseCtx())
+  $(doc, 'name').value = ''
+  await pk.handleSave()
+  const btn = $(doc, 'save')
+  assert.equal(btn.disabled, false, '改完卻按不下去')
+  assert.equal(btn.textContent, '儲存')
+})
