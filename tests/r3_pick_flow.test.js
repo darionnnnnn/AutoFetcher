@@ -64,6 +64,28 @@ test('C9-2 停用的工具列段被點到時，面板要說出原因', async () 
   assert.match(after, /表格/, '要說出「先把滑鼠移到表格上」')
 })
 
+test('C9-2b 非表格上點「單格」給的理由要是「這裡不是表格」，不能自相矛盾', async () => {
+  const { doc, win } = await enter()
+  const para = doc.getElementById('para')
+  move(win, para)
+  click(win, tool(doc, 'cell'))
+  const text = panelText(doc)
+
+  assert.match(text, /表格/, '真正的原因是這裡不是表格')
+  assert.doesNotMatch(text, /一次只選一個/, '這與用途無關，說成用途限制會跟上一行「非表格：抓整個元素」打架')
+})
+
+test('C9-2c 點任何一段工具列都要解除鎖定（包含永遠可點的「單格」）', async () => {
+  const { doc, win } = await enter()
+  const para = doc.getElementById('para')
+  move(win, para)
+  click(win, para) // 鎖定
+  click(win, tool(doc, 'cell'))
+  move(win, doc.getElementById('a1'))
+
+  assert.ok(marked(doc).length > 0, '鎖著的話滑鼠移到表格上完全沒反應')
+})
+
 test('C9-3 在非表格上點「整欄」記住意圖，滑鼠移到表格時自動套用', async () => {
   const { doc, win, pm } = await enter({ initialTarget: null })
   click(win, tool(doc, 'col'))
@@ -193,6 +215,20 @@ test('C13-1 面板閃避：游標靠近時換到另一角', async () => {
   assert.equal(panel.style.right, '')
 })
 
+test('C13-1b 連續在同一處移動不會來回彈跳（換角後要離開才再換）', async () => {
+  const { doc, win } = await enter()
+  const panel = doc.querySelector('[data-af-panel]')
+  // 面板換角之後，游標仍在原處：舊實作會用「移動前的位置」再判一次而翻回去
+  panel.getBoundingClientRect = () => ({ left: 800, right: 980, top: 600, bottom: 700, width: 180, height: 100 })
+  move(win, doc.getElementById('a1'), { clientX: 810, clientY: 620 })
+  assert.equal(panel.style.left, '16px')
+
+  // 只再移動「一次」：移動兩次的話彈回去又彈回來，最終位置剛好一樣，測不出抖動
+  move(win, doc.getElementById('a1'), { clientX: 812, clientY: 622 })
+  assert.equal(panel.style.left, '16px', '游標沿邊緣移動時面板不該左右抖動')
+  assert.equal(panel.style.right, '', '仍應停在左邊')
+})
+
 test('C13-2 滑鼠在面板自己身上時不閃避（否則按鈕會從指尖跑掉）', async () => {
   const { doc, win } = await enter()
   const panel = doc.querySelector('[data-af-panel]')
@@ -230,10 +266,20 @@ test('C15 exitPickMode 清掉本輪新增的狀態（連續兩次選取不互相
   click(win, doc.getElementById('a1'))
   move(win, doc.getElementById('a2'))
   click(win, doc.getElementById('a2')) // 產生復原快照
+  // 先讓面板真的翻到左邊，這樣「角落狀態有沒有被重設」才有訊號
+  const oldPanel = doc.querySelector('[data-af-panel]')
+  oldPanel.getBoundingClientRect = () => ({ left: 800, right: 980, top: 600, bottom: 700, width: 180, height: 100 })
+  move(win, doc.getElementById('a1'), { clientX: 810, clientY: 620 })
+  assert.equal(oldPanel.style.left, '16px', '前提：這一次已經翻到左邊')
   pm.exitPickMode()
 
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('t') })
   assert.equal(doc.querySelector('[data-af-undo]').hidden, true, '上一次的復原快照不得留到下一次')
+
+  // 面板位置要驗的是 panelCorner 這個變數本身：新面板一律寫死 right=16px，
+  // 只看 style.right 的話，就算殘留了上一次的角落也照樣是 16px
   const panel = doc.querySelector('[data-af-panel]')
-  assert.equal(panel.style.right, '16px', '面板位置要回到預設角落')
+  panel.getBoundingClientRect = () => ({ left: 800, right: 980, top: 600, bottom: 700, width: 180, height: 100 })
+  move(win, doc.getElementById('a1'), { clientX: 810, clientY: 620 })
+  assert.equal(panel.style.left, '16px', '重進之後第一次靠近應該往左閃（角落狀態已重設）')
 })

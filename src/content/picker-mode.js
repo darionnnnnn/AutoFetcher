@@ -32,6 +32,8 @@ let panelBodyEl = null, panelActionsEl = null, panelDoneEl = null, panelUndoEl =
 let undoSnapshot = null
 // 面板固定在右下角，但游標靠近時要閃到左下角，否則它就擋在使用者要選的內容上
 let panelCorner = 'right'
+// 換角之後先鎖住，等游標離開面板附近才允許再換（避免沿邊緣移動時來回彈跳）
+let panelAvoidLatched = false
 let pickMode = 'cell', cellIndex = null, colIndex = null, rowIndex = null, currentDataRows = [], currentRowEl = null, currentCellEl = null
 let selectedList = [], maxPicks = 20, limitReached = false, headerChangedNotice = false
 // 非表格元素被「點一下鎖定」後不再跟著滑鼠跑（檔案總管點一下選取的習慣）
@@ -1384,7 +1386,13 @@ function avoidPanel(event) {
     event.clientX <= r.right + PANEL_AVOID_MARGIN &&
     event.clientY >= r.top - PANEL_AVOID_MARGIN &&
     event.clientY <= r.bottom + PANEL_AVOID_MARGIN
-  if (!near) return
+  if (!near) {
+    // 離開之後才解除鎖定，否則游標沿著面板邊緣走會左右來回彈跳
+    panelAvoidLatched = false
+    return
+  }
+  if (panelAvoidLatched) return
+  panelAvoidLatched = true
   setPanelCorner(panelCorner === 'right' ? 'left' : 'right')
 }
 
@@ -1600,11 +1608,19 @@ function onClick(event) {
     if (toolBtn.getAttribute('aria-disabled') === 'true') {
       // 靜默 return 會讓使用者以為模式切了（實際沒切），要說出點不動的原因
       const mode = toolBtn.getAttribute('data-af-tool')
-      if (isMultiPickPurpose() && (mode === 'col' || mode === 'row')) {
-        pendingMode = mode
-        // 先前點過非表格元素會把目標鎖住，鎖住時滑鼠移到表格上也不會有反應
-        lockedEl = null
-        toolbarNotice = `先把滑鼠移到表格上，會自動切成${mode === 'row' ? '整列' : '整欄'}`
+      // 點工具列＝使用者要重新挑目標，先前點非表格元素造成的鎖定一律解除；
+      // 鎖著的話滑鼠移到表格上也完全沒有反應，看起來就是「工具列壞了」
+      lockedEl = null
+      const onTable = Boolean(currentTargetEl && isTableMode(currentTargetEl))
+      if (!onTable) {
+        // 停用的真正原因是「這裡不是表格」，與用途無關；
+        // 說成「一次只選一個」會跟面板上一行的「非表格：抓整個元素」自相矛盾
+        if (isMultiPickPurpose() && (mode === 'col' || mode === 'row')) {
+          pendingMode = mode
+          toolbarNotice = `先把滑鼠移到表格上，會自動切成${mode === 'row' ? '整列' : '整欄'}`
+        } else {
+          toolbarNotice = '先把滑鼠移到表格上'
+        }
       } else {
         toolbarNotice = '這個用途一次只選一個元素'
       }
@@ -2111,6 +2127,11 @@ export function exitPickMode() {
   panelDoneEl = null
   panelUndoEl = null
   panelCorner = 'right'
+  panelAvoidLatched = false
+  // 這兩個漏清會讓下一次選取沿用上一次的預選、以及舊的表格列欄數快取
+  pendingPreselect = null
+  kindCacheEl = null
+  kindCache = null
 }
 
 export function isActive() { return active }

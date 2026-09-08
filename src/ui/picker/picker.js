@@ -933,10 +933,13 @@ const CARD_SIZES = {
 /**
  * 依目前模式套用預設勾選
  */
-function applyDefaultCardTypes() {
+function applyDefaultCardTypes({ force = false } = {}) {
   const modeVal = document.getElementById('mode')?.value || 'number'
   const cardTypes = document.getElementById('card-types')
   if (!cardTypes) return
+  // 使用者自己動過卡片型別之後就不要再覆蓋：移除一個值、上下移、改定位都會
+  // 走到這裡，無聲把他的選擇改回預設是最難察覺的一種「東西自己變了」
+  if (!force && cardTypes._afTouched) return
   // 多個值用一張樞紐表加一張折線就看得完；一個值長兩張卡會被當成重複
   const multi = document.querySelectorAll('#field-list [data-field-row]').length >= 2
   const checkboxes = cardTypes.querySelectorAll('input[type="checkbox"]')
@@ -1186,12 +1189,15 @@ export function updateSchedulePreview(nowMs = Date.now()) {
   const el = document.getElementById('schedule-preview')
   if (!el) return
   const values = getFormData()
-  const errs = validateForm(values)
+  // validateForm 回的是 { ok, errors }；直接讀 errs.times 會永遠是 undefined，
+  // 整個錯誤分支就成了死碼，畫面會對著一個永遠不會執行的排程說「每天」
+  const errs = validateForm(values).errors || {}
   const schedule = buildSchedule(values)
   const lines = [describeSchedule(schedule)]
 
-  if (errs.times || errs.everyMinutes || errs.window) {
-    lines.push(errs.times || errs.everyMinutes || errs.window)
+  const firstError = errs.times || errs.everyMinutes || errs.window || errs.weekdays
+  if (firstError) {
+    lines.push(firstError)
   } else if (values.scheduleType === 'interval') {
     const dayStart = new Date(nowMs)
     dayStart.setHours(0, 0, 0, 0)
@@ -1255,13 +1261,21 @@ function bindModeEvents() {
   }
   document.querySelectorAll('#card-types input[type="checkbox"]').forEach(cb => {
     if (cb._summaryBound) return
-    cb.addEventListener('change', () => updateSetupSummary())
+    cb.addEventListener('change', () => {
+      const box = document.getElementById('card-types')
+      if (box) box._afTouched = true
+      updateSetupSummary()
+    })
     cb._summaryBound = true
   })
-  const nameEl = document.getElementById('name')
-  if (nameEl && !nameEl._summaryBound) {
-    nameEl.addEventListener('input', () => updateSetupSummary())
-    nameEl._summaryBound = true
+  // 摘要卡的第一行吃的是定位、模式與聚合方式，這些欄位一動就要重算，
+  // 否則畫面會拿舊事實回答「抓什麼」——比不寫還糟
+  for (const id of ['row-pos', 'col-pos', 'mode', 'block-aggregate']) {
+    const el = document.getElementById(id)
+    if (el && !el._summaryBound) {
+      el.addEventListener('change', () => updateSetupSummary())
+      el._summaryBound = true
+    }
   }
 
   const addBtn = document.getElementById('time-add')
@@ -1430,8 +1444,8 @@ export function applyFieldResults(fields, res) {
     if (!cell) return
     const f = fields?.[i]
     const r = f ? res?.fields?.[f.key] : null
-    if (r && r.ok) {
-      cell.textContent = r.value !== undefined ? String(r.value) : (r.raw ?? '')
+    if (r && r.ok && (r.value !== undefined && r.value !== null || r.raw)) {
+      cell.textContent = (r.value !== undefined && r.value !== null) ? String(r.value) : String(r.raw)
       cell.setAttribute('data-state', 'ok')
       cell.removeAttribute('title')
     } else if (r) {
@@ -1559,7 +1573,6 @@ function renderFieldList(items) {
     fieldList.appendChild(row)
   }
 
-  updateFieldListState()
   updateFieldListState()
 
 }

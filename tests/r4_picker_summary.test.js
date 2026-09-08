@@ -149,13 +149,15 @@ test('A3 一鍵命名只改沒被手動改過的列', async () => {
 test('A4-1 儲存回饋：說出下次抓取時間並提供開啟報表', async () => {
   const { pk, doc } = await fresh()
   pk.render({ locator: LOCATOR, url: 'https://a.test/p' })
-  const at = new Date(2026, 8, 8, 9, 30, 0).getTime()
+  // 刻意讓 alarm 的實際時刻（14:05）與排程句（09:30）不同：
+  // 兩者一樣的話，就算實作完全不看 nextRunMs 也照樣會出現 09:30
+  const at = new Date(2026, 8, 8, 14, 5, 0).getTime()
   await pk.showSavedFeedback({ id: 't1', schedule: { type: 'daily', times: ['09:30'], weekdays: [1] } }, { nextRunMs: at, closeDelayMs: 5 })
 
   const box = doc.getElementById('saved-feedback')
   assert.ok(box, '儲存後不能無聲關窗')
-  assert.match(box.textContent, /已儲存/)
-  assert.match(box.textContent, /09:30/)
+  assert.match(box.textContent, /已儲存。下次抓取：14:05/)
+  assert.doesNotMatch(box.textContent, /09:30/, '有實際 alarm 時間就不該再退回排程句')
   assert.ok(doc.getElementById('saved-open-report'), '要有去看結果的路')
   globalThis.window.close = () => {}
   await new Promise(r => setTimeout(r, 15))
@@ -186,10 +188,83 @@ test('A4-3 儲存回饋：延遲關窗只關自己那個視窗', async () => {
   globalThis.window = mine
 })
 
-test('A5 視窗寬度：頁面不寫死寬度，視窗自己夠寬', () => {
-  assert.doesNotMatch(PICKER_HTML, /width:\s*360px/, '寫死寬度會讓捲軸卡在畫面中間')
-  assert.doesNotMatch(SITE_HTML, /width:\s*480px/, '站台設定視窗同型問題')
+test('A5 視窗寬度：彈出視窗的頁面一律不寫死 body 寬度', () => {
+  // 掃的是「body 有沒有寫死寬度」，不是某個被刪掉的字面值——
+  // 比對舊值的話，改成別的固定寬度一樣會綠
+  for (const [name, html] of [['picker', PICKER_HTML], ['site', SITE_HTML]]) {
+    const bodyRule = html.match(/body\s*\{[^}]*\}/)
+    assert.ok(bodyRule, `${name}.html 要有 body 樣式`)
+    assert.doesNotMatch(bodyRule[0], /width:\s*\d+px/,
+      `${name}.html 的 body 寫死寬度會讓右邊空一條、捲軸卡在畫面中間`)
+  }
   const widths = [...MAIN_JS.matchAll(/width:\s*(\d+)/g)].map(m => Number(m[1]))
   assert.ok(widths.length >= 2, '兩個彈出視窗都要有寬度設定')
   for (const w of widths) assert.ok(w >= 560, `彈出視窗至少 560 寬，實得 ${w}`)
+})
+
+test('A1-5 摘要卡跟著「列定位」與數值類型變（不是只跟排程變）', async () => {
+  const { pk, doc } = await fresh()
+  pk.render({ locator: LOCATOR, url: 'https://a.test/p', blockInfo: TABLE_INFO, picks: [CELL_PICK] })
+  const rowPos = doc.getElementById('row-pos')
+  rowPos.value = 'last'
+  rowPos.dispatchEvent(new doc.defaultView.Event('change'))
+
+  assert.match(summary(doc, 'summary-target'), /列取最後一筆/, '改了定位，摘要不能還在講舊事實')
+})
+
+test('A6-1 排程預覽會說出欄位錯誤，不會對著不會執行的排程說「每天」', async () => {
+  const { pk, doc } = await fresh()
+  pk.render({ locator: LOCATOR, url: 'https://a.test/p' })
+  // 星期全部取消：nextDailyRun 會回 null，這個任務永遠不會執行
+  doc.querySelectorAll('#weekdays input[type="checkbox"]').forEach(cb => { cb.checked = false })
+  pk.updateSchedulePreview(new Date(2026, 8, 7, 7, 0, 0).getTime())
+
+  const text = doc.getElementById('schedule-preview').textContent
+  assert.match(text, /星期/, '要說出真正的問題（沒有選任何星期）')
+})
+
+test('A6-2 間隔沒填分鐘時，預覽講的是欄位沒填，不是星期或時段不符', async () => {
+  const { pk, doc } = await fresh()
+  pk.render({ locator: LOCATOR, url: 'https://a.test/p' })
+  doc.getElementById('schedule-type').value = 'interval'
+  doc.getElementById('schedule-type').dispatchEvent(new doc.defaultView.Event('change'))
+  doc.getElementById('every-minutes').value = ''
+  pk.updateSchedulePreview(new Date(2026, 8, 7, 7, 0, 0).getTime())
+
+  const text = doc.getElementById('schedule-preview').textContent
+  assert.doesNotMatch(text, /今天不會執行/, '理由錯的話使用者會去改星期，白改一輪')
+  assert.match(text, /間隔|分鐘/)
+})
+
+test('A7-1 使用者改過卡片型別之後，移除一個值不得把他的勾選改回預設', async () => {
+  const { pk, doc } = await fresh()
+  await pk.renderDashboardSection(null)
+  pk.render({
+    locator: LOCATOR,
+    url: 'https://a.test/p',
+    blockInfo: TABLE_INFO,
+    picks: [
+      { cell: { row: { index: 0, header: '美金' }, col: { index: 1, header: '買入' } } },
+      { cell: { row: { index: 1, header: '日圓' }, col: { index: 1, header: '買入' } } },
+      { cell: { row: { index: 2, header: '歐元' }, col: { index: 1, header: '買入' } } }
+    ]
+  })
+  const boxes = [...doc.querySelectorAll('#card-types input[type="checkbox"]')]
+  for (const cb of boxes) {
+    cb.checked = (cb.value === 'table')
+    cb.dispatchEvent(new doc.defaultView.Event('change'))
+  }
+  // 移除一列會走 updateFieldListState → applyDefaultCardTypes
+  doc.querySelector('#field-list [data-field-row] [data-field-remove]')?.click()
+
+  const after = boxes.filter(cb => cb.checked).map(cb => cb.value)
+  assert.deepEqual(after, ['table'], '使用者選過的卡片型別不得被無聲改掉')
+})
+
+test('A7-2 新任務預設就選好儀表板（不是「不加入」）', async () => {
+  const { pk, doc } = await fresh()
+  await pk.renderDashboardSection(null)
+  const sel = doc.getElementById('dashboard-select')
+  assert.notEqual(sel.value, 'none', '存完卻沒地方看，使用者會以為沒作用')
+  assert.ok(sel.value)
 })

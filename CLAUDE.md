@@ -68,7 +68,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1736 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1744 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -86,7 +86,8 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - 訊息型別集中 `shared/messages.js`;三個執行環境的分工見 SPEC §0。
 - **顏色一律走 `ui/theme.css` 變數**,任何模組內都不得出現色碼字面值(多序列用 `--chart-1`~`--chart-8`)。
 - **格線數學與資料聚合寫成純函式**(無 DOM、無 `chrome.`),DOM 接線另置,才測得動。
-- **白話描述只有一份**:`shared/describe.js`(Picker 摘要卡、儲存回饋、任務頁、popup 都用它)。
+- **白話描述只有一份**:`shared/describe.js`(Picker 摘要卡與儲存回饋、任務頁的排程欄、
+  popup 任務列的 `title` 都用它)。
   同一個任務在不同畫面上長得不一樣,比沒有描述更糟。
 - **排程數學只有一份**:`shared/schedule-math.js`(`nextIntervalRun` 等);
   `background/scheduler.js` 只 re-export。Picker 的觸發預覽要用同一份,不得自己算一套。
@@ -127,7 +128,10 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **選取模式的面板動作列建一次、只更新文字**:每次 hover 重建會把使用者正要按的那一顆換掉
   (「完成鈕點了沒反應」的根因);面板文字在 `data-af-panel-body`,動作列是它的兄弟節點。
 - **停用的控制項被點到不得靜默無事**:要嘛記住意圖稍後兌現(工具列的 `pendingMode`),
-  要嘛說出原因。靜默 return 會讓使用者以為自己已經切好了模式。
+  要嘛說出原因,而且**理由要對到真正的判定**(非表格就說不是表格,不要說成用途限制)。
+  靜默 return 會讓使用者以為自己已經切好了模式。
+- **「自動套用預設值」的函式要有『使用者動過就不再覆蓋』的守衛**:
+  `applyDefaultCardTypes` 曾在移除一個值、上下移、改定位時把使用者勾的卡片型別改回預設。
 - **延遲關窗前要確認 `globalThis.window` 還是自己那一個**:jsdom 測試共用全域 window,
   也可能關到別人的視窗。
 - **選取模式的模組狀態要在 `exitPickMode` 全部重設**:漏一個(例如「已選屬於哪張表」)

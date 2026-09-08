@@ -3,6 +3,7 @@ import { getTasks, saveTask, getHealthMap, getMissedList, getLastValues } from '
 import { MSG } from '../../shared/messages.js'
 import { seriesIdOf } from '../../shared/series-index.js'
 import { computeHealth } from '../../background/health.js'
+import { describeSchedule } from '../../shared/describe.js'
 
 let currentCtx = null
 
@@ -56,6 +57,9 @@ function renderTaskRow(task, { lastValues, nextRuns, healthMap }) {
   const nextSpan = document.createElement('span')
   nextSpan.className = 'task-next'
   nextSpan.textContent = formatTime(nextRuns?.[task.id])
+  // 只寫一個時刻，久沒用回來看不出這是每天還是每十分鐘一次；
+  // 排程白話走 shared/describe.js（與 Picker 摘要卡、任務頁同一份）
+  nextSpan.title = describeSchedule(task.schedule)
   subDiv.appendChild(nextSpan)
 
   if (task.enabled === false) {
