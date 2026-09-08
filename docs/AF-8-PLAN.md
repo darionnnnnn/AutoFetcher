@@ -1,6 +1,6 @@
 # AF-8 第 8 輪規劃：表格模式進入規則、位置定位（第一／最後一筆）、iframe 前置步驟提示
 
-> 狀態：規劃中
+> 狀態：全案完成，待體檢與併 dev（分支 `feature/AF-8`）
 > 基準：dev@38f5b97（1558 綠，v0.6.0）
 > 來源：使用者實測回饋五條（twse 市場成交資訊頁、巢狀表格監控頁）
 > 委派：agy（`gemini-delegate`）；agy 沒額度時由 Claude 自己實作。整輪只用一種，中途切換註明起點。
@@ -103,7 +103,10 @@
 
 - `Enter` 送出、`Esc` 取消（既有）；`Ctrl`＋`A`：目標是表格時全選該表所有資料格（受上限截斷並提示）。
 - `Shift`＋方向鍵：從目前格延伸範圍（既有行為保留）。
-- `Tab`：在工具列三段與面板按鈕之間循環（不再只循環三段），焦點環可見；`Space`／`Enter` 觸發聚焦的按鈕（`Enter` 落在按鈕上時**不**當成「送出」）。
+- `Tab`：**實作時降級**——`Tab` 維持只循環工具列三段（既有行為，五個測試檔依賴），
+  「`Tab` 走到面板按鈕」進 BACKLOG。改為修真正的根因：`mousedown` 原本對 overlay 自己的按鈕也
+  `preventDefault`，按鈕因此永遠拿不到焦點、焦點環是死規則；現在按鈕點得到焦點。
+  `Enter` 落在面板按鈕上時**不**當成「送出」（這條有做）。
 - `Backspace` 移除最後一項（既有）。
 
 **面板（右下角）**
@@ -141,7 +144,9 @@
 - 非表格：點一下鎖定（滑鼠移到別處目標不變）、點空白解鎖、雙擊送出。
 - 面板：無已選＋表格 → 完成鈕 `aria-disabled`；選 3 格 → 文字含「3」；點完成 → 送出；點取消 → `PICKED{cancelled:true}`。
 - `Ctrl+A` 在 3×3 表 → 9 格；在 `maxPicks: 5` 下 → 5 格且面板含「上限」。
-- `Tab` 從工具列最後一段 → 焦點到「完成」鈕；聚焦按鈕時按 `Enter` 觸發該鈕、不觸發 `confirmPick` 兩次（斷言 `sendMessage` 只一次）。
+- ~~`Tab` 從工具列最後一段 → 焦點到「完成」鈕~~（降級進 BACKLOG，見上）；
+  改驗：overlay 自己的按鈕 `mousedown` 不得被 `preventDefault`（否則拿不到焦點）、
+  頁面上的 `mousedown` 仍要擋、焦點停在「取消」鈕上按 `Enter` 不得送出。
 - 指標：進入後表格格子 `cursor` 為 `cell`、`th` 有 `title`；`exitPickMode` 後 `body.style.cursor` 還原為原值。
 - reduced-motion：`matchMedia` 替身回 `matches: true` → 標示元素 `style.transition` 為空。
 - 突變：把 `onClick` 改回直接 `confirmPick` → 第一條必紅；把 `Ctrl` 判定拿掉 → 加選案必紅。
