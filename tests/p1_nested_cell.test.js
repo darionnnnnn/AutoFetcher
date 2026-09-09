@@ -209,6 +209,17 @@ test('A-3 按 ↑ 可以改選外層表格的那一格（保留 AF-7 的用法�
   pm.exitPickMode()
 })
 
+test('A-3b 外層那一格內含表格時，面板要先說出「會抓到整串文字」（AF-10 作業 D）', async () => {
+  const { doc, pm, win } = await enterOnMonitor()
+  fire(win, valueCell(doc), 'mousemove')
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
+  fire(win, valueCell(doc).closest('table').parentElement, 'mousemove')
+  const text = doc.querySelector('[data-af-panel]')?.textContent || ''
+  assert.ok(text.includes('這一格內含表格'),
+    `外層格的文字是內層小表串接起來的，面板要說出來，實得：${text.slice(0, 200)}`)
+  pm.exitPickMode()
+})
+
 test('A-3 選整欄時預覽描述那一欄，不帶整張表的數字', async () => {
   const { c, doc, pm, win } = await enterOnMonitor()
   fire(win, valueCell(doc), 'mousemove')

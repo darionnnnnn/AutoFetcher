@@ -555,6 +555,23 @@ iframe 可能是「先點按鈕才出現」,所以 1、2 層是**輪詢**等待(
   `rowHeader(row)`(該列第一個非空文字格)、`getDataRows(el)`(排除表頭的資料列元素)。
   表頭列只認 `thead` 內的列,或表格**開頭連續**的表頭列——表格中段整列 `th` 的分組標題
   (「亞洲貨幣」那種)是資料的一部分,把它當表頭會讓整份表頭被那一列洗掉。
+- **「哪些列／格屬於這張表」的判準只有 `shared/table.js` 一份**(AF-10):
+  `tableOf` / `cellOf` / `isHeaderCell` / `tableRowsOf` / `rowCellsOf` / `isHeaderRowOf`
+  加上 `CELL_SELECTOR` / `TABLE_SELECTOR`,`content/picker-mode.js`(選取)與
+  `shared/block-detect.js`(面板描述)都 import 它,不得自己再寫一份。
+  規則:同時認 `<table>` 與 ARIA(`role=grid|table` / `row` / `cell|gridcell|columnheader`);
+  **列只算「最近的表格祖先就是這張表」的**、格只算「最近的列祖先就是這一列」的(巢狀小表格的列格不算);
+  `role="columnheader"` 整列視為表頭列。容器(`<div>`、`role="table"`)自己沒有列、
+  卻恰好包著**一張**表格時以那張表為準;**包著兩張以上就不猜**(挑第一張會少算,
+  使用者也無從得知挑了哪一張)。
+  三份判準不一致的代價是靜默錯值:選取時以外層算索引、擷取時解析內層,抓到的是別一格。
+- **選取端與擷取端必須看到同一張表**:`picker-mode.js` 的 `upgradeTarget` 在回傳前套
+  `innermostTable`,與擷取端(`parseTable` / `getDataRows`)同一份判準。
+  滑鼠落在純包裝外層的那一格(`<td>` 的邊或 padding)時,沒有這一條就會索引配錯表。
+- **格子裡自己包著一張表格時,面板要先說出來**(`這一格內含表格，會抓到整串文字…`):
+  那一格的文字是內層小表整串接起來的(`25530`+`39806` → `2553039806`),
+  解析出的數字只是碰巧排在最前面的那個——抓得到值但值是錯的,是看不見的錯誤。
+  面板只在目標改變時重畫,所以 hover 換到(或離開)這種格子時補畫一次,不是每次 `mousemove` 都重畫。
 - `task.fields = [{ key, name }]` 是**顯示用**的值清單(名稱、順序),
   `task.spec.fields = [{ key, cell?|block? }]` 是**擷取規格**,兩者以 `key` 一一對應;
   `key` 建立後不變、同任務內唯一、不得含保留字元。改名不改 `key`。

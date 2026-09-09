@@ -5,7 +5,16 @@ import { MSG } from '../shared/messages.js'
 import { describe } from '../shared/selector.js'
 import { detectKind } from '../shared/block-detect.js'
 import { parseNumber, resolveByPosition } from '../shared/extract.js'
-import { columnHeaders, rowHeader } from '../shared/table.js'
+import {
+  columnHeaders, rowHeader, innermostTable,
+  // 「哪些列／格屬於這張表」的判準只有 shared/table.js 一份（AF-10 作業 D）：
+  // 這裡以原本的區域名稱引入，呼叫端一律不變
+  CELL_SELECTOR,
+  tableOf, isHeaderCell,
+  tableRowsOf as getTableRows,
+  rowCellsOf as getRowCells,
+  isHeaderRowOf as isHeaderRow
+} from '../shared/table.js'
 
 // 顏色常數（對應 theme.css 暗色軌）——這是本檔唯一允許出現色碼字面值的地方
 const COLORS = {
@@ -42,6 +51,11 @@ let lockedEl = null
 let preselectPristine = false, replaceConfirmPending = null
 // 工具列被點到停用的那一段時要說原因（點不動卻沒訊息是最容易被當成壞掉的）
 let toolbarNotice = null
+// 這一格內含表格時的警語（面板唯一一份）
+const NESTED_CELL_NOTICE = '這一格內含表格，會抓到整串文字；要抓裡面的值請把滑鼠移進去'
+// 上一次是否已經在說這句話：面板只在目標改變時重畫，
+// hover 換到（或離開）內含表格的格子時要補畫一次，但不能每次 mousemove 都重畫
+let nestedNoticeOn = false
 // 目標還不是表格時點「整欄／整列」：記下意圖，等滑鼠移到表格上再自動套用。
 // 沒有這個的話按鈕當下是停用的，點了完全沒事，使用者卻以為模式已經切好了
 let pendingMode = null
@@ -74,18 +88,6 @@ function isTableMode(el) {
   return kind === 'table' || kind === 'grid'
 }
 
-// 判定格子是否為表頭格
-function isHeaderCell(c) {
-  return c?.tagName === 'TH' || c?.getAttribute?.('role') === 'columnheader'
-}
-
-const CELL_SELECTOR = 'td, th, [role="cell"], [role="gridcell"], [role="columnheader"]'
-
-// 取得元素所屬的最近表格
-function tableOf(el) {
-  return el && typeof el.closest === 'function' ? el.closest('table, [role="grid"], [role="table"]') : null
-}
-
 // 判定儲存格是否屬於指定表格
 function cellBelongsToTable(cell, tableEl) {
   return tableOf(cell) === tableEl
@@ -103,6 +105,9 @@ function upgradeTarget(el) {
   if (cell) upgraded = tableOf(cell)
   if (!upgraded) upgraded = tableOf(el)
   if (!upgraded) return el
+  // 擷取端（shared/table.js 的 parseTable / getDataRows）對純包裝的外層表會鑽到內層，
+  // 選取端不跟著鑽的話，索引以外層算、值以內層取，會靜默抓到別一格（AF-10 作業 D）
+  upgraded = innermostTable(upgraded)
   // 已經選了值就鎖在那張表：巢狀小表的索引配外層表的定位會送出錯的規格
   // 不論是「外層包住已選的表」還是「已選的表包住這張」，都鎖回已選那張——
   // 只擋其中一個方向的話，內層已選後 Ctrl 點外層格子會混進另一張表的索引，再用內層 locator 送出
@@ -111,29 +116,6 @@ function upgradeTarget(el) {
     return pickedTableEl
   }
   return upgraded
-}
-
-// 取得列中的格子（只取這一列自己的儲存格，排除巢狀小表格的儲存格）
-function getRowCells(row) {
-  if (!row) return []
-  const rowTable = tableOf(row)
-  const raw = row.querySelectorAll ? Array.from(row.querySelectorAll(CELL_SELECTOR)) : []
-  const cells = rowTable ? raw.filter(c => cellBelongsToTable(c, rowTable)) : raw
-  return cells.length > 0 ? cells : Array.from(row.children || [])
-}
-
-// 判定是否為表頭列
-function isHeaderRow(r) {
-  if (r.closest && r.closest('thead')) return true
-  const cells = getRowCells(r)
-  return cells.length > 0 && cells.every(isHeaderCell)
-}
-
-// 取得表格的所有列
-function getTableRows(tableEl) {
-  if (!tableEl) return []
-  const rows = tableEl.querySelectorAll ? Array.from(tableEl.querySelectorAll('tr, [role="row"]')).filter(r => tableOf(r) === tableEl) : []
-  return rows.length > 0 ? rows : Array.from(tableEl.children || []).filter(c => c?.getAttribute?.('role') === 'row')
 }
 
 // 取得表格的所有資料列（排除表頭列）
@@ -259,6 +241,14 @@ function markCells(cell, dataRows, row, mode, cIdx) {
       }
     }
   }
+}
+
+// 這一格裡面自己包著一張表格嗎？
+// 這種格子的文字是內層小表整串接起來的（25530+39806 → 2553039806），
+// 解析出的數字只是碰巧排在最前面的那一個。抓得到值、但值是錯的，
+// 是看不見的錯誤——所以在面板上先說出來（AF-10 作業 D）。
+function cellWrapsTable(cell) {
+  return Boolean(cell && typeof cell.querySelector === 'function' && cell.querySelector('table, [role="grid"], [role="table"]'))
 }
 
 // 清除所有已選標記
@@ -540,6 +530,7 @@ function updatePanel(panel, el) {
     if (undoSnapshot) {
       noticeLines.push('已換成新的選取（可按復原或 Ctrl／⌘＋Z 還原）')
     }
+    if (cellWrapsTable(currentCellEl)) noticeLines.push(NESTED_CELL_NOTICE)
     if (toolbarNotice) noticeLines.push(toolbarNotice)
     noticeLines.push(instructionLine(el))
     const footerDiv = document.createElement('div')
@@ -594,6 +585,7 @@ function updatePanel(panel, el) {
   if (limitReached || selectedList.length >= maxPicks) lines.push('（已達選取上限）')
   if (headerChangedNotice) lines.push('（位置已變）')
   if (lockedEl && el === lockedEl) lines.push('（已鎖定：滑鼠移開也不會換目標，點別處解除）')
+  if (cellWrapsTable(currentCellEl)) lines.push(NESTED_CELL_NOTICE)
   if (toolbarNotice) lines.push(toolbarNotice)
   lines.push(instructionLine(el))
   appendPanelText(panel, lines)
@@ -820,6 +812,7 @@ function handleTableMouseMove(target) {
       markCells(null, dataRows, dataRows[head.index], 'row', null)
     }
     applyPickedMarks(currentTargetEl)
+    syncNestedNotice()
     return
   }
   const info = resolveCell(target, currentTargetEl)
@@ -829,6 +822,7 @@ function handleTableMouseMove(target) {
     currentCellEl = null
     clearMarkedCells(document)
     applyPickedMarks(currentTargetEl)
+    syncNestedNotice()
     return
   }
   setCursor('cell')
@@ -840,6 +834,15 @@ function handleTableMouseMove(target) {
   currentRowEl = info.row
   markCells(currentCellEl, info.dataRows, info.row, pickMode, colIndex)
   applyPickedMarks(currentTargetEl)
+  syncNestedNotice()
+}
+
+// hover 的格子是否內含表格，改變時才重畫面板（每次 mousemove 都重畫會把按鈕從指尖換掉）
+function syncNestedNotice() {
+  const on = cellWrapsTable(currentCellEl)
+  if (on === nestedNoticeOn) return
+  nestedNoticeOn = on
+  if (panelEl) updatePanel(panelEl, currentTargetEl)
 }
 
 // 取得表格 caption 文字
@@ -2105,7 +2108,7 @@ export function exitPickMode() {
   }
   active = false; currentPurpose = null; currentTaskId = undefined; currentTargetEl = null; backStack = []
   overlayEl = null; highlightEl = null; panelEl = null; toolbarEl = null; menuEl = null
-  pickMode = 'cell'; cellIndex = null; colIndex = null; rowIndex = null; currentCellEl = null
+  pickMode = 'cell'; cellIndex = null; colIndex = null; rowIndex = null; currentCellEl = null; nestedNoticeOn = false
   currentDataRows = []; currentRowEl = null
   selectedList = []
   // 這一個漏清會讓下一次選取沿用上一張表的 locator，配上新表的列欄索引送出去（AF-7 體檢）

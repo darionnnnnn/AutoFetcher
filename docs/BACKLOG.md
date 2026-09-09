@@ -19,8 +19,6 @@
 | 折線超過 8 條的上限收成一份 | 目前 `drop-rules.MAX_CHART_SERIES` 與 `dashboard`、`trend-popover` 的硬編碼 `8` 三處並存;下次動到圖表上限時一併收成一份 |
 | 卡片 TSV 不再掛在 `dataset.tsv` | 目前為了讓測試讀得到而序列化進 DOM 屬性;找到別的驗證方式時 |
 | 多值任務的 Picker `ctx` 改走 `storage.session` | 目前走 URL 參數(20 個值約 6KB,遠低於限制);值的數量成長到讓網址過長時 |
-| 「哪些列／格屬於這張表」的判準收成一份(現在 `shared/table.js`、`shared/block-detect.js`、`content/picker-mode.js` 各一份,謂詞還不一致:table.js 只認 `<table>`,另兩份含 ARIA) | AF-7 體檢發現;下次動表格解析時一起合併,屆時連 ARIA 表格的測試一起補 |
-| `picker-mode.js` 自帶的 `getRowCells` / `isHeaderRow` / `getTableRows` 併進 `shared/table.js` | 兩份判準不同(picker-mode 版多認 ARIA role 與 children 退路);合併要連 ARIA 表格的測試一起補,下次動表格解析時做 |
 | 深色模式以外的主題色 | 使用者提出 |
 | 選取工具列加第四段「這一欄每格各一個值」 | 目前留在右鍵選單(工具列三段已夠用,四段會擠);使用者反映右鍵選單不好發現時 |
 | 位置定位的名稱後綴收成一份 | 現在 `picker.js` 的 `singleCellName`/`defaultPickName` 與 `main.js` 的 `defaultFieldName` 各一份（`POS_LABELS`/`POS_NAMES` 兩張同表）；下次動命名規則時搬進 `shared/` 讓兩端 import |
