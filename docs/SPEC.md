@@ -210,6 +210,23 @@
     (`data-af-frame-proxy`,`pointer-events: auto`)。**沒有這一層就 hover 不到 `<iframe>`**:
     滑鼠移到 iframe 上時事件由 iframe 自己的文件接走,最上層的 overlay 又是 `pointer-events: none`。
     指到代理層時面板顯示「框架 iframe / 主機名 / 確認即進入這個框架選取」。
+  - **代理層不得擋住頁面自己疊在 iframe 上的東西**(下拉選單、彈窗;AF-11)。
+    指標被代理層攔走的話,站台收到 `mouseout` 就把選單收起來,使用者永遠點不到選單項目。
+    三件事:
+    1. **代理層貼在 `<body>` 底下,不放進 overlay**——overlay 的 `z-index` 是 2147483647
+       且自成堆疊脈絡,放進去的東西一定蓋過所有頁面內容。
+    2. **`z-index` 跟著它代表的那個 iframe 走**(`getComputedStyle(frame).zIndex`,非數字取 `0`):
+       蓋得住 iframe,但頁面把選單疊上來時一定給了更高的 `z-index`,那就由選單勝出。這是主要機制。
+    3. **只靠 DOM 順序疊上來(沒有 `z-index`)時讓路**:指標落在代理層上的那次 `mousemove`,
+       暫時關掉代理層問一次 `document.elementFromPoint`,底下是頁面元素就把 `pointer-events` 收成 `none`
+       並改以它為目標;指標離開它(`mousemove` 到別處,或它自己的 `mouseout`)再裝回去。
+       這是最後防線,救得回**有收合延遲**的選單(jQuery 常見);零延遲又沒有 `z-index` 的選單救不回來
+       (第一次閃斷就收合了),不假裝做得到。
+    **「滑鼠踏上 iframe 才打開代理層」的事件式做法不可行**:真實瀏覽器實測,
+    指標從頁面內容移進跨網域 iframe 時,父文件收不到**任何**事件
+    (`mouseover`/`mouseout`/`pointerout` 都沒有),沒有任何進入訊號可用。
+  - **代理層的位置在滑鼠移動時重算**(節流 250ms):lazy layout 常在進入選取模式之後才把 iframe 推開,
+    只在建立時算一次會凍在舊位置。
   - 確認的目標是 `<iframe>`(或其代理層)時**不送 `PICKED`**,改送 `DESCEND_FRAME{purpose, taskId, src, preselect}`;
     background 以 `src` 對當下的 frame 清單做**網址比對**(只有 §3 的第 1、2 層——選取當下還沒有目標的 locator 可驗證),
     唯一命中才注入該 frame 並重新 `ENTER_PICK`(`purpose` 原樣帶著)。
@@ -218,7 +235,7 @@
     要點的按鈕常常在外層(頁籤、彈窗的關閉鈕),而值在 iframe 裡;
     進到值所在的那一層就選不到外層的按鈕了——選取模式只能往下鑽、回不去。
   - 指在代理層時 `↑` 走的是 **iframe 的父層**(代理層自己的父層是 overlay,不是頁面);`↓` 回到代理層。
-    代理層在進入選取模式時一次建好,之後的版面重排不會跟著更新(見 BACKLOG)。
+    代理層在進入選取模式時建好,位置隨滑鼠移動重算(見上)。
   - **只能往下鑽,不能往上回**(`↑` 到該 frame 的 `body` 就停住);要換目標一律 `Esc` 重來。
 - **單值儲存格的預設任務名稱是欄標題**(使用者選的是「成交金額」那一格,名稱就該是它);
   欄標題空的才退回列標題,再退回 `nameHint`。整欄／整列聚合維持用 `nameHint`(那是整張表的聚合)。

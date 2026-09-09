@@ -389,25 +389,115 @@ function iframeOf(el) {
   return el.tagName === 'IFRAME' ? el : null
 }
 
+const PROXY_SYNC_MS = 250
+let lastProxySync = 0
+// 代理層讓路給哪一個頁面元素（null = 沒有讓路）
+let yieldedEl = null
+
+// 把代理層貼回它代表的那個 iframe 當下的位置（建立時與滑鼠移動時各一次，唯一一份）。
+// lazy layout 常在進入選取模式之後才把 iframe 推開，只在建立時算一次會凍在舊位置。
+function syncProxyRect(proxy) {
+  const frame = proxy && proxy.__afFrame
+  if (!frame) return
+  const rect = typeof frame.getBoundingClientRect === 'function' ? frame.getBoundingClientRect() : null
+  const sx = (typeof window !== 'undefined' && (window.scrollX || window.pageXOffset)) || 0
+  const sy = (typeof window !== 'undefined' && (window.scrollY || window.pageYOffset)) || 0
+  proxy.style.left = `${(rect?.left || 0) + sx}px`
+  proxy.style.top = `${(rect?.top || 0) + sy}px`
+  proxy.style.width = `${rect?.width || 0}px`
+  proxy.style.height = `${rect?.height || 0}px`
+}
+
+function allProxies() {
+  if (typeof document === 'undefined' || !document.querySelectorAll) return []
+  return [...document.querySelectorAll('[data-af-frame-proxy]')]
+}
+
+// 版面重排（lazy layout、頁籤切換）會把 iframe 推開，代理層要跟上；
+// 每次滑鼠移動都量會逼瀏覽器重算版面，所以節流。
+function syncProxyRects() {
+  const now = Date.now()
+  if (now - lastProxySync < PROXY_SYNC_MS) return
+  lastProxySync = now
+  for (const proxy of allProxies()) syncProxyRect(proxy)
+}
+
+// iframe 的代理層要蓋在 iframe 上（不然指不到它），
+// **但不能蓋在頁面自己疊上來的東西上**（下拉選單、彈窗）——
+// 指標被代理層攔走的話，站台收到 mouseout 就把選單收起來，使用者永遠點不到選單項目。
+// 所以代理層貼在 <body> 底下（不放進 z-index 拉到最高的 overlay，那是獨立堆疊脈絡，
+// 放進去就一定蓋過所有頁面內容），z-index 跟著 iframe 自己那一層走：
+// 頁面把選單疊在 iframe 上時一定給了更高的 z-index，那就由選單勝出。
+function proxyZIndexFor(frame) {
+  let z = 0
+  try {
+    const cs = typeof window !== 'undefined' && typeof window.getComputedStyle === 'function'
+      ? window.getComputedStyle(frame) : null
+    const raw = Number(cs?.zIndex)
+    if (Number.isFinite(raw)) z = raw
+  } catch {}
+  return String(Math.max(0, z))
+}
+
 function buildFrameProxies() {
-  if (typeof document === 'undefined' || !document.body || !overlayEl) return
+  if (typeof document === 'undefined' || !document.body) return
   for (const frame of document.querySelectorAll('iframe')) {
-    const rect = typeof frame.getBoundingClientRect === 'function' ? frame.getBoundingClientRect() : null
     const proxy = document.createElement('div')
     proxy.setAttribute('data-af-frame-proxy', '')
     proxy.__afFrame = frame
-    const sx = (typeof window !== 'undefined' && (window.scrollX || window.pageXOffset)) || 0
-    const sy = (typeof window !== 'undefined' && (window.scrollY || window.pageYOffset)) || 0
     proxy.style.position = 'absolute'
-    proxy.style.left = `${(rect?.left || 0) + sx}px`
-    proxy.style.top = `${(rect?.top || 0) + sy}px`
-    proxy.style.width = `${rect?.width || 0}px`
-    proxy.style.height = `${rect?.height || 0}px`
-    // 這一層必須收得到滑鼠事件,否則就跟沒貼一樣
     proxy.style.pointerEvents = 'auto'
-    proxy.style.zIndex = '2147483646'
-    overlayEl.appendChild(proxy)
+    proxy.style.zIndex = proxyZIndexFor(frame)
+    syncProxyRect(proxy)
+    document.body.appendChild(proxy)
   }
+  lastProxySync = Date.now()
+}
+
+// 疊上來的東西沒有 z-index（只靠 DOM 順序）時代理層還是會贏，這是最後一道防線：
+// 暫時關掉代理層問一次真實命中，底下是頁面元素就讓路，把指標還給它。
+// 站台的選單多半有收合延遲，一個 mousemove（幾毫秒）內還回去通常來得及。
+// `elementFromPoint` 是 CLAUDE.md 那條禁令的唯一例外（只有真實命中測試答得出來），
+// 拿不到它（jsdom）就跳過讓路，行為同以往。
+function yieldProxyIfCovered(proxy, event) {
+  if (typeof document === 'undefined' || typeof document.elementFromPoint !== 'function') return null
+  const prev = proxy.style.pointerEvents
+  proxy.style.pointerEvents = 'none'
+  let hit = null
+  try {
+    hit = document.elementFromPoint(event.clientX, event.clientY)
+  } finally {
+    proxy.style.pointerEvents = prev
+  }
+  // 問不出來、或底下就是那個 iframe：維持可指到，否則 iframe 又選不到了
+  if (!hit || hit === proxy.__afFrame) return null
+  // 命中我們自己的東西（overlay、別的代理層）不算頁面元素
+  if (overlayEl && (hit === overlayEl || overlayEl.contains(hit))) return null
+  if (hit.getAttribute && hit.getAttribute('data-af-frame-proxy') !== null) return null
+  proxy.style.pointerEvents = 'none'
+  yieldedEl = hit
+  return hit
+}
+
+// 讓路是暫時的：指標離開那個元素就要把代理層裝回去，否則 iframe 從此選不到。
+// （指標從選單移進裸露的 iframe 區域時，父文件收不到任何事件——
+//   那個轉換的最後一個訊號就是選單自己的 mouseout，所以要聽它。）
+function rearmProxies() {
+  if (!yieldedEl) return
+  yieldedEl = null
+  for (const proxy of allProxies()) proxy.style.pointerEvents = 'auto'
+}
+
+function stillOnYielded(node) {
+  if (!yieldedEl || !node) return false
+  return node === yieldedEl || (typeof yieldedEl.contains === 'function' && yieldedEl.contains(node))
+}
+
+function onMouseOut(event) {
+  if (!active || !yieldedEl) return
+  if (!stillOnYielded(event.target)) return
+  if (stillOnYielded(event.relatedTarget)) return
+  rearmProxies()
 }
 
 // 更新工具列狀態（作用中模式與停用狀態）
@@ -745,6 +835,9 @@ function setTarget(el) {
     if (panelEl) updatePanel(panelEl, null)
     return
   }
+  // 目標是代理層時先重算一次位置（鍵盤 ↓ 回到代理層也走這裡），
+  // 不然藍框會畫在版面重排前的舊矩形上
+  if (frameOfProxy(el)) syncProxyRect(el)
   if (highlightEl) {
     highlightEl.style.display = 'block'
     updateHighlight(highlightEl, el)
@@ -1461,8 +1554,16 @@ function setPanelCorner(corner) {
 // 事件監聽處理常式
 function onMouseMove(event) {
   if (!active) return
-  const target = event.target
+  let target = event.target
   avoidPanel(event)
+  syncProxyRects()
+  // 指標已經離開讓路的那個元素：把代理層裝回去，不然 iframe 從此選不到
+  if (yieldedEl && !stillOnYielded(target)) rearmProxies()
+  // 指在代理層上時先問一次底下真正是什麼：疊在 iframe 上的下拉選單要還給頁面
+  if (frameOfProxy(target)) {
+    const covered = yieldProxyIfCovered(target, event)
+    if (covered) target = covered
+  }
   // overlay 自己的元素一律跳過，唯一例外是 iframe 的代理層——它就是為了被指到才貼的
   const isProxy = !!frameOfProxy(target)
   if (!target || (!isProxy && overlayEl && (target === overlayEl || overlayEl.contains(target)))) return
@@ -2155,6 +2256,7 @@ export function enterPickMode(opts) {
   }
 
   document.addEventListener('mousemove', onMouseMove, true)
+  document.addEventListener('mouseout', onMouseOut, true)
   document.addEventListener('keydown', onKeyDown, true)
   document.addEventListener('click', onClick, true)
   document.addEventListener('mousedown', onMouseDown, true)
@@ -2197,6 +2299,7 @@ export function exitPickMode(opts = {}) {
   }
   if (typeof document !== 'undefined') {
     document.removeEventListener('mousemove', onMouseMove, true)
+    document.removeEventListener('mouseout', onMouseOut, true)
     document.removeEventListener('keydown', onKeyDown, true)
     document.removeEventListener('click', onClick, true)
     document.removeEventListener('mousedown', onMouseDown, true)
@@ -2218,7 +2321,10 @@ export function exitPickMode(opts = {}) {
     for (const el of (document.querySelectorAll ? document.querySelectorAll('[data-af-menu]') : [])) {
       el.remove()
     }
+    // 代理層貼在 <body> 底下（見 buildFrameProxies），不會隨 overlay 一起拆掉
+    for (const el of allProxies()) el.remove()
   }
+  yieldedEl = null; lastProxySync = 0
   active = false; currentPurpose = null; currentTaskId = undefined; currentTargetEl = null; backStack = []
   overlayEl = null; highlightEl = null; panelEl = null; toolbarEl = null; menuEl = null
   pickMode = 'cell'; cellIndex = null; colIndex = null; rowIndex = null; currentCellEl = null; nestedNoticeOn = false

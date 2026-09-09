@@ -158,9 +158,44 @@ try {
   const outerHtml = `<!doctype html><meta charset="utf-8">
 <h1>外層</h1>
 <iframe id="fr" src="http://localhost:48124/inner" width="400" height="200"></iframe>`
+  // AF-11:下拉選單疊在內容 iframe 上（使用者回報的版面）。
+  // 選單對 mouseout **立刻**收合、沒有任何延遲,比真實站台更嚴格:
+  // 代理層只要攔到一次滑鼠,選單就沒了。
+  // 同時記錄最上層文件收到的 mouseover target,那是整個修法的前提(B-0 探針)。
+  const overlapHtml = `<!doctype html><meta charset="utf-8">
+<body style="margin:0">
+<div id="bar" style="height:30px;background:#333;color:#fff">投資先生</div>
+<div id="menu" style="position:absolute;left:0;top:30px;width:200px;height:120px;background:#fff;border:1px solid #999;display:none;z-index:10">
+  <a id="item" href="#" style="display:block;padding:8px">Intelligent</a>
+</div>
+<iframe id="fr" src="http://localhost:48124/inner" style="width:600px;height:400px;border:0"></iframe>
+<script>
+  const bar = document.getElementById('bar'), menu = document.getElementById('menu')
+  const inside = (n) => n && (n === bar || n === menu || menu.contains(n))
+  let hideTimer = null
+  // __delay=false:mouseout 立刻收合(最嚴格,只有堆疊順序救得了)
+  // __delay=true :jQuery 選單常見的延遲收合,移回選單就取消——讓路救得回來
+  window.__delay = false
+  const show = () => { clearTimeout(hideTimer); menu.style.display = 'block' }
+  const hide = () => {
+    clearTimeout(hideTimer)
+    if (window.__delay) hideTimer = setTimeout(() => { menu.style.display = 'none' }, 300)
+    else menu.style.display = 'none'
+  }
+  bar.addEventListener('mouseover', show)
+  menu.addEventListener('mouseover', show)
+  const leave = (e) => { if (!inside(e.relatedTarget)) hide() }
+  bar.addEventListener('mouseout', leave)
+  menu.addEventListener('mouseout', leave)
+  window.__overs = []
+  document.addEventListener('mouseover', (e) => {
+    window.__overs.push(e.target.id || e.target.tagName)
+  }, true)
+</script>`
   const server = http.createServer((req, res) => {
     res.setHeader('content-type', 'text/html; charset=utf-8')
     if (req.url.startsWith('/login')) return res.end(loginHtml)
+    if (req.url.startsWith('/overlapframe')) return res.end(overlapHtml)
     if (req.url.startsWith('/withframe')) return res.end(outerHtml)
     res.end(fixtureHtml)
   })
@@ -399,6 +434,127 @@ try {
     console.log(`${browserName}:跨網域 iframe 先點按鈕再擷取成功 (frameId=${frameResult.frameId}, value=${frameResult.extract.value})`)
   }
   await framePage.close()
+
+  // 5f. AF-11:疊在 iframe 上的下拉選單要選得到(代理層不得攔走指標)
+  const olPage = await browser.newPage()
+  await olPage.setViewport({ width: 800, height: 600 })
+  await olPage.goto('http://127.0.0.1:48123/overlapframe', { waitUntil: 'load' })
+  // 這一頁還沒被注入過 content script(前面幾段注入的是別的分頁)
+  await ext2.evaluate(async () => {
+    const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/overlapframe*' })
+    await chrome.scripting.executeScript({
+      target: { tabId: tabs[0].id, frameIds: [0] },
+      func: (url) => import(url),
+      args: [chrome.runtime.getURL('content/main.js')]
+    })
+  })
+  const enterPick = async (purpose) => {
+    await ext2.evaluate(async (pp) => {
+      const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/overlapframe*' })
+      await chrome.tabs.sendMessage(tabs[0].id, { type: 'EXIT_PICK' }, { frameId: 0 }).catch(() => {})
+      await chrome.tabs.sendMessage(tabs[0].id, { type: 'ENTER_PICK', purpose: pp }, { frameId: 0 })
+    }, purpose)
+  }
+  // content 送出的訊息會廣播到所有擴充功能環境,從這裡收得到
+  await ext2.evaluate(() => {
+    window.__afMsgs = []
+    chrome.runtime.onMessage.addListener((m) => { window.__afMsgs.push(m?.type) })
+  })
+  const takeMsgs = () => ext2.evaluate(() => { const l = window.__afMsgs.slice(); window.__afMsgs = []; return l })
+  const olProbe = () => olPage.evaluate(() => ({
+    menu: document.getElementById('menu').style.display,
+    proxy: document.querySelector('[data-af-frame-proxy]')?.style.pointerEvents ?? null,
+    zIndex: document.querySelector('[data-af-frame-proxy]')?.style.zIndex ?? null,
+    inOverlay: !!document.querySelector('[data-af-overlay] [data-af-frame-proxy]'),
+    panel: document.querySelector('[data-af-panel]')?.textContent || '',
+    overs: window.__overs.splice(0)
+  }))
+  const setMenuZ = (z) => olPage.evaluate((zz) => { document.getElementById('menu').style.zIndex = zz }, z)
+
+  // (1) 選單有 z-index(絕大多數站台):靠堆疊順序就贏,代理層根本收不到指標
+  await setMenuZ('10')
+  await enterPick('preaction')
+  await olPage.mouse.move(60, 15)                 // 選單列:選單展開
+  await olPage.mouse.move(80, 90)                 // 往下走進疊在 iframe 上的選單項目
+  await new Promise(r => setTimeout(r, 200))
+  const onMenu = await olProbe()
+  if (onMenu.inOverlay) {
+    errors.push('AF-11:代理層又被放回 z-index 最高的 overlay 裡,頁面選單一定被蓋掉')
+  }
+  if (onMenu.menu === 'none') {
+    errors.push('AF-11:滑鼠移進疊在 iframe 上的選單,選單被收掉了(代理層攔走了指標事件)')
+  }
+  if (/框架/.test(onMenu.panel)) {
+    errors.push(`AF-11:面板把選單項目說成框架:${onMenu.panel.slice(0, 40)}`)
+  }
+  await takeMsgs()
+  await olPage.mouse.click(80, 90)
+  await new Promise(r => setTimeout(r, 300))
+  const afterItemClick = await takeMsgs()
+  if (!afterItemClick.includes('PICKED')) {
+    errors.push(`AF-11:點選單項目要送 PICKED,實得 ${JSON.stringify(afterItemClick)}`)
+  }
+  if (afterItemClick.includes('DESCEND_FRAME')) {
+    errors.push('AF-11:點選單項目卻被帶進 iframe')
+  }
+  if (onMenu.menu !== 'none' && !onMenu.inOverlay && afterItemClick.includes('PICKED')) {
+    console.log(`${browserName}:疊在 iframe 上的選單選得到(有 z-index,靠堆疊順序)`)
+  }
+
+  // (2) 選單沒有 z-index(只靠 DOM 順序):代理層會贏,靠讓路把指標還回去。
+  //     站台這時一定有收合延遲才救得回來(零延遲又沒 z-index 的選單,第一次閃斷就沒了,
+  //     那是做不到的事,不假裝做得到)。
+  await setMenuZ('')
+  await olPage.evaluate(() => { window.__delay = true })
+  await enterPick('preaction')
+  await olPage.mouse.move(60, 15)
+  await olPage.mouse.move(80, 80)                 // 踏進疊在 iframe 上的區域(代理層搶到)
+  await olPage.mouse.move(80, 92)                 // 使用者繼續往選單項目移動
+  await new Promise(r => setTimeout(r, 200))
+  const onMenu2 = await olProbe()
+  if (onMenu2.proxy !== 'none') {
+    errors.push(`AF-11:沒有 z-index 的選單要靠讓路,代理層該退出來,實得 ${onMenu2.proxy}`)
+  }
+  if (onMenu2.menu === 'none') {
+    errors.push('AF-11:讓路沒把指標及時還給選單,選單被收掉了')
+  }
+  if (/框架/.test(onMenu2.panel)) {
+    errors.push(`AF-11:讓路之後面板仍說是框架:${onMenu2.panel.slice(0, 40)}`)
+  }
+  if (onMenu2.proxy === 'none' && onMenu2.menu !== 'none') {
+    console.log(`${browserName}:沒有 z-index 的選單靠讓路救回來`)
+  }
+  await olPage.evaluate(() => { window.__delay = false })
+
+  // (3) 裸露的 iframe 仍要指得到、點得進去
+  await setMenuZ('10')
+  await enterPick('task')
+  await olPage.mouse.move(700, 550)               // 先離開選單,讓代理層裝回去
+  await olPage.mouse.move(400, 300)               // iframe 上沒有東西疊著的地方
+  await new Promise(r => setTimeout(r, 200))
+  const onFrame = await olProbe()
+  // B-0 探針的結論:指標從頁面內容移進跨網域 iframe 時,父文件收不到任何事件。
+  // 「踏上 iframe 才打開代理層」的事件式做法因此不可行,只能靠堆疊順序。
+  if (onFrame.overs.includes('fr')) {
+    console.log(`${browserName}:注意 — 父文件這次收到了 <iframe> 的 mouseover(與 AF-11 的前提不同)`)
+  }
+  if (onFrame.proxy !== 'auto') {
+    errors.push(`AF-11:裸露的 iframe 上代理層要接得到指標,實得 ${onFrame.proxy}`)
+  }
+  if (!/框架/.test(onFrame.panel)) {
+    errors.push(`AF-11:指到 iframe 時面板要說是框架,實得 ${onFrame.panel.slice(0, 40)}`)
+  }
+  await takeMsgs()
+  await olPage.mouse.click(400, 300)
+  await new Promise(r => setTimeout(r, 300))
+  const afterFrameClick = await takeMsgs()
+  if (!afterFrameClick.includes('DESCEND_FRAME')) {
+    errors.push(`AF-11:點裸露的 iframe 要下鑽,實得 ${JSON.stringify(afterFrameClick)}`)
+  }
+  if (onFrame.proxy === 'auto' && afterFrameClick.includes('DESCEND_FRAME')) {
+    console.log(`${browserName}:裸露的 iframe 仍指得到並下鑽`)
+  }
+  await olPage.close()
 
   await ext2.close()
   await pageUnderTest.close()
