@@ -62,6 +62,10 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   **`sidePanel.open()` 的手勢不跨 `sendMessage`**——每個入口都要在自己的點擊／右鍵處理裡呼叫,
   不得轉給 background 代開;面板的參數一律走 `storage.session` 的 `panel:<tabId>`,
   **`setOptions.path` 不得帶查詢字串**(面板重載時會被丟掉)。
+- **`sidePanel.open()` 要排在手勢裡第一個 `await`**:`setOptions` 不得先 await
+  (同一個 task 送出即可,瀏覽器照順序處理)。右鍵選單的手勢在 service worker,
+  沒有 DOM 暫時性啟用可依附,先 await 就會退回彈出視窗;
+  **擴充功能頁跨 await 仍然開得起來,所以只驗那條會漏掉右鍵**。
 - **面板不能自己判斷屬於哪個分頁**:`sender.tab` 永遠是 null、載入當下查作用分頁會拿到切換前的舊分頁。
   只能取 `windows.getCurrent().id`,在 `visibilitychange` 轉為可見時問 background(`RESOLVE_PANEL_TAB`)。
 - **`held` 標示(送出後留在頁面上的藍框)有兩個出口**:面板關閉(`EXIT_PICK`)與下一輪同用途的 `ENTER_PICK`;
@@ -78,7 +82,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1832 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1834 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。

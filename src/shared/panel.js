@@ -28,10 +28,17 @@ export async function openPanel(tabId, kind = 'picker', fallbackQuery = '') {
   const api = typeof chrome !== 'undefined' ? chrome.sidePanel : null
   if (api && typeof api.open === 'function') {
     try {
-      if (typeof api.setOptions === 'function') {
-        await api.setOptions({ tabId, path, enabled: true })
-      }
+      // **`open` 必須是這個使用者手勢裡第一個 await 的呼叫。**
+      // 右鍵選單的手勢發生在 service worker，沒有 DOM 的暫時性啟用可依附：
+      // 先 `await setOptions` 就等於把 `open` 推到手勢之外，Chrome 會拒絕，
+      // 使用者看到的就是「開的是彈出視窗，不是側邊面板」。
+      // setOptions 不 await——兩者在同一個 task 送出，瀏覽器會照順序處理
+      //（實測：全域停用中、setOptions 換路徑，open 出來的仍是換過的那一頁）。
+      const options = typeof api.setOptions === 'function'
+        ? api.setOptions({ tabId, path, enabled: true })
+        : null
       await api.open({ tabId })
+      if (options) await options
       return { ok: true }
     } catch (err) {
       // 手勢不成立（例如被轉手到別的非同步環節）→ 退回舊的彈出視窗，

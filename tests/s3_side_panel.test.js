@@ -581,3 +581,36 @@ test('體檢-9 退路的彈出視窗要被告知服務哪個分頁（popup 與�
   assert.match(main, /openPanel\(tab\.id, 'picker', `tabId=/, '右鍵退路也要帶')
   assert.match(picker, /params\.has\('tabId'\)/, 'picker 要認得網址上的 tabId 並直接採用')
 })
+
+// ---------- 體檢輪：手勢順序（使用者回報「開的是彈出視窗不是側邊面板」）----------
+
+test('體檢-10 open 必須是手勢裡第一個非同步呼叫（右鍵的手勢不跨 await）', async () => {
+  const { c, bg } = await freshBg()
+  // setOptions 在 open 被呼叫之前不會 resolve：先 await 它的寫法會卡在這裡，
+  // 真實瀏覽器裡的表現則是手勢過期、open 被拒、退回彈出視窗
+  c.__blockSetOptionsUntilOpen(true)
+  const tab = await c.tabs.create({ url: 'https://a.test/p' })
+
+  const done = await Promise.race([
+    bg.handleContextMenu({ menuItemId: 'af-pick', frameId: 0 }, tab).then(() => 'done'),
+    new Promise((resolve) => setTimeout(() => resolve('卡住'), 1000))
+  ])
+  assert.equal(done, 'done',
+    'openPanel 先 await setOptions 就等於把 open 推到手勢之外，右鍵會開成彈出視窗')
+  assert.equal(api(c, 'sidePanel.open').length, 1, '面板要開起來')
+  assert.equal(api(c, 'windows.create').length, 0, '不該退回彈出視窗')
+})
+
+test('體檢-10b 站台登入的右鍵入口同樣要在手勢內開面板', async () => {
+  const { c, bg } = await freshBg()
+  c.__blockSetOptionsUntilOpen(true)
+  const tab = await c.tabs.create({ url: 'https://a.test/login' })
+  const done = await Promise.race([
+    bg.handleContextMenu({ menuItemId: 'af-site-login' }, tab).then(() => 'done'),
+    new Promise((resolve) => setTimeout(() => resolve('卡住'), 1000))
+  ])
+  assert.equal(done, 'done')
+  assert.equal(api(c, 'windows.create').length, 0)
+  const setOpts = api(c, 'sidePanel.setOptions').find(x => /site\.html/.test(String(x.args[0].path)))
+  assert.ok(setOpts, '路徑仍要換成站台設定頁（setOptions 與 open 同一個 task 送出，瀏覽器會照順序處理）')
+})

@@ -118,6 +118,8 @@ function buildChromeMock() {
   const panelOptions = new Map()
   const openPanels = new Set()
   let panelOpenShouldThrow = false
+  let blockSetOptionsUntilOpen = false
+  const setOptionsWaiters = []
   let currentWindowId = 900
   let currentTab = null
   const onStartup = createEvent()
@@ -340,6 +342,11 @@ function buildChromeMock() {
         recordCall('sidePanel.setOptions', [options])
         const key = options.tabId ?? '__global'
         panelOptions.set(key, { ...(panelOptions.get(key) || {}), ...options })
+        // 模擬真實情況：`open` 必須在使用者手勢的同一個 task 內送出，
+        // 先 await 這一支就來不及了。卡住它，讓那種寫法在測試裡直接卡死。
+        if (blockSetOptionsUntilOpen) {
+          await new Promise((resolve) => { setOptionsWaiters.push(resolve) })
+        }
       },
       async getOptions(options = {}) {
         recordCall('sidePanel.getOptions', [options])
@@ -347,6 +354,7 @@ function buildChromeMock() {
       },
       async open(options = {}) {
         recordCall('sidePanel.open', [options])
+        while (setOptionsWaiters.length > 0) setOptionsWaiters.shift()()
         if (panelOpenShouldThrow) throw new Error('`sidePanel.open()` may only be called in response to a user gesture.')
         openPanels.add(options.tabId ?? options.windowId ?? '__global')
       },
@@ -449,6 +457,11 @@ function buildChromeMock() {
     __setPanelOpenThrows(v) {
       panelOpenShouldThrow = Boolean(v)
     },
+    // 讓 setOptions 在 open 被呼叫之前不 resolve：
+    // 用來驗「open 是手勢裡第一個非同步呼叫」，先 await setOptions 的寫法會卡死
+    __blockSetOptionsUntilOpen(v) {
+      blockSetOptionsUntilOpen = Boolean(v)
+    },
     __openPanels() {
       return Array.from(openPanels)
     },
@@ -492,6 +505,8 @@ function buildChromeMock() {
       panelOptions.clear()
       openPanels.clear()
       panelOpenShouldThrow = false
+      blockSetOptionsUntilOpen = false
+      setOptionsWaiters.length = 0
       currentWindowId = 900
       currentTab = null
       storageOnChanged._reset()

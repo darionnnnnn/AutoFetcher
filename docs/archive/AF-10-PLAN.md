@@ -1,6 +1,6 @@
 # AF-10 第 10 輪規劃：side panel 設定面板、鎖表選取、表格判準合一、前置動作靈活化
 
-> 狀態：全案完成，已併 dev；換模型體檢（Fable 5.1）完成，1832 綠；煙霧 Chrome 全過，Edge 最後一跑因使用者的 Edge 開著而啟動不了（同日稍早兩次全過，其後未動 Edge 專屬程式碼）
+> 狀態：全案完成，已併 dev；換模型體檢（Fable 5.1）完成，1834 綠；煙霧 Chrome 全過，Edge 最後一跑因使用者的 Edge 開著而啟動不了（同日稍早兩次全過，其後未動 Edge 專屬程式碼）
 > 基準：dev@1fd301b（1748 綠，v0.8.0）
 > 來源：使用者回饋 5 項 + 核對時順手發現 9 項
 > 實作方式：**Claude 自己做**（agy 無額度）。仍照慣例：每階段先寫測試（含突變）再實作、一段一驗。
@@ -380,7 +380,7 @@
 ## 體檢輪修正（換模型：實作 Opus 5 → 體檢 Fable 5.1，2026-09-09）
 
 範圍 `1fd301b..HEAD`（已 push，改以 PLAN 基準到 HEAD）。親讀 background/main.js、picker.js 面板端、
-picker-mode.js 三份 diff，另開一份獨立獵 bug 審查掃其餘檔。**抓到 12 項，全部修掉並各補迴歸測試，
+picker-mode.js 三份 diff，另開一份獨立獵 bug 審查掃其餘檔。**抓到 13 項（含使用者實測回報的右鍵開不了面板），全部修掉並各補迴歸測試，
 守門線逐一突變驗證會紅。**
 
 | # | 哪裡 | 症狀 | 修法 | 迴歸測試 |
@@ -398,17 +398,24 @@ picker-mode.js 三份 diff，另開一份獨立獵 bug 審查掃其餘檔。**�
 | 11 | `fetcher.js` dryRun catch | **失敗時軌跡被丟掉**——正好是 A-10 說最需要軌跡的情境 | 失敗也回 `preActionTrace`，picker 顯示「走到第 N 步」 | s4 體檢 |
 | 12 | `content/main.js`／`fetcher.js` | `timeoutMs` 是字串時兩端各自解讀（一邊 3 秒一邊 20 秒）；派不出事件時靜默回 `ok` | `timeoutMsOf` 一份；拿不到建構子就 throw | s4 體檢 |
 
-**駁回一項**：審查主張「`openPanel` 前有 `await` 就必失效，side panel 從來開不起來」。
-真實瀏覽器驗證（Report 編輯鈕經三個 `await` 後面板以 360px 開啟、無 `panel_fallback` 診斷）證明
-Chrome 的使用者啟動是**時間窗**而非同一個 task；B-0 只證明它**不跨 sendMessage**。維持現狀，
-但 popup 入口未實機驗證，列入待實測。
+**先前「駁回」的一項，使用者實測後證明只對了一半**（記錄於此，這是本輪最貴的一課）：
+審查主張「`openPanel` 前有 `await` 就失效」，我以 Report 編輯鈕（經三個 `await` 仍開得起來）
+駁回。使用者回報右鍵開出來的是彈出視窗——**兩條路的手勢機制不同**：
+擴充功能頁有 DOM 的暫時性啟用（5 秒視窗，跨 `await` 仍有效），
+service worker 的右鍵手勢沒有可依附的啟用狀態，`await` 一次就沒了。
+真正的兇手不在呼叫端，而在 `openPanel` 內部——它 `await api.setOptions()` 之後才 `open()`。
+修法：`setOptions` 不 await（同一個 task 送出，瀏覽器照順序處理；探針實測全域停用中
+仍會用換過的路徑開），`open` 成為手勢裡第一個 await 的呼叫。
+**教訓：反駁一條框架斷言時，要驗的是它宣稱失效的那條路徑，不是另一條看起來相似的。**
+
+| 13 | `shared/panel.js` | 右鍵開出來的是**彈出視窗不是側邊面板**（使用者實測回報）：`open` 之前先 await 了 `setOptions`，service worker 的手勢跨不過去 | `setOptions` 不 await，`open` 排第一 | s3 體檢-10／10b（mock 讓 `setOptions` 卡到 `open` 被呼叫才 resolve，先 await 的寫法會卡死） |
 
 規約普查：UI 未直接碰 `chrome.storage`、無 `innerHTML`、無色碼字面值、background 無動態 import、
 正式碼無測試替身。最後一個手改 commit（067233b）單獨掃過，乾淨。
 
 ## 體檢交接
 
-- 測試：`npm test` **1832 綠**（上輪基線 1748，本輪 +84），零紅。
+- 測試：`npm test` **1834 綠**（上輪基線 1748，本輪 +86），零紅。
 - 煙霧：`./run_smoke.sh` Chrome 與 Edge **全部通過**。
 - 版本：`0.8.0 → 0.9.0`（manifest 與 package.json 兩處）。
 - 分支：`feature/af-10`，七個 commit（規劃 + 四個作業 + 收官 + 終檢處置）。

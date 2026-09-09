@@ -229,6 +229,13 @@
   面板停在目標分頁旁邊,永遠看得見、不會被別的視窗蓋住(MV3 沒有 `alwaysOnTop`),
   而且頁面上的高亮與設定畫面可以同時在眼前。新增、編輯、站台登入**三條走同一個載體**
   (以前編輯是另開一個普通分頁,「保持在最上層」對分頁根本不適用)。
+  - **`open()` 必須是那個手勢裡第一個 `await` 的呼叫**(`shared/panel.js`):
+    `setOptions` **不得 await**——兩者在同一個 task 送出,瀏覽器會照順序處理
+    (實測:全域停用中、`setOptions` 換路徑,`open` 出來的仍是換過的那一頁)。
+    右鍵選單的手勢發生在 service worker,**沒有 DOM 的暫時性啟用可依附**:
+    先 `await setOptions` 就把 `open` 推到手勢之外,Chrome 拒絕,使用者看到的是
+    「開的是彈出視窗,不是側邊面板」。擴充功能頁(Report 的編輯鈕、popup)另有 5 秒的
+    暫時性啟用視窗,**跨幾個 `await` 仍然開得起來**——所以只從擴充功能頁驗證會漏掉右鍵這條。
   - **`sidePanel.open()` 只能在使用者手勢裡呼叫,而且手勢不跨 `sendMessage`**
     (實測錯誤訊息 `may only be called in response to a user gesture`):
     四個入口(右鍵兩項、popup 的選取鈕、任務頁的編輯鈕)各自在**自己的**處理函式裡呼叫,
