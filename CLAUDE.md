@@ -82,7 +82,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1834 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1848 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -150,6 +150,11 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   也可能關到別人的視窗。
 - **會跨表格殘留的狀態，在「換表清空」那一段也要一起清**:AF-7 是 `pickedTableEl`、AF-9 是復原快照 `undoSnapshot`,
   兩次都是「清單清了、旁邊那份索引沒清」,`Ctrl+Z` 或送出就把 A 表的索引配上 B 表的定位。
+- **蓋在頁面上、又接指標事件的東西要讓得開**:iframe 代理層曾貼在 z-index 最高的 overlay 底下,
+  把站台疊在 iframe 上的下拉選單整個擋掉(站台收到 `mouseout` 就收合,使用者點不到選單項目)。
+  規則見 SPEC §2:貼在 `<body>` 底下、`z-index` 跟著 iframe **最外層有數字 z-index 的祖先**走
+  (只看 iframe 自己會被 `.content { z-index: 2 }` 這種容器蓋住,iframe 反而選不到)、沒有 z-index 時靠 `elementFromPoint` 讓路。
+  **父文件收不到「指標進入跨網域 iframe」的任何事件**,別再想用 `mouseover` 之類的訊號開關它。
 - **選取模式的模組狀態要在 `exitPickMode` 全部重設**:漏一個(例如「已選屬於哪張表」)
   會讓同一頁的下一次選取沿用上一張表的 locator、配上新表的列欄索引送出,抓到的永遠是錯的值。
   只驗「DOM 元素被移除」的測試抓不到這種殘留,要驗「連續選兩次」的行為。
@@ -172,6 +177,8 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   `setPointerCapture` 要先檢查存在(jsdom 25 沒有 `PointerEvent` 也沒有這個方法)。
 - **新的拖曳一律走 `ui/report/dnd.js`**,不要再各自內嵌 pointer 監聽(既有三處尚未搬過去,見 BACKLOG);
   **不要用 `document.elementFromPoint`**(jsdom 沒有,測不動)。命中與拒收往下找的規則見 SPEC §8.2。
+  唯一例外是 `content/picker-mode.js` 的代理層讓路(只有真實命中測試答得出「底下是誰」),
+  必須帶存在判斷,測試用替身注入。
 - **底層投放目標要自己判斷指標是否壓在上層元素上**,否則會在拒收的卡片底下偷偷長出新卡片。
 - **缺值不補 0、不內插**(SPEC §8.6);抓取失敗一律顯示 `—`,錯誤原因放 `title`。
 - **數值不進科學記號、不截有效位數**:整數原樣輸出,只對有小數的值去浮點尾巴(`cards.js` 的 `formatNumber`)。

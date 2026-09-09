@@ -31,6 +31,7 @@ test('選取模式一開，每個 iframe 上面都要有一層可以指到的代
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('v') })
   const proxies = doc.querySelectorAll('[data-af-frame-proxy]')
   assert.equal(proxies.length, 1, 'iframe 上沒有代理層的話，使用者永遠選不到它')
+  assert.equal(proxies[0].style.pointerEvents, 'auto', '不接事件就跟沒貼一樣')
 })
 
 test('代理層要指得回它代表的那個 iframe', async () => {
