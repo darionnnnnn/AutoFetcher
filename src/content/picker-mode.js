@@ -96,7 +96,7 @@ function cellBelongsToTable(cell, tableEl) {
 // 把滑鼠下的元素升級成「它所屬的最內層表格」。
 // 使用者的直覺是「我點的是這一格」，而擷取規格要的是表格容器 + 列欄索引，
 // 兩者之間的轉換只有這一份。只對會挑值的用途升級：前置動作與登入要的是那個元素本身。
-function upgradeTarget(el) {
+function upgradeTarget(el, opts = {}) {
   if (!el) return el
   if (currentPurpose !== 'task' && currentPurpose !== 'repick') return el
   if (typeof el.closest !== 'function') return el
@@ -104,14 +104,22 @@ function upgradeTarget(el) {
   const cell = el.closest(CELL_SELECTOR)
   if (cell) upgraded = tableOf(cell)
   if (!upgraded) upgraded = tableOf(el)
-  if (!upgraded) return el
+  // 找不到任何表格＝滑鼠落在頁面的別處（往右上角工具列移動途中經過的段落、空白）。
+  // 已經選了值的時候不換目標：換掉的話工具列三段會立刻反灰、hover 標示被清掉，
+  // 使用者根本走不到工具列去改「單格／整欄／整列」——這就是 P4 回饋的根因。
+  if (!upgraded) {
+    if (!opts.deliberate && selectedList.length > 0 && pickedTableEl) return pickedTableEl
+    return el
+  }
   // 擷取端（shared/table.js 的 parseTable / getDataRows）對純包裝的外層表會鑽到內層，
   // 選取端不跟著鑽的話，索引以外層算、值以內層取，會靜默抓到別一格（AF-10 作業 D）
   upgraded = innermostTable(upgraded)
-  // 已經選了值就鎖在那張表：巢狀小表的索引配外層表的定位會送出錯的規格
-  // 不論是「外層包住已選的表」還是「已選的表包住這張」，都鎖回已選那張——
-  // 只擋其中一個方向的話，內層已選後 Ctrl 點外層格子會混進另一張表的索引，再用內層 locator 送出
-  if (selectedList.length > 0 && pickedTableEl && upgraded !== pickedTableEl &&
+  // 已經選了值就鎖在那張表（AF-10 作業 C）：
+  // 巢狀內外層是「同一張表的事」，鎖回已選那張（只擋一個方向的話，內層已選後
+  // Ctrl 點外層格子會混進另一張表的索引，再用內層 locator 送出）；
+  // **另一張不相干的表**才把目標換過去，讓使用者看得到「可以改點這張」——
+  // 但換不換得成要等他真的點下去（滑鼠路過不算）。
+  if (!opts.deliberate && selectedList.length > 0 && pickedTableEl && upgraded !== pickedTableEl &&
       (pickedTableEl.contains(upgraded) || upgraded.contains(pickedTableEl))) {
     return pickedTableEl
   }
@@ -700,19 +708,10 @@ function updatePanelActions(el) {
 
 // 設定當前目標元素
 function setTarget(el) {
-  // 換到另一張表格（或離開表格）時，先前選的列欄索引就沒有意義了；
-  // 不清掉會把 A 表的索引配上 B 表的定位一起送出去
-  // 滑鼠落在「另一張表格」裡（不論停在表格本身或它的某一格）才算換表
-  const hostTable = tableOf(el)
-  if (selectedList.length > 0 && pickedTableEl && hostTable && hostTable !== pickedTableEl &&
-      !pickedTableEl.contains(hostTable) && !hostTable.contains(pickedTableEl)) {
-    clearPickedMarks(document)
-    selectedList = []
-    limitReached = false
-    pickedTableEl = null
-    // 快照裡是上一張表的列欄索引，留著會被 Ctrl+Z 配上這張表的定位送出去（AF-7 同型缺陷）
-    undoSnapshot = null
-  }
+  // AF-10 作業 C：**滑鼠移動不再有破壞性副作用**。
+  // 以前滑鼠刮過另一張表就把整批已選清掉（連復原快照一起丟），
+  // 使用者只是要把游標移到右上角工具列，途中經過別的表格就全沒了。
+  // 現在換表一律由「點另一張表的格子」觸發（onClick 的表格分支），而且留一步反悔。
   clearMarkedCells(document)
   currentTargetEl = el; currentDataRows = []; currentRowEl = null; colIndex = null; rowIndex = null; cellIndex = null; currentCellEl = null
   if (!el) {
@@ -943,6 +942,16 @@ function confirmPick() {
     setTarget(pickedTableEl)
   }
   if (!currentTargetEl) return
+
+  // 整欄／整列模式卻沒有任何已選、目標又不是表格：送出去的會是「整個元素」，
+  // 使用者以為自己選的是一整欄。停下來說原因，不要把他選的模式靜靜丟掉（AF-10 作業 C）
+  if (isMultiPickPurpose() && selectedList.length === 0 &&
+      (pickMode === 'col' || pickMode === 'row') && !isTableMode(currentTargetEl) &&
+      !iframeOf(currentTargetEl)) {
+    toolbarNotice = `${pickMode === 'row' ? '整列' : '整欄'}只能在表格上選，先把滑鼠移到表格；要抓這個元素請切回「單格」`
+    if (panelEl) updatePanel(panelEl, currentTargetEl)
+    return
+  }
 
   // 目標是 iframe(或它的代理層):值在框架裡面，選這個殼沒有意義，改成鑽進去
   const descendTarget = iframeOf(currentTargetEl)
@@ -1549,7 +1558,8 @@ function onKeyDown(event) {
     // 指在代理層時往上要走 iframe 的父層；代理層自己的父層是我們的 overlay
     const anchor = frameOfProxy(currentTargetEl) || currentTargetEl
     if (anchor.parentElement) {
-      backStack.push(currentTargetEl); setTarget(upgradeTarget(anchor.parentElement))
+      // `↑` 是使用者明確要換目標（滑鼠路過才需要鎖表保護），不套鎖表
+      backStack.push(currentTargetEl); setTarget(upgradeTarget(anchor.parentElement, { deliberate: true }))
       relockAfterMove()
     }
   } else if (event.key === 'ArrowDown') {
@@ -1621,6 +1631,14 @@ function onClick(event) {
       // 點工具列＝使用者要重新挑目標，先前點非表格元素造成的鎖定一律解除；
       // 鎖著的話滑鼠移到表格上也完全沒有反應，看起來就是「工具列壞了」
       lockedEl = null
+      // 點「單格」＝改變主意了，先前記住的整欄／整列意圖要一起取消，
+      // 否則滑鼠一移到表格上還是會自動切成整欄
+      if (mode === 'cell') {
+        pendingMode = null
+        toolbarNotice = null
+        if (panelEl) updatePanel(panelEl, currentTargetEl)
+        return
+      }
       const onTable = Boolean(currentTargetEl && isTableMode(currentTargetEl))
       if (!onTable) {
         // 停用的真正原因是「這裡不是表格」，與用途無關；
@@ -1737,6 +1755,15 @@ function onClick(event) {
       }
 
       const additive = event.ctrlKey || event.metaKey
+      // 跨表加選擋下來：兩張表的列欄索引配不到同一個 locator，
+      // 混在一起送出去的規格永遠抓到錯的值（要換表就直接點，那是取代且留得住復原）
+      if (additive && pickedTableEl && currentTargetEl !== pickedTableEl &&
+          !pickedTableEl.contains(currentTargetEl) && !currentTargetEl.contains(pickedTableEl)) {
+        toolbarNotice = '一個任務只能抓同一張表格裡的值；要改抓另一張表，直接點那一格'
+        applyPickedMarks(pickedTableEl)
+        updatePanel(panelEl, currentTargetEl)
+        return
+      }
       if (additive) {
         // Ctrl／⌘ 點：加選或取消這一個（檔案總管的複選習慣）
         togglePick(candidate)
@@ -1774,6 +1801,13 @@ function onClick(event) {
   // 表格不走這條——點在表格的縫隙（格子解析不出來）不該把整張表鎖住，
   // 那會讓 hover 標示凍結在原地，看起來像整個選取模式壞了
   if (isMultiPickPurpose() && !isTableMode(currentTargetEl) && !iframeOf(currentTargetEl)) {
+    // 使用者選的是「整欄／整列」，這裡卻不是表格：鎖定它、之後送出整個元素，
+    // 等於把他選的模式靜靜丟掉（工具列還亮著整欄）。說出來，不要照做。
+    if (pickMode === 'col' || pickMode === 'row') {
+      toolbarNotice = `${pickMode === 'row' ? '整列' : '整欄'}只能在表格上選，先把滑鼠移到表格；要抓這個元素請切回「單格」`
+      updatePanel(panelEl, currentTargetEl)
+      return
+    }
     if (lockedEl) {
       lockedEl = null
       if (event.target && (!overlayEl || !overlayEl.contains(event.target))) setTarget(upgradeTarget(event.target))
@@ -1819,7 +1853,7 @@ function upgradeLastPickTo(mode) {
   const index = axis === 'row' ? last.cell.row.index : last.cell.col.index
   const headerText = (axis === 'row' ? last.cell.row.header : last.cell.col.header) || ''
   const upgraded = { block: { axis, index, headerText } }
-  const previous = selectedList.slice()
+  const previous = takeUndoSnapshot(selectedList, pickedTableEl)
   if (selectedList.some(p => samePick(p, upgraded))) {
     // 已經選過同一欄／列了，只要把那一格拿掉就好
     selectedList = selectedList.slice(0, -1)
@@ -1846,17 +1880,29 @@ function clearUndoSnapshot() {
 function undoReplace() {
   if (!undoSnapshot) return false
   clearPickedMarks(document)
-  selectedList = undoSnapshot.slice()
+  selectedList = undoSnapshot.picks.slice()
+  // 快照裡的那一批索引屬於快照當時那張表：還原時目標與 pickedTableEl 要一起回去，
+  // 只還原清單的話，接下來就是「舊表的索引配上新表的定位」——AF-7 同型缺陷
+  const backTo = undoSnapshot.tableEl
   undoSnapshot = null
   limitReached = selectedList.length >= maxPicks
+  if (backTo) {
+    pickedTableEl = backTo
+    setTarget(backTo)
+  }
   if (currentTargetEl && isTableMode(currentTargetEl)) applyPickedMarks(currentTargetEl)
   return true
+}
+
+// 存一份可還原的快照（連同這批索引屬於哪一張表）
+function takeUndoSnapshot(picks, tableEl) {
+  return picks && picks.length > 0 ? { picks: picks.slice(), tableEl: tableEl || pickedTableEl || null } : null
 }
 
 // 取代目前已選：點一下就是「只選這一個」
 function replaceSelection(candidate) {
   // 空清單沒有東西可復原：第一次點格不能長出「復原」鈕與「已換成」提示
-  const previous = selectedList.length > 0 ? selectedList.slice() : null
+  const previous = takeUndoSnapshot(selectedList, pickedTableEl)
   clearPickedMarks(document)
   selectedList = []
   limitReached = false

@@ -255,7 +255,9 @@ test('值清單是空的時候不得留下矛盾的帳本與燈號', async () =>
     `帳本說失敗、燈號說正常，兩邊講不同的話：ledger=${ledger} health=${health.bank?.status}`)
 })
 
-test('換一張表格時已選的值要清掉', async () => {
+// AF-10 作業 C 推翻舊語意：滑鼠「移」到另一張表不再清空已選（那讓使用者
+// 只是要把游標移到工具列就丟掉整批），改成點另一張表的格子才換表，而且留一步反悔。
+test('滑鼠移到另一張表格不清空已選，點下去才換表（AF-10）', async () => {
   resetChromeMock()
   installChromeMock()
   const jd = new JSDOM(`<!doctype html><body>
@@ -273,8 +275,14 @@ test('換一張表格時已選的值要清掉', async () => {
   cell.dispatchEvent(new jd.window.MouseEvent('mousemove', { bubbles: true }))
   cell.dispatchEvent(new jd.window.MouseEvent('click', { bubbles: true, shiftKey: true }))
   assert.equal(pm.selectedCount(), 1)
-  doc.getElementById('b').dispatchEvent(new jd.window.MouseEvent('mousemove', { bubbles: true }))
-  assert.equal(pm.selectedCount(), 0, '換了表格，先前那張表的列欄索引就沒有意義了')
+  const b1 = doc.getElementById('b1')
+  b1.dispatchEvent(new jd.window.MouseEvent('mousemove', { bubbles: true }))
+  assert.equal(pm.selectedCount(), 1, '只是滑鼠經過另一張表，不得丟掉已選')
+  b1.dispatchEvent(new jd.window.MouseEvent('click', { bubbles: true }))
+  assert.equal(pm.selectedCount(), 1, '點下去＝換表取代，不是累加')
+  assert.equal(b1.hasAttribute('data-af-picked'), true, '換到新表的那一格')
+  assert.equal(doc.getElementById('a1').hasAttribute('data-af-picked'), false,
+    '舊表的索引不得跟著新表一起送出')
   pm.exitPickMode()
 })
 

@@ -174,7 +174,10 @@ test('C11-3b 第一次點格（清單原本是空的）不算取代：不得長�
   assert.doesNotMatch(panelText(doc), /已換成/, '沒有換掉任何東西就不該說「已換成」')
 })
 
-test('C11-3c 換到另一張表之後，上一張表的復原快照要作廢（否則 Ctrl+Z 會把舊索引配上新表送出）', async () => {
+// AF-10 作業 C 推翻 AF-9 定案：hover 不再有破壞性副作用之後，唯一的破壞性動作
+// 就是「點另一張表的格子」——它最需要反悔，所以快照改成連同「這批索引屬於哪張表」一起存，
+// 還原時目標與 pickedTableEl 一起回去（只還原清單才會把舊索引配上新表）。
+test('C11-3c 換表要留得住復原：Ctrl+Z 連目標一起回到上一張表（AF-10）', async () => {
   const { doc, win, pm, c } = await enter()
   doc.body.insertAdjacentHTML('beforeend', `
     <table id="t2"><thead><tr><th>c</th><th>d</th><th>e</th></tr></thead>
@@ -183,12 +186,18 @@ test('C11-3c 換到另一張表之後，上一張表的復原快照要作廢（�
   click(win, doc.getElementById('a1'))
   move(win, doc.getElementById('a2'))
   click(win, doc.getElementById('a2')) // 取代，快照＝第一張表的 a1
-  move(win, doc.getElementById('y3')) // 換表：清單清空
-  assert.equal(pm.selectedCount(), 0)
+  move(win, doc.getElementById('y3'))
+  assert.equal(pm.selectedCount(), 1, '滑鼠路過另一張表不得清空')
+  click(win, doc.getElementById('y3')) // 換表：取代，快照＝第一張表那一批
+  assert.equal(pm.selectedCount(), 1)
+  assert.equal(doc.getElementById('y3').hasAttribute('data-af-picked'), true)
 
   key(doc, win, 'z', { ctrlKey: true })
-  assert.equal(pm.selectedCount(), 0, '不得把第一張表的索引還原到第二張表上')
-  assert.equal(doc.querySelector('[data-af-undo]').hidden, true)
+  assert.equal(pm.selectedCount(), 1, '換表要能反悔')
+  assert.equal(doc.getElementById('a2').hasAttribute('data-af-picked'), true,
+    '要回到上一張表的那一格')
+  assert.equal(pm.currentTarget()?.id, 't',
+    `目標要跟著回到舊表，否則舊索引會配上新表的定位，實得 ${pm.currentTarget()?.id}`)
 })
 
 test('C11-4 有可復原的取代時，面板上要有「復原」鈕；沒有就不顯示', async () => {
