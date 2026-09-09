@@ -283,7 +283,9 @@ test('前置動作存進 task.preActions,順序照畫面上的順序', async () 
   )
   assert.equal(t.preActions.length, 2)
   assert.equal(t.preActions[0].type, 'click')
-  assert.equal(t.preActions[1].ms, 2000)
+  // AF-10：單位一律改成秒（下拉本來就寫「等待秒數」，欄位卻收毫秒，填 3 只會等 3 毫秒）。
+  // 舊任務存的 ms 讀得懂，重存時換算成 sec。
+  assert.equal(t.preActions[1].sec, 2, `舊的 ms 要換算成秒，實得 ${JSON.stringify(t.preActions[1])}`)
 })
 
 test('沒有前置動作時任務上不得多出這個鍵', async () => {
@@ -324,7 +326,7 @@ test('等待秒數沒填數字的動作也不得存進去', async () => {
     { css: '#v' }
   )
   assert.equal(t.preActions.length, 1, `空白或非數字的等待沒有意義,實得 ${JSON.stringify(t.preActions)}`)
-  assert.equal(t.preActions[0].ms, 1500)
+  assert.equal(t.preActions[0].sec, 1.5, `舊的 1500 毫秒＝1.5 秒，實得 ${JSON.stringify(t.preActions[0])}`)
 })
 
 test('編輯既有任務時前置動作要顯示出來', async () => {

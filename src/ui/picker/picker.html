@@ -228,6 +228,7 @@
     .preaction-desc { font-size: var(--text-xs, 12px); color: var(--text-muted); line-height: 1.4; }
     #preaction-list { display: flex; flex-direction: column; gap: 6px; }
     [data-preaction-row] { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .preaction-visible { display: inline-flex; align-items: center; gap: 3px; font-size: var(--text-xs, 12px); color: var(--text-muted); white-space: nowrap; }
     [data-preaction-row] select { flex: 2; min-width: 90px; }
     [data-preaction-row] input[type="number"] { flex: 1.5; min-width: 60px; }
     [data-preaction-row] button {
@@ -425,7 +426,10 @@
         </fieldset>
         <div id="preaction-section">
           <div class="preaction-title">前置動作</div>
-          <div class="preaction-desc">抓取前依序執行，例如先關掉彈窗、或等圖表載入完成。</div>
+          <div class="preaction-desc">抓取前依序執行，例如先關掉彈窗、或等圖表載入完成。<br>
+            要抓「滑鼠移過去才出現的選單」，用「移到元素上」→「等元素出現」→「點擊元素」三步。
+            <strong>純用 CSS <code>:hover</code> 展開的選單無法用這個方式打開</strong>（程式送出的滑鼠事件不是真的游標）；
+            這種站台通常選單項目本來就在頁面裡，把「等元素出現」的「要看得見」取消再直接點它即可。</div>
           <div id="frame-hint" role="status" hidden>
             <div id="frame-hint-text"></div>
             <div id="frame-hint-actions">

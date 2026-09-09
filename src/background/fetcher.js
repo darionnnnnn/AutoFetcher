@@ -1,5 +1,6 @@
 // AutoFetcher 擷取流程：開分頁、注入、擷取、寫紀錄、重試
 import { getTask, saveTask, appendRecord, appendRecords, getRecordsInRange, getSettings, getAlertLog, setAlertLog, setLastValue, setLastValues } from '../shared/storage.js'
+import { waitMsOf, preActionFailure, DEFAULT_WAIT_TIMEOUT_MS } from '../shared/preaction.js'
 import { seriesIdOf, parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
 import { MSG } from '../shared/messages.js'
 import { slotOf } from './scheduler.js'
@@ -286,6 +287,9 @@ export async function runTask(task, opts = {}) {
   // 同站台串行佇列執行
   const origin = getOrigin(task.url)
   return enqueueForOrigin(origin, async (queueCtx) => {
+    // 前置動作的逐步軌跡：立即測試要說得出「hover 有做、是 click 沒點到」，
+    // 只回一句「成功」的話，使用者在調 hover 選單時完全沒有線索
+    const preActionTrace = []
     // 佇列中再次確認冪等，防止併發重複執行（dryRun 與手動抓取略過）
     if (!dryRun && !isManual) {
       const currentLedger = await getLedger()
@@ -385,17 +389,20 @@ export async function runTask(task, opts = {}) {
       if (Array.isArray(task.preActions) && task.preActions.length > 0) {
         for (let i = 0; i < task.preActions.length; i++) {
           const action = task.preActions[i]
+          const startedAt = Date.now()
           if (action?.type === 'wait') {
-            const ms = typeof action.ms === 'number' ? action.ms : 0
+            const ms = waitMsOf(action)
             if (ms > 0) await sleep(ms)
+            preActionTrace.push({ step: i + 1, type: 'wait', ok: true, ms: Date.now() - startedAt })
             continue
           }
           const actionTimeout = action?.type === 'waitFor'
-            ? (action.timeoutMs ?? 20000)
-            : (opts.frameTimeoutMs ?? 20000)
+            ? (action.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS)
+            : (opts.frameTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS)
           const actionLoc = await locateFrame(tabId, action?.frame, action?.locator, { pollMs, timeoutMs: actionTimeout })
           if (actionLoc === null) {
-            throw new Error(`前置動作失敗：第 ${i + 1} 個動作找不到所在的框架`)
+            preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
+            throw new Error(preActionFailure(i, action, 'frame_not_found'))
           }
           await injectContent(tabId, { frameId: actionLoc.frameId })
           const preRes = await chrome.tabs.sendMessage(tabId, {
@@ -403,8 +410,11 @@ export async function runTask(task, opts = {}) {
             actions: [action]
           }, { frameId: actionLoc.frameId })
           if (preRes?.ok !== true) {
-            throw new Error(`前置動作失敗：${preRes?.error || '未知錯誤'}`)
+            preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
+            // 訊息要說得出「第幾步、哪一種動作、怎麼了」，使用者才知道要調哪一列
+            throw new Error(preActionFailure(i, action, preRes?.error))
           }
+          preActionTrace.push({ step: i + 1, type: action?.type, ok: true, ms: Date.now() - startedAt })
         }
       }
 
@@ -431,8 +441,8 @@ export async function runTask(task, opts = {}) {
         new Promise((_, reject) => setTimeout(() => reject(new Error('Extract timeout')), extractTimeoutMs))
       ])
 
-      // 演練模式：直接回傳 content script 擷取回覆
-      if (dryRun) return res
+      // 演練模式：直接回傳 content script 擷取回覆（附上前置動作做了哪幾步）
+      if (dryRun) return preActionTrace.length > 0 ? { ...res, preActionTrace } : res
 
       // 結果處理：成功路徑
       if (res?.ok === true) {

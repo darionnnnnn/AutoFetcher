@@ -433,10 +433,36 @@ iframe 可能是「先點按鈕才出現」,所以 1、2 層是**輪詢**等待(
   已經開著 iframe 的分頁跑的,排程卻是開新分頁,成功不代表排程會成功。
 - **送出中要有回饋**:「立即測試」與「儲存」按下後停用並改字(測試中…／儲存中…),
   結果回來(或驗證失敗)才還原,不得連按。
-- 抓取前可選的**前置動作**(`task.preActions`,依序執行,任一失敗即停止並走錯誤路徑):
-  `waitFor`(等某元素出現,預設逾時 20 秒,用 `MutationObserver` 不用輪詢)、
-  `click`(點某元素:關閉彈窗、切分頁籤)、`wait`(等 N 毫秒)。
+- 抓取前可選的**前置動作**(`task.preActions`,依序執行,任一失敗即停止並走錯誤路徑),四種:
+  - **`hover`**(移到元素上,AF-10):`scrollIntoView` 後依序派發
+    `pointerover` → `pointerenter` → `mouseover` → `mouseenter` → `mousemove`;
+    **`mouseenter` / `pointerenter` 不冒泡**,要沿祖先鏈逐一派發(靠外層容器的 enter 才展開的選單很常見)。
+    `holdMs`(預設 300)是游標停留的毫秒,停留期間每 100ms 補一次 `mousemove`(有些選單要停一下才展開);
+    **刻意不派 `mouseout`/`mouseleave`**——下一步通常是點那個選單,移開會讓它收起來。
+  - **`waitFor`**(等某元素出現,預設逾時 20 秒,`MutationObserver` 不輪詢):
+    **「出現」預設是「看得見」**(`visible`,預設 true):在 DOM 裡不等於使用者看得到,
+    選單多半早就在 DOM 中、靠 class 或 `display` 切換顯示;等到一個隱藏的元素,下一步就是點到看不見的東西。
+    因此 observer **必須同時監聽 `attributes`**(`class`/`style`/`hidden`/`aria-hidden`),
+    只監聽 `childList` 的話這種選單永遠等不到。要點隱藏項目的站台把 `visible` 設 false。
+  - **`click`**(點某元素:關閉彈窗、切分頁籤):**派完整的指標事件序列**
+    (hover 那一串 → `pointerdown` → `mousedown` → `focus` → `pointerup` → `mouseup` → `el.click()`)。
+    只呼叫 `el.click()` 只會送出一個 `click` 事件,綁 `pointerdown`/`mousedown` 的元件庫選單點不動
+    (與「填表單要派 `input`/`change`」同一個道理)。
+  - **`wait`**(等 N 秒):**單位是秒**(`sec`,AF-10 改;下拉本來就寫「等待秒數」,欄位卻收毫秒,
+    使用者填 3 只會等 3 毫秒)。**舊任務存的 `ms` 仍讀得懂**,重存時換算成 `sec`;
+    換算只有 `shared/preaction.js` 的 `waitMsOf` 一份。
   在 Picker 的「前置動作」區設定,要點的元素直接回頁面上選(走 §2 的選取模式)。
+  **「滑鼠移過去才出現的選單」用 `hover` → `waitFor` → `click` 三步組合**,不做一列做三件事的複合型
+  (失敗時不知道卡在哪一步,而且比三列更難懂)。
+  **做不到的要說出來**:合成事件的 `isTrusted` 一律是 false,**純 CSS `:hover` 展開的選單打不開**,
+  Picker 的說明也寫著這一句與替代路徑(那種站台的選單項目通常本來就在頁面裡,
+  把 `waitFor` 的「要看得見」取消再直接點它)。沒有這一句,使用者會以為功能壞了。
+- **前置動作的失敗訊息要說得出「第幾步、哪一種動作、怎麼了」**(`shared/preaction.js` 的
+  `preActionFailure`,唯一一份):`前置動作第 2 步（等元素出現）等不到元素出現（逾時）`。
+  內部代碼(`preaction_timeout`)不得露出到使用者眼前。訊息一路走到紀錄的 `error` 與立即測試的 `#errors`。
+- **立即測試回報前置動作的逐步軌跡**(`preActionTrace: [{step, type, ok, ms}]`,只在 `dryRun` 回傳):
+  `#test-note` 顯示「前置動作 N 步完成（共 X 秒）」。調 hover 選單時最需要知道的是
+  「hover 有做、是 click 沒點到」還是「hover 就失敗」,只回一句「成功」等於什麼都沒說。
 - **前置動作逐一執行,每個動作各自帶 `frame`**(形狀同 `task.frame`,缺省 = 最上層):
   每個動作執行前各自 `locateFrame`(`waitFor` 用自己的 `timeoutMs`,`click` 用 20 秒),
   命中才注入該 frame 並送**只含這一個動作**的 `RUN_PRE_ACTIONS`。

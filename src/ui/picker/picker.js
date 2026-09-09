@@ -1,4 +1,5 @@
 import { saveTask, getTask, getSettings, saveSettings } from '../../shared/storage.js'
+import { DEFAULT_HOVER_HOLD_MS, DEFAULT_WAIT_TIMEOUT_MS } from '../../shared/preaction.js'
 import { MSG } from '../../shared/messages.js'
 import { getLayout, addCard } from '../../shared/layout-store.js'
 import { seriesIdOf } from '../../shared/series-index.js'
@@ -60,11 +61,17 @@ export function getFormData() {
 
     const frame = row._frame || null
     if (type === 'waitFor') {
-      const act = {
-        type,
-        locator,
-        timeoutMs: Number.isFinite(num) ? num : (valStr === '' ? 20000 : NaN)
-      }
+      // 畫面是秒、資料是毫秒；沒填就交給 buildTask 那一份預設值（不要兩層各寫一份）
+      const act = { type, locator }
+      if (valStr !== '' && Number.isFinite(num)) act.timeoutMs = Math.round(num * 1000)
+      const visibleBox = row.querySelector('[data-preaction-visible]')
+      if (visibleBox && !visibleBox.checked) act.visible = false
+      if (frame) act.frame = frame
+      return act
+    }
+    if (type === 'hover') {
+      const act = { type, locator }
+      if (valStr !== '' && Number.isFinite(num)) act.holdMs = num
       if (frame) act.frame = frame
       return act
     }
@@ -76,7 +83,7 @@ export function getFormData() {
     if (type === 'wait') {
       return {
         type,
-        ms: num
+        sec: valStr === '' ? '' : num
       }
     }
     return { type, locator }
@@ -421,18 +428,30 @@ export function buildTask(values, locator, existing, frame) {
           if (!hasLoc) return null
           return withFrame({ type: 'click', locator: a.locator }, a.frame)
         }
+        if (a.type === 'hover') {
+          const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
+          if (!hasLoc) return null
+          const act = { type: 'hover', locator: a.locator }
+          const hold = Number(a.holdMs)
+          if (Number.isFinite(hold) && hold >= 0) act.holdMs = hold
+          return withFrame(act, a.frame)
+        }
         if (a.type === 'waitFor') {
           const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
           if (!hasLoc) return null
-          const timeoutMs = Number.isFinite(Number(a.timeoutMs)) ? Number(a.timeoutMs) : 20000
-          return withFrame({ type: 'waitFor', locator: a.locator, timeoutMs }, a.frame)
+          const timeoutMs = Number.isFinite(Number(a.timeoutMs)) ? Number(a.timeoutMs) : DEFAULT_WAIT_TIMEOUT_MS
+          const act = { type: 'waitFor', locator: a.locator, timeoutMs }
+          if (a.visible === false) act.visible = false
+          return withFrame(act, a.frame)
         }
         if (a.type === 'wait') {
           // 空字串經 Number() 會變成 0，看起來合法但其實是使用者沒填
-          if (a.ms === '' || a.ms === null || a.ms === undefined) return null
-          const ms = Number(a.ms)
-          if (!Number.isFinite(ms)) return null
-          return { type: 'wait', ms }
+          const raw = a.sec !== undefined ? a.sec : a.ms
+          if (raw === '' || raw === null || raw === undefined) return null
+          const n = Number(raw)
+          if (!Number.isFinite(n)) return null
+          // 舊任務存的是 ms，重存一律寫 sec（讀取端仍相容 ms）
+          return a.sec !== undefined ? { type: 'wait', sec: n } : { type: 'wait', sec: n / 1000 }
         }
         return null
       })
@@ -1698,14 +1717,23 @@ function updatePreActionRowVisibility(row) {
   const type = select?.value || 'waitFor'
   if (pickBtn) pickBtn.hidden = (type === 'wait')
   if (targetEl) targetEl.hidden = (type === 'wait')
+  const visibleWrap = row.querySelector('[data-preaction-visible-wrap]')
+  if (visibleWrap) visibleWrap.hidden = (type !== 'waitFor')
   if (input) {
     input.hidden = (type === 'click')
     if (type === 'wait') {
-      input.placeholder = '毫秒數'
+      // 下拉寫「等待秒數」欄位卻收毫秒，使用者填 3 只會等 3 毫秒——單位一律用秒
+      input.placeholder = '秒數'
+      input.step = '0.1'
+    } else if (type === 'hover') {
+      input.placeholder = '停留毫秒'
+      input.step = '50'
+      if (!input.value) input.value = String(DEFAULT_HOVER_HOLD_MS)
     } else if (type === 'waitFor') {
-      input.placeholder = '逾時毫秒'
+      input.placeholder = '逾時秒數'
+      input.step = '1'
       if (!input.value) {
-        input.value = '20000'
+        input.value = String(DEFAULT_WAIT_TIMEOUT_MS / 1000)
       }
     }
   }
@@ -1728,6 +1756,7 @@ function addPreActionRow(data = {}) {
   select.className = 'preaction-type'
   const options = [
     { value: 'waitFor', text: '等元素出現' },
+    { value: 'hover', text: '移到元素上' },
     { value: 'click', text: '點擊元素' },
     { value: 'wait', text: '等待秒數' }
   ]
@@ -1774,18 +1803,38 @@ function addPreActionRow(data = {}) {
   input.min = '0'
   input.step = '1'
   if (data.type === 'wait') {
-    if (data.ms !== undefined && data.ms !== null && !Number.isNaN(data.ms) && String(data.ms).trim() !== '') {
-      input.value = String(data.ms)
+    // 舊任務存的是毫秒，畫面一律以秒顯示（換算只有 shared/preaction.js 一份）
+    if (data.sec !== undefined && data.sec !== null && String(data.sec).trim() !== '') {
+      input.value = String(data.sec)
+    } else if (data.ms !== undefined && data.ms !== null && !Number.isNaN(data.ms) && String(data.ms).trim() !== '') {
+      input.value = String(Number(data.ms) / 1000)
     }
   } else if (data.type === 'click') {
     input.value = ''
+  } else if (data.type === 'hover') {
+    input.value = data.holdMs !== undefined && data.holdMs !== null && String(data.holdMs).trim() !== ''
+      ? String(data.holdMs)
+      : String(DEFAULT_HOVER_HOLD_MS)
   } else {
     if (data.timeoutMs !== undefined && data.timeoutMs !== null && !Number.isNaN(data.timeoutMs) && String(data.timeoutMs).trim() !== '') {
-      input.value = String(data.timeoutMs)
+      input.value = String(Number(data.timeoutMs) / 1000)
     } else {
-      input.value = '20000'
+      input.value = String(DEFAULT_WAIT_TIMEOUT_MS / 1000)
     }
   }
+
+  // 「出現」預設是看得見：選單多半早就在 DOM 裡、靠 class 切換顯示，
+  // 要點隱藏的項目時才把這個勾掉
+  const visibleWrap = document.createElement('label')
+  visibleWrap.setAttribute('data-preaction-visible-wrap', '')
+  visibleWrap.className = 'preaction-visible'
+  const visibleBox = document.createElement('input')
+  visibleBox.type = 'checkbox'
+  visibleBox.setAttribute('data-preaction-visible', '')
+  visibleBox.checked = data.visible !== false
+  visibleWrap.appendChild(visibleBox)
+  visibleWrap.appendChild(document.createTextNode('要看得見'))
+  visibleWrap.title = '勾選＝元素要真的顯示出來才算出現；取消＝只要在頁面裡就算'
 
   const removeBtn = document.createElement('button')
   removeBtn.type = 'button'
@@ -1802,6 +1851,7 @@ function addPreActionRow(data = {}) {
   row.appendChild(pickBtn)
   row.appendChild(targetEl)
   row.appendChild(input)
+  row.appendChild(visibleWrap)
   row.appendChild(removeBtn)
 
   updatePreActionLocatorText(row)
@@ -2090,7 +2140,12 @@ export async function handleTestNow() {
       // 兩者會不一樣，成功不代表排程也會成功
       const noPreActions = !Array.isArray(values.preActions) || values.preActions.length === 0
       const noteEl = document.getElementById('test-note')
-      if (noteEl && currentCtx?.frameUrl && noPreActions) {
+      if (noteEl && Array.isArray(res.preActionTrace) && res.preActionTrace.length > 0) {
+        // 調 hover 選單時最需要知道的是「hover 有做、是 click 沒點到」還是「hover 就失敗」，
+        // 只回一句「成功」等於什麼都沒說
+        const total = res.preActionTrace.reduce((sum, step) => sum + (Number(step.ms) || 0), 0)
+        noteEl.textContent = `前置動作 ${res.preActionTrace.length} 步完成（共 ${(total / 1000).toFixed(1)} 秒）`
+      } else if (noteEl && currentCtx?.frameUrl && noPreActions) {
         noteEl.textContent = '這次測試在目前分頁執行；排程會開新分頁，若那個框架要先點才會出現，請加入前置動作。'
       }
     } else {
