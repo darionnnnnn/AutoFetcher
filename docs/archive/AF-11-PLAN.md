@@ -179,3 +179,7 @@
    定位參考沒變；`enterPickMode` 先呼叫 `exitPickMode`，重入不會疊代理層。
 
 測試：**1848 綠**（基線 1834 + 14）；煙霧 Chrome for Testing 全過（Edge 本機起不動，改動前亦然）。
+
+## 終檢輪
+
+終檢無新發現（併 dev 後 1848 綠；文件掃描只補 CLAUDE.md 歸檔清單 AF-1~AF-11）。
