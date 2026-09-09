@@ -20,7 +20,9 @@
 - **不用 `FAST`、走生產時序的測試跑得快嗎**（決定接線測試能不能拿掉 seam）：mock 的分頁預設 `status: 'complete'`
   （[chrome-mock.js:136](../tests/chrome-mock.js:136)），[fetcher.js:365](../src/background/fetcher.js:365) 的載入輪詢一次都不進；
   `extraDelayMs` 未指定時讀 `settings.extraDelaySec`（[fetcher.js:255-262](../src/background/fetcher.js:255)），
-  測試把它設 0 就是 0；`extractTimeoutMs` 15 秒只在 responder 不回時才會等到。所以**接線測試可以不帶任何時序選項**。
+  測試把它設 0 就是 0。所以**接線測試可以不帶任何時序選項**。
+  （規劃時這裡還寫著「`extractTimeoutMs` 15 秒只在 responder 不回時才會等到」，**這句是錯的**：
+  逾時計時器從不清除，就算擷取成功它也會吊著事件迴圈到 15 秒。實作 A-3 時才發現，見下面的計畫外修正。）
 - **慣例測試沒有擋這件事**：`tests/a4_conventions.test.js` 到 D13 為止，沒有一條掃 `src/` 的 `__test`／測試檔名／`Error().stack`；
   CLAUDE.md 那條規則目前只靠人工 grep（[CLAUDE.md:92](../CLAUDE.md:92)），這就是它從開案活到現在的原因。
 - `docs/SPEC.md` 沒有提到 `testOpts`／`handleAlarm`／`handleMessage` 的簽名，不用改 SPEC。
@@ -69,12 +71,16 @@ d6 的耗時就從 0.8 秒變成 15.6 秒，才暴露出來。
 修法是 `.finally(() => clearTimeout(extractTimer))`。
 迴歸測試 `d2_fetcher`「抓完不留計時器」用 `process.getActiveResourcesInfo()` 比對前後的 Timeout 數，
 不指定 `extractTimeoutMs`（走正式的 15 秒）。d2 自己的耗時也從 1.03 秒降到 0.74 秒。
+**另補一條「擷取一直不回時逾時失敗」**：逐條比對時發現這條失敗路徑**本來就沒有任何測試**，
+而這輪剛好改到它——`.finally` 不吞 rejection 已另外驗過，但沒有測試就沒有人保證下一個人改它時還是這樣。
+突變（計時器改成不 reject）會紅。
 
 ### 測試／驗收
 
-- 全套 **1851 綠**（基線 1848 + 3）。
-- 突變三個各自紅：訊息又能塞選項（`...(msg.__testOpts || {})` 加回去）→ d6 負向測試紅；
-  `reason: 'manual'` 移到 `...runOpts` 前面 → l1「不得覆蓋 reason」紅；計時器不清 → d2 新測試紅。
+- 全套 **1852 綠**（基線 1848 + 4）。
+- 突變四個各自紅：訊息又能塞選項（`...(msg.__testOpts || {})` 加回去）→ d6 負向測試紅；
+  `reason: 'manual'` 移到 `...runOpts` 前面 → l1「不得覆蓋 reason」紅；計時器不清 → d2「抓完不留計時器」紅；
+  逾時不再 reject → d2「擷取一直不回時逾時失敗」紅。
 - `grep -rn "__test" src/` 零筆。
 - 逐檔耗時對照 dev 全部持平或更快（d2 1.03→0.74 秒，其餘在噪音內）。
 
@@ -116,10 +122,10 @@ d6 的耗時就從 0.8 秒變成 15.6 秒，才暴露出來。
 ## 體檢交接
 
 - 實作：Opus 5（分支 `r12`）。體檢：請切換模型後執行 `project-closeout`。
-- 測試：`npm test` **1851 綠**（基線 1848 + 3）；煙霧 Chrome for Testing 全過（Edge 本機起不動，改動前亦然）。
+- 測試：`npm test` **1852 綠**（基線 1848 + 4）；煙霧 Chrome for Testing 全過（Edge 本機起不動，改動前亦然）。
 - **實作方最沒把握的三處**：
   1. 計時器洩漏的修正是計畫外的第二處正式碼改動（`fetcher.js`）。理由與量測寫在上面，但它超出原規劃的「一行正式碼」，
-     請確認這個決定合理、且 `.finally` 不會吞掉 race 的 rejection（`Extract timeout` 仍要走既有的失敗路徑）。
+     請確認這個決定合理。（`.finally` 吞不吞 rejection 已單獨驗過、也補了逾時失敗路徑的測試，這一點不再是疑慮。）
   2. d6 那條接線測試現在依賴「mock 分頁預設 `complete`」與「`extraDelaySec: 0`」兩個前提。
      前提若哪天變了，這條測試會從「快」變成「慢但仍綠」，不會有人發現。
   3. D14 掃的是**每一行文字**（含註解與字串），可能誤傷未來合理的用法（例如正式碼裡出現 `__testnet` 之類的字）。
