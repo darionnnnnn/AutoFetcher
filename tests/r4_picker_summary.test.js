@@ -197,8 +197,11 @@ test('A5 視窗寬度：彈出視窗的頁面一律不寫死 body 寬度', () =>
     assert.doesNotMatch(bodyRule[0], /width:\s*\d+px/,
       `${name}.html 的 body 寫死寬度會讓右邊空一條、捲軸卡在畫面中間`)
   }
-  const widths = [...MAIN_JS.matchAll(/width:\s*(\d+)/g)].map(m => Number(m[1]))
-  assert.ok(widths.length >= 2, '兩個彈出視窗都要有寬度設定')
+  // AF-10：設定畫面改成 side panel（寬度由瀏覽器決定，實測 360px），
+  // 只有舊版瀏覽器的退路才開彈出視窗——那一份寬度定義在 shared/panel.js
+  const PANEL_JS = readFileSync(new URL('../src/shared/panel.js', import.meta.url), 'utf8')
+  const widths = [...PANEL_JS.matchAll(/width:\s*(\d+)/g)].map(m => Number(m[1]))
+  assert.ok(widths.length >= 1, '退路的彈出視窗要有寬度設定')
   for (const w of widths) assert.ok(w >= 560, `彈出視窗至少 560 寬，實得 ${w}`)
 })
 

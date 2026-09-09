@@ -1,4 +1,5 @@
-import { getTask, saveTask, deleteTask, getTasks, countRecordsForTask, listDates } from '../../shared/storage.js'
+import { getTask, saveTask, deleteTask, getTasks, countRecordsForTask, listDates, setPanelCtx } from '../../shared/storage.js'
+import { openPanel } from '../../shared/panel.js'
 import { MSG } from '../../shared/messages.js'
 import { buildExport, download } from '../../shared/export.js'
 import { describeSchedule } from '../../shared/describe.js'
@@ -310,11 +311,18 @@ function createTaskRow(t) {
   editBtn.dataset.action = 'edit'
   editBtn.textContent = '編輯'
   editBtn.addEventListener('click', async () => {
-    const raw = 'ui/picker/picker.html?taskId=' + t.id
-    const url = typeof chrome?.runtime?.getURL === 'function'
-      ? await chrome.runtime.getURL(raw)
-      : raw
-    await chrome.tabs.create({ url: String(url) })
+    // 新增與編輯用同一個載體（面板）：以前編輯是另開一個普通分頁，
+    // 「保持在最上層」對分頁根本不適用。網址參數不能用（面板重載會丟掉），走 session。
+    // 擴充功能頁問自己在哪個分頁用 getCurrent（查作用分頁在切換競態下會拿到別人的）
+    let tabId
+    try { tabId = (await chrome.tabs.getCurrent())?.id } catch {}
+    if (tabId === undefined) {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
+      tabId = tabs?.[0]?.id
+    }
+    if (tabId === undefined) return
+    await setPanelCtx(tabId, { kind: 'edit', taskId: t.id })
+    await openPanel(tabId, 'picker', `taskId=${encodeURIComponent(t.id)}`)
   })
   actionsEl.appendChild(editBtn)
 

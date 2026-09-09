@@ -42,11 +42,10 @@ test('選好的多個值要一路傳到 Picker，不能在 background 掉光', a
     nameHint: '臺銀牌告匯率',
     picks: PICKS
   }, { tab: { id: 7, url: 'https://bank.test/rate' } })
-  const created = c.__calls.find(x => x.api === 'windows.create')
-  assert.ok(created, '要開 Picker 視窗')
-  const url = created.args[0].url
-  const ctxRaw = decodeURIComponent(url.split('?ctx=')[1] || '')
-  const ctx = JSON.parse(ctxRaw)
+  // AF-10：設定畫面是 side panel，ctx 走 storage.session（網址參數重載後會被丟掉）
+  const stored = await chrome.storage.session.get('panel:7')
+  assert.ok(stored['panel:7'], '要把 ctx 寫進 session 給面板讀')
+  const ctx = stored['panel:7'].ctx
   assert.equal(ctx.picks?.length, 2, `選了兩個值卻只帶了 ${ctx.picks?.length ?? 0} 個`)
   assert.equal(ctx.picks[0].cell.col.index, 3)
   assert.equal(ctx.nameHint, '臺銀牌告匯率')
@@ -59,8 +58,8 @@ test('單選時照樣帶得出一個值', async () => {
     type: 'PICKED', purpose: 'task', locator: { css: '#v' }, preview: '1234',
     picks: [{ cell: { row: { index: 0, header: '' }, col: { index: 0, header: '' } } }]
   }, { tab: { id: 3, url: 'https://x.test/a' } })
-  const url = c.__calls.find(x => x.api === 'windows.create').args[0].url
-  const ctx = JSON.parse(decodeURIComponent(url.split('?ctx=')[1]))
+  // AF-10：設定畫面是 side panel，ctx 走 storage.session（網址參數在面板重載時會被丟掉）
+  const ctx = (await chrome.storage.session.get('panel:3'))['panel:3'].ctx
   assert.equal(ctx.picks.length, 1)
 })
 
@@ -255,7 +254,9 @@ test('值清單是空的時候不得留下矛盾的帳本與燈號', async () =>
     `帳本說失敗、燈號說正常，兩邊講不同的話：ledger=${ledger} health=${health.bank?.status}`)
 })
 
-test('換一張表格時已選的值要清掉', async () => {
+// AF-10 作業 C 推翻舊語意：滑鼠「移」到另一張表不再清空已選（那讓使用者
+// 只是要把游標移到工具列就丟掉整批），改成點另一張表的格子才換表，而且留一步反悔。
+test('滑鼠移到另一張表格不清空已選，點下去才換表（AF-10）', async () => {
   resetChromeMock()
   installChromeMock()
   const jd = new JSDOM(`<!doctype html><body>
@@ -273,8 +274,14 @@ test('換一張表格時已選的值要清掉', async () => {
   cell.dispatchEvent(new jd.window.MouseEvent('mousemove', { bubbles: true }))
   cell.dispatchEvent(new jd.window.MouseEvent('click', { bubbles: true, shiftKey: true }))
   assert.equal(pm.selectedCount(), 1)
-  doc.getElementById('b').dispatchEvent(new jd.window.MouseEvent('mousemove', { bubbles: true }))
-  assert.equal(pm.selectedCount(), 0, '換了表格，先前那張表的列欄索引就沒有意義了')
+  const b1 = doc.getElementById('b1')
+  b1.dispatchEvent(new jd.window.MouseEvent('mousemove', { bubbles: true }))
+  assert.equal(pm.selectedCount(), 1, '只是滑鼠經過另一張表，不得丟掉已選')
+  b1.dispatchEvent(new jd.window.MouseEvent('click', { bubbles: true }))
+  assert.equal(pm.selectedCount(), 1, '點下去＝換表取代，不是累加')
+  assert.equal(b1.hasAttribute('data-af-picked'), true, '換到新表的那一格')
+  assert.equal(doc.getElementById('a1').hasAttribute('data-af-picked'), false,
+    '舊表的索引不得跟著新表一起送出')
   pm.exitPickMode()
 })
 
@@ -398,8 +405,8 @@ test('在 iframe 裡右鍵選的目標，frame 身分要一路傳到任務裡', 
     type: 'PICKED', purpose: 'task', locator: { css: '#rate' }, preview: '31.2'
   }, { tab: { id: 3, url: 'https://a.test/p' }, frameId: 7, url: 'https://b.example/widget.html?token=abc' })
 
-  const created = c.__calls.find(x => x.api === 'windows.create')
-  const ctx = JSON.parse(decodeURIComponent(created.args[0].url.split('?ctx=')[1]))
+  // AF-10：設定畫面是 side panel，ctx 走 storage.session（網址參數在面板重載時會被丟掉）
+  const ctx = (await chrome.storage.session.get('panel:3'))['panel:3'].ctx
   assert.equal(ctx.frameUrl, 'https://b.example/widget.html?token=abc', 'frame 網址掉在 background 就再也找不回那個 frame')
 
   // ③ Picker 把它存進任務

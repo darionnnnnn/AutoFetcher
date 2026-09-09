@@ -1,5 +1,5 @@
 // AutoFetcher 站台登入設定視窗互動邏輯
-import { getSite, saveSite } from '../../shared/storage.js'
+import { getSite, saveSite, getPanelCtx } from '../../shared/storage.js'
 import { encryptSecret } from '../../shared/crypto.js'
 import { MSG } from '../../shared/messages.js'
 
@@ -51,14 +51,43 @@ function ensureMessageListener() {
   }
 }
 
+/**
+ * 問 background：這個視窗現在的作用分頁是哪個。
+ * 面板的 `sender.tab` 永遠是 null、網址參數在面板重載後會被丟掉，
+ * 載入當下查作用分頁又會在切換競態中拿到舊分頁——只有 windowId 這條路可靠。
+ * @returns {Promise<number|null>}
+ */
+async function resolvePanelTab() {
+  try {
+    const win = await chrome.windows.getCurrent()
+    if (win?.id === undefined || win?.id === null) return null
+    const res = await chrome.runtime.sendMessage({ type: MSG.RESOLVE_PANEL_TAB, windowId: win.id })
+    return res?.tabId ?? null
+  } catch { return null }
+}
+
 export async function render() {
   ensureMessageListener()
 
-  const search = typeof window !== 'undefined' ? window.location?.search : ''
-  const params = new URLSearchParams(search || '')
-  currentOrigin = params.get('origin') || ''
-  const tabIdParam = params.get('tabId')
-  currentTabId = tabIdParam ? Number(tabIdParam) : null
+  // 先走面板：參數放在 storage.session 的 panel:<tabId>
+  if (globalThis.chrome?.sidePanel) {
+    const tabId = await resolvePanelTab()
+    const ctx = tabId !== null ? await getPanelCtx(tabId) : null
+    if (ctx?.kind === 'site') {
+      currentOrigin = ctx.origin || ''
+      currentTabId = ctx.tabId ?? tabId
+    }
+  }
+  // 退路：舊版瀏覽器走彈出視窗，參數在網址上
+  if (!currentOrigin) {
+    const search = typeof window !== 'undefined' ? window.location?.search : ''
+    const params = new URLSearchParams(search || '')
+    currentOrigin = params.get('origin') || ''
+    const tabIdParam = params.get('tabId')
+    if (currentTabId === null || currentTabId === undefined) {
+      currentTabId = tabIdParam ? Number(tabIdParam) : null
+    }
+  }
 
   const originEl = document.getElementById('origin')
   if (originEl) {
@@ -183,6 +212,13 @@ export async function handleSave() {
 }
 
 if (typeof document !== 'undefined' && document.getElementById('site-save') && globalThis.chrome?.runtime?.id) {
+  // 面板文件在切換分頁後會被重載，而且載入當下解析得到的分頁可能是舊的：
+  // 每次轉為可見都重畫一次（自癒）
+  if (globalThis.chrome?.sidePanel) {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') render()
+    })
+  }
   document.getElementById('site-save')?.addEventListener('click', () => handleSave())
   document.getElementById('site-cancel')?.addEventListener('click', () => window.close())
   render()

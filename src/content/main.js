@@ -1,4 +1,5 @@
 import { MSG } from '../shared/messages.js'
+import { waitMsOf, DEFAULT_HOVER_HOLD_MS, DEFAULT_WAIT_TIMEOUT_MS } from '../shared/preaction.js'
 import { describe, resolve } from '../shared/selector.js'
 import { extractValue, parseNumber } from '../shared/extract.js'
 import { enterPickMode, exitPickMode } from './picker-mode.js'
@@ -115,6 +116,61 @@ function handleResolveLocator(msg, sendResponse) {
 }
 
 // 處理 RUN_PRE_ACTIONS 訊息：依序執行前置動作
+// 合成事件的 `isTrusted` 一律是 false，純 CSS `:hover` 展開的選單不會因此打開
+// （SPEC §4 有寫，Picker 也說了一句）；能做的是把 JS 監聽得到的那一串事件補齊。
+function dispatchMouse(el, type, extra = {}) {
+  const View = el?.ownerDocument?.defaultView || globalThis.window
+  const init = { bubbles: true, cancelable: true, view: View, ...extra }
+  const Ctor = type.startsWith('pointer') && typeof View?.PointerEvent === 'function'
+    ? View.PointerEvent
+    : (typeof View?.MouseEvent === 'function' ? View.MouseEvent : null)
+  if (!Ctor) return
+  el.dispatchEvent(new Ctor(type, type.startsWith('pointer') ? { ...init, pointerId: 1, pointerType: 'mouse', isPrimary: true } : init))
+}
+
+// `mouseenter` / `pointerenter` **不冒泡**：只派給目標的話，
+// 靠祖先容器（列、選單列）的 enter 才展開的選單不會有反應，所以要沿祖先鏈各派一次
+function dispatchEnterChain(el, type) {
+  const chain = []
+  let cur = el
+  while (cur && cur.nodeType === 1) {
+    chain.push(cur)
+    cur = cur.parentElement
+  }
+  for (const node of chain.reverse()) dispatchMouse(node, type, { bubbles: false })
+}
+
+// 把游標「移到」這個元素上：先捲進畫面，再補齊進入事件
+function hoverElement(el) {
+  if (typeof el.scrollIntoView === 'function') {
+    try { el.scrollIntoView({ block: 'center', inline: 'center' }) } catch { el.scrollIntoView() }
+  }
+  dispatchMouse(el, 'pointerover')
+  dispatchEnterChain(el, 'pointerenter')
+  dispatchMouse(el, 'mouseover')
+  dispatchEnterChain(el, 'mouseenter')
+  dispatchMouse(el, 'mousemove')
+}
+
+// 元素是否「看得見」：在 DOM 裡不等於使用者看得到，
+// 選單多半早就在 DOM 中、靠 class 或 display 切換顯示
+function isVisible(el) {
+  if (!el || !el.isConnected) return false
+  if (typeof el.getClientRects === 'function') {
+    const rects = el.getClientRects()
+    // jsdom 沒有版面，一律 0 個矩形——那裡改看樣式，不能因此一律判定看不見
+    if (rects.length > 0) return true
+  }
+  const view = el.ownerDocument?.defaultView || globalThis.window
+  const style = typeof view?.getComputedStyle === 'function' ? view.getComputedStyle(el) : null
+  if (style) {
+    if (style.display === 'none' || style.visibility === 'hidden') return false
+    if (style.opacity !== '' && Number(style.opacity) === 0) return false
+  }
+  if (el.hasAttribute && (el.hasAttribute('hidden') || el.getAttribute('aria-hidden') === 'true')) return false
+  return true
+}
+
 async function handlePreActions(msg, sendResponse) {
   const actions = Array.isArray(msg?.actions) ? msg.actions : []
 
@@ -123,23 +179,56 @@ async function handlePreActions(msg, sendResponse) {
       if (!action || typeof action !== 'object') continue
 
       if (action.type === 'wait') {
-        const ms = typeof action.ms === 'number' ? action.ms : 0
+        const ms = waitMsOf(action)
         if (ms > 0) {
           await new Promise((r) => setTimeout(r, ms))
         }
+      } else if (action.type === 'hover') {
+        const res = resolve(document, action.locator)
+        if (res?.error || !res?.el) {
+          throw new Error('preaction_not_found')
+        }
+        hoverElement(res.el)
+        // 有些選單要游標「停著」才展開：停留期間持續補 mousemove
+        const hold = Number.isFinite(Number(action.holdMs)) ? Number(action.holdMs) : DEFAULT_HOVER_HOLD_MS
+        if (hold > 0) {
+          const step = 100
+          for (let waited = 0; waited < hold; waited += step) {
+            await new Promise((r) => setTimeout(r, Math.min(step, hold - waited)))
+            dispatchMouse(res.el, 'mousemove')
+          }
+        }
+        // 刻意不派 mouseout／mouseleave：下一步通常是點那個選單，移開會讓它收起來
       } else if (action.type === 'click') {
         const res = resolve(document, action.locator)
         if (res?.error || !res?.el) {
           throw new Error('preaction_not_found')
         }
+        // 只呼叫 el.click() 只會送出一個 click 事件；
+        // 綁 pointerdown / mousedown 的元件庫選單（常見於下拉、選單列）點不動
+        hoverElement(res.el)
+        dispatchMouse(res.el, 'pointerdown')
+        dispatchMouse(res.el, 'mousedown')
+        if (typeof res.el.focus === 'function') {
+          try { res.el.focus() } catch {}
+        }
+        dispatchMouse(res.el, 'pointerup')
+        dispatchMouse(res.el, 'mouseup')
         if (typeof res.el.click === 'function') {
           res.el.click()
         }
       } else if (action.type === 'waitFor') {
-        const initial = resolve(document, action.locator)
-        if (initial?.error || !initial?.el) {
+        // 「出現」預設是**看得見**：元素早就在 DOM 裡、只是隱藏著的話，
+        // 等到了也只是點到看不見的東西（visible: false 可關掉這個要求）
+        const needVisible = action.visible !== false
+        const hit = () => {
+          const res = resolve(document, action.locator)
+          if (res?.error || !res?.el) return false
+          return needVisible ? isVisible(res.el) : true
+        }
+        if (!hit()) {
           await new Promise((resolvePromise, rejectPromise) => {
-            const timeout = typeof action.timeoutMs === 'number' ? action.timeoutMs : 20000
+            const timeout = typeof action.timeoutMs === 'number' ? action.timeoutMs : DEFAULT_WAIT_TIMEOUT_MS
             let timer = null
             let observer = null
 
@@ -160,14 +249,19 @@ async function handlePreActions(msg, sendResponse) {
             }, timeout)
 
             observer = new MutationObserver(() => {
-              const res = resolve(document, action.locator)
-              if (!res.error && res.el) {
+              if (hit()) {
                 cleanup()
                 resolvePromise()
               }
             })
 
-            observer.observe(document, { childList: true, subtree: true })
+            // 只監聽 childList 的話，「早就在 DOM 裡、靠 class/style 切換顯示」的選單永遠等不到
+            observer.observe(document, {
+              childList: true,
+              subtree: true,
+              attributes: true,
+              attributeFilter: ['class', 'style', 'hidden', 'aria-hidden']
+            })
           })
         }
       }

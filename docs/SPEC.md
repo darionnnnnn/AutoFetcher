@@ -95,9 +95,16 @@
   - **一次挑多個值**(`task` 與 `repick` 支援;`repick` 會帶既有的值回來勾,所以也要能多選):
     上述 `Ctrl`/`Shift`/拖曳,加上
     `Shift` + 方向鍵以目前的格為起點四方向自由加選(不限軸)。上限 `maxPicks`(預設 20)。
-    **切換模式不清空已選**(已選清單本來就可以混放儲存格與欄列聚合,見 §7 的 `spec.fields`);
-    **滑鼠移到另一張表格時才清空**(A 表的索引配 B 表的定位會送出錯的規格),
-    漂出表格再回來不清。已選的格子帶 `data-af-picked`。
+    **切換模式不清空已選**(已選清單本來就可以混放儲存格與欄列聚合,見 §7 的 `spec.fields`)。
+    **已經選了值就鎖在那張表**(AF-10,推翻 AF-8 的「滑鼠移到另一張表格時才清空」):
+    滑鼠移到非表格區域、或這張表的巢狀內外層,目標都不變——
+    以前一移出表格,工具列三段立刻反灰、hover 標示被清掉,
+    使用者根本走不到右上角去改「單格／整欄／整列」(P4 回饋的根因)。
+    **換表要「點」不要「移」**:滑鼠移到另一張表只是把目標指過去(讓使用者看得到可以改點這張),
+    **點下那張表的格子才換表**,而且是取代並存復原快照;`Ctrl` 點另一張表的格子**不加選**
+    (兩張表的索引配不到同一個 locator),面板說明「一個任務只能抓同一張表格裡的值」。
+    **鍵盤 `↑`／`↓` 不受鎖表限制**——那是明確意圖,不是滑鼠路過。
+    已選的格子帶 `data-af-picked`。
     **選取狀態只存索引與表頭字串,不存元素參照**——即時報價的表格會整個重畫,
     存參照會讓標記留在被丟掉的節點上;每次滑鼠移動重貼一次標記。
   - **右鍵選單**(攔截頁面原生選單):表格內是
@@ -128,9 +135,11 @@
   - **取代都留一步反悔**:「點一下取代」與「單格升級成整欄／整列」都會存下被換掉的清單,
     面板出現「復原」鈕(`data-af-undo`,沒有可復原的取代時 `hidden`),
     `Ctrl`/`⌘`+`Z` **先還原取代**,沒有可還原的才退回「移除最後一項」;
-    加選、移除、離開選取模式、**滑鼠換到另一張表格**都讓快照失效
-    (留著會在幾步之後莫名其妙跳回舊的一批;換表那一條尤其要緊——快照裡是上一張表的列欄索引,
-    `Ctrl+Z` 會把它配上這張表的定位送出去,與 AF-7 體檢抓到的 `pickedTableEl` 是同一型缺陷)。
+    加選、移除、離開選取模式都讓快照失效(留著會在幾步之後莫名其妙跳回舊的一批)。
+    **換表反而要存快照**(AF-10,推翻 AF-9 的「換表讓快照失效」):
+    hover 不再有破壞性副作用之後,唯一的破壞性動作就是「點另一張表的格子」,它最需要反悔。
+    快照因此連同**這批索引屬於哪一張表**一起存,還原時 `pickedTableEl` 與目標一起回去——
+    只還原清單的話就是「舊表的索引配上新表的定位」,與 AF-7 體檢抓到的 `pickedTableEl` 同型。
     **清單原本是空的時候點格不算取代**,不存快照、不長出「復原」鈕。
   - **面板永遠以一句「現在該做什麼」收尾**(`instructionLine`,唯一一份,固定在文字區最後一行、
     緊鄰動作列),隨狀態換:
@@ -147,7 +156,11 @@
     三段「單格 / 整欄 / 整列」,屬性 `data-af-tool="cell|col|row"`,目前那一段帶 `data-af-active`,
     **預設是單格**。`Tab` 在三段之間循環(停用的跳過)。
     對外的 `currentAxis()` 維持相容:非表格回 `null`、`row` 回 `'row'`、`cell` 與 `col` 都回 `'col'`。
-    **停用規則**:目標不是表格時三段全停用,面板一併顯示「非表格:抓整個元素」說明為什麼點不動;
+    **停用規則**:**已經選了值時以 `pickedTableEl` 判定**(那永遠是表格,所以三段一直可用,
+    滑鼠在頁面上任何地方都走得到工具列);
+    **`upgradeLastPickTo`(把最後一格升級成整欄／整列)也用同一個判定來源**,
+    不然會出現「按鈕亮著、按下去卻沒反應」;還沒選任何值時才看 hover 目標——
+    目標不是表格時三段全停用,面板一併顯示「非表格:抓整個元素」說明為什麼點不動;
     `preaction` 與 `login-*`(一次只選一個)時 `col` 與 `row` 停用——`repick` 不在此列,
     停用者帶 `aria-disabled="true"` 且點了不改模式,但**不得靜默無事**,而且
     **點任何一段都先解除鎖定**(`lockedEl`);理由要說對:目標不是表格就說「先把滑鼠移到表格上」
@@ -158,6 +171,11 @@
     沒有這一條的話,從最上層進選取模式(目標還不是表格)時點整欄完全沒有反應,
     而先點過非表格元素造成的鎖定會讓後續滑鼠移動全部失效——使用者看到的是「工具列壞了」。
     這幾種用途**一次只選一個元素**,選到就送出,所以 chip 清單實際上不會累積。
+    **`pendingMode` 兌現時要一併做 `upgradeLastPickTo`**(與直接點工具列的路徑同結果),
+    點「單格」那一段則是**取消**先前記住的意圖(改變主意了,不能滑鼠一移到表格又自動切成整欄)。
+    **模式是整欄／整列時,非表格元素不得鎖定、不得送出**:送出去的會是「整個元素」,
+    使用者卻以為選的是一整欄,而工具列還亮著整欄——說出
+    「整欄只能在表格上選…要抓這個元素請切回單格」,不要照做。
   - 滑鼠移到某一格時,**標示範圍跟著模式走**:單格只標那一格、整欄標整欄、整列標整列
     (待選標記 `data-af-cell`);點擊即選定,此時 locator 仍指向表格容器本身,欄列資訊另外帶回。
   - **`Ctrl`/`⌘` 點一個已經選過的格/欄/列 = 移除它,而且不送出**(判定走 `samePick`,加減一律走 `addPick`/`togglePick`);
@@ -207,8 +225,56 @@
 - 選到表格類元素時,content 一併算出 **`nameHint`**(表格的 `<caption>` → 目標之前最近的
   `h1`~`h6` → 頁面 `title`,截 60 字)帶進 `PICKED`,Picker 拿它當任務名稱的預設值;
   非表格不帶,由 Picker 退回文字錨定或預覽前 20 字。
+- **設定畫面是側邊面板(`chrome.sidePanel`),不是彈出視窗**(AF-10 推翻先前的 `windows.create`):
+  面板停在目標分頁旁邊,永遠看得見、不會被別的視窗蓋住(MV3 沒有 `alwaysOnTop`),
+  而且頁面上的高亮與設定畫面可以同時在眼前。新增、編輯、站台登入**三條走同一個載體**
+  (以前編輯是另開一個普通分頁,「保持在最上層」對分頁根本不適用)。
+  - **`sidePanel.open()` 只能在使用者手勢裡呼叫,而且手勢不跨 `sendMessage`**
+    (實測錯誤訊息 `may only be called in response to a user gesture`):
+    四個入口(右鍵兩項、popup 的選取鈕、任務頁的編輯鈕)各自在**自己的**處理函式裡呼叫,
+    **不得轉給 background 代開**。唯一入口是 `shared/panel.js` 的 `openPanel(tabId, kind)`。
+  - **參數一律走 `storage.session` 的 `panel:<tabId>`**,`setOptions.path` **不得帶查詢字串**:
+    面板重載時 Chrome 用 `default_path` 重新載入,`?ctx=`／`?taskId=`／`?origin=` 全部會被丟掉(實測)。
+    形狀是 `{ kind: 'waiting'|'new'|'edit'|'site', ctx?, taskId?, origin?, draft?, retarget? }`。
+  - **面板判斷自己屬於哪個分頁**:`sender.tab` 永遠是 `null`、載入當下查作用分頁會在切換競態中
+    拿到**切換前的舊分頁**(兩者皆實測)。可靠的做法只有一條:取 `windows.getCurrent().id`(跨重載穩定),
+    **在轉為可見時**(`visibilitychange`,不是載入時)送 `RESOLVE_PANEL_TAB{windowId}` 問 background,
+    而且每次轉為可見都重解析一次(自癒)。
+  - **切走再切回會重載面板文件**(實測),所以表單值要寫進 `panel:<tabId>.draft` 並在重載時還原——
+    沒有這一段,使用者切去看一眼別的分頁,回來就發現表單被清空了。
+  - **面板已經有表單時再選一次目標＝換目標,不重置**:只換 `locator`/`picks`/`blockInfo`/`preview`/`nameHint`,
+    名稱、排程、儀表板、進階設定全部留著,面板提示「已換成新的目標」。
+  - **面板關閉＝清場**,收斂到 `closePanelFor(tabId)`,**冪等**(暫存還在才代表這一輪還沒清過,
+    清過就不再對頁面廣播 `EXIT_PICK`)。通道只有兩條:`sidePanel.onClosed`(142+,實測切分頁不會誤觸發)
+    與 `tabs.onRemoved`(分頁關了,只清暫存)。
+    **不可用面板自己的 `pagehide`,也不可用 `runtime.connect` 的斷線**——
+    切換分頁會卸載並重載面板文件(實測),兩者都會把「還開著的面板」誤判成已關閉,
+    然後清掉草稿與頁面上的標示,正好是本輪要修的那個症狀。
+    代價:Chrome 114–141 沒有 `onClosed`,關掉面板後頁面上的標示會留到下一次選取或分頁關閉為止
+    (只是視覺殘留,不影響資料)。儲存後自動關面板用 `sidePanel.close({tabId})`(141+)。
+  - **舊版瀏覽器(或手勢不成立)退回原本的彈出視窗**,並記一筆 `panel_fallback` 診斷:
+    使用者看到的是「右鍵沒反應」,沒有紀錄就查不出原因。
+- **面板有三種畫面狀態**:**等待態**(`#panel-waiting`,右鍵剛開、還在頁面上選)——
+  一句「正在頁面上選取…」加一顆「取消選取」;**表單**(選好之後);
+  **換目標提示**(`#retarget-note`,「已換成新的目標，其他設定都留著。」)。
+  等待態時表單與底部動作列一併隱藏——一開面板就看到一整頁空欄位,使用者不知道自己該做什麼。
+- **面板的表單有草稿**(`panel:<tabId>.draft`,鍵是元素 id,debounce 300ms 寫回):
+  切換分頁會重載面板文件(實測),沒有草稿就會「切去看一眼別的分頁,回來表單被清空」。
+  **儲存或取消時連同 ctx 一起清掉**——不清的話,下一個新任務會被上一個的名稱與排程灌進去。
+- **面板可以「回頁面重選目標」**(`#repick-target`):不必關面板、也不必回頁面按右鍵,
+  按了直接進選取模式並把目前已選帶回去勾(`preselect`)。
+- **送出後頁面上的標示要留著,直到面板關閉**(`data-af-held="<purpose>"`):
+  設定畫面就開在旁邊,使用者要看得到自己剛剛選的是哪一格。
+  進入 `held` 時工具列、面板、事件攔截、`userSelect`/`cursor` 覆寫全部拆掉,頁面要能正常操作。
+  **標示按用途分群**,而且**只標「這一輪選的」**(已經屬於別的用途的不得改群——
+  前置動作送出一次就把任務目標那一格改成 `preaction` 群的話,
+  下一次前置動作的 `Esc` 會連它一起抹掉);
+  取消／`Esc`／下一輪 `ENTER_PICK` 只清**同一個用途**的
+  (前置動作選到一半反悔,不該把任務目標的藍框一起抹掉);`EXIT_PICK` 清全部。
+  `repick` 送出後不留標示(存檔就結束,沒有面板要看)。
 - 確認後 content 送 `PICKED` 給 background,由它決定去處(`purpose`):
-  `task` 開 Picker 設定視窗、`repick` 直接更新既有任務的 locator、
+  `task` 把 ctx 寫進面板的 session、`repick` 直接更新既有任務的 locator
+  (並重建排程、更新燈號、收掉為了重選而開的那個分頁)、
   `login-*` 轉發給站台登入設定視窗、`preaction` 轉發給 Picker 的前置動作那一列。
   **同一套狀態機,只有確認後的去向不同。**
 - overlay 的樣式以 `element.style` 逐項設定(頁面 CSS 會污染 class),
@@ -241,7 +307,8 @@
   `--ok`/`--danger`),**每次 `render` 都先清掉**,免得換了目標還留著上一次的紅框。
   底部動作列:儲存(主色)/取消/立即測試,「將此次設定固定為預設值」在動作列上方。
   **頁面不得寫死寬度**(`picker.html` 與 `site.html` 都是 `width: 100%`):
-  寫死會在較寬的視窗裡空出一條、讓捲軸卡在畫面中間;視窗尺寸由 `background/main.js` 開窗時給(600×820)。
+  寫死會在較寬的視窗裡空出一條、讓捲軸卡在畫面中間;**面板寬度由瀏覽器管理**(實測最小 360px,使用者可自行拖寬),
+  版面要在 360px 下不溢出、不橫向捲動;退路的彈出視窗尺寸(600×820)在 `shared/panel.js`。
 - **多值清單的每一列**(`[data-field-row]`)除了序號與名稱,還有
   `[data-field-where]`(這個值在表格的哪個位置,「美金 · 買入」/「買入 整欄」)與
   `[data-field-result]`(立即測試的逐值結果就地顯示,未測與失敗都是 `—`,失敗原因放 `title`);
@@ -417,10 +484,36 @@ iframe 可能是「先點按鈕才出現」,所以 1、2 層是**輪詢**等待(
   已經開著 iframe 的分頁跑的,排程卻是開新分頁,成功不代表排程會成功。
 - **送出中要有回饋**:「立即測試」與「儲存」按下後停用並改字(測試中…／儲存中…),
   結果回來(或驗證失敗)才還原,不得連按。
-- 抓取前可選的**前置動作**(`task.preActions`,依序執行,任一失敗即停止並走錯誤路徑):
-  `waitFor`(等某元素出現,預設逾時 20 秒,用 `MutationObserver` 不用輪詢)、
-  `click`(點某元素:關閉彈窗、切分頁籤)、`wait`(等 N 毫秒)。
+- 抓取前可選的**前置動作**(`task.preActions`,依序執行,任一失敗即停止並走錯誤路徑),四種:
+  - **`hover`**(移到元素上,AF-10):`scrollIntoView` 後依序派發
+    `pointerover` → `pointerenter` → `mouseover` → `mouseenter` → `mousemove`;
+    **`mouseenter` / `pointerenter` 不冒泡**,要沿祖先鏈逐一派發(靠外層容器的 enter 才展開的選單很常見)。
+    `holdMs`(預設 300)是游標停留的毫秒,停留期間每 100ms 補一次 `mousemove`(有些選單要停一下才展開);
+    **刻意不派 `mouseout`/`mouseleave`**——下一步通常是點那個選單,移開會讓它收起來。
+  - **`waitFor`**(等某元素出現,預設逾時 20 秒,`MutationObserver` 不輪詢):
+    **「出現」預設是「看得見」**(`visible`,預設 true):在 DOM 裡不等於使用者看得到,
+    選單多半早就在 DOM 中、靠 class 或 `display` 切換顯示;等到一個隱藏的元素,下一步就是點到看不見的東西。
+    因此 observer **必須同時監聽 `attributes`**(`class`/`style`/`hidden`/`aria-hidden`),
+    只監聽 `childList` 的話這種選單永遠等不到。要點隱藏項目的站台把 `visible` 設 false。
+  - **`click`**(點某元素:關閉彈窗、切分頁籤):**派完整的指標事件序列**
+    (hover 那一串 → `pointerdown` → `mousedown` → `focus` → `pointerup` → `mouseup` → `el.click()`)。
+    只呼叫 `el.click()` 只會送出一個 `click` 事件,綁 `pointerdown`/`mousedown` 的元件庫選單點不動
+    (與「填表單要派 `input`/`change`」同一個道理)。
+  - **`wait`**(等 N 秒):**單位是秒**(`sec`,AF-10 改;下拉本來就寫「等待秒數」,欄位卻收毫秒,
+    使用者填 3 只會等 3 毫秒)。**舊任務存的 `ms` 仍讀得懂**,重存時換算成 `sec`;
+    換算只有 `shared/preaction.js` 的 `waitMsOf` 一份。
   在 Picker 的「前置動作」區設定,要點的元素直接回頁面上選(走 §2 的選取模式)。
+  **「滑鼠移過去才出現的選單」用 `hover` → `waitFor` → `click` 三步組合**,不做一列做三件事的複合型
+  (失敗時不知道卡在哪一步,而且比三列更難懂)。
+  **做不到的要說出來**:合成事件的 `isTrusted` 一律是 false,**純 CSS `:hover` 展開的選單打不開**,
+  Picker 的說明也寫著這一句與替代路徑(那種站台的選單項目通常本來就在頁面裡,
+  把 `waitFor` 的「要看得見」取消再直接點它)。沒有這一句,使用者會以為功能壞了。
+- **前置動作的失敗訊息要說得出「第幾步、哪一種動作、怎麼了」**(`shared/preaction.js` 的
+  `preActionFailure`,唯一一份):`前置動作第 2 步（等元素出現）等不到元素出現（逾時）`。
+  內部代碼(`preaction_timeout`)不得露出到使用者眼前。訊息一路走到紀錄的 `error` 與立即測試的 `#errors`。
+- **立即測試回報前置動作的逐步軌跡**(`preActionTrace: [{step, type, ok, ms}]`,只在 `dryRun` 回傳):
+  `#test-note` 顯示「前置動作 N 步完成（共 X 秒）」。調 hover 選單時最需要知道的是
+  「hover 有做、是 click 沒點到」還是「hover 就失敗」,只回一句「成功」等於什麼都沒說。
 - **前置動作逐一執行,每個動作各自帶 `frame`**(形狀同 `task.frame`,缺省 = 最上層):
   每個動作執行前各自 `locateFrame`(`waitFor` 用自己的 `timeoutMs`,`click` 用 20 秒),
   命中才注入該 frame 並送**只含這一個動作**的 `RUN_PRE_ACTIONS`。
@@ -555,6 +648,23 @@ iframe 可能是「先點按鈕才出現」,所以 1、2 層是**輪詢**等待(
   `rowHeader(row)`(該列第一個非空文字格)、`getDataRows(el)`(排除表頭的資料列元素)。
   表頭列只認 `thead` 內的列,或表格**開頭連續**的表頭列——表格中段整列 `th` 的分組標題
   (「亞洲貨幣」那種)是資料的一部分,把它當表頭會讓整份表頭被那一列洗掉。
+- **「哪些列／格屬於這張表」的判準只有 `shared/table.js` 一份**(AF-10):
+  `tableOf` / `cellOf` / `isHeaderCell` / `tableRowsOf` / `rowCellsOf` / `isHeaderRowOf`
+  加上 `CELL_SELECTOR` / `TABLE_SELECTOR`,`content/picker-mode.js`(選取)與
+  `shared/block-detect.js`(面板描述)都 import 它,不得自己再寫一份。
+  規則:同時認 `<table>` 與 ARIA(`role=grid|table` / `row` / `cell|gridcell|columnheader`);
+  **列只算「最近的表格祖先就是這張表」的**、格只算「最近的列祖先就是這一列」的(巢狀小表格的列格不算);
+  `role="columnheader"` 整列視為表頭列。容器(`<div>`、`role="table"`)自己沒有列、
+  卻恰好包著**一張**表格時以那張表為準;**包著兩張以上就不猜**(挑第一張會少算,
+  使用者也無從得知挑了哪一張)。
+  三份判準不一致的代價是靜默錯值:選取時以外層算索引、擷取時解析內層,抓到的是別一格。
+- **選取端與擷取端必須看到同一張表**:`picker-mode.js` 的 `upgradeTarget` 在回傳前套
+  `innermostTable`,與擷取端(`parseTable` / `getDataRows`)同一份判準。
+  滑鼠落在純包裝外層的那一格(`<td>` 的邊或 padding)時,沒有這一條就會索引配錯表。
+- **格子裡自己包著一張表格時,面板要先說出來**(`這一格內含表格，會抓到整串文字…`):
+  那一格的文字是內層小表整串接起來的(`25530`+`39806` → `2553039806`),
+  解析出的數字只是碰巧排在最前面的那個——抓得到值但值是錯的,是看不見的錯誤。
+  面板只在目標改變時重畫,所以 hover 換到(或離開)這種格子時補畫一次,不是每次 `mousemove` 都重畫。
 - `task.fields = [{ key, name }]` 是**顯示用**的值清單(名稱、順序),
   `task.spec.fields = [{ key, cell?|block? }]` 是**擷取規格**,兩者以 `key` 一一對應;
   `key` 建立後不變、同任務內唯一、不得含保留字元。改名不改 `key`。
@@ -773,7 +883,7 @@ iframe 可能是「先點按鈕才出現」,所以 1、2 層是**輪詢**等待(
 
 ## §9 權限(manifest)
 
-`contextMenus`, `alarms`, `storage`, `unlimitedStorage`, `tabs`, `scripting`, `notifications`, `downloads`,
+`contextMenus`, `alarms`, `storage`, `unlimitedStorage`, `tabs`, `scripting`、`sidePanel`(設定面板), `notifications`, `downloads`,
 `host_permissions: ["<all_urls>"]`(或改為 `optional_host_permissions` 於首次設定任務時逐站授權,見 BACKLOG)。
 `downloads` 為 JSON 匯出所需;`notifications` 為失敗/告警/補抓詢問所需;
 `unlimitedStorage` 讓歷史紀錄不受 `storage.local` 預設 10MB 上限限制(保留天數預設 365 天很容易超過)。
@@ -875,7 +985,9 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
 ## §13 瀏覽器相容(Chrome + Edge)
 
 - Edge 為 Chromium 核心,`chrome.*` 命名空間與 MV3 API 相同;**同一份程式碼、同一個 manifest**,不分版本。
-- 只用 §9 列出的 API,不用 Chrome 專屬或實驗性 API(`sidePanel`、`offscreen`、`declarativeNetRequest` 等一律不引入)。
+- 只用 §9 列出的 API,不用 Chrome 專屬或實驗性 API(`offscreen`、`declarativeNetRequest` 等一律不引入)。
+  **`sidePanel` 是例外且已引入**(AF-10):Edge 官方 API 支援表列它為 MV3 支援,不是 Chrome 專屬;
+  沒有它的舊版仍有彈出視窗的退路。
 - Edge 特有行為與對策:
 
 | Edge 機制 | 影響 | 對策 |
@@ -885,6 +997,8 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
 | 啟動加速(Startup boost)/ 關閉視窗後仍在背景執行 | 無視窗狀態更常見 | §4.1「沒有任何視窗」對策 |
 | `edge://extensions` 載入未封裝 | 路徑不同 | README 兩個瀏覽器的安裝步驟都寫 |
 | Edge Add-ons 商店獨立審核 | 上架要分別送 | BACKLOG |
+| `chrome.sidePanel` | Edge 官方 API 支援表列為 MV3 支援(Windows/Linux/Mac),另有 sidebar 開發指南 | 同一份程式碼;`sidePanel` 需 114+,`close()` 需 141+、`onClosed` 需 142+,兩者都有退路(停用該分頁的面板／停在「已儲存」畫面) |
+| 沒有 `chrome.sidePanel`(114 以下) | 設定畫面開不起來 | `shared/panel.js` 退回原本的彈出視窗,並記 `panel_fallback` 診斷 |
 
 - 驗收:Puppeteer 煙霧腳本以環境變數 `BROWSER_PATH` 指定執行檔,CI/本機各跑一次 Chrome 與 Edge(未安裝 Edge 時自動略過並標示)。
 - 使用者可見差異只有一處:設定頁「排程健康」顯示目前瀏覽器名稱與版本(`navigator.userAgentData`)。

@@ -209,6 +209,23 @@ test('A-3 按 ↑ 可以改選外層表格的那一格（保留 AF-7 的用法�
   pm.exitPickMode()
 })
 
+test('A-3b 外層那一格內含表格時，面板要先說出「會抓到整串文字」（AF-10 作業 D）', async () => {
+  const { c, doc, pm, win } = await enterOnMonitor()
+  fire(win, valueCell(doc), 'mousemove')
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
+  fire(win, valueCell(doc).closest('table').parentElement, 'mousemove')
+  const text = doc.querySelector('[data-af-panel]')?.textContent || ''
+  assert.ok(text.includes('這一格內含表格'),
+    `外層格的文字是內層小表串接起來的，面板要說出來，實得：${text.slice(0, 200)}`)
+
+  // 髒值本身也要釘住：只驗提示的話，哪天預覽真的變乾淨了也不會有人知道
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  const msg = pickedMsgs(c)[0]
+  assert.match(String(msg.preview), /^42MAX/,
+    `外層那一格的預覽就是內層小表串接起來的字串，實得 ${JSON.stringify(msg.preview)}`)
+  pm.exitPickMode()
+})
+
 test('A-3 選整欄時預覽描述那一欄，不帶整張表的數字', async () => {
   const { c, doc, pm, win } = await enterOnMonitor()
   fire(win, valueCell(doc), 'mousemove')
@@ -349,9 +366,8 @@ test('A-6 PICKED{picks:[{cell}]} 一路走到 Picker 的 buildSpec', async () =>
     }, { tab: { id: 3, url: 'https://x.example/' } }, resolve)
     if (ret !== true) reject(new Error('onMessage 必須回傳 true'))
   })
-  const created = c.__calls.find(x => x.api === 'windows.create')
-  const url = created.args[0].url
-  const ctx = JSON.parse(decodeURIComponent(url.split('?ctx=')[1]))
+  // AF-10：設定畫面是 side panel，ctx 走 storage.session（網址參數在面板重載時會被丟掉）
+  const ctx = (await chrome.storage.session.get('panel:3'))['panel:3'].ctx
   assert.deepEqual(ctx.picks, [{ cell: CELL }], 'background 不得丟掉單格')
 
   const jd = new JSDOM(PICKER_HTML)

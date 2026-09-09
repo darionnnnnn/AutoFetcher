@@ -1,4 +1,6 @@
-import { saveTask, getTask, getSettings, saveSettings } from '../../shared/storage.js'
+import { saveTask, getTask, getSettings, saveSettings, getPanelCtx, mergePanelCtx, subscribe
+} from '../../shared/storage.js'
+import { DEFAULT_HOVER_HOLD_MS, DEFAULT_WAIT_TIMEOUT_MS } from '../../shared/preaction.js'
 import { MSG } from '../../shared/messages.js'
 import { getLayout, addCard } from '../../shared/layout-store.js'
 import { seriesIdOf } from '../../shared/series-index.js'
@@ -60,11 +62,17 @@ export function getFormData() {
 
     const frame = row._frame || null
     if (type === 'waitFor') {
-      const act = {
-        type,
-        locator,
-        timeoutMs: Number.isFinite(num) ? num : (valStr === '' ? 20000 : NaN)
-      }
+      // 畫面是秒、資料是毫秒；沒填就交給 buildTask 那一份預設值（不要兩層各寫一份）
+      const act = { type, locator }
+      if (valStr !== '' && Number.isFinite(num)) act.timeoutMs = Math.round(num * 1000)
+      const visibleBox = row.querySelector('[data-preaction-visible]')
+      if (visibleBox && !visibleBox.checked) act.visible = false
+      if (frame) act.frame = frame
+      return act
+    }
+    if (type === 'hover') {
+      const act = { type, locator }
+      if (valStr !== '' && Number.isFinite(num)) act.holdMs = num
       if (frame) act.frame = frame
       return act
     }
@@ -76,7 +84,7 @@ export function getFormData() {
     if (type === 'wait') {
       return {
         type,
-        ms: num
+        sec: valStr === '' ? '' : num
       }
     }
     return { type, locator }
@@ -421,18 +429,30 @@ export function buildTask(values, locator, existing, frame) {
           if (!hasLoc) return null
           return withFrame({ type: 'click', locator: a.locator }, a.frame)
         }
+        if (a.type === 'hover') {
+          const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
+          if (!hasLoc) return null
+          const act = { type: 'hover', locator: a.locator }
+          const hold = Number(a.holdMs)
+          if (Number.isFinite(hold) && hold >= 0) act.holdMs = hold
+          return withFrame(act, a.frame)
+        }
         if (a.type === 'waitFor') {
           const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
           if (!hasLoc) return null
-          const timeoutMs = Number.isFinite(Number(a.timeoutMs)) ? Number(a.timeoutMs) : 20000
-          return withFrame({ type: 'waitFor', locator: a.locator, timeoutMs }, a.frame)
+          const timeoutMs = Number.isFinite(Number(a.timeoutMs)) ? Number(a.timeoutMs) : DEFAULT_WAIT_TIMEOUT_MS
+          const act = { type: 'waitFor', locator: a.locator, timeoutMs }
+          if (a.visible === false) act.visible = false
+          return withFrame(act, a.frame)
         }
         if (a.type === 'wait') {
           // 空字串經 Number() 會變成 0，看起來合法但其實是使用者沒填
-          if (a.ms === '' || a.ms === null || a.ms === undefined) return null
-          const ms = Number(a.ms)
-          if (!Number.isFinite(ms)) return null
-          return { type: 'wait', ms }
+          const raw = a.sec !== undefined ? a.sec : a.ms
+          if (raw === '' || raw === null || raw === undefined) return null
+          const n = Number(raw)
+          if (!Number.isFinite(n)) return null
+          // 舊任務存的是 ms，重存一律寫 sec（讀取端仍相容 ms）
+          return a.sec !== undefined ? { type: 'wait', sec: n } : { type: 'wait', sec: n / 1000 }
         }
         return null
       })
@@ -1698,14 +1718,23 @@ function updatePreActionRowVisibility(row) {
   const type = select?.value || 'waitFor'
   if (pickBtn) pickBtn.hidden = (type === 'wait')
   if (targetEl) targetEl.hidden = (type === 'wait')
+  const visibleWrap = row.querySelector('[data-preaction-visible-wrap]')
+  if (visibleWrap) visibleWrap.hidden = (type !== 'waitFor')
   if (input) {
     input.hidden = (type === 'click')
     if (type === 'wait') {
-      input.placeholder = '毫秒數'
+      // 下拉寫「等待秒數」欄位卻收毫秒，使用者填 3 只會等 3 毫秒——單位一律用秒
+      input.placeholder = '秒數'
+      input.step = '0.1'
+    } else if (type === 'hover') {
+      input.placeholder = '停留毫秒'
+      input.step = '50'
+      if (!input.value) input.value = String(DEFAULT_HOVER_HOLD_MS)
     } else if (type === 'waitFor') {
-      input.placeholder = '逾時毫秒'
+      input.placeholder = '逾時秒數'
+      input.step = '1'
       if (!input.value) {
-        input.value = '20000'
+        input.value = String(DEFAULT_WAIT_TIMEOUT_MS / 1000)
       }
     }
   }
@@ -1728,6 +1757,7 @@ function addPreActionRow(data = {}) {
   select.className = 'preaction-type'
   const options = [
     { value: 'waitFor', text: '等元素出現' },
+    { value: 'hover', text: '移到元素上' },
     { value: 'click', text: '點擊元素' },
     { value: 'wait', text: '等待秒數' }
   ]
@@ -1774,18 +1804,38 @@ function addPreActionRow(data = {}) {
   input.min = '0'
   input.step = '1'
   if (data.type === 'wait') {
-    if (data.ms !== undefined && data.ms !== null && !Number.isNaN(data.ms) && String(data.ms).trim() !== '') {
-      input.value = String(data.ms)
+    // 舊任務存的是毫秒，畫面一律以秒顯示（換算只有 shared/preaction.js 一份）
+    if (data.sec !== undefined && data.sec !== null && String(data.sec).trim() !== '') {
+      input.value = String(data.sec)
+    } else if (data.ms !== undefined && data.ms !== null && !Number.isNaN(data.ms) && String(data.ms).trim() !== '') {
+      input.value = String(Number(data.ms) / 1000)
     }
   } else if (data.type === 'click') {
     input.value = ''
+  } else if (data.type === 'hover') {
+    input.value = data.holdMs !== undefined && data.holdMs !== null && String(data.holdMs).trim() !== ''
+      ? String(data.holdMs)
+      : String(DEFAULT_HOVER_HOLD_MS)
   } else {
     if (data.timeoutMs !== undefined && data.timeoutMs !== null && !Number.isNaN(data.timeoutMs) && String(data.timeoutMs).trim() !== '') {
-      input.value = String(data.timeoutMs)
+      input.value = String(Number(data.timeoutMs) / 1000)
     } else {
-      input.value = '20000'
+      input.value = String(DEFAULT_WAIT_TIMEOUT_MS / 1000)
     }
   }
+
+  // 「出現」預設是看得見：選單多半早就在 DOM 裡、靠 class 切換顯示，
+  // 要點隱藏的項目時才把這個勾掉
+  const visibleWrap = document.createElement('label')
+  visibleWrap.setAttribute('data-preaction-visible-wrap', '')
+  visibleWrap.className = 'preaction-visible'
+  const visibleBox = document.createElement('input')
+  visibleBox.type = 'checkbox'
+  visibleBox.setAttribute('data-preaction-visible', '')
+  visibleBox.checked = data.visible !== false
+  visibleWrap.appendChild(visibleBox)
+  visibleWrap.appendChild(document.createTextNode('要看得見'))
+  visibleWrap.title = '勾選＝元素要真的顯示出來才算出現；取消＝只要在頁面裡就算'
 
   const removeBtn = document.createElement('button')
   removeBtn.type = 'button'
@@ -1802,6 +1852,7 @@ function addPreActionRow(data = {}) {
   row.appendChild(pickBtn)
   row.appendChild(targetEl)
   row.appendChild(input)
+  row.appendChild(visibleWrap)
   row.appendChild(removeBtn)
 
   updatePreActionLocatorText(row)
@@ -2040,6 +2091,12 @@ export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs =
     // 關掉別人的視窗比不關還糟
     const myWindow = typeof window !== 'undefined' ? window : null
     setTimeout(() => {
+      // 面板沒有 window.close()：請 background 關它，並清掉草稿——
+      // 不清的話下一個新任務會被這一個的名稱與排程灌進去
+      if (globalThis.chrome?.sidePanel) {
+        finishPanelSession()
+        return
+      }
       if (myWindow && globalThis.window === myWindow && myWindow.close) myWindow.close()
     }, closeDelayMs)
   }
@@ -2090,7 +2147,12 @@ export async function handleTestNow() {
       // 兩者會不一樣，成功不代表排程也會成功
       const noPreActions = !Array.isArray(values.preActions) || values.preActions.length === 0
       const noteEl = document.getElementById('test-note')
-      if (noteEl && currentCtx?.frameUrl && noPreActions) {
+      if (noteEl && Array.isArray(res.preActionTrace) && res.preActionTrace.length > 0) {
+        // 調 hover 選單時最需要知道的是「hover 有做、是 click 沒點到」還是「hover 就失敗」，
+        // 只回一句「成功」等於什麼都沒說
+        const total = res.preActionTrace.reduce((sum, step) => sum + (Number(step.ms) || 0), 0)
+        noteEl.textContent = `前置動作 ${res.preActionTrace.length} 步完成（共 ${(total / 1000).toFixed(1)} 秒）`
+      } else if (noteEl && currentCtx?.frameUrl && noPreActions) {
         noteEl.textContent = '這次測試在目前分頁執行；排程會開新分頁，若那個框架要先點才會出現，請加入前置動作。'
       }
     } else {
@@ -2124,6 +2186,138 @@ function setBusy(id, label) {
   }
 }
 
+// ---- side panel 啟動流程（AF-10 作業 B）----
+// 面板無法自己判斷屬於哪個分頁：`sender.tab` 永遠是 null、網址參數重載後被丟掉、
+// 載入當下查 active tab 會在切換競態拿到舊分頁（B-0 #11、#12）。
+// 唯一穩的是 windowId（#14），而且要在**轉為可見時**才解析（#13）。
+let panelTabId = null
+let panelWindowId = null
+let draftTimer = null
+
+/**
+ * 問 background：這個視窗現在的作用分頁是哪個。
+ * @returns {Promise<number|null>}
+ */
+async function resolvePanelTab() {
+  if (panelWindowId === null) {
+    try { panelWindowId = (await chrome.windows.getCurrent())?.id ?? null } catch { panelWindowId = null }
+  }
+  if (panelWindowId === null) return null
+  try {
+    const res = await chrome.runtime.sendMessage({ type: MSG.RESOLVE_PANEL_TAB, windowId: panelWindowId })
+    return res?.tabId ?? null
+  } catch { return null }
+}
+
+/**
+ * 依 session 裡的 ctx 決定要顯示哪一個畫面。
+ */
+export async function renderFromPanelCtx(ctx) {
+  const waiting = document.getElementById('panel-waiting')
+  const form = document.getElementById('picker-form') || document.querySelector('.settings-body')
+  const kind = ctx?.kind
+  if (waiting) waiting.hidden = kind !== 'waiting'
+  // 等待態時把表單藏起來：面板一開就看到一整頁空欄位，使用者不知道自己該做什麼
+  if (form) form.hidden = kind === 'waiting'
+  const footer = document.querySelector('.settings-footer') || document.getElementById('picker-actions')
+  if (footer) footer.hidden = kind === 'waiting'
+  if (kind === 'waiting' || !ctx) return
+
+  if (kind === 'edit' && ctx.taskId) {
+    const task = await getTask(ctx.taskId)
+    if (!task) return
+    render({ task, locator: task.locator, url: task.url })
+    const testNow = document.getElementById('test-now')
+    if (testNow) testNow.hidden = true
+    await renderDashboardSection(task)
+    return
+  }
+
+  if (kind === 'new' && ctx.ctx) {
+    // 換目標（面板已經開著、使用者填了一半）：只換目標欄位，
+    // 名稱／排程／儀表板／進階留著——右鍵重選一個目標不該把表單清空
+    if (ctx.retarget) {
+      applyRetarget(ctx.ctx)
+      return
+    }
+    render(ctx.ctx)
+    await renderDashboardSection(ctx.ctx?.task)
+    await applyPickerDefaults(ctx.ctx?.task)
+    restoreDraft(ctx.draft)
+  }
+}
+
+/**
+ * 只換目標，保留使用者已經填的其他設定。
+ */
+function applyRetarget(payload) {
+  // 先把畫面上現有的值抄下來（鍵是元素 id，才還原得回去），再換目標、再貼回來
+  const keep = snapshotForm()
+  render(payload)
+  restoreDraft(keep, { skipTarget: true })
+  const note = document.getElementById('retarget-note')
+  if (note) {
+    note.hidden = false
+    note.textContent = '已換成新的目標，其他設定都留著。'
+  }
+}
+
+// 要跨「換目標」與「面板重載」保住的欄位（鍵一律是元素 id，restoreDraft 靠它還原）
+const DRAFT_FIELDS = [
+  'name', 'schedule-type', 'interval-value', 'interval-unit', 'daily-time',
+  'agg', 'row-pos', 'col-pos', 'dashboard-select', 'regex', 'multiplier', 'decimals'
+]
+
+/**
+ * 把畫面上的表單值抄成 `{元素 id: 值}`。
+ */
+function snapshotForm() {
+  const out = {}
+  for (const id of DRAFT_FIELDS) {
+    const el = document.getElementById(id)
+    if (!el) continue
+    out[id] = el.type === 'checkbox' ? el.checked : el.value
+  }
+  return out
+}
+
+/**
+ * 草稿還原：面板文件在切換分頁後會被重載（B-0 #5 實測），
+ * 沒有這一段，使用者切去看一眼別的分頁回來就發現表單被清空了。
+ */
+function restoreDraft(draft, opts = {}) {
+  if (!draft || typeof draft !== 'object') return
+  for (const [id, value] of Object.entries(draft)) {
+    if (opts.skipTarget && (id === 'url' || id === 'mode')) continue
+    const el = document.getElementById(id)
+    if (!el) continue
+    if (el.type === 'checkbox') el.checked = Boolean(value)
+    else if (value !== undefined && value !== null) el.value = String(value)
+  }
+}
+
+/**
+ * 表單值變動就寫回草稿（節流）。
+ */
+/**
+ * 存檔或取消後的收尾：清掉草稿並請 background 關面板。
+ * 不清草稿的話，下一個新任務會被上一個的名稱與排程灌進去。
+ */
+async function finishPanelSession() {
+  if (panelTabId === null) return
+  if (draftTimer) { clearTimeout(draftTimer); draftTimer = null }
+  try { await chrome.runtime.sendMessage({ type: MSG.CLOSE_PANEL, tabId: panelTabId }) } catch {}
+}
+
+function scheduleDraftSave() {
+  if (panelTabId === null) return
+  if (draftTimer) clearTimeout(draftTimer)
+  draftTimer = setTimeout(async () => {
+    draftTimer = null
+    try { await mergePanelCtx(panelTabId, { draft: snapshotForm() }) } catch {}
+  }, 300)
+}
+
 export async function initFromQuery(search) {
   const params = new URLSearchParams(search || '')
   const taskId = params.get('taskId')
@@ -2139,7 +2333,21 @@ export async function initFromQuery(search) {
 
 if (typeof document !== 'undefined' && document.getElementById('save') && globalThis.chrome?.runtime?.id) {
   document.getElementById('save')?.addEventListener('click', () => handleSave())
-  document.getElementById('cancel')?.addEventListener('click', () => window.close())
+  document.getElementById('cancel')?.addEventListener('click', () => {
+    // 面板沒有 window.close()：請 background 關它，順便把草稿清掉
+    finishPanelSession()
+    if (!globalThis.chrome?.sidePanel) window.close()
+  })
+  // 回頁面重選目標：面板不必關，選好之後 background 會把新目標併進來
+  document.getElementById('repick-target')?.addEventListener('click', async () => {
+    if (panelTabId === null) return
+    try {
+      await chrome.runtime.sendMessage({
+        type: MSG.ENTER_PICK, purpose: 'task', tabId: panelTabId, frameId: 0,
+        preselect: Array.isArray(currentCtx?.picks) ? currentCtx.picks : undefined
+      })
+    } catch {}
+  })
   document.getElementById('test-now')?.addEventListener('click', () => handleTestNow())
   bindModeEvents()
   bindAlertEvents()
@@ -2148,7 +2356,30 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
 
   const search = typeof window !== 'undefined' ? window.location?.search : ''
   const params = new URLSearchParams(search || '')
-  if (params.has('taskId')) {
+  // side panel：沒有網址參數可用，改由 session 的 ctx 決定畫面
+  if (!params.has('taskId') && !params.has('ctx') && globalThis.chrome?.sidePanel) {
+    const boot = async () => {
+      const tabId = await resolvePanelTab()
+      if (tabId === null) return
+      const changed = tabId !== panelTabId
+      panelTabId = tabId
+      const ctx = await getPanelCtx(tabId)
+      if (changed || ctx) await renderFromPanelCtx(ctx)
+    }
+    // 載入當下就解析會拿到切換前的舊分頁；轉為可見時再解析才正確，
+    // 而且每次轉為可見都重解析一次（自癒）
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') boot()
+    })
+    if (document.visibilityState === 'visible') boot()
+    // ctx 變了（例如使用者在頁面上選好了目標）就重畫
+    subscribe(() => { boot() }, { area: 'session' })
+    document.addEventListener('input', scheduleDraftSave, true)
+    document.addEventListener('change', scheduleDraftSave, true)
+    document.getElementById('panel-cancel-pick')?.addEventListener('click', () => {
+      try { chrome.runtime.sendMessage({ type: MSG.CLOSE_PANEL, tabId: panelTabId }) } catch {}
+    })
+  } else if (params.has('taskId')) {
     initFromQuery(search).then(() => {
       renderDashboardSection(currentCtx?.task)
     })

@@ -27,35 +27,118 @@ function getSpan(cell, attr) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
 }
 
-// 取得 HTML 表格的所有列
-function getTableRows(table) {
-  if (table.rows) return Array.from(table.rows)
-  if (typeof table.querySelectorAll === 'function') return Array.from(table.querySelectorAll('tr'))
-  return Array.from(table.children || []).filter((child) => child.tagName === 'TR')
+// ---- 「哪些列／格屬於這張表」的唯一判準（AF-10 作業 D）----
+// 選取模式（content/picker-mode.js）、面板描述（shared/block-detect.js）與解析（本檔）
+// 以前各有一份，判準不一致會讓選取時算出的索引配上擷取時解析的另一張表，靜默抓到錯的值。
+
+/** 儲存格選擇器（HTML 與 ARIA 兩種寫法） */
+export const CELL_SELECTOR = 'td, th, [role="cell"], [role="gridcell"], [role="columnheader"], [role="rowheader"]'
+/** 表格選擇器（HTML 與 ARIA 兩種寫法） */
+export const TABLE_SELECTOR = 'table, [role="grid"], [role="table"]'
+const ROW_SELECTOR = 'tr, [role="row"]'
+
+/**
+ * 取得元素所屬的最近表格（HTML 或 ARIA）。
+ * @param {Element} el 元素
+ * @returns {Element|null} 表格元素
+ */
+export function tableOf(el) {
+  return el && typeof el.closest === 'function' ? el.closest(TABLE_SELECTOR) : null
 }
 
-// 取得列的所有格子
-function getRowCells(row) {
-  if (row.cells) return Array.from(row.cells)
-  if (typeof row.querySelectorAll === 'function') return Array.from(row.querySelectorAll('th, td'))
-  return Array.from(row.children || []).filter((child) => child.tagName === 'TH' || child.tagName === 'TD')
+/**
+ * 取得元素所屬的最近儲存格（HTML 或 ARIA）。
+ * @param {Element} el 元素
+ * @returns {Element|null} 儲存格元素
+ */
+export function cellOf(el) {
+  return el && typeof el.closest === 'function' ? el.closest(CELL_SELECTOR) : null
 }
 
-// 判定是否為 HTML 表格的表頭列
-function isHeaderRow(row, cells) {
-  if (cells.length === 0) return false
+/**
+ * 判定是否為表頭格（`th` 或 `role="columnheader"`）。
+ * @param {Element} cell 儲存格
+ * @returns {boolean}
+ */
+export function isHeaderCell(cell) {
+  if (!cell) return false
+  return cell.tagName === 'TH' || getRole(cell) === 'columnheader'
+}
+
+// 取得「這個元素自己的」列：巢狀小表格的列不算
+function ownRows(el) {
+  if (!el) return []
+  // 原生 rows 已經只含這張表自己的列（巢狀表的列屬於內層表），
+  // 而且 thead / tbody / tfoot 的順序由瀏覽器決定，比 querySelectorAll 的文件順序可靠
+  if (el.tagName === 'TABLE' && el.rows && el.rows.length > 0) return Array.from(el.rows)
+  const raw = typeof el.querySelectorAll === 'function' ? Array.from(el.querySelectorAll(ROW_SELECTOR)) : []
+  if (raw.length > 0) {
+    return raw.filter((row) => typeof row.closest !== 'function' || tableOf(row) === el)
+  }
+  return Array.from(el.children || []).filter((child) => getRole(child) === 'row')
+}
+
+/**
+ * 取得這張表自己的全部列（含表頭列），排除巢狀小表格的列。
+ * 容器（`<div>`、`role="table"`）本身沒有列、卻恰好包著**一張**表格時以那張表為準；
+ * 包著兩張以上就不猜（挑第一張會少算，而且使用者無從得知挑了哪一張）。
+ * @param {Element} el 表格或包著表格的容器
+ * @returns {Element[]} 列元素陣列
+ */
+export function tableRowsOf(el) {
+  if (!el) return []
+  const own = ownRows(el)
+  if (own.length > 0) return own
+  const inners = typeof el.querySelectorAll === 'function' ? Array.from(el.querySelectorAll('table')) : []
+  if (inners.length === 1) return ownRows(inners[0])
+  return []
+}
+
+/**
+ * 取得這一列自己的格子，排除格內小表格的格子。
+ * @param {Element} row 列元素
+ * @returns {Element[]} 儲存格陣列
+ */
+export function rowCellsOf(row) {
+  if (!row) return []
+  if (row.cells && row.cells.length > 0) return Array.from(row.cells)
+  const raw = typeof row.querySelectorAll === 'function' ? Array.from(row.querySelectorAll(CELL_SELECTOR)) : []
+  if (raw.length > 0) {
+    const own = raw.filter((cell) => typeof cell.closest !== 'function' || cell.closest(ROW_SELECTOR) === row)
+    if (own.length > 0) return own
+    return []
+  }
+  return Array.from(row.children || [])
+}
+
+/**
+ * 判定是否為表頭列：在 `thead` 內，或整列都是表頭格。
+ * @param {Element} row 列元素
+ * @returns {boolean}
+ */
+export function isHeaderRowOf(row) {
+  if (!row) return false
   const inThead = (typeof row.closest === 'function' && Boolean(row.closest('thead'))) ||
     row.parentElement?.tagName === 'THEAD'
   if (inThead) return true
-  return cells.every((cell) => cell.tagName === 'TH')
+  const cells = rowCellsOf(row)
+  return cells.length > 0 && cells.every(isHeaderCell)
+}
+
+// 本檔內部沿用的別名（解析流程原本就以這三個名字呼叫）。
+// `isHeaderRow` 只是 `isHeaderRowOf` 的薄包裝——判準要真的只有一份，
+// 呼叫端已經算好 cells 時就別再算一次（空列不算表頭列）
+const getTableRows = tableRowsOf
+const getRowCells = rowCellsOf
+function isHeaderRow(row, cells) {
+  if (cells.length === 0) return false
+  return isHeaderRowOf(row)
 }
 
 // 取得 ARIA 表格的列元素
 function getAriaRows(el) {
-  if (typeof el.querySelectorAll === 'function') {
-    const rows = Array.from(el.querySelectorAll('[role="row"]'))
-    if (rows.length > 0) return rows
-  }
+  const rows = tableRowsOf(el)
+  if (rows.length > 0) return rows
   return Array.from(el.children || []).filter((child) => getRole(child) === 'row')
 }
 

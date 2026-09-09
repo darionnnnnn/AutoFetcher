@@ -13,7 +13,7 @@ src/
 │                          precheck 預檢 / sitecheck 每日站台檢查 / missed 補抓 / watchdog 看門狗
 │                          health 燈號 / notify 通知唯一入口 / inject 注入唯一入口
 │                          frames 目標所在 iframe 的定位唯一入口
-├── content/             ← 注入頁面:main.js 訊息路由/擷取/填登入/前置動作
+├── content/             ← 注入頁面:main.js 訊息路由/擷取/填登入/前置動作(hover/等/點/等待)
 │                          picker-mode.js 選取模式(高亮 overlay、↑↓、右上角工具列三段
 │                          「單格(預設)/整欄/整列」、可互動的已選 chip 面板、完成/取消鈕;
 │                          點一下選取、Ctrl 加選、Shift 拉範圍、雙擊送出)
@@ -37,6 +37,8 @@ src/
                            series-index(序列 id 的唯一入口:組合/拆解/名稱)
                            extract(策略鏈)、export(三種匯出)、settings-io(設定匯出入)、diag(診斷)
                            layout-store(版面唯一入口)、record-status(成功狀態唯一來源)、crypto(站台密碼)
+                           panel(side panel 的唯一入口:開啟／關閉／舊版退路)
+                           preaction(前置動作的單位換算與失敗訊息,三端共用)
                            純函式:block-detect / table / aggregate / alerts
                            schedule-math(排程數學,background 與 Picker 共用)
                            describe(目標／排程／去處的白話句,全站唯一一份)
@@ -56,6 +58,14 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **frame 定位只有一份**:`background/frames.js`(`listFrames` / `matchFrameByUrl` / `locateFrame`,
   以及「同一個目標頁」的判定 `sameOriginPath`——立即測試核對分頁網址也用它,不得各比一次);
   任務存的是 `frame: { url }`,**`frameId` 存不得**(每次載入都不同),見 SPEC §3。
+- **side panel 的唯一入口**:`shared/panel.js` 的 `openPanel(tabId, kind)`(含舊版退路與診斷)。
+  **`sidePanel.open()` 的手勢不跨 `sendMessage`**——每個入口都要在自己的點擊／右鍵處理裡呼叫,
+  不得轉給 background 代開;面板的參數一律走 `storage.session` 的 `panel:<tabId>`,
+  **`setOptions.path` 不得帶查詢字串**(面板重載時會被丟掉)。
+- **面板不能自己判斷屬於哪個分頁**:`sender.tab` 永遠是 null、載入當下查作用分頁會拿到切換前的舊分頁。
+  只能取 `windows.getCurrent().id`,在 `visibilitychange` 轉為可見時問 background(`RESOLVE_PANEL_TAB`)。
+- **`held` 標示(送出後留在頁面上的藍框)有兩個出口**:面板關閉(`EXIT_PICK`)與下一輪同用途的 `ENTER_PICK`;
+  按用途分群(`data-af-held`),取消／`Esc` 只清自己那一群。
 - **health 一律經 `background/health.js` 的 `setTaskHealth` 寫**(fetcher / precheck / sitecheck 三個呼叫端);
   抓取結果 → 狀態的算法只有 `fetcher.js` 的 `healthFromRecords` 那一份。
 
@@ -63,12 +73,12 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 
 - 改任何行為 → `docs/SPEC.md`(現況規格,§編號會被程式碼註解引用,勿拆檔)
 - 想做但刻意沒做 → `docs/BACKLOG.md`(每項附觸發條件)
-- 本輪規劃 → `docs/AF-<N>-PLAN.md`;完工搬 `docs/archive/`(按需讀,勿全掃)。AF-1~AF-9 已歸檔。
+- 本輪規劃 → `docs/AF-<N>-PLAN.md`;完工搬 `docs/archive/`(按需讀,勿全掃)。AF-1~AF-10 已歸檔。
 
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1748 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1815 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。

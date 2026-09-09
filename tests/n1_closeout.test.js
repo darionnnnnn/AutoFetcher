@@ -57,7 +57,8 @@ test('滑鼠停在表格外時按 Enter，送出的仍是那張表格與已選�
   assert.ok(msg.blockInfo?.kind === 'table', `定位資訊要指向表格而不是那段文字：${JSON.stringify(msg.blockInfo)}`)
 })
 
-test('換到另一張表格才清空已選', async () => {
+// AF-10 作業 C 推翻舊語意：換表由「點」觸發，不由「移」觸發
+test('滑鼠移到另一張表格不清空已選（AF-10：換表要點）', async () => {
   const { pm, doc, win } = await pickMode()
   const t2 = doc.createElement('table')
   t2.id = 'other'
@@ -67,7 +68,9 @@ test('換到另一張表格才清空已選', async () => {
   mv(doc, win, 'c0-1')
   doc.getElementById('c0-1').dispatchEvent(new win.MouseEvent('click', { bubbles: true, shiftKey: true }))
   mv(doc, win, 'o0')
-  assert.equal(pm.selectedCount(), 0)
+  assert.equal(pm.selectedCount(), 1, '滑鼠路過不得清空')
+  doc.getElementById('o0').dispatchEvent(new win.MouseEvent('click', { bubbles: true }))
+  assert.equal(pm.selectedCount(), 1, '點下去才換表，且是取代')
   pm.exitPickMode()
 })
 
