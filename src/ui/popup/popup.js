@@ -203,7 +203,7 @@ export function render(ctx) {
         }
         // 面板要在**這個點擊**裡開：手勢不跨 sendMessage，
         // 轉給 background 代開一定會被 Chrome 擋下（B-0 實測）
-        await openPanel(tab.id, 'picker')
+        await openPanel(tab.id, 'picker', `tabId=${tab.id}`)
         await chrome.runtime.sendMessage({
           type: MSG.ENTER_PICK,
           purpose: 'task',

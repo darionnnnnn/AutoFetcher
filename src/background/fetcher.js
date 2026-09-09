@@ -1,6 +1,6 @@
 // AutoFetcher 擷取流程：開分頁、注入、擷取、寫紀錄、重試
 import { getTask, saveTask, appendRecord, appendRecords, getRecordsInRange, getSettings, getAlertLog, setAlertLog, setLastValue, setLastValues } from '../shared/storage.js'
-import { waitMsOf, preActionFailure, DEFAULT_WAIT_TIMEOUT_MS } from '../shared/preaction.js'
+import { waitMsOf, timeoutMsOf, preActionFailure, DEFAULT_WAIT_TIMEOUT_MS } from '../shared/preaction.js'
 import { seriesIdOf, parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
 import { MSG } from '../shared/messages.js'
 import { slotOf } from './scheduler.js'
@@ -397,7 +397,7 @@ export async function runTask(task, opts = {}) {
             continue
           }
           const actionTimeout = action?.type === 'waitFor'
-            ? (action.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS)
+            ? timeoutMsOf(action)
             : (opts.frameTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS)
           const actionLoc = await locateFrame(tabId, action?.frame, action?.locator, { pollMs, timeoutMs: actionTimeout })
           if (actionLoc === null) {
@@ -643,7 +643,13 @@ export async function runTask(task, opts = {}) {
       }, { parentId: task.id, skipLedger: isManual })
 
     } catch (err) {
-      if (dryRun) return { ok: false, error: String(err?.message || err) }
+      // 立即測試失敗時也要帶軌跡：使用者最需要知道的是「hover 有做、卡在第幾步」，
+      // 只回一句錯誤訊息就是把軌跡丟掉
+      if (dryRun) {
+        const out = { ok: false, error: String(err?.message || err) }
+        if (preActionTrace.length > 0) out.preActionTrace = preActionTrace
+        return out
+      }
       if (!isManual && attempt < 3) {
         await scheduleRetry(task.id, attempt, false, slot)
         return null

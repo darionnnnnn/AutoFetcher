@@ -1,6 +1,6 @@
 # AF-10 第 10 輪規劃：side panel 設定面板、鎖表選取、表格判準合一、前置動作靈活化
 
-> 狀態：全案完成（含兩份獨立終檢的處置），1815 綠、煙霧 Chrome + Edge 全過，待併 dev
+> 狀態：全案完成，已併 dev；換模型體檢（Fable 5.1）完成，1832 綠；煙霧 Chrome 全過，Edge 最後一跑因使用者的 Edge 開著而啟動不了（同日稍早兩次全過，其後未動 Edge 專屬程式碼）
 > 基準：dev@1fd301b（1748 綠，v0.8.0）
 > 來源：使用者回饋 5 項 + 核對時順手發現 9 項
 > 實作方式：**Claude 自己做**（agy 無額度）。仍照慣例：每階段先寫測試（含突變）再實作、一段一驗。
@@ -377,9 +377,38 @@
 
 終檢後補寫的測試都做了突變驗證：7 條守門線改壞各自會紅（其中 4 條第一次沒被抓到，補測試才守住）。
 
+## 體檢輪修正（換模型：實作 Opus 5 → 體檢 Fable 5.1，2026-09-09）
+
+範圍 `1fd301b..HEAD`（已 push，改以 PLAN 基準到 HEAD）。親讀 background/main.js、picker.js 面板端、
+picker-mode.js 三份 diff，另開一份獨立獵 bug 審查掃其餘檔。**抓到 12 項，全部修掉並各補迴歸測試，
+守門線逐一突變驗證會紅。**
+
+| # | 哪裡 | 症狀 | 修法 | 迴歸測試 |
+|---|---|---|---|---|
+| 1 | `picker-mode.js` `exitPickMode({hold})` | **非表格目標送出後零高亮**——它的高亮畫在 overlay 上、隨 overlay 拆掉；最常見的「單一數字」正是這種，P3 回饋只對表格生效 | 沒有 `data-af-picked` 時把目標元素自己標進 held 群並畫外框 | s3 體檢-1 |
+| 2 | `main.js` 右鍵 `af-pick` | 面板已有表單時再按右鍵，ctx 被**整包蓋成等待態**，草稿沒了、選完也不是換目標；B-5 只在 popup 入口成立 | 已有表單就不動 ctx | s3 體檢-2 |
+| 3 | `picker.js` `renderFromPanelCtx` | 草稿寫回 session → `onChanged` → 面板收到同一份 ctx → **整張表單重畫**，使用者打字時焦點被踢掉 | 以簽章比對，沒變就不重畫 | s3 體檢-3 |
+| 4 | 同上 retarget 分支 | 切分頁回來（文件重載）走 retarget 路徑，拿空白表單當「現有的值」，**草稿丟了** | 剛載入的文件走完整路徑再貼草稿 | s3 體檢-4 |
+| 5 | `main.js` `ENTER_PICK` 帶 tabId | popup 入口沒有等待態，面板是一張空白表單 | 沒有表單時寫等待態 | s3 體檢-5 |
+| 6 | `site.js` `render` | 切到沒有站台設定的分頁時**沿用上一個分頁的 origin**，A 站設定會寫到 B 站 | 重畫前重置狀態 | s3 體檢-6 |
+| 7 | `site.js` `handleSave` | 判斷不出分頁時存出**鍵為空字串的站台** | 停用儲存鈕、存檔擋下 | s3 體檢-7 |
+| 8 | `site.js` 可見時重畫 | 切分頁回來把剛填的密碼與剛選的欄位洗掉 | 分頁沒變就不重畫 | （與 6 同路徑） |
+| 9 | `site.js` 存檔／取消 | 存好不關面板；取消還在呼叫 `window.close()`（面板裡無效） | 走 `CLOSE_PANEL` | s3 體檢-8 |
+| 10 | `popup.js`／`main.js` 退路 | 退路的彈出視窗沒帶 `tabId`，picker 解析到的是彈出視窗自己 → **永遠空白** | 退路網址帶 `tabId=`，picker 直接採用 | s3 體檢-9 |
+| 11 | `fetcher.js` dryRun catch | **失敗時軌跡被丟掉**——正好是 A-10 說最需要軌跡的情境 | 失敗也回 `preActionTrace`，picker 顯示「走到第 N 步」 | s4 體檢 |
+| 12 | `content/main.js`／`fetcher.js` | `timeoutMs` 是字串時兩端各自解讀（一邊 3 秒一邊 20 秒）；派不出事件時靜默回 `ok` | `timeoutMsOf` 一份；拿不到建構子就 throw | s4 體檢 |
+
+**駁回一項**：審查主張「`openPanel` 前有 `await` 就必失效，side panel 從來開不起來」。
+真實瀏覽器驗證（Report 編輯鈕經三個 `await` 後面板以 360px 開啟、無 `panel_fallback` 診斷）證明
+Chrome 的使用者啟動是**時間窗**而非同一個 task；B-0 只證明它**不跨 sendMessage**。維持現狀，
+但 popup 入口未實機驗證，列入待實測。
+
+規約普查：UI 未直接碰 `chrome.storage`、無 `innerHTML`、無色碼字面值、background 無動態 import、
+正式碼無測試替身。最後一個手改 commit（067233b）單獨掃過，乾淨。
+
 ## 體檢交接
 
-- 測試：`npm test` **1815 綠**（上輪基線 1748，本輪 +67），零紅。
+- 測試：`npm test` **1832 綠**（上輪基線 1748，本輪 +84），零紅。
 - 煙霧：`./run_smoke.sh` Chrome 與 Edge **全部通過**。
 - 版本：`0.8.0 → 0.9.0`（manifest 與 package.json 兩處）。
 - 分支：`feature/af-10`，七個 commit（規劃 + 四個作業 + 收官 + 終檢處置）。

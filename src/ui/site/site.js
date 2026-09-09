@@ -66,12 +66,20 @@ async function resolvePanelTab() {
   } catch { return null }
 }
 
+// 面板目前服務的分頁：轉為可見時若沒變就不重畫（重畫會把剛填的密碼與剛選的欄位洗掉）
+let panelTabId = null
+
 export async function render() {
   ensureMessageListener()
+  // 每次重畫都從乾淨狀態起算：切到沒有站台設定的分頁時，
+  // 不重置會沿用上一個分頁的 origin，把 A 站的設定寫到 B 站
+  currentOrigin = ''
+  currentTabId = null
 
   // 先走面板：參數放在 storage.session 的 panel:<tabId>
   if (globalThis.chrome?.sidePanel) {
     const tabId = await resolvePanelTab()
+    panelTabId = tabId
     const ctx = tabId !== null ? await getPanelCtx(tabId) : null
     if (ctx?.kind === 'site') {
       currentOrigin = ctx.origin || ''
@@ -92,6 +100,14 @@ export async function render() {
   const originEl = document.getElementById('origin')
   if (originEl) {
     originEl.textContent = currentOrigin
+  }
+  // 判斷不出目前分頁時不能讓人存：存出去的是鍵為空字串的站台，永遠不會被任何網址命中
+  const saveBtn = document.getElementById('site-save')
+  if (saveBtn) saveBtn.disabled = !currentOrigin
+  const noteEl0 = document.getElementById('site-note')
+  if (!currentOrigin && noteEl0) {
+    noteEl0.style.color = 'var(--danger)'
+    noteEl0.textContent = '無法判斷目前的分頁，請關掉面板後在目標網頁上重新按右鍵「設定此站台登入」'
   }
 
   // 綁定選取按鈕點擊事件（表格驅動）
@@ -141,8 +157,15 @@ export async function render() {
   }
 }
 
-export async function handleSave() {
+export async function handleSave({ closeDelayMs = 1500 } = {}) {
   const noteEl = document.getElementById('site-note')
+  if (!currentOrigin) {
+    if (noteEl) {
+      noteEl.style.color = 'var(--danger)'
+      noteEl.textContent = '無法判斷目前的分頁，沒有存檔'
+    }
+    return
+  }
 
   // 1. 三個選擇器任一個沒有時，顯示缺什麼並不存檔
   const missing = []
@@ -209,17 +232,35 @@ export async function handleSave() {
     noteEl.style.color = 'var(--ok)'
     noteEl.textContent = '已儲存'
   }
+  // 與任務面板同一套：存好之後把面板關掉（連同頁面上保留的標示）
+  if (globalThis.chrome?.sidePanel && panelTabId !== null && typeof setTimeout === 'function') {
+    const tabId = panelTabId
+    setTimeout(() => {
+      try { chrome.runtime.sendMessage({ type: MSG.CLOSE_PANEL, tabId }) } catch {}
+    }, closeDelayMs)
+  }
 }
 
 if (typeof document !== 'undefined' && document.getElementById('site-save') && globalThis.chrome?.runtime?.id) {
   // 面板文件在切換分頁後會被重載，而且載入當下解析得到的分頁可能是舊的：
   // 每次轉為可見都重畫一次（自癒）
   if (globalThis.chrome?.sidePanel) {
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') render()
+    document.addEventListener('visibilitychange', async () => {
+      if (document.visibilityState !== 'visible') return
+      // 分頁沒變就不重畫：使用者切去看一眼別的分頁，回來密碼與剛選的欄位要還在
+      const tabId = await resolvePanelTab()
+      if (tabId !== null && tabId === panelTabId) return
+      render()
     })
   }
   document.getElementById('site-save')?.addEventListener('click', () => handleSave())
-  document.getElementById('site-cancel')?.addEventListener('click', () => window.close())
+  document.getElementById('site-cancel')?.addEventListener('click', () => {
+    // 面板沒有 window.close()：請 background 關它（順便清掉頁面上的標示）
+    if (globalThis.chrome?.sidePanel && panelTabId !== null) {
+      try { chrome.runtime.sendMessage({ type: MSG.CLOSE_PANEL, tabId: panelTabId }) } catch {}
+      return
+    }
+    window.close()
+  })
   render()
 }

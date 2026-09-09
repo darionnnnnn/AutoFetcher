@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import { JSDOM } from 'jsdom'
 import { readFileSync } from 'node:fs'
 import { installChromeMock, resetChromeMock } from './chrome-mock.js'
-import { waitMsOf, preActionLabel, preActionFailure } from '../src/shared/preaction.js'
+import { waitMsOf, timeoutMsOf, preActionLabel, preActionFailure } from '../src/shared/preaction.js'
 
 async function bootContent(html) {
   resetChromeMock()
@@ -244,4 +244,27 @@ test('A-7 選好元素回填時，那一列已經不在畫面上就不寫（否�
   await new Promise(r => setTimeout(r, 5))
   assert.equal(row._locator ?? null, null,
     '寫進已經被丟掉的節點等於什麼都沒發生，使用者會以為選取失敗')
+})
+
+// ---------- 體檢輪 ----------
+
+test('體檢 立即測試失敗時也要帶逐步軌跡（要看得出卡在第幾步）', async () => {
+  const { st, fe } = await bootFetcher()
+  const t = baseTask({
+    preActions: [
+      { type: 'hover', locator: { css: '#m' } },
+      { type: 'waitFor', locator: { css: '#nope' }, timeoutMs: 5 }
+    ]
+  })
+  await st.saveTask(t)
+  const res = await fe.runTask(t, { dryRun: true, reason: 'manual', slot: '2026-09-06T09:00', extraDelayMs: 0, ...FAST })
+  assert.equal(res.ok, false)
+  assert.ok(Array.isArray(res.preActionTrace) && res.preActionTrace.length >= 1,
+    `失敗時丟掉軌跡，使用者就分不出「hover 有做、卡在第 2 步」與「hover 就失敗」，實得 ${JSON.stringify(res)}`)
+})
+
+test('體檢 waitFor 的逾時毫秒是字串（匯入設定檔常見）時，兩端要讀成同一個數', () => {
+  assert.equal(timeoutMsOf({ timeoutMs: '3000' }), 3000)
+  assert.equal(timeoutMsOf({ timeoutMs: 0 }), 20000, '0 不是合法逾時，退回預設')
+  assert.equal(timeoutMsOf({}), 20000)
 })

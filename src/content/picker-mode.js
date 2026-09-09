@@ -2181,8 +2181,18 @@ export function exitPickMode(opts = {}) {
     // 只標「這一輪選的」：已經屬於別的用途的保留標示不得被改群，
     // 否則前置動作送出一次，就會把任務目標那一格也變成 preaction 群，
     // 下一次 preaction 的 Esc 會把它一起抹掉（定案 B-6 要防的正是這件事）
+    let held = 0
     for (const el of document.querySelectorAll('[data-af-picked]:not([data-af-held])')) {
       el.setAttribute('data-af-held', holdPurpose)
+      held++
+    }
+    // 非表格的目標（最常見的單一數字就是這種）沒有 data-af-picked 可以留，
+    // 高亮本來畫在 overlay 上、隨 overlay 一起拆掉——要改標在元素自己身上
+    if (held === 0 && currentTargetEl && currentTargetEl !== document.body &&
+        !isTableMode(currentTargetEl) && !iframeOf(currentTargetEl) &&
+        !currentTargetEl.hasAttribute('data-af-held')) {
+      currentTargetEl.setAttribute('data-af-held', holdPurpose)
+      currentTargetEl.style.outline = `2px solid ${COLORS.primary}`
     }
   }
   if (typeof document !== 'undefined') {

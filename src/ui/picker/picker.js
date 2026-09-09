@@ -2166,6 +2166,12 @@ export async function handleTestNow() {
       if (errorsEl) errorsEl.textContent = err
       if (previewEl) previewEl.textContent = '—'
       setPreviewState('error')
+      // 走到第幾步也要說：調 hover 選單時，「hover 有做、click 沒點到」與「hover 就失敗」是兩種修法
+      const noteEl = document.getElementById('test-note')
+      if (noteEl && Array.isArray(res?.preActionTrace) && res.preActionTrace.length > 0) {
+        const done = res.preActionTrace.filter(step => step.ok).length
+        noteEl.textContent = `前置動作走到第 ${res.preActionTrace.length} 步（前 ${done} 步成功）`
+      }
     }
   } catch (e) {
     const err = e?.message || '找不到目標元素'
@@ -2198,6 +2204,9 @@ function setBusy(id, label) {
 let panelTabId = null
 let panelWindowId = null
 let draftTimer = null
+// 上一次真的畫過的 ctx 簽章：草稿寫回 session 會觸發 onChanged，
+// 面板會再收到同一份 ctx（只多了 draft）——這時不能重畫，使用者正在打字
+let lastPanelSig = null
 
 /**
  * 問 background：這個視窗現在的作用分頁是哪個。
@@ -2218,6 +2227,12 @@ async function resolvePanelTab() {
  * 依 session 裡的 ctx 決定要顯示哪一個畫面。
  */
 export async function renderFromPanelCtx(ctx) {
+  const sig = ctx ? JSON.stringify({ kind: ctx.kind, ctx: ctx.ctx, taskId: ctx.taskId, retarget: ctx.retarget }) : 'null'
+  if (sig === lastPanelSig) return { rendered: false }
+  // 面板文件剛載入（還沒畫過）時，retarget 沒有「現有的表單」可以保留，
+  // 要走完整路徑再把草稿貼回來，不然切分頁回來草稿就丟了
+  const freshDocument = lastPanelSig === null
+  lastPanelSig = sig
   const waiting = document.getElementById('panel-waiting')
   const form = document.getElementById('picker-form') || document.querySelector('.settings-body')
   const kind = ctx?.kind
@@ -2226,30 +2241,33 @@ export async function renderFromPanelCtx(ctx) {
   if (form) form.hidden = kind === 'waiting'
   const footer = document.querySelector('.settings-footer') || document.getElementById('picker-actions')
   if (footer) footer.hidden = kind === 'waiting'
-  if (kind === 'waiting' || !ctx) return
+  if (kind === 'waiting' || !ctx) return { rendered: true }
 
   if (kind === 'edit' && ctx.taskId) {
     const task = await getTask(ctx.taskId)
-    if (!task) return
+    if (!task) return { rendered: false }
     render({ task, locator: task.locator, url: task.url })
     const testNow = document.getElementById('test-now')
     if (testNow) testNow.hidden = true
     await renderDashboardSection(task)
-    return
+    restoreDraft(ctx.draft)
+    return { rendered: true }
   }
 
   if (kind === 'new' && ctx.ctx) {
     // 換目標（面板已經開著、使用者填了一半）：只換目標欄位，
     // 名稱／排程／儀表板／進階留著——右鍵重選一個目標不該把表單清空
-    if (ctx.retarget) {
+    if (ctx.retarget && !freshDocument) {
       applyRetarget(ctx.ctx)
-      return
+      return { rendered: true }
     }
     render(ctx.ctx)
     await renderDashboardSection(ctx.ctx?.task)
     await applyPickerDefaults(ctx.ctx?.task)
     restoreDraft(ctx.draft)
+    return { rendered: true }
   }
+  return { rendered: false }
 }
 
 /**
@@ -2363,8 +2381,11 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
   const params = new URLSearchParams(search || '')
   // side panel：沒有網址參數可用，改由 session 的 ctx 決定畫面
   if (!params.has('taskId') && !params.has('ctx') && globalThis.chrome?.sidePanel) {
+    // 退路的彈出視窗不是面板：它的作用分頁是它自己，解析不到目標分頁。
+    // 開它的人會在網址上寫明「你服務的是哪個分頁」
+    const forcedTab = params.has('tabId') ? Number(params.get('tabId')) : null
     const boot = async () => {
-      const tabId = await resolvePanelTab()
+      const tabId = Number.isFinite(forcedTab) && forcedTab !== null ? forcedTab : await resolvePanelTab()
       if (tabId === null) return
       const changed = tabId !== panelTabId
       panelTabId = tabId

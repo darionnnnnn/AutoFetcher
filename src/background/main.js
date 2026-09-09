@@ -543,6 +543,14 @@ export async function handleMessage(msg, sender) {
     if (msg.type === MSG.ENTER_PICK) {
       if (msg.tabId) {
         const frameId = msg.frameId ?? 0
+        // popup 的「選取要抓的內容」走這裡：面板已由 popup 自己開好，
+        // 但沒有表單時要先顯示等待態（同右鍵入口），否則面板是一張空白表單
+        if (msg.purpose === 'task') {
+          const current = await getPanelCtx(msg.tabId)
+          if (!current || current.kind === 'waiting' || current.kind === 'site') {
+            await setPanelCtx(msg.tabId, { kind: 'waiting', purpose: 'task' })
+          }
+        }
         await injectContent(msg.tabId, { frameId })
         const known = msg.taskId ? await getTask(msg.taskId) : null
         await chrome.tabs.sendMessage(msg.tabId, {
@@ -749,8 +757,13 @@ export async function handleContextMenu(info, tab) {
       const frameId = info.frameId ?? 0
       // 面板先開起來顯示「正在頁面上選取…」，使用者才知道東西在哪裡、也才有地方可以取消。
       // **`open` 要排在最前面**：手勢跨越非同步等待有失效風險
-      await openPanel(tab.id, 'picker')
-      await setPanelCtx(tab.id, { kind: 'waiting', purpose: 'task' })
+      await openPanel(tab.id, 'picker', `tabId=${tab.id}`)
+      // 面板已經有表單（使用者填到一半又回頁面按右鍵）就不動 ctx：
+      // 蓋成等待態會把草稿一起洗掉，選完也認不出這是「換目標」
+      const current = await getPanelCtx(tab.id)
+      if (!current || current.kind === 'waiting' || current.kind === 'site') {
+        await setPanelCtx(tab.id, { kind: 'waiting', purpose: 'task' })
+      }
       await injectContent(tab.id, { frameId })
       await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'task' }, { frameId })
       return

@@ -426,3 +426,158 @@ test('B-12 面板關閉清場也要留診斷', async () => {
   assert.ok(entries.some(e => e.kind === 'panel_closed'),
     '使用者回報「藍框自己不見了」時要查得到是哪一次清場')
 })
+
+// ---------- 體檢輪（Fable 5.1）補件 ----------
+
+test('體檢-1 非表格元素送出後也要保留高亮（最常見的單一數字就是這種）', async () => {
+  const { doc, pm, win } = await bootPicker('<div id="price">1,234</div>' + TABLE)
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.body })
+  move(win, doc.getElementById('price'))
+  click(win, doc.getElementById('price'))
+  key(doc, win, 'Enter')
+  const el = doc.getElementById('price')
+  assert.equal(el.getAttribute('data-af-held'), 'task', '非表格的目標本身要進 held 群')
+  assert.ok(el.style.outline, '要留一個看得見的框，面板旁邊才對得上「我剛剛選的是哪個」')
+  pm.exitPickMode()
+  assert.equal(el.hasAttribute('data-af-held'), false)
+  assert.equal(el.style.outline, '', 'EXIT_PICK 之後外框要還原')
+})
+
+test('體檢-2 面板已有表單時再按右鍵重選，不得把 ctx 蓋成等待態（草稿會跟著沒了）', async () => {
+  const { c, bg } = await freshBg()
+  const tab = await c.tabs.create({ url: 'https://a.test/p' })
+  await bg.handleMessage({
+    type: 'PICKED', purpose: 'task', locator: { css: '#a' }, preview: '1', picks: []
+  }, { tab: { id: tab.id, url: 'https://a.test/p' } })
+  const st = await import('../src/shared/storage.js?t=' + Math.random())
+  await st.mergePanelCtx(tab.id, { draft: { name: '我的電費' } })
+
+  await bg.handleContextMenu({ menuItemId: 'af-pick', frameId: 0 }, tab)
+  await bg.handleMessage({
+    type: 'PICKED', purpose: 'task', locator: { css: '#b' }, preview: '2', picks: []
+  }, { tab: { id: tab.id, url: 'https://a.test/p' } })
+
+  const entry = await sessionOf(tab.id)
+  assert.equal(entry.retarget, true, '右鍵重選是最常走的路，它也必須是「換目標」')
+  assert.equal(entry.draft?.name, '我的電費', `草稿不得被等待態洗掉，實得 ${JSON.stringify(entry)}`)
+})
+
+async function freshPanelPage() {
+  resetChromeMock()
+  installChromeMock()
+  const st = await import('../src/shared/storage.js?t=' + Math.random())
+  await st.init()
+  const html = readFileSync(new URL('../src/ui/picker/picker.html', import.meta.url), 'utf8')
+  const jd = new JSDOM(html, { url: 'chrome-extension://abc/ui/picker/picker.html' })
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  const pk = await import('../src/ui/picker/picker.js?t=' + Math.random())
+  return { pk, doc: jd.window.document }
+}
+const CTX_A = { locator: { css: '#a' }, url: 'https://a.test/p', preview: '1', picks: [] }
+
+test('體檢-3 只有草稿變動時不得整張表單重畫（使用者正在打字，重畫會把焦點踢掉）', async () => {
+  const { pk, doc } = await freshPanelPage()
+  const first = await pk.renderFromPanelCtx({ kind: 'new', ctx: CTX_A })
+  assert.equal(first?.rendered, true, '第一次要畫')
+  doc.getElementById('name').value = '打到一'
+  // 草稿寫回 session 會觸發 onChanged → 面板再收到同一份 ctx（只多了 draft）
+  const again = await pk.renderFromPanelCtx({ kind: 'new', ctx: CTX_A, draft: { name: '打到一' } })
+  assert.equal(again?.rendered, false, '同一份 ctx 不該重畫')
+  assert.equal(doc.getElementById('name').value, '打到一')
+})
+
+test('體檢-4 換目標之後切分頁再回來（面板重載），草稿還要在', async () => {
+  const { pk, doc } = await freshPanelPage()
+  // 面板剛重載：文件是新的，session 裡是 retarget:true + 先前的草稿
+  await pk.renderFromPanelCtx({
+    kind: 'new', retarget: true,
+    ctx: { locator: { css: '#b' }, url: 'https://b.test/q', preview: '2', picks: [] },
+    draft: { name: '我的電費' }
+  })
+  assert.equal(doc.getElementById('name').value, '我的電費',
+    '重載後走換目標分支會拿空白表單當「現有的值」，草稿就丟了')
+})
+
+test('體檢-5 popup 入口也要顯示等待態；面板已有表單時則不動它', async () => {
+  const { c, bg } = await freshBg()
+  const tab = await c.tabs.create({ url: 'https://a.test/p' })
+  await bg.handleMessage({ type: 'ENTER_PICK', purpose: 'task', tabId: tab.id, frameId: 0 }, {})
+  assert.equal((await sessionOf(tab.id))?.kind, 'waiting', '沒有表單時要先給等待態，不能是空白表單')
+
+  await bg.handleMessage({
+    type: 'PICKED', purpose: 'task', locator: { css: '#a' }, preview: '1', picks: []
+  }, { tab: { id: tab.id, url: 'https://a.test/p' } })
+  await bg.handleMessage({ type: 'ENTER_PICK', purpose: 'task', tabId: tab.id, frameId: 0 }, {})
+  assert.equal((await sessionOf(tab.id))?.kind, 'new', '已有表單就不能蓋成等待態')
+})
+
+// ---------- 體檢輪：站台登入面板 ----------
+
+async function freshSitePanel(resolveTab) {
+  resetChromeMock()
+  const c = installChromeMock()
+  const st = await import('../src/shared/storage.js?t=' + Math.random())
+  await st.init()
+  c.__setRuntimeResponder((msg) => msg?.type === 'RESOLVE_PANEL_TAB'
+    ? { ok: true, tabId: resolveTab() }
+    : undefined)
+  const html = readFileSync(new URL('../src/ui/site/site.html', import.meta.url), 'utf8')
+  const jd = new JSDOM(html, { url: 'chrome-extension://abc/ui/site/site.html' })
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  const sp = await import('../src/ui/site/site.js?t=' + Math.random())
+  return { c, st, sp, doc: jd.window.document }
+}
+
+test('體檢-6 站台面板切到沒有站台設定的分頁時，不得沿用上一個分頁的 origin', async () => {
+  let tab = 7
+  const { c, st, sp, doc } = await freshSitePanel(() => tab)
+  await st.setPanelCtx(7, { kind: 'site', origin: 'https://a.test', tabId: 7 })
+  await sp.render()
+  assert.equal(doc.getElementById('origin').textContent, 'https://a.test', '前置：A 站要顯示出來')
+
+  tab = 99 // 切到一個沒有站台設定的分頁
+  await sp.render()
+  assert.equal(doc.getElementById('origin').textContent, '', 'B 分頁沒有站台設定，不能還顯示 A 站')
+  assert.equal(doc.getElementById('site-save').disabled, true, '判斷不出分頁時不能讓人存')
+  void c
+})
+
+test('體檢-7 判斷不出目前分頁時，存檔要被擋下（不得存出鍵為空字串的站台）', async () => {
+  const { st, sp, doc } = await freshSitePanel(() => null)
+  await sp.render()
+  const before = JSON.stringify(await chrome.storage.local.get(null))
+  await sp.handleSave({ closeDelayMs: 0 })
+  const after = JSON.stringify(await chrome.storage.local.get(null))
+  assert.equal(after, before, '空 origin 的站台永遠不會被任何網址命中，存了只是垃圾')
+  assert.match(doc.getElementById('site-note').textContent, /無法判斷/)
+  void st
+})
+
+test('體檢-8 站台面板存好之後要像任務面板一樣關掉（連同頁面標示）', async () => {
+  const { c, st, sp, doc } = await freshSitePanel(() => 7)
+  await st.setPanelCtx(7, { kind: 'site', origin: 'https://a.test', tabId: 7 })
+  await sp.render()
+  const listener = [...c.runtime.onMessage._listeners][0]
+  for (const [purpose, css] of [['login-user', '#u'], ['login-pass', '#p'], ['login-submit', '#go']]) {
+    listener({ type: 'PICKED', purpose, locator: { css } }, {}, () => {})
+  }
+  doc.getElementById('username').value = 'wayne'
+  doc.getElementById('password').value = 'hunter2'
+  doc.getElementById('login-url').value = 'https://a.test/login'
+  doc.getElementById('success-value').value = 'https://a.test/home'
+  await sp.handleSave({ closeDelayMs: 0 })
+  await new Promise(r => setTimeout(r, 10))
+  const closed = api(c, 'runtime.sendMessage').some(x => x.args[0]?.type === 'CLOSE_PANEL' && x.args[0]?.tabId === 7)
+  assert.ok(closed, '存好了面板要關，不然頁面上的標示會一直留著')
+})
+
+test('體檢-9 退路的彈出視窗要被告知服務哪個分頁（popup 與右鍵兩個入口都要帶 tabId）', () => {
+  const popup = readFileSync(new URL('../src/ui/popup/popup.js', import.meta.url), 'utf8')
+  const main = readFileSync(new URL('../src/background/main.js', import.meta.url), 'utf8')
+  const picker = readFileSync(new URL('../src/ui/picker/picker.js', import.meta.url), 'utf8')
+  assert.match(popup, /openPanel\([^)]*`tabId=/, 'popup 退路沒帶 tabId，彈出視窗會是永遠空白的表單')
+  assert.match(main, /openPanel\(tab\.id, 'picker', `tabId=/, '右鍵退路也要帶')
+  assert.match(picker, /params\.has\('tabId'\)/, 'picker 要認得網址上的 tabId 並直接採用')
+})

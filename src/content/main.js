@@ -1,5 +1,5 @@
 import { MSG } from '../shared/messages.js'
-import { waitMsOf, DEFAULT_HOVER_HOLD_MS, DEFAULT_WAIT_TIMEOUT_MS } from '../shared/preaction.js'
+import { waitMsOf, timeoutMsOf, DEFAULT_HOVER_HOLD_MS } from '../shared/preaction.js'
 import { describe, resolve } from '../shared/selector.js'
 import { extractValue, parseNumber } from '../shared/extract.js'
 import { enterPickMode, exitPickMode } from './picker-mode.js'
@@ -124,7 +124,8 @@ function dispatchMouse(el, type, extra = {}) {
   const Ctor = type.startsWith('pointer') && typeof View?.PointerEvent === 'function'
     ? View.PointerEvent
     : (typeof View?.MouseEvent === 'function' ? View.MouseEvent : null)
-  if (!Ctor) return
+  // 拿不到事件建構子就派不出任何事件：要炸出來，不能回 ok 讓 fetcher 記成「hover 有做」
+  if (!Ctor) throw new Error('preaction_no_event_ctor')
   el.dispatchEvent(new Ctor(type, type.startsWith('pointer') ? { ...init, pointerId: 1, pointerType: 'mouse', isPrimary: true } : init))
 }
 
@@ -228,7 +229,7 @@ async function handlePreActions(msg, sendResponse) {
         }
         if (!hit()) {
           await new Promise((resolvePromise, rejectPromise) => {
-            const timeout = typeof action.timeoutMs === 'number' ? action.timeoutMs : DEFAULT_WAIT_TIMEOUT_MS
+            const timeout = timeoutMsOf(action)
             let timer = null
             let observer = null
 

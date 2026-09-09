@@ -59,3 +59,14 @@ export function preActionFailure(index, action, code) {
   if (code === 'frame_not_found') return `${step}找不到元素所在的框架`
   return `${step}失敗：${code || '未知錯誤'}`
 }
+
+/**
+ * `waitFor` 要等幾毫秒才算逾時。字串（匯入的設定檔常見）也要吃得下，
+ * 否則 background 與 content 各自解讀，一邊 3 秒、一邊 20 秒。
+ * @param {{timeoutMs?: number|string}} action 動作
+ * @returns {number} 毫秒數
+ */
+export function timeoutMsOf(action) {
+  const n = Number(action?.timeoutMs)
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_WAIT_TIMEOUT_MS
+}
