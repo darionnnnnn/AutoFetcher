@@ -16,7 +16,7 @@ test('manifest 是 MV3 且有必要欄位', () => {
 })
 
 test('manifest 權限剛好是 SPEC §9 那組,沒有多的', () => {
-  const want = ['alarms', 'contextMenus', 'downloads', 'notifications', 'scripting', 'storage', 'tabs', 'unlimitedStorage']
+  const want = ['alarms', 'contextMenus', 'downloads', 'notifications', 'scripting', 'sidePanel', 'storage', 'tabs', 'unlimitedStorage']
   assert.deepEqual([...manifest.permissions].sort(), want)
   assert.deepEqual(manifest.host_permissions, ['<all_urls>'])
 })
@@ -26,7 +26,9 @@ test('manifest 有 options_page 指向報表頁（chrome://extensions 可開啟�
 })
 
 test('manifest 不得使用 Chrome 專屬 API(Edge 相容,SPEC §13)', () => {
-  const banned = ['sidePanel', 'offscreen', 'declarativeNetRequest', 'ttsEngine', 'identity']
+  // AF-10 把 sidePanel 從封鎖清單移除：Microsoft 官方 API 支援表列它為 MV3 支援
+  // （Windows/Linux/Mac），Edge 另有 sidebar 開發指南。原本的封鎖是過時的預防措施。
+  const banned = ['offscreen', 'declarativeNetRequest', 'ttsEngine', 'identity']
   const text = JSON.stringify(manifest)
   for (const b of banned) assert.ok(!text.includes(b), `manifest 不該出現 ${b}`)
 })

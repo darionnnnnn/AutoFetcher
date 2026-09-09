@@ -360,9 +360,8 @@ test('A-6 PICKED{picks:[{cell}]} 一路走到 Picker 的 buildSpec', async () =>
     }, { tab: { id: 3, url: 'https://x.example/' } }, resolve)
     if (ret !== true) reject(new Error('onMessage 必須回傳 true'))
   })
-  const created = c.__calls.find(x => x.api === 'windows.create')
-  const url = created.args[0].url
-  const ctx = JSON.parse(decodeURIComponent(url.split('?ctx=')[1]))
+  // AF-10：設定畫面是 side panel，ctx 走 storage.session（網址參數在面板重載時會被丟掉）
+  const ctx = (await chrome.storage.session.get('panel:3'))['panel:3'].ctx
   assert.deepEqual(ctx.picks, [{ cell: CELL }], 'background 不得丟掉單格')
 
   const jd = new JSDOM(PICKER_HTML)

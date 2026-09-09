@@ -28,6 +28,7 @@
     "downloads",
     "notifications",
     "scripting",
+    "sidePanel",
     "storage",
     "tabs",
     "unlimitedStorage"
@@ -46,5 +47,8 @@
       ]
     }
   ],
+  "side_panel": {
+    "default_path": "ui/picker/picker.html"
+  },
   "options_page": "ui/report/report.html"
 }

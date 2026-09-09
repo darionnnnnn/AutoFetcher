@@ -532,13 +532,72 @@ function shouldNotify(changes) {
   return false
 }
 
-export function subscribe(handler) {
+// ---- 面板（side panel）的暫存 ctx：AF-10 作業 B ----
+// 為什麼不走網址參數：B-0 實測面板重載時 Chrome 用 `default_path` 重新載入，
+// `?ctx=` 之類的查詢字串會被丟掉。改放 `storage.session`（分頁關掉就沒了，正好）。
+const PANEL_PREFIX = 'panel:'
+
+/**
+ * 讀某個分頁的面板 ctx。
+ * @param {number} tabId 分頁 id
+ * @returns {Promise<object|null>}
+ */
+export async function getPanelCtx(tabId) {
+  if (tabId === undefined || tabId === null) return null
+  const key = PANEL_PREFIX + tabId
+  const res = await chrome.storage.session.get(key)
+  return res?.[key] ?? null
+}
+
+/**
+ * 寫某個分頁的面板 ctx（整包取代）。
+ * @param {number} tabId 分頁 id
+ * @param {object} ctx 內容
+ */
+export async function setPanelCtx(tabId, ctx) {
+  if (tabId === undefined || tabId === null) return
+  await chrome.storage.session.set({ [PANEL_PREFIX + tabId]: ctx })
+}
+
+/**
+ * 併入某個分頁的面板 ctx（只換給的那幾個鍵）。
+ * 使用者可能已經在面板上填了一半的表單，整包覆蓋會把他打的字洗掉。
+ * @param {number} tabId 分頁 id
+ * @param {object} patch 要換的欄位
+ */
+export async function mergePanelCtx(tabId, patch) {
+  const current = (await getPanelCtx(tabId)) || {}
+  await setPanelCtx(tabId, { ...current, ...patch })
+}
+
+/**
+ * 清掉某個分頁的面板 ctx（面板關閉或分頁關閉時）。
+ * @param {number} tabId 分頁 id
+ */
+export async function clearPanelCtx(tabId) {
+  if (tabId === undefined || tabId === null) return
+  await chrome.storage.session.remove(PANEL_PREFIX + tabId)
+}
+
+export function subscribe(handler, opts = {}) {
   if (typeof handler !== 'function') {
     return () => {}
   }
   const onChanged = (typeof chrome !== 'undefined' && chrome.storage) ? chrome.storage.onChanged : null
   if (!onChanged || typeof onChanged.addListener !== 'function') {
     return () => {}
+  }
+  // 面板要監看的是 session（它的 ctx 放那裡），別的畫面看 local；
+  // 各自再寫一份 onChanged 監聽會違反「UI 監看資料變動的唯一入口」
+  if (opts.area === 'session') {
+    const onSession = (changes, areaName) => {
+      if (areaName !== 'session') return
+      handler(changes)
+    }
+    onChanged.addListener(onSession)
+    return () => {
+      if (typeof onChanged.removeListener === 'function') onChanged.removeListener(onSession)
+    }
   }
   if (!isListening) {
     onChanged.addListener((changes, areaName) => {

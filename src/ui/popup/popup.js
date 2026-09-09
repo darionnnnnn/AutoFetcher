@@ -1,5 +1,6 @@
 // AutoFetcher 工具列 popup 控制器 (SPEC §12.2)
 import { getTasks, saveTask, getHealthMap, getMissedList, getLastValues } from '../../shared/storage.js'
+import { openPanel } from '../../shared/panel.js'
 import { MSG } from '../../shared/messages.js'
 import { seriesIdOf } from '../../shared/series-index.js'
 import { computeHealth } from '../../background/health.js'
@@ -200,6 +201,9 @@ export function render(ctx) {
           if (pickNote) pickNote.textContent = '這個頁面無法選取，請切換到一般網頁再試'
           return
         }
+        // 面板要在**這個點擊**裡開：手勢不跨 sendMessage，
+        // 轉給 background 代開一定會被 Chrome 擋下（B-0 實測）
+        await openPanel(tab.id, 'picker')
         await chrome.runtime.sendMessage({
           type: MSG.ENTER_PICK,
           purpose: 'task',

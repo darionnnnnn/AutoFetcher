@@ -114,6 +114,12 @@ function buildChromeMock() {
   const tabsMap = new Map()
 
   const onMessage = createEvent()
+  const sidePanelOnClosed = createEvent()
+  const panelOptions = new Map()
+  const openPanels = new Set()
+  let panelOpenShouldThrow = false
+  let currentWindowId = 900
+  let currentTab = null
   const onStartup = createEvent()
   const onInstalled = createEvent()
 
@@ -179,6 +185,8 @@ function buildChromeMock() {
           active: props.active !== undefined ? props.active : true,
           status: defaultTabStatus,
           discarded: false,
+          // 真實 Chrome 的分頁一定屬於某個視窗；面板要靠 windowId 才問得到自己在哪個分頁
+          windowId: currentWindowId,
           ...props
         }
         tabsMap.set(tab.id, tab)
@@ -186,11 +194,16 @@ function buildChromeMock() {
         if (typeof mock.__onTabCreated === 'function') mock.__onTabCreated(tab)
         return tab
       },
+      async getCurrent() {
+        recordCall('tabs.getCurrent', [])
+        return currentTab
+      },
       async query(queryInfo = {}) {
         recordCall('tabs.query', [queryInfo])
         return Array.from(tabsMap.values()).filter((t) => {
           if (queryInfo.url !== undefined && t.url !== queryInfo.url) return false
           if (queryInfo.active !== undefined && t.active !== queryInfo.active) return false
+          if (queryInfo.windowId !== undefined && t.windowId !== queryInfo.windowId) return false
           return true
         })
       },
@@ -322,7 +335,33 @@ function buildChromeMock() {
       }
     },
 
+    sidePanel: {
+      async setOptions(options = {}) {
+        recordCall('sidePanel.setOptions', [options])
+        const key = options.tabId ?? '__global'
+        panelOptions.set(key, { ...(panelOptions.get(key) || {}), ...options })
+      },
+      async getOptions(options = {}) {
+        recordCall('sidePanel.getOptions', [options])
+        return panelOptions.get(options.tabId ?? '__global') || {}
+      },
+      async open(options = {}) {
+        recordCall('sidePanel.open', [options])
+        if (panelOpenShouldThrow) throw new Error('`sidePanel.open()` may only be called in response to a user gesture.')
+        openPanels.add(options.tabId ?? options.windowId ?? '__global')
+      },
+      async close(options = {}) {
+        recordCall('sidePanel.close', [options])
+        openPanels.delete(options.tabId ?? options.windowId ?? '__global')
+      },
+      onClosed: sidePanelOnClosed
+    },
+
     windows: {
+      async getCurrent(queryOptions) {
+        recordCall('windows.getCurrent', [queryOptions])
+        return { id: currentWindowId }
+      },
       async create(createData = {}) {
         recordCall('windows.create', [createData])
         const win = { id: nextWindowId++, ...createData }
@@ -406,6 +445,23 @@ function buildChromeMock() {
     __setTabResponder(fn) {
       tabResponder = fn
     },
+    // side panel 的測試輔助：模擬「手勢不成立」與查詢面板狀態
+    __setPanelOpenThrows(v) {
+      panelOpenShouldThrow = Boolean(v)
+    },
+    __openPanels() {
+      return Array.from(openPanels)
+    },
+    __setCurrentWindowId(id) {
+      currentWindowId = id
+    },
+    __setCurrentTab(tab) {
+      currentTab = tab
+    },
+    __emitPanelClosed(info) {
+      openPanels.delete(info?.tabId ?? '__global')
+      for (const fn of sidePanelOnClosed._listeners) fn(info)
+    },
     __setRuntimeResponder(fn) {
       runtimeResponder = fn
     },
@@ -432,6 +488,12 @@ function buildChromeMock() {
       scriptResponder = () => []
       localStorage._reset()
       sessionStorage._reset()
+      sidePanelOnClosed._reset()
+      panelOptions.clear()
+      openPanels.clear()
+      panelOpenShouldThrow = false
+      currentWindowId = 900
+      currentTab = null
       storageOnChanged._reset()
       alarmsMap.clear()
       onAlarm._reset()

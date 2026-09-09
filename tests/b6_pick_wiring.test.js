@@ -76,14 +76,16 @@ test('purpose=task:選完才開 Picker 視窗,且帶上 locator 與區塊資訊'
     blockInfo: { kind: 'table', axis: 'col', index: 1, headerText: '數量' }
   }, { tab: { id: 7, url: 'https://a.test/p' } })
 
-  const win = c.__calls.find(x => x.api === 'windows.create')
-  assert.ok(win, '必須開 Picker 視窗')
-  const url = win.args[0].url
-  const ctx = JSON.parse(decodeURIComponent(url.split('ctx=')[1]))
-  assert.equal(ctx.locator.css, '#v')
-  assert.equal(ctx.previewValue, 1234)
-  assert.equal(ctx.blockInfo.headerText, '數量')
-  assert.equal(ctx.url, 'https://a.test/p', '目標網址取自送訊息的那個分頁')
+  // AF-10：設定畫面改成 side panel，ctx 走 storage.session
+  // （面板重載時網址參數會被 Chrome 丟掉，見 AF-10-PLAN 的 B-0 #10）
+  const stored = await chrome.storage.session.get('panel:7')
+  const entry = stored['panel:7']
+  assert.ok(entry, '必須把 ctx 寫進 session 給面板讀')
+  assert.equal(entry.kind, 'new')
+  assert.equal(entry.ctx.locator.css, '#v')
+  assert.equal(entry.ctx.previewValue, 1234)
+  assert.equal(entry.ctx.blockInfo.headerText, '數量')
+  assert.equal(entry.ctx.url, 'https://a.test/p', '目標網址取自送訊息的那個分頁')
 })
 
 test('purpose=repick:直接更新任務的 locator,不開視窗', async () => {

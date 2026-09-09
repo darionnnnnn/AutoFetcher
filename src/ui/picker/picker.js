@@ -1,4 +1,5 @@
-import { saveTask, getTask, getSettings, saveSettings } from '../../shared/storage.js'
+import { saveTask, getTask, getSettings, saveSettings, getPanelCtx, mergePanelCtx, subscribe
+} from '../../shared/storage.js'
 import { DEFAULT_HOVER_HOLD_MS, DEFAULT_WAIT_TIMEOUT_MS } from '../../shared/preaction.js'
 import { MSG } from '../../shared/messages.js'
 import { getLayout, addCard } from '../../shared/layout-store.js'
@@ -2179,6 +2180,117 @@ function setBusy(id, label) {
   }
 }
 
+// ---- side panel 啟動流程（AF-10 作業 B）----
+// 面板無法自己判斷屬於哪個分頁：`sender.tab` 永遠是 null、網址參數重載後被丟掉、
+// 載入當下查 active tab 會在切換競態拿到舊分頁（B-0 #11、#12）。
+// 唯一穩的是 windowId（#14），而且要在**轉為可見時**才解析（#13）。
+let panelTabId = null
+let panelWindowId = null
+let draftTimer = null
+
+/**
+ * 問 background：這個視窗現在的作用分頁是哪個。
+ * @returns {Promise<number|null>}
+ */
+async function resolvePanelTab() {
+  if (panelWindowId === null) {
+    try { panelWindowId = (await chrome.windows.getCurrent())?.id ?? null } catch { panelWindowId = null }
+  }
+  if (panelWindowId === null) return null
+  try {
+    const res = await chrome.runtime.sendMessage({ type: MSG.RESOLVE_PANEL_TAB, windowId: panelWindowId })
+    return res?.tabId ?? null
+  } catch { return null }
+}
+
+/**
+ * 依 session 裡的 ctx 決定要顯示哪一個畫面。
+ */
+export async function renderFromPanelCtx(ctx) {
+  const waiting = document.getElementById('panel-waiting')
+  const form = document.getElementById('picker-form') || document.querySelector('.settings-body')
+  const kind = ctx?.kind
+  if (waiting) waiting.hidden = kind !== 'waiting'
+  // 等待態時把表單藏起來：面板一開就看到一整頁空欄位，使用者不知道自己該做什麼
+  if (form) form.hidden = kind === 'waiting'
+  const footer = document.querySelector('.settings-footer') || document.getElementById('picker-actions')
+  if (footer) footer.hidden = kind === 'waiting'
+  if (kind === 'waiting' || !ctx) return
+
+  if (kind === 'edit' && ctx.taskId) {
+    const task = await getTask(ctx.taskId)
+    if (!task) return
+    render({ task, locator: task.locator, url: task.url })
+    const testNow = document.getElementById('test-now')
+    if (testNow) testNow.hidden = true
+    await renderDashboardSection(task)
+    return
+  }
+
+  if (kind === 'new' && ctx.ctx) {
+    // 換目標（面板已經開著、使用者填了一半）：只換目標欄位，
+    // 名稱／排程／儀表板／進階留著——右鍵重選一個目標不該把表單清空
+    if (ctx.retarget) {
+      applyRetarget(ctx.ctx)
+      return
+    }
+    render(ctx.ctx)
+    await renderDashboardSection(ctx.ctx?.task)
+    await applyPickerDefaults(ctx.ctx?.task)
+    restoreDraft(ctx.draft)
+  }
+}
+
+/**
+ * 只換目標，保留使用者已經填的其他設定。
+ */
+function applyRetarget(payload) {
+  const keep = collectValues()
+  render(payload)
+  // 名稱只在使用者沒動過時才跟著換（動過就尊重他打的）
+  const nameEl = document.getElementById('name')
+  if (nameEl && keep.name && nameEl._afAutoName !== keep.name) nameEl.value = keep.name
+  restoreDraft(keep, { skipTarget: true })
+  const note = document.getElementById('retarget-note')
+  if (note) {
+    note.hidden = false
+    note.textContent = '已換成新的目標，其他設定都留著。'
+  }
+}
+
+/**
+ * 草稿還原：面板文件在切換分頁後會被重載（B-0 #5 實測），
+ * 沒有這一段，使用者切去看一眼別的分頁回來就發現表單被清空了。
+ */
+function restoreDraft(draft, opts = {}) {
+  if (!draft || typeof draft !== 'object') return
+  for (const [id, value] of Object.entries(draft)) {
+    if (opts.skipTarget && (id === 'url' || id === 'mode')) continue
+    const el = document.getElementById(id)
+    if (!el) continue
+    if (el.type === 'checkbox') el.checked = Boolean(value)
+    else if (value !== undefined && value !== null) el.value = String(value)
+  }
+}
+
+/**
+ * 表單值變動就寫回草稿（節流）。
+ */
+function scheduleDraftSave() {
+  if (panelTabId === null) return
+  if (draftTimer) clearTimeout(draftTimer)
+  draftTimer = setTimeout(async () => {
+    draftTimer = null
+    const draft = {}
+    for (const id of ['name', 'url', 'mode', 'schedule-type', 'interval-value', 'interval-unit']) {
+      const el = document.getElementById(id)
+      if (!el) continue
+      draft[id] = el.type === 'checkbox' ? el.checked : el.value
+    }
+    try { await mergePanelCtx(panelTabId, { draft }) } catch {}
+  }, 300)
+}
+
 export async function initFromQuery(search) {
   const params = new URLSearchParams(search || '')
   const taskId = params.get('taskId')
@@ -2203,7 +2315,34 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
 
   const search = typeof window !== 'undefined' ? window.location?.search : ''
   const params = new URLSearchParams(search || '')
-  if (params.has('taskId')) {
+  // side panel：沒有網址參數可用，改由 session 的 ctx 決定畫面
+  if (!params.has('taskId') && !params.has('ctx') && globalThis.chrome?.sidePanel) {
+    const boot = async () => {
+      const tabId = await resolvePanelTab()
+      if (tabId === null) return
+      const changed = tabId !== panelTabId
+      panelTabId = tabId
+      const ctx = await getPanelCtx(tabId)
+      if (changed || ctx) await renderFromPanelCtx(ctx)
+    }
+    // 載入當下就解析會拿到切換前的舊分頁；轉為可見時再解析才正確，
+    // 而且每次轉為可見都重解析一次（自癒）
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') boot()
+    })
+    if (document.visibilityState === 'visible') boot()
+    // ctx 變了（例如使用者在頁面上選好了目標）就重畫
+    subscribe(() => { boot() }, { area: 'session' })
+    // 面板被關掉：把頁面上保留的標示清乾淨
+    window.addEventListener('pagehide', () => {
+      try { chrome.runtime.sendMessage({ type: MSG.PANEL_CLOSING, tabId: panelTabId }) } catch {}
+    })
+    document.addEventListener('input', scheduleDraftSave, true)
+    document.addEventListener('change', scheduleDraftSave, true)
+    document.getElementById('panel-cancel-pick')?.addEventListener('click', () => {
+      try { chrome.runtime.sendMessage({ type: MSG.CLOSE_PANEL, tabId: panelTabId }) } catch {}
+    })
+  } else if (params.has('taskId')) {
     initFromQuery(search).then(() => {
       renderDashboardSection(currentCtx?.task)
     })

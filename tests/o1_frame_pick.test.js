@@ -41,10 +41,10 @@ function sendTo(c, msg, sender = {}) {
 
 const injections = (c) => c.__calls.filter((x) => x.api === 'scripting.executeScript').map((x) => x.args[0])
 const sent = (c) => c.__calls.filter((x) => x.api === 'tabs.sendMessage').map((x) => x.args)
-const ctxOf = (c) => {
-  const created = c.__calls.find((x) => x.api === 'windows.create')
-  const url = created?.args?.[0]?.url || ''
-  return JSON.parse(decodeURIComponent(url.split('?ctx=')[1] || '%7B%7D'))
+// AF-10：ctx 走 storage.session（面板重載時網址參數會被丟掉）
+const ctxOf = async (c, tabId = 3) => {
+  const stored = await chrome.storage.session.get(`panel:${tabId}`)
+  return stored[`panel:${tabId}`]?.ctx || {}
 }
 
 const LOCATOR = { css: '#v', path: 'body > div:nth-of-type(1)', anchor: null, xpath: '/html[1]/body[1]/div[1]' }
@@ -120,7 +120,7 @@ test('在 iframe 內選好的目標，frame 身分要一路傳到 Picker', async
   await sendTo(c, {
     type: 'PICKED', purpose: 'task', locator: { css: '#rate' }, preview: '31.2'
   }, { tab: { id: 3, url: 'https://a.test/p' }, frameId: 7, url: 'https://b.example/widget.html?token=abc' })
-  const ctx = ctxOf(c)
+  const ctx = await ctxOf(c)
   assert.equal(ctx.frameId, 7)
   assert.equal(ctx.frameUrl, 'https://b.example/widget.html?token=abc', 'frameUrl 要取 sender.url（frame 自己的網址），不是分頁網址')
   assert.equal(ctx.url, 'https://a.test/p', '任務網址仍是分頁的網址')
@@ -131,7 +131,7 @@ test('目標在最上層時不得留下 frame 欄位（舊任務零遷移的前�
   await sendTo(c, {
     type: 'PICKED', purpose: 'task', locator: { css: '#v' }, preview: '1'
   }, { tab: { id: 3, url: 'https://a.test/p' }, frameId: 0, url: 'https://a.test/p' })
-  const ctx = ctxOf(c)
+  const ctx = await ctxOf(c)
   assert.equal('frameId' in ctx, false, 'top 不得帶 frameId')
   assert.equal('frameUrl' in ctx, false, 'top 不得帶 frameUrl')
 })

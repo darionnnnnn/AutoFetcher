@@ -56,6 +56,14 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **frame 定位只有一份**:`background/frames.js`(`listFrames` / `matchFrameByUrl` / `locateFrame`,
   以及「同一個目標頁」的判定 `sameOriginPath`——立即測試核對分頁網址也用它,不得各比一次);
   任務存的是 `frame: { url }`,**`frameId` 存不得**(每次載入都不同),見 SPEC §3。
+- **side panel 的唯一入口**:`shared/panel.js` 的 `openPanel(tabId, kind)`(含舊版退路與診斷)。
+  **`sidePanel.open()` 的手勢不跨 `sendMessage`**——每個入口都要在自己的點擊／右鍵處理裡呼叫,
+  不得轉給 background 代開;面板的參數一律走 `storage.session` 的 `panel:<tabId>`,
+  **`setOptions.path` 不得帶查詢字串**(面板重載時會被丟掉)。
+- **面板不能自己判斷屬於哪個分頁**:`sender.tab` 永遠是 null、載入當下查作用分頁會拿到切換前的舊分頁。
+  只能取 `windows.getCurrent().id`,在 `visibilitychange` 轉為可見時問 background(`RESOLVE_PANEL_TAB`)。
+- **`held` 標示(送出後留在頁面上的藍框)有兩個出口**:面板關閉(`EXIT_PICK`)與下一輪同用途的 `ENTER_PICK`;
+  按用途分群(`data-af-held`),取消／`Esc` 只清自己那一群。
 - **health 一律經 `background/health.js` 的 `setTaskHealth` 寫**(fetcher / precheck / sitecheck 三個呼叫端);
   抓取結果 → 狀態的算法只有 `fetcher.js` 的 `healthFromRecords` 那一份。
 
@@ -68,7 +76,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1748 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1807 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。

@@ -16,6 +16,23 @@
       flex-direction: column;
     }
     form { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    #panel-waiting {
+      padding: 16px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: flex-start;
+    }
+    #panel-waiting-title { font-weight: 600; }
+    #panel-waiting-desc { color: var(--text-muted); font-size: var(--text-sm, 13px); line-height: 1.5; }
+    #retarget-note {
+      margin: 8px 12px 0;
+      padding: 6px 8px;
+      border-radius: 4px;
+      background: var(--surface-2, var(--surface));
+      color: var(--text-muted);
+      font-size: var(--text-sm, 13px);
+    }
     .settings-body {
       flex: 1;
       overflow-y: auto;
@@ -299,6 +316,12 @@
       <div id="summary-dashboard"></div>
     </div>
   </div>
+  <div id="panel-waiting" role="status" hidden>
+    <div id="panel-waiting-title">正在頁面上選取…</div>
+    <div id="panel-waiting-desc">把滑鼠移到要抓的內容上，點一下選取；好了按頁面右下角的「完成」。</div>
+    <button type="button" id="panel-cancel-pick">取消選取</button>
+  </div>
+  <div id="retarget-note" role="status" hidden></div>
   <form id="picker-form" onsubmit="return false;">
     <div class="settings-body">
       <fieldset id="block-section" hidden>

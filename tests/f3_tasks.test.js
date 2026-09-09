@@ -122,14 +122,17 @@ test('立即抓取送出 RUN_TASK 訊息', async () => {
   assert.ok(sent.some(m => m.type === 'RUN_TASK' && m.taskId === 'a'))
 })
 
-test('編輯開啟 Picker 並帶 taskId 參數', async () => {
+test('編輯在 side panel 開啟，任務 id 走 session（AF-10：與新增同一個載體）', async () => {
   const { ts, c, doc } = await fresh()
+  c.__setCurrentTab({ id: 42, url: 'chrome-extension://abc/ui/report/report.html' })
   ts.renderTasks([task('a')], {}, [])
   doc.querySelector('[data-task-id="a"] [data-action="edit"]').click()
-  await new Promise(r => setTimeout(r, 10))
-  const opened = c.__calls.filter(x => x.api === 'tabs.create' || x.api === 'windows.create')
-  const urls = JSON.stringify(opened)
-  assert.ok(urls.includes('taskId=a'), `應以 ?taskId=a 開啟 picker，實得 ${urls}`)
+  await new Promise(r => setTimeout(r, 20))
+  const opened = c.__calls.find(x => x.api === 'sidePanel.open')
+  assert.ok(opened, `編輯要開面板，實得 ${JSON.stringify(c.__calls.map(x => x.api))}`)
+  const entries = await chrome.storage.session.get(null)
+  const found = Object.values(entries).find(v => v?.kind === 'edit' && v?.taskId === 'a')
+  assert.ok(found, `要把 taskId 寫進 session（網址參數在面板重載時會被丟掉），實得 ${JSON.stringify(entries)}`)
 })
 
 test('複製任務寫入 storage 且不自動啟用', async () => {

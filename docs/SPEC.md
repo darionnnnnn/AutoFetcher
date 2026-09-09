@@ -223,8 +223,40 @@
 - 選到表格類元素時,content 一併算出 **`nameHint`**(表格的 `<caption>` → 目標之前最近的
   `h1`~`h6` → 頁面 `title`,截 60 字)帶進 `PICKED`,Picker 拿它當任務名稱的預設值;
   非表格不帶,由 Picker 退回文字錨定或預覽前 20 字。
+- **設定畫面是側邊面板(`chrome.sidePanel`),不是彈出視窗**(AF-10 推翻先前的 `windows.create`):
+  面板停在目標分頁旁邊,永遠看得見、不會被別的視窗蓋住(MV3 沒有 `alwaysOnTop`),
+  而且頁面上的高亮與設定畫面可以同時在眼前。新增、編輯、站台登入**三條走同一個載體**
+  (以前編輯是另開一個普通分頁,「保持在最上層」對分頁根本不適用)。
+  - **`sidePanel.open()` 只能在使用者手勢裡呼叫,而且手勢不跨 `sendMessage`**
+    (實測錯誤訊息 `may only be called in response to a user gesture`):
+    四個入口(右鍵兩項、popup 的選取鈕、任務頁的編輯鈕)各自在**自己的**處理函式裡呼叫,
+    **不得轉給 background 代開**。唯一入口是 `shared/panel.js` 的 `openPanel(tabId, kind)`。
+  - **參數一律走 `storage.session` 的 `panel:<tabId>`**,`setOptions.path` **不得帶查詢字串**:
+    面板重載時 Chrome 用 `default_path` 重新載入,`?ctx=`／`?taskId=`／`?origin=` 全部會被丟掉(實測)。
+    形狀是 `{ kind: 'waiting'|'new'|'edit'|'site', ctx?, taskId?, origin?, draft?, retarget? }`。
+  - **面板判斷自己屬於哪個分頁**:`sender.tab` 永遠是 `null`、載入當下查作用分頁會在切換競態中
+    拿到**切換前的舊分頁**(兩者皆實測)。可靠的做法只有一條:取 `windows.getCurrent().id`(跨重載穩定),
+    **在轉為可見時**(`visibilitychange`,不是載入時)送 `RESOLVE_PANEL_TAB{windowId}` 問 background,
+    而且每次轉為可見都重解析一次(自癒)。
+  - **切走再切回會重載面板文件**(實測),所以表單值要寫進 `panel:<tabId>.draft` 並在重載時還原——
+    沒有這一段,使用者切去看一眼別的分頁,回來就發現表單被清空了。
+  - **面板已經有表單時再選一次目標＝換目標,不重置**:只換 `locator`/`picks`/`blockInfo`/`preview`/`nameHint`,
+    名稱、排程、儀表板、進階設定全部留著,面板提示「已換成新的目標」。
+  - **面板關閉＝清場**,三條通道全部收斂到 `closePanelFor(tabId)`(冪等):
+    `sidePanel.onClosed`(實測切分頁不會誤觸發)、面板自己的 `pagehide`、`tabs.onRemoved`。
+    **不可用 `runtime.connect` 的斷線當訊號**——分頁切換與 service worker 重啟都會斷,
+    會把還開著的面板誤判成已關閉。儲存後自動關面板用 `sidePanel.close({tabId})`。
+  - **舊版瀏覽器(或手勢不成立)退回原本的彈出視窗**,並記一筆 `panel_fallback` 診斷:
+    使用者看到的是「右鍵沒反應」,沒有紀錄就查不出原因。
+- **送出後頁面上的標示要留著,直到面板關閉**(`data-af-held="<purpose>"`):
+  設定畫面就開在旁邊,使用者要看得到自己剛剛選的是哪一格。
+  進入 `held` 時工具列、面板、事件攔截、`userSelect`/`cursor` 覆寫全部拆掉,頁面要能正常操作。
+  **標示按用途分群**:取消／`Esc`／下一輪 `ENTER_PICK` 只清**同一個用途**的
+  (前置動作選到一半反悔,不該把任務目標的藍框一起抹掉);`EXIT_PICK` 清全部。
+  `repick` 送出後不留標示(存檔就結束,沒有面板要看)。
 - 確認後 content 送 `PICKED` 給 background,由它決定去處(`purpose`):
-  `task` 開 Picker 設定視窗、`repick` 直接更新既有任務的 locator、
+  `task` 把 ctx 寫進面板的 session、`repick` 直接更新既有任務的 locator
+  (並重建排程、更新燈號、收掉為了重選而開的那個分頁)、
   `login-*` 轉發給站台登入設定視窗、`preaction` 轉發給 Picker 的前置動作那一列。
   **同一套狀態機,只有確認後的去向不同。**
 - overlay 的樣式以 `element.style` 逐項設定(頁面 CSS 會污染 class),
@@ -832,7 +864,7 @@ iframe 可能是「先點按鈕才出現」,所以 1、2 層是**輪詢**等待(
 
 ## §9 權限(manifest)
 
-`contextMenus`, `alarms`, `storage`, `unlimitedStorage`, `tabs`, `scripting`, `notifications`, `downloads`,
+`contextMenus`, `alarms`, `storage`, `unlimitedStorage`, `tabs`, `scripting`、`sidePanel`(設定面板), `notifications`, `downloads`,
 `host_permissions: ["<all_urls>"]`(或改為 `optional_host_permissions` 於首次設定任務時逐站授權,見 BACKLOG)。
 `downloads` 為 JSON 匯出所需;`notifications` 為失敗/告警/補抓詢問所需;
 `unlimitedStorage` 讓歷史紀錄不受 `storage.local` 預設 10MB 上限限制(保留天數預設 365 天很容易超過)。
@@ -934,7 +966,9 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
 ## §13 瀏覽器相容(Chrome + Edge)
 
 - Edge 為 Chromium 核心,`chrome.*` 命名空間與 MV3 API 相同;**同一份程式碼、同一個 manifest**,不分版本。
-- 只用 §9 列出的 API,不用 Chrome 專屬或實驗性 API(`sidePanel`、`offscreen`、`declarativeNetRequest` 等一律不引入)。
+- 只用 §9 列出的 API,不用 Chrome 專屬或實驗性 API(`offscreen`、`declarativeNetRequest` 等一律不引入)。
+  **`sidePanel` 是例外且已引入**(AF-10):Edge 官方 API 支援表列它為 MV3 支援,不是 Chrome 專屬;
+  沒有它的舊版仍有彈出視窗的退路。
 - Edge 特有行為與對策:
 
 | Edge 機制 | 影響 | 對策 |
@@ -944,6 +978,8 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
 | 啟動加速(Startup boost)/ 關閉視窗後仍在背景執行 | 無視窗狀態更常見 | §4.1「沒有任何視窗」對策 |
 | `edge://extensions` 載入未封裝 | 路徑不同 | README 兩個瀏覽器的安裝步驟都寫 |
 | Edge Add-ons 商店獨立審核 | 上架要分別送 | BACKLOG |
+| `chrome.sidePanel` | Edge 官方 API 支援表列為 MV3 支援(Windows/Linux/Mac),另有 sidebar 開發指南 | 同一份程式碼;`sidePanel` 需 114+,`close()` 需 141+、`onClosed` 需 142+,兩者都有退路(停用該分頁的面板／停在「已儲存」畫面) |
+| 沒有 `chrome.sidePanel`(114 以下) | 設定畫面開不起來 | `shared/panel.js` 退回原本的彈出視窗,並記 `panel_fallback` 診斷 |
 
 - 驗收:Puppeteer 煙霧腳本以環境變數 `BROWSER_PATH` 指定執行檔,CI/本機各跑一次 Chrome 與 Edge(未安裝 Edge 時自動略過並標示)。
 - 使用者可見差異只有一處:設定頁「排程健康」顯示目前瀏覽器名稱與版本(`navigator.userAgentData`)。

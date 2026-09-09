@@ -42,11 +42,10 @@ test('選好的多個值要一路傳到 Picker，不能在 background 掉光', a
     nameHint: '臺銀牌告匯率',
     picks: PICKS
   }, { tab: { id: 7, url: 'https://bank.test/rate' } })
-  const created = c.__calls.find(x => x.api === 'windows.create')
-  assert.ok(created, '要開 Picker 視窗')
-  const url = created.args[0].url
-  const ctxRaw = decodeURIComponent(url.split('?ctx=')[1] || '')
-  const ctx = JSON.parse(ctxRaw)
+  // AF-10：設定畫面是 side panel，ctx 走 storage.session（網址參數重載後會被丟掉）
+  const stored = await chrome.storage.session.get('panel:7')
+  assert.ok(stored['panel:7'], '要把 ctx 寫進 session 給面板讀')
+  const ctx = stored['panel:7'].ctx
   assert.equal(ctx.picks?.length, 2, `選了兩個值卻只帶了 ${ctx.picks?.length ?? 0} 個`)
   assert.equal(ctx.picks[0].cell.col.index, 3)
   assert.equal(ctx.nameHint, '臺銀牌告匯率')
@@ -59,8 +58,8 @@ test('單選時照樣帶得出一個值', async () => {
     type: 'PICKED', purpose: 'task', locator: { css: '#v' }, preview: '1234',
     picks: [{ cell: { row: { index: 0, header: '' }, col: { index: 0, header: '' } } }]
   }, { tab: { id: 3, url: 'https://x.test/a' } })
-  const url = c.__calls.find(x => x.api === 'windows.create').args[0].url
-  const ctx = JSON.parse(decodeURIComponent(url.split('?ctx=')[1]))
+  // AF-10：設定畫面是 side panel，ctx 走 storage.session（網址參數在面板重載時會被丟掉）
+  const ctx = (await chrome.storage.session.get('panel:3'))['panel:3'].ctx
   assert.equal(ctx.picks.length, 1)
 })
 
@@ -406,8 +405,8 @@ test('在 iframe 裡右鍵選的目標，frame 身分要一路傳到任務裡', 
     type: 'PICKED', purpose: 'task', locator: { css: '#rate' }, preview: '31.2'
   }, { tab: { id: 3, url: 'https://a.test/p' }, frameId: 7, url: 'https://b.example/widget.html?token=abc' })
 
-  const created = c.__calls.find(x => x.api === 'windows.create')
-  const ctx = JSON.parse(decodeURIComponent(created.args[0].url.split('?ctx=')[1]))
+  // AF-10：設定畫面是 side panel，ctx 走 storage.session（網址參數在面板重載時會被丟掉）
+  const ctx = (await chrome.storage.session.get('panel:3'))['panel:3'].ctx
   assert.equal(ctx.frameUrl, 'https://b.example/widget.html?token=abc', 'frame 網址掉在 background 就再也找不回那個 frame')
 
   // ③ Picker 把它存進任務

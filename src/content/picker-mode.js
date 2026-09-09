@@ -259,11 +259,29 @@ function cellWrapsTable(cell) {
   return Boolean(cell && typeof cell.querySelector === 'function' && cell.querySelector('table, [role="grid"], [role="table"]'))
 }
 
+/**
+ * 清掉保留中的標示。
+ * @param {Document} doc 文件
+ * @param {string|null} purpose 只清這個用途的；不給就全清
+ */
+function clearHeldMarks(doc, purpose) {
+  const d = doc || (typeof document !== 'undefined' ? document : null)
+  if (!d || typeof d.querySelectorAll !== 'function') return
+  const sel = purpose ? `[data-af-held="${purpose}"]` : '[data-af-held]'
+  for (const el of d.querySelectorAll(sel)) {
+    el.removeAttribute('data-af-held')
+    el.removeAttribute('data-af-picked')
+    el.style.outline = ''
+  }
+}
+
 // 清除所有已選標記
 function clearPickedMarks(doc) {
   const d = doc || (typeof document !== 'undefined' ? document : null)
   if (!d || typeof d.querySelectorAll !== 'function') return
-  for (const cell of d.querySelectorAll('[data-af-picked]')) {
+  // 保留中的標示（送出後留給面板旁邊看的那些）不在這裡清，
+  // 它們的出口是 EXIT_PICK 或下一次同用途的 ENTER_PICK
+  for (const cell of d.querySelectorAll('[data-af-picked]:not([data-af-held])')) {
     cell.removeAttribute('data-af-picked')
     if (cell.hasAttribute('data-af-cell')) {
       cell.style.outline = `2px solid ${COLORS.warn}`
@@ -1065,15 +1083,18 @@ function confirmPick() {
   }
 
   chrome.runtime.sendMessage(msg)
-  exitPickMode()
+  // 設定面板就開在旁邊，使用者要看得到自己剛剛選的是哪一格；
+  // repick 沒有面板（存檔就結束），維持全清
+  exitPickMode(currentPurpose === 'repick' ? {} : { hold: currentPurpose })
 }
 
 // 送出取消訊息並離開
 function cancelPick() {
   const msg = { type: MSG.PICKED, purpose: currentPurpose, cancelled: true }
   if (currentTaskId !== undefined) msg.taskId = currentTaskId
+  const purpose = currentPurpose
   chrome.runtime.sendMessage(msg)
-  exitPickMode()
+  exitPickMode({ clearOnly: purpose })
 }
 
 // 關閉右鍵選單
@@ -2013,7 +2034,9 @@ function onContextMenu(event) {
 }
 
 export function enterPickMode(opts) {
-  exitPickMode()
+  // 進來前先清乾淨，但**只清同一個用途**的保留標示：
+  // 前置動作要選一個元素時，任務目標的藍框要留在畫面上（面板還開著、使用者還在看）
+  exitPickMode({ clearOnly: opts?.purpose || null })
   active = true
   currentPurpose = opts?.purpose || null
   currentTaskId = opts?.taskId !== undefined ? opts.taskId : undefined
@@ -2127,8 +2150,25 @@ export function enterPickMode(opts) {
   document.addEventListener('contextmenu', onContextMenu, true)
 }
 
-export function exitPickMode() {
+/**
+ * 離開選取模式。
+ * @param {{hold?: string}} opts `hold` 給定用途時，**保留該用途的已選標示**（`data-af-held`）：
+ *   設定面板開在旁邊時，使用者要看得到自己剛剛選的是哪一格（AF-10 作業 B）。
+ *   不給就是全清（`EXIT_PICK`、取消、測試清場都走這條）。
+ */
+export function exitPickMode(opts = {}) {
   currentHint = null
+  // 取消／`Esc` 只清自己這一輪的保留標示：前置動作選到一半反悔，
+  // 不該把任務目標的藍框一起抹掉（那是另一個用途的成果）
+  const clearOnly = typeof opts.clearOnly === 'string' ? opts.clearOnly : null
+  // 送出後保留標示：藍框留著，但工具列、面板、事件攔截、游標覆寫全部拆掉，
+  // 頁面要能正常操作（使用者接下來是在面板上填表單，不是還在選）
+  const holdPurpose = typeof opts.hold === 'string' ? opts.hold : null
+  if (holdPurpose && typeof document !== 'undefined' && document.querySelectorAll) {
+    for (const el of document.querySelectorAll('[data-af-picked]')) {
+      el.setAttribute('data-af-held', holdPurpose)
+    }
+  }
   if (typeof document !== 'undefined') {
     document.removeEventListener('mousemove', onMouseMove, true)
     document.removeEventListener('keydown', onKeyDown, true)
@@ -2139,6 +2179,7 @@ export function exitPickMode() {
     document.removeEventListener('contextmenu', onContextMenu, true)
     clearMarkedCells(document)
     clearPickedMarks(document)
+    if (!holdPurpose) clearHeldMarks(document, clearOnly)
     closeMenu()
     if (document.body) {
       document.body.style.userSelect = originalUserSelect
