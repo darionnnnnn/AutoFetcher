@@ -411,7 +411,10 @@ function buildFrameProxies() {
 // 更新工具列狀態（作用中模式與停用狀態）
 function updateToolbar() {
   if (!toolbarEl) return
-  const isTable = Boolean(currentTargetEl && isTableMode(currentTargetEl))
+  // 已經選了值就以「已選那張表」為準：滑鼠可能正停在表格外的一段文字上，
+  // 用 hover 目標判定會讓三段在使用者走向工具列的途中反灰（P4 回饋的根因）
+  const judgeEl = (selectedList.length > 0 && pickedTableEl) ? pickedTableEl : currentTargetEl
+  const isTable = Boolean(judgeEl && isTableMode(judgeEl))
   const isTask = isMultiPickPurpose()
 
   for (const btn of toolbarEl.querySelectorAll('[data-af-tool]')) {
@@ -554,7 +557,9 @@ function updatePanel(panel, el) {
       noticeLines.push(`（再點一次會取代這 ${selectedList.length} 個已選值）`)
     }
     if (undoSnapshot) {
-      noticeLines.push('已換成新的選取（可按復原或 Ctrl／⌘＋Z 還原）')
+      noticeLines.push(undoSnapshot.tableEl && pickedTableEl && undoSnapshot.tableEl !== pickedTableEl
+        ? '已換到另一張表格（可按復原或 Ctrl／⌘＋Z 回上一張）'
+        : '已換成新的選取（可按復原或 Ctrl／⌘＋Z 還原）')
     }
     if (cellWrapsTable(currentCellEl)) noticeLines.push(NESTED_CELL_NOTICE)
     if (toolbarNotice) noticeLines.push(toolbarNotice)
@@ -749,6 +754,9 @@ function setTarget(el) {
     pickMode = pendingMode
     pendingMode = null
     toolbarNotice = null
+    // 這裡刻意不呼叫 upgradeLastPickTo：工具列的停用判定改以 `pickedTableEl` 為準之後
+    // （已選非空時三段一律可用），「有已選卻點到停用的整欄」不可能成立，
+    // 走到這裡時已選一定是空的，沒有東西可以升級。
   }
   updateToolbar()
   if (panelEl) updatePanel(panelEl, el)
@@ -1868,9 +1876,12 @@ function upgradeLastPickTo(mode) {
   if (selectedList.length === 0) return false
   const last = selectedList[selectedList.length - 1]
   if (!last || !last.cell) return false
-  if (!currentTargetEl || !isTableMode(currentTargetEl)) return false
+  const judgeEl = pickedTableEl || currentTargetEl
+  if (!judgeEl || !isTableMode(judgeEl)) return false
 
   const axis = mode === 'row' ? 'row' : 'col'
+  // 判定來源要與工具列一致：工具列以「已選那張表」判定可不可用，
+  // 這裡卻看 hover 目標的話，會出現「按鈕亮著、按下去卻沒反應」
   const index = axis === 'row' ? last.cell.row.index : last.cell.col.index
   const headerText = (axis === 'row' ? last.cell.row.header : last.cell.col.header) || ''
   const upgraded = { block: { axis, index, headerText } }
@@ -1885,7 +1896,7 @@ function upgradeLastPickTo(mode) {
   undoSnapshot = previous
   limitReached = selectedList.length >= maxPicks
   clearPickedMarks(document)
-  applyPickedMarks(currentTargetEl)
+  applyPickedMarks(judgeEl)
   return true
 }
 
@@ -2165,7 +2176,10 @@ export function exitPickMode(opts = {}) {
   // 頁面要能正常操作（使用者接下來是在面板上填表單，不是還在選）
   const holdPurpose = typeof opts.hold === 'string' ? opts.hold : null
   if (holdPurpose && typeof document !== 'undefined' && document.querySelectorAll) {
-    for (const el of document.querySelectorAll('[data-af-picked]')) {
+    // 只標「這一輪選的」：已經屬於別的用途的保留標示不得被改群，
+    // 否則前置動作送出一次，就會把任務目標那一格也變成 preaction 群，
+    // 下一次 preaction 的 Esc 會把它一起抹掉（定案 B-6 要防的正是這件事）
+    for (const el of document.querySelectorAll('[data-af-picked]:not([data-af-held])')) {
       el.setAttribute('data-af-held', holdPurpose)
     }
   }

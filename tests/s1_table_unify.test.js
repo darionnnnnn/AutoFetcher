@@ -116,20 +116,19 @@ test('D-2 容器只包一張表時以那張表為準', () => {
   assert.equal(tableRowsOf(doc.getElementById('box')).length, 2)
 })
 
-test('D-2 querySelectorAll 退路（沒有原生 rows/cells）也要做巢狀過濾', () => {
-  const doc = jsdom(PER_ROW_TABLES)
-  const outer = doc.getElementById('outer2')
-  // 造一個沒有 .rows 的替身，強制走 querySelectorAll 那條路
-  const stub = {
-    tagName: 'DIV',
-    getAttribute: (n) => (n === 'role' ? 'table' : null),
-    querySelectorAll: (sel) => outer.querySelectorAll(sel),
-    querySelector: (sel) => outer.querySelector(sel),
-    children: outer.children
-  }
-  const rows = tableRowsOf(stub)
-  assert.ok(rows.length <= 2,
-    `退路不得把內層小表的列一起吃進來，實得 ${rows.length} 列`)
+test('D-2 ARIA 表格（沒有原生 rows）走 querySelectorAll 那條路，也要做巢狀過濾', () => {
+  // ARIA 表格沒有 .rows，一定走退路；第二列的格子裡再包一個 ARIA 表格，
+  // 它的列不算外層這張表的列
+  const doc = jsdom(`<div id="g" role="grid">
+      <div role="row"><span role="cell">甲</span></div>
+      <div role="row"><span role="cell">
+        <div role="table"><div role="row"><span role="cell">內1</span></div>
+          <div role="row"><span role="cell">內2</span></div></div>
+      </span></div>
+    </div>`)
+  const rows = tableRowsOf(doc.getElementById('g'))
+  assert.equal(rows.length, 2,
+    `外層只有兩列，內層小表的兩列不算，實得 ${rows.length} 列`)
 })
 
 test('D-2 ARIA 列（沒有原生 cells）的格子不含巢狀子表格的格子', () => {
@@ -217,4 +216,15 @@ test('D-5 picker-mode 與 block-detect 不再自己定義表格列格判準', ()
   }
   assert.ok(pm.includes("from '../shared/table.js'"), 'picker-mode 要改用 shared/table.js')
   assert.ok(bd.includes("from './table.js'"), 'block-detect 要改用 shared/table.js')
+})
+
+test('D-3b ARIA 的 role=rowheader 也算一格（漏掉會讓整列索引位移）', () => {
+  const doc = jsdom(`<div id="g" role="grid">
+      <div id="r" role="row">
+        <span role="rowheader">美金</span><span role="cell">31.5</span><span role="cell">32.0</span>
+      </div>
+    </div>`)
+  const cells = rowCellsOf(doc.getElementById('r'))
+  assert.equal(cells.length, 3,
+    `列標題格不算格的話，這一列的欄索引會整排少一格，實得 ${cells.length}`)
 })

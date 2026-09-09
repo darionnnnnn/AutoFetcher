@@ -9,7 +9,7 @@
 // 所以每個入口都要在**自己的**點擊／右鍵處理裡呼叫這支函式，不能轉給 background 代開。
 import { log as diagLog } from './diag.js'
 
-/** 面板的四種畫面，各對應一個擴充功能頁 */
+/** 面板的兩種畫面，各對應一個擴充功能頁 */
 export const PANEL_PATHS = {
   picker: 'ui/picker/picker.html',
   site: 'ui/site/site.html'
@@ -23,7 +23,7 @@ export const PANEL_PATHS = {
  * @param {'picker'|'site'} kind 要顯示哪一個畫面
  * @returns {Promise<{ok: boolean, fallback?: boolean}>}
  */
-export async function openPanel(tabId, kind = 'picker') {
+export async function openPanel(tabId, kind = 'picker', fallbackQuery = '') {
   const path = PANEL_PATHS[kind] || PANEL_PATHS.picker
   const api = typeof chrome !== 'undefined' ? chrome.sidePanel : null
   if (api && typeof api.open === 'function') {
@@ -41,7 +41,7 @@ export async function openPanel(tabId, kind = 'picker') {
   } else {
     await diagLog('panel_fallback', { message: 'sidePanel API 不存在（Chrome/Edge 114 以下）', path })
   }
-  return openFallbackWindow(path)
+  return openFallbackWindow(path, fallbackQuery)
 }
 
 /**
@@ -49,11 +49,14 @@ export async function openPanel(tabId, kind = 'picker') {
  * @param {string} path 擴充功能頁路徑
  * @returns {Promise<{ok: boolean, fallback: boolean}>}
  */
-async function openFallbackWindow(path) {
-  const url = typeof chrome?.runtime?.getURL === 'function'
+async function openFallbackWindow(path, query = '') {
+  const base = typeof chrome?.runtime?.getURL === 'function'
     ? await chrome.runtime.getURL(path)
     : path
-  await chrome.windows.create({ url: String(url), type: 'popup', width: 600, height: 820 })
+  // 退路的視窗讀不到面板的 session ctx（那條路是給面板走的），參數要放在網址上，
+  // 否則舊版瀏覽器開出來的是一張空表單
+  const url = query ? `${String(base)}?${query}` : String(base)
+  await chrome.windows.create({ url, type: 'popup', width: 600, height: 820 })
   return { ok: true, fallback: true }
 }
 

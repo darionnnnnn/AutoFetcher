@@ -210,13 +210,19 @@ test('A-3 按 ↑ 可以改選外層表格的那一格（保留 AF-7 的用法�
 })
 
 test('A-3b 外層那一格內含表格時，面板要先說出「會抓到整串文字」（AF-10 作業 D）', async () => {
-  const { doc, pm, win } = await enterOnMonitor()
+  const { c, doc, pm, win } = await enterOnMonitor()
   fire(win, valueCell(doc), 'mousemove')
   doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
   fire(win, valueCell(doc).closest('table').parentElement, 'mousemove')
   const text = doc.querySelector('[data-af-panel]')?.textContent || ''
   assert.ok(text.includes('這一格內含表格'),
     `外層格的文字是內層小表串接起來的，面板要說出來，實得：${text.slice(0, 200)}`)
+
+  // 髒值本身也要釘住：只驗提示的話，哪天預覽真的變乾淨了也不會有人知道
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  const msg = pickedMsgs(c)[0]
+  assert.match(String(msg.preview), /^42MAX/,
+    `外層那一格的預覽就是內層小表串接起來的字串，實得 ${JSON.stringify(msg.preview)}`)
   pm.exitPickMode()
 })
 

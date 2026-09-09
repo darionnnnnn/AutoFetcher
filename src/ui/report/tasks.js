@@ -1,6 +1,5 @@
-import { getTask, saveTask, deleteTask, getTasks, countRecordsForTask, listDates } from '../../shared/storage.js'
+import { getTask, saveTask, deleteTask, getTasks, countRecordsForTask, listDates, setPanelCtx } from '../../shared/storage.js'
 import { openPanel } from '../../shared/panel.js'
-import { setPanelCtx } from '../../shared/storage.js'
 import { MSG } from '../../shared/messages.js'
 import { buildExport, download } from '../../shared/export.js'
 import { describeSchedule } from '../../shared/describe.js'
@@ -323,7 +322,7 @@ function createTaskRow(t) {
     }
     if (tabId === undefined) return
     await setPanelCtx(tabId, { kind: 'edit', taskId: t.id })
-    await openPanel(tabId, 'picker')
+    await openPanel(tabId, 'picker', `taskId=${encodeURIComponent(t.id)}`)
   })
   actionsEl.appendChild(editBtn)
 

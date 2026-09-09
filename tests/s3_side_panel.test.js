@@ -80,10 +80,13 @@ test('B-1 面板已經有表單時再選一次＝換目標，不重置（要保�
 
 // ---------- B-2 舊版瀏覽器與手勢失敗都要有退路 ----------
 
-test('B-2 沒有 sidePanel API 時退回彈出視窗，而且留下診斷', async () => {
+test('B-2 沒有 sidePanel API 時退回彈出視窗，而且留下診斷', async (t) => {
   resetChromeMock()
   const c = installChromeMock()
+  // 這個 mock 是共用的：刪掉之後一定要還原，否則後面的案例會以為瀏覽器不支援面板
+  const savedSidePanel = c.sidePanel
   delete c.sidePanel
+  t.after(() => { c.sidePanel = savedSidePanel })
   const st = await import('../src/shared/storage.js?t=' + Math.random())
   await st.init()
   const bg = await import('../src/background/main.js?t=' + Math.random())
@@ -120,13 +123,20 @@ test('B-3 sidePanel.onClosed 觸發時清掉頁面標示與暫存', async () => 
   assert.equal(await sessionOf(tab.id), undefined, '暫存也要清掉')
 })
 
-test('B-3 三條通道重複觸發是常態，必須冪等', async () => {
+test('B-3 三條通道重複觸發是常態，第二次之後不得再對頁面送訊息', async () => {
   const { c, bg } = await freshBg()
   const tab = await c.tabs.create({ url: 'https://a.test/p' })
   await bg.handleContextMenu({ menuItemId: 'af-pick', frameId: 0 }, tab)
+
   await bg.closePanelFor(tab.id)
+  const afterFirst = api(c, 'tabs.sendMessage').filter(x => x.args[1]?.type === 'EXIT_PICK').length
+  assert.ok(afterFirst >= 1, '第一次要真的清場')
+
   await bg.handleMessage({ type: 'PANEL_CLOSING', tabId: tab.id }, {})
-  await bg.closePanelFor(tab.id, { keepMarks: true })
+  await bg.closePanelFor(tab.id)
+  const afterRest = api(c, 'tabs.sendMessage').filter(x => x.args[1]?.type === 'EXIT_PICK').length
+  assert.equal(afterRest, afterFirst,
+    `清過就沒有東西要清了，重複送只是白花訊息，實得 ${afterRest} 則（第一次 ${afterFirst} 則）`)
   assert.equal(await sessionOf(tab.id), undefined)
 })
 
@@ -269,4 +279,95 @@ test('B-8 正式碼不得用網址參數傳面板參數，也只剩退路會開�
     assert.ok(!/windows\.create/.test(src),
       `${f} 不該自己開彈出視窗：那是 shared/panel.js 的退路`)
   }
+})
+
+// ---------- B-9 鏈結：session ctx 一路走到面板端渲染 ----------
+// 只驗 background 寫了什麼是不夠的——面板端渲染崩掉（例如呼叫不存在的函式）完全逃得掉。
+
+test('B-9 面板端能用 background 寫的 ctx 渲染，換目標時不會炸也不清掉已填的設定', async () => {
+  resetChromeMock()
+  const c = installChromeMock()
+  const st = await import('../src/shared/storage.js?t=' + Math.random())
+  await st.init()
+  const html = readFileSync(new URL('../src/ui/picker/picker.html', import.meta.url), 'utf8')
+  const jd = new JSDOM(html, { url: 'chrome-extension://abc/ui/picker/picker.html' })
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  const pk = await import('../src/ui/picker/picker.js?t=' + Math.random())
+
+  // 第一個目標 + 使用者改了名稱與排程
+  await pk.renderFromPanelCtx({
+    kind: 'new',
+    ctx: { locator: { css: '#a' }, url: 'https://a.test/p', preview: '1', picks: [] }
+  })
+  jd.window.document.getElementById('name').value = '我的電費'
+  const schedule = jd.window.document.getElementById('schedule-type')
+  if (schedule) schedule.value = 'interval'
+
+  // 右鍵選了新目標：background 標成 retarget
+  await pk.renderFromPanelCtx({
+    kind: 'new',
+    retarget: true,
+    ctx: { locator: { css: '#b' }, url: 'https://a.test/p', preview: '2', picks: [] }
+  })
+
+  assert.equal(jd.window.document.getElementById('name').value, '我的電費',
+    '換目標不該把使用者打的名稱洗掉')
+  if (schedule) {
+    assert.equal(jd.window.document.getElementById('schedule-type').value, 'interval',
+      '排程也要留著')
+  }
+  const note = jd.window.document.getElementById('retarget-note')
+  assert.equal(note?.hidden, false, '要告訴使用者目標換了')
+})
+
+// ---------- B-10 終檢補件：存檔收尾與「回頁面重選目標」 ----------
+
+test('B-10 CLOSE_PANEL 會關掉面板並把草稿一起清掉', async () => {
+  const { c, bg } = await freshBg()
+  const tab = await c.tabs.create({ url: 'https://a.test/p' })
+  const st = await import('../src/shared/storage.js?t=' + Math.random())
+  await st.setPanelCtx(tab.id, { kind: 'new', ctx: {}, draft: { name: '上一個任務' } })
+
+  await bg.handleMessage({ type: 'CLOSE_PANEL', tabId: tab.id }, {})
+
+  assert.ok(api(c, 'sidePanel.close').length >= 1, '存檔後要把面板關掉')
+  assert.equal(await sessionOf(tab.id), undefined,
+    '草稿沒清的話，下一個新任務會被上一個的名稱與排程灌進去')
+})
+
+test('B-10 面板有「回頁面重選目標」的入口，而且帶著目前已選回去', () => {
+  const html = readFileSync(new URL('../src/ui/picker/picker.html', import.meta.url), 'utf8')
+  assert.match(html, /id="repick-target"/, '面板要有回頁面重選目標的鈕')
+  const js = readFileSync(new URL('../src/ui/picker/picker.js', import.meta.url), 'utf8')
+  const idx = js.indexOf("repick-target")
+  assert.ok(idx > 0, 'picker.js 要接上那顆鈕')
+  const seg = js.slice(idx, idx + 600)
+  assert.match(seg, /ENTER_PICK/, '要讓頁面重新進選取模式')
+  assert.match(seg, /preselect/, '要把目前已選帶回去勾，不然使用者得從頭選一次')
+})
+
+test('B-11 前置動作「送出成功」之後，任務目標的標示仍屬於 task 群', async () => {
+  const { doc, pm, win } = await bootPicker(TABLE)
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.body })
+  move(win, doc.getElementById('v'))
+  click(win, doc.getElementById('v'))
+  key(doc, win, 'Enter')
+  assert.equal(doc.querySelectorAll('[data-af-held="task"]').length, 1, '前置：任務目標已保留')
+
+  // 前置動作選一個元素並送出（一次只選一個，點一下就送）
+  pm.enterPickMode({ purpose: 'preaction', initialTarget: doc.body })
+  move(win, doc.getElementById('link'))
+  click(win, doc.getElementById('link'))
+  key(doc, win, 'Enter')
+
+  assert.equal(doc.querySelectorAll('[data-af-held="task"]').length, 1,
+    '前置動作送出不得把任務目標那一格改成 preaction 群（改群之後下一次 Esc 會連它一起抹掉）')
+
+  // 再進一輪前置動作並取消：任務目標要活下來
+  pm.enterPickMode({ purpose: 'preaction', initialTarget: doc.body })
+  key(doc, win, 'Escape')
+  assert.equal(doc.querySelectorAll('[data-af-held="task"]').length, 1,
+    '別的用途取消，不該把任務目標的藍框一起抹掉')
+  pm.exitPickMode()
 })

@@ -236,6 +236,7 @@ export async function setupContextMenus() {
 export async function handleInstalled(details) {
   try {
     await initStorage()
+    await disablePanelGlobally()
     await setupContextMenus()
     await rebuildAlarms()
     await schedulePrechecks()
@@ -249,6 +250,7 @@ export async function handleInstalled(details) {
 export async function handleStartup() {
   try {
     await initStorage()
+    await disablePanelGlobally()
     await rebuildAlarms()
     await schedulePrechecks()
     await scheduleSiteCheck()
@@ -430,11 +432,9 @@ export async function handleMessage(msg, sender) {
     if (msg.type === MSG.RESOLVE_PANEL_TAB) {
       const windowId = msg.windowId
       if (windowId === undefined || windowId === null) return { ok: false }
-      let tabs = await chrome.tabs.query({ active: true, windowId })
-      if (!tabs || tabs.length === 0) {
-        // 有些情境查不到指定視窗（例如視窗剛建立），退回目前作用中的那個
-        tabs = await chrome.tabs.query({ active: true, currentWindow: true })
-      }
+      // 查不到就回 null：猜一個別的視窗的作用分頁，會讓面板拿別人的 ctx 去讀寫。
+      // 面板下一次轉為可見時會自己再問一次（自癒）
+      const tabs = await chrome.tabs.query({ active: true, windowId })
       const tabId = tabs?.[0]?.id ?? null
       return { ok: tabId !== null, tabId }
     }
@@ -461,6 +461,10 @@ export async function handleMessage(msg, sender) {
       }
 
       if (msg.cancelled === true) {
+        // 取消也要收掉「為了重選而開的那個分頁」，否則每取消一次殘留一個
+        if (msg.purpose === 'repick' && msg.taskId !== undefined) {
+          await closeRepickTab(msg.taskId)
+        }
         return { ok: true }
       }
 
@@ -502,11 +506,7 @@ export async function handleMessage(msg, sender) {
         await rebuildAlarms()
         await refreshBadge()
         // 為了重選而開的分頁由我們收掉（使用者原本就開著的那個不動）
-        const openedTab = repickTabs.get(msg.taskId)
-        if (openedTab !== undefined) {
-          repickTabs.delete(msg.taskId)
-          try { await chrome.tabs.remove(openedTab) } catch {}
-        }
+        await closeRepickTab(msg.taskId)
         return { ok: true }
       }
 
@@ -559,7 +559,7 @@ export async function handleMessage(msg, sender) {
       const tab = await chrome.tabs.create({ url: task.url, active: true })
       if (!tab?.id) return { ok: false }
       // 這個分頁是我們為了重選開的，選完（或取消）要收掉，不然每重選一次留一個
-      repickTabs.set(msg.taskId, tab.id)
+      await rememberRepickTab(msg.taskId, tab.id)
       const pollMs = msg.pollMs ?? 250
       const loadTimeoutMs = msg.loadTimeoutMs ?? 30000
       let tabInfo = await chrome.tabs.get(tab.id)
@@ -661,7 +661,24 @@ export async function handleNotificationClick(notificationId) {
 }
 
 // 為了重選而開的分頁：`taskId -> tabId`。使用者原本就開著的分頁不進這張表，也就不會被收掉。
-const repickTabs = new Map()
+// 放 `storage.session` 而不是模組級 Map——MV3 的 service worker 一被回收就整張歸零，
+// 而重選流程（開分頁→等載入→使用者慢慢選）很容易跨過閒置回收。
+const REPICK_KEY = 'repickTabs'
+
+async function rememberRepickTab(taskId, tabId) {
+  const cur = (await chrome.storage.session.get(REPICK_KEY))[REPICK_KEY] || {}
+  cur[taskId] = tabId
+  await chrome.storage.session.set({ [REPICK_KEY]: cur })
+}
+
+async function closeRepickTab(taskId) {
+  const cur = (await chrome.storage.session.get(REPICK_KEY))[REPICK_KEY] || {}
+  const tabId = cur[taskId]
+  if (tabId === undefined) return
+  delete cur[taskId]
+  await chrome.storage.session.set({ [REPICK_KEY]: cur })
+  try { await chrome.tabs.remove(tabId) } catch {}
+}
 
 /**
  * 面板關掉了：把頁面上的標示清乾淨，並丟掉那個分頁的暫存 ctx。
@@ -672,8 +689,11 @@ const repickTabs = new Map()
  */
 export async function closePanelFor(tabId, opts = {}) {
   if (tabId === undefined || tabId === null) return
+  // 三條通道會重複觸發（onClosed + 分頁關閉…），暫存還在才代表「這一輪還沒清過」。
+  // 不擋的話每次都對頁面廣播一輪 EXIT_PICK，白花訊息也可能清到下一輪剛貼上的標示
+  const pending = await getPanelCtx(tabId)
   await clearPanelCtx(tabId)
-  if (opts.keepMarks) return
+  if (opts.keepMarks || !pending) return
   // 最上層一定在，先送它；其餘 frame 能列出來就一起送（選取模式可能鑽進了 iframe）。
   // 一個分頁可能有多個 frame，不指名 frameId 就是廣播（見 CLAUDE.md 的 D13 規約）
   const targets = new Set([0])
@@ -707,9 +727,10 @@ export async function handleContextMenu(info, tab) {
         origin = tab.url ? new URL(tab.url).origin : ''
       } catch {}
       // 網址參數在面板重載後會被丟掉（B-0 實測），參數一律走 storage.session
+      // **先開面板再寫 ctx**：手勢必須留在 contextMenus.onClicked 裡（轉給別人開一定失敗），
+      // 而且中間不要夾非同步等待——面板先顯示等待態，ctx 晚一步到達由 session 監聽補畫
+      await openPanel(tab.id, 'site', `origin=${encodeURIComponent(origin)}&tabId=${tab.id}`)
       await setPanelCtx(tab.id, { kind: 'site', origin, tabId: tab.id })
-      // 手勢必須留在 contextMenus.onClicked 裡：轉給別人開一定失敗
-      await openPanel(tab.id, 'site')
       await injectContent(tab.id, { frameId: 0 })
       await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'login-user' }, { frameId: 0 })
       return
@@ -718,9 +739,10 @@ export async function handleContextMenu(info, tab) {
     if (info.menuItemId === 'af-pick') {
       if (!tab?.id) return
       const frameId = info.frameId ?? 0
-      // 面板先開起來顯示「正在頁面上選取…」，使用者才知道東西在哪裡、也才有地方可以取消
-      await setPanelCtx(tab.id, { kind: 'waiting', purpose: 'task' })
+      // 面板先開起來顯示「正在頁面上選取…」，使用者才知道東西在哪裡、也才有地方可以取消。
+      // **`open` 要排在最前面**：手勢跨越非同步等待有失效風險
       await openPanel(tab.id, 'picker')
+      await setPanelCtx(tab.id, { kind: 'waiting', purpose: 'task' })
       await injectContent(tab.id, { frameId })
       await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'task' }, { frameId })
       return
@@ -729,6 +751,12 @@ export async function handleContextMenu(info, tab) {
 }
 
 // 註冊所有事件監聽器（載入時僅註冊，不執行副作用）
+// 全域停用面板（分頁層 `enabled: true` 仍可開，B-0 #9 實測）：
+// 不停用的話，工具列圖示右鍵的「開啟側邊面板」會開出一張沒有 ctx 的空表單
+async function disablePanelGlobally() {
+  try { await chrome.sidePanel?.setOptions?.({ enabled: false }) } catch {}
+}
+
 chrome.alarms.onAlarm.addListener(handleAlarm)
 chrome.runtime.onInstalled.addListener(handleInstalled)
 chrome.runtime.onStartup.addListener(handleStartup)

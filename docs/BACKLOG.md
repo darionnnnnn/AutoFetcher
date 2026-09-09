@@ -18,6 +18,8 @@
 | 排程觸發失敗立即寫紀錄 | 目前只有手動抓取這樣做(排程仍走重試策略);使用者反映看不到排程失敗時 |
 | 折線超過 8 條的上限收成一份 | 目前 `drop-rules.MAX_CHART_SERIES` 與 `dashboard`、`trend-popover` 的硬編碼 `8` 三處並存;下次動到圖表上限時一併收成一份 |
 | 卡片 TSV 不再掛在 `dataset.tsv` | 目前為了讓測試讀得到而序列化進 DOM 屬性;找到別的驗證方式時 |
+| 面板寬度記憶／自訂 | side panel 的寬度由瀏覽器管理(實測預設 360px,使用者可拖寬);有人反映每次都要重拖時再看 |
+| Chrome 114–141 沒有 `sidePanel.onClosed`：關掉面板後頁面標示會殘留到下一次選取 | 只是視覺殘留;有那個版本的使用者回報時再補輪詢或別的訊號 |
 | 深色模式以外的主題色 | 使用者提出 |
 | 選取工具列加第四段「這一欄每格各一個值」 | 目前留在右鍵選單(工具列三段已夠用,四段會擠);使用者反映右鍵選單不好發現時 |
 | 位置定位的名稱後綴收成一份 | 現在 `picker.js` 的 `singleCellName`/`defaultPickName` 與 `main.js` 的 `defaultFieldName` 各一份（`POS_LABELS`/`POS_NAMES` 兩張同表）；下次動命名規則時搬進 `shared/` 讓兩端 import |

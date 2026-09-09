@@ -256,3 +256,52 @@ test('C-6 repick 帶既有的值進來，滑鼠移到表格外工具列仍可用
   assert.equal(disabledCount(doc), 0, 'repick 一進來就有已選，同樣要鎖表')
   pm.exitPickMode()
 })
+
+// ---------- C-7 終檢補件：規劃寫了但原本沒被守住的三條 ----------
+
+test('C-7 用 ↑ 把目標帶到非表格之後，工具列仍以「已選那張表」判定（不得反灰）', async () => {
+  const { doc, pm, win } = await boot(TWO_TABLES)
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.body })
+  move(win, doc.getElementById('a1'))
+  click(win, doc.getElementById('a1'))
+  assert.ok(pm.selectedPicks()[0]?.cell, '前置：先選一格')
+
+  // `↑` 是明確意圖，不受鎖表限制：一路往上會走到非表格的祖先
+  for (let i = 0; i < 5 && pm.currentTarget() && pm.currentTarget().tagName !== 'BODY'; i++) {
+    key(doc, win, 'ArrowUp')
+  }
+  assert.equal(pm.selectedCount(), 1, '前置：已選還在')
+  assert.equal(disabledCount(doc), 0,
+    `已選非空時工具列一律以那張表判定，實得停用 ${disabledCount(doc)} 段`)
+
+  // 而且此時點整欄，最後一項要真的升級（走的是「可用」那條路）
+  click(win, tool(doc, 'col'))
+  assert.ok(pm.selectedPicks()[0]?.block, '整欄要套到已選那一格上')
+  pm.exitPickMode()
+})
+
+test('C-7 換表的提示要說得出「換到另一張表格」，不是通用的換選取', async () => {
+  const { doc, pm, win } = await boot(TWO_TABLES)
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.body })
+  move(win, doc.getElementById('a1'))
+  click(win, doc.getElementById('a1'))
+  move(win, doc.getElementById('b1'))
+  click(win, doc.getElementById('b1'))
+  assert.match(panelText(doc), /另一張表格/,
+    `跳到別張表是很大的動作，提示要說得出來，實得：${panelText(doc).slice(0, 150)}`)
+  pm.exitPickMode()
+})
+
+test('C-7 工具列的判定來源是「已選那張表」，不是滑鼠底下那個元素', async () => {
+  const { doc, pm, win } = await boot(TWO_TABLES)
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.body })
+  move(win, doc.getElementById('a1'))
+  click(win, doc.getElementById('a1'))
+  // 直接把目標塞成非表格（繞過 upgradeTarget 的鎖表），工具列仍要可用
+  pm.enterPickMode({ purpose: 'repick', initialTarget: doc.getElementById('a1'),
+    preselect: [{ cell: { row: { index: 0, header: '09/01' }, col: { index: 1, header: '成交金額' } } }] })
+  assert.equal(pm.selectedCount(), 1)
+  move(win, doc.getElementById('gap'))
+  assert.equal(disabledCount(doc), 0, '已選非空時三段一律可用')
+  pm.exitPickMode()
+})

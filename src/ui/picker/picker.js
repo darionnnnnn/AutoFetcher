@@ -2091,6 +2091,12 @@ export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs =
     // 關掉別人的視窗比不關還糟
     const myWindow = typeof window !== 'undefined' ? window : null
     setTimeout(() => {
+      // 面板沒有 window.close()：請 background 關它，並清掉草稿——
+      // 不清的話下一個新任務會被這一個的名稱與排程灌進去
+      if (globalThis.chrome?.sidePanel) {
+        finishPanelSession()
+        return
+      }
       if (myWindow && globalThis.window === myWindow && myWindow.close) myWindow.close()
     }, closeDelayMs)
   }
@@ -2245,17 +2251,34 @@ export async function renderFromPanelCtx(ctx) {
  * 只換目標，保留使用者已經填的其他設定。
  */
 function applyRetarget(payload) {
-  const keep = collectValues()
+  // 先把畫面上現有的值抄下來（鍵是元素 id，才還原得回去），再換目標、再貼回來
+  const keep = snapshotForm()
   render(payload)
-  // 名稱只在使用者沒動過時才跟著換（動過就尊重他打的）
-  const nameEl = document.getElementById('name')
-  if (nameEl && keep.name && nameEl._afAutoName !== keep.name) nameEl.value = keep.name
   restoreDraft(keep, { skipTarget: true })
   const note = document.getElementById('retarget-note')
   if (note) {
     note.hidden = false
     note.textContent = '已換成新的目標，其他設定都留著。'
   }
+}
+
+// 要跨「換目標」與「面板重載」保住的欄位（鍵一律是元素 id，restoreDraft 靠它還原）
+const DRAFT_FIELDS = [
+  'name', 'schedule-type', 'interval-value', 'interval-unit', 'daily-time',
+  'agg', 'row-pos', 'col-pos', 'dashboard-select', 'regex', 'multiplier', 'decimals'
+]
+
+/**
+ * 把畫面上的表單值抄成 `{元素 id: 值}`。
+ */
+function snapshotForm() {
+  const out = {}
+  for (const id of DRAFT_FIELDS) {
+    const el = document.getElementById(id)
+    if (!el) continue
+    out[id] = el.type === 'checkbox' ? el.checked : el.value
+  }
+  return out
 }
 
 /**
@@ -2276,18 +2299,22 @@ function restoreDraft(draft, opts = {}) {
 /**
  * 表單值變動就寫回草稿（節流）。
  */
+/**
+ * 存檔或取消後的收尾：清掉草稿並請 background 關面板。
+ * 不清草稿的話，下一個新任務會被上一個的名稱與排程灌進去。
+ */
+async function finishPanelSession() {
+  if (panelTabId === null) return
+  if (draftTimer) { clearTimeout(draftTimer); draftTimer = null }
+  try { await chrome.runtime.sendMessage({ type: MSG.CLOSE_PANEL, tabId: panelTabId }) } catch {}
+}
+
 function scheduleDraftSave() {
   if (panelTabId === null) return
   if (draftTimer) clearTimeout(draftTimer)
   draftTimer = setTimeout(async () => {
     draftTimer = null
-    const draft = {}
-    for (const id of ['name', 'url', 'mode', 'schedule-type', 'interval-value', 'interval-unit']) {
-      const el = document.getElementById(id)
-      if (!el) continue
-      draft[id] = el.type === 'checkbox' ? el.checked : el.value
-    }
-    try { await mergePanelCtx(panelTabId, { draft }) } catch {}
+    try { await mergePanelCtx(panelTabId, { draft: snapshotForm() }) } catch {}
   }, 300)
 }
 
@@ -2306,7 +2333,21 @@ export async function initFromQuery(search) {
 
 if (typeof document !== 'undefined' && document.getElementById('save') && globalThis.chrome?.runtime?.id) {
   document.getElementById('save')?.addEventListener('click', () => handleSave())
-  document.getElementById('cancel')?.addEventListener('click', () => window.close())
+  document.getElementById('cancel')?.addEventListener('click', () => {
+    // 面板沒有 window.close()：請 background 關它，順便把草稿清掉
+    finishPanelSession()
+    if (!globalThis.chrome?.sidePanel) window.close()
+  })
+  // 回頁面重選目標：面板不必關，選好之後 background 會把新目標併進來
+  document.getElementById('repick-target')?.addEventListener('click', async () => {
+    if (panelTabId === null) return
+    try {
+      await chrome.runtime.sendMessage({
+        type: MSG.ENTER_PICK, purpose: 'task', tabId: panelTabId, frameId: 0,
+        preselect: Array.isArray(currentCtx?.picks) ? currentCtx.picks : undefined
+      })
+    } catch {}
+  })
   document.getElementById('test-now')?.addEventListener('click', () => handleTestNow())
   bindModeEvents()
   bindAlertEvents()
@@ -2333,10 +2374,6 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
     if (document.visibilityState === 'visible') boot()
     // ctx 變了（例如使用者在頁面上選好了目標）就重畫
     subscribe(() => { boot() }, { area: 'session' })
-    // 面板被關掉：把頁面上保留的標示清乾淨
-    window.addEventListener('pagehide', () => {
-      try { chrome.runtime.sendMessage({ type: MSG.PANEL_CLOSING, tabId: panelTabId }) } catch {}
-    })
     document.addEventListener('input', scheduleDraftSave, true)
     document.addEventListener('change', scheduleDraftSave, true)
     document.getElementById('panel-cancel-pick')?.addEventListener('click', () => {

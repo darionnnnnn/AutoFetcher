@@ -32,7 +32,7 @@ function getSpan(cell, attr) {
 // 以前各有一份，判準不一致會讓選取時算出的索引配上擷取時解析的另一張表，靜默抓到錯的值。
 
 /** 儲存格選擇器（HTML 與 ARIA 兩種寫法） */
-export const CELL_SELECTOR = 'td, th, [role="cell"], [role="gridcell"], [role="columnheader"]'
+export const CELL_SELECTOR = 'td, th, [role="cell"], [role="gridcell"], [role="columnheader"], [role="rowheader"]'
 /** 表格選擇器（HTML 與 ARIA 兩種寫法） */
 export const TABLE_SELECTOR = 'table, [role="grid"], [role="table"]'
 const ROW_SELECTOR = 'tr, [role="row"]'
@@ -125,15 +125,14 @@ export function isHeaderRowOf(row) {
   return cells.length > 0 && cells.every(isHeaderCell)
 }
 
-// 本檔內部沿用的別名（解析流程原本就以這三個名字呼叫）
+// 本檔內部沿用的別名（解析流程原本就以這三個名字呼叫）。
+// `isHeaderRow` 只是 `isHeaderRowOf` 的薄包裝——判準要真的只有一份，
+// 呼叫端已經算好 cells 時就別再算一次（空列不算表頭列）
 const getTableRows = tableRowsOf
 const getRowCells = rowCellsOf
 function isHeaderRow(row, cells) {
   if (cells.length === 0) return false
-  const inThead = (typeof row.closest === 'function' && Boolean(row.closest('thead'))) ||
-    row.parentElement?.tagName === 'THEAD'
-  if (inThead) return true
-  return cells.every(isHeaderCell)
+  return isHeaderRowOf(row)
 }
 
 // 取得 ARIA 表格的列元素
