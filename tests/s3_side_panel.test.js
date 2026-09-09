@@ -371,3 +371,58 @@ test('B-11 前置動作「送出成功」之後，任務目標的標示仍屬於
     '別的用途取消，不該把任務目標的藍框一起抹掉')
   pm.exitPickMode()
 })
+
+// ---------- B-12 規劃定案的其餘三條 ----------
+
+// 契約測試：摘要卡（「這個任務在做什麼」的三句話）必須跟著新目標走。
+// 目前是 render() 內部重算的，這條測試不在乎由誰做，只在乎結果不能停在舊目標。
+test('B-12 換目標之後摘要卡要跟著重算（不能停在舊目標）', async () => {
+  resetChromeMock()
+  installChromeMock()
+  const st = await import('../src/shared/storage.js?t=' + Math.random())
+  await st.init()
+  const html = readFileSync(new URL('../src/ui/picker/picker.html', import.meta.url), 'utf8')
+  const jd = new JSDOM(html, { url: 'chrome-extension://abc/ui/picker/picker.html' })
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  const pk = await import('../src/ui/picker/picker.js?t=' + Math.random())
+
+  await pk.renderFromPanelCtx({
+    kind: 'new',
+    ctx: { locator: { css: '#a' }, url: 'https://a.test/p', preview: '1', picks: [] }
+  })
+  const before = jd.window.document.getElementById('summary-target')?.textContent
+
+  await pk.renderFromPanelCtx({
+    kind: 'new', retarget: true,
+    ctx: { locator: { css: '#b' }, url: 'https://b.test/q', preview: '2', picks: [] }
+  })
+  const after = jd.window.document.getElementById('summary-target')?.textContent
+  assert.notEqual(after, before,
+    `摘要卡是「這個任務在做什麼」的那三句話，換了目標不重算就會說謊，前後都是 ${JSON.stringify(after)}`)
+})
+
+test('B-12 面板已關卻仍收到 PICKED 時要留診斷（使用者看到的是「選完沒反應」）', async () => {
+  const { c, bg } = await freshBg()
+  const tab = await c.tabs.create({ url: 'https://a.test/p' })
+  // 面板沒開（session 沒有暫存），頁面卻送來選取結果
+  await bg.handleMessage({
+    type: 'PICKED', purpose: 'task', locator: { css: '#v' }, preview: '1', picks: []
+  }, { tab: { id: tab.id, url: 'https://a.test/p' } })
+
+  const diag = await import('../src/shared/diag.js?t=' + Math.random())
+  const entries = await diag.getAll()
+  assert.ok(entries.some(e => e.kind === 'panel_missing_on_pick'),
+    `沒有這一筆就查不出「選完什麼都沒發生」的原因，實得 ${JSON.stringify(entries.map(e => e.kind))}`)
+})
+
+test('B-12 面板關閉清場也要留診斷', async () => {
+  const { c, bg } = await freshBg()
+  const tab = await c.tabs.create({ url: 'https://a.test/p' })
+  await bg.handleContextMenu({ menuItemId: 'af-pick', frameId: 0 }, tab)
+  await bg.closePanelFor(tab.id)
+  const diag = await import('../src/shared/diag.js?t=' + Math.random())
+  const entries = await diag.getAll()
+  assert.ok(entries.some(e => e.kind === 'panel_closed'),
+    '使用者回報「藍框自己不見了」時要查得到是哪一次清場')
+})

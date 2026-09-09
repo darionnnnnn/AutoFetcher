@@ -1883,6 +1883,11 @@ function bindPreActionMessageListener() {
   if (globalThis.chrome?.runtime?.onMessage?.addListener) {
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.type === MSG.PICKED && msg.purpose === 'preaction') {
+        // 那一列可能已經被刪掉、或整份清單被重畫過（編輯既有任務時會 replaceChildren）：
+        // 寫進孤兒節點的話，使用者會看到「選好了卻沒反應」
+        if (lastPreActionPickRow && !lastPreActionPickRow.isConnected) {
+          lastPreActionPickRow = null
+        }
         if (lastPreActionPickRow && !msg.cancelled) {
           lastPreActionPickRow._locator = msg.locator || null
           lastPreActionPickRow._frame = msg.frameUrl ? { url: msg.frameUrl } : null

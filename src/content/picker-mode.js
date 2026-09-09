@@ -11,6 +11,7 @@ import {
   // 這裡以原本的區域名稱引入，呼叫端一律不變
   CELL_SELECTOR,
   tableOf, isHeaderCell,
+  cssGridRowsOf,
   tableRowsOf as getTableRows,
   rowCellsOf as getRowCells,
   isHeaderRowOf as isHeaderRow
@@ -132,7 +133,8 @@ function resolveDataRows(tableEl) {
   if (kindOf(tableEl).kind === 'table') {
     return getTableRows(tableEl).filter(r => !isHeaderRow(r))
   }
-  return Array.from(tableEl.children || [])
+  // CSS 假表格的列判準也走 shared/table.js 那一份（選取端與解析端不得各寫一份）
+  return cssGridRowsOf(tableEl)
 }
 
 // 解析目標所在的資料列與資料欄索引

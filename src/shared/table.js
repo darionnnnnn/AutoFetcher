@@ -475,6 +475,17 @@ function parseAriaTable(el) {
   return { cells, headers }
 }
 
+/**
+ * CSS 假表格的資料列：容器的直接子節點就是列。
+ * 選取端（picker-mode 的 resolveDataRows）與解析端（parseCssGrid）要用同一份，
+ * 各寫一份的話，兩邊對「哪些是列」的認知會漂移——這一輪修掉的正是這種漂移。
+ * @param {Element} el 容器
+ * @returns {Element[]} 列元素
+ */
+export function cssGridRowsOf(el) {
+  return Array.from(el?.children || [])
+}
+
 // 判定是否符合 CSS 假表格條件
 function isCssGrid(el) {
   const children = Array.from(el?.children || [])
@@ -488,7 +499,7 @@ function isCssGrid(el) {
 
 // 解析 CSS 假表格
 function parseCssGrid(el) {
-  const children = Array.from(el.children || [])
+  const children = cssGridRowsOf(el)
   const cells = children.map((row) =>
     Array.from(row.children || []).map((col) => cleanText(col.textContent))
   )

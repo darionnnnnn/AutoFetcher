@@ -485,6 +485,11 @@ export async function handleMessage(msg, sender) {
         // 面板已經開著、使用者也填了一半的表單時，**只換目標**：
         // 名稱、排程、儀表板、進階設定全部留著（右鍵重選一個目標不該把表單清空）
         const existing = await getPanelCtx(tabId)
+        // 面板已經關掉（暫存被清），頁面卻還在選取模式：值選好了沒有人接。
+        // 使用者看到的是「選完什麼都沒發生」，沒有這一筆就查不出原因
+        if (!existing) {
+          await diag.log('panel_missing_on_pick', { tabId, purpose: msg.purpose })
+        }
         const keepDraft = existing && (existing.kind === 'new' || existing.kind === 'edit')
         await mergePanelCtx(tabId, {
           kind: 'new',
@@ -694,6 +699,9 @@ export async function closePanelFor(tabId, opts = {}) {
   const pending = await getPanelCtx(tabId)
   await clearPanelCtx(tabId)
   if (opts.keepMarks || !pending) return
+  // 「面板關掉了、頁面上的標示也清了」要留痕跡：使用者回報「藍框自己不見了」時，
+  // 診斷區看得到是哪一次清場、當時面板停在哪個狀態
+  await diag.log('panel_closed', { tabId, kind: pending?.kind })
   // 最上層一定在，先送它；其餘 frame 能列出來就一起送（選取模式可能鑽進了 iframe）。
   // 一個分頁可能有多個 frame，不指名 frameId 就是廣播（見 CLAUDE.md 的 D13 規約）
   const targets = new Set([0])

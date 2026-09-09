@@ -254,6 +254,8 @@
     (只是視覺殘留,不影響資料)。儲存後自動關面板用 `sidePanel.close({tabId})`(141+)。
   - **舊版瀏覽器(或手勢不成立)退回原本的彈出視窗**,並記一筆 `panel_fallback` 診斷:
     使用者看到的是「右鍵沒反應」,沒有紀錄就查不出原因。
+    另兩種說不出口的狀況也各記一筆:面板關閉清場(`panel_closed`,對到「藍框自己不見了」)、
+    面板已關卻仍收到 `PICKED`(`panel_missing_on_pick`,對到「選完什麼都沒發生」)。
 - **面板有三種畫面狀態**:**等待態**(`#panel-waiting`,右鍵剛開、還在頁面上選)——
   一句「正在頁面上選取…」加一顆「取消選取」;**表單**(選好之後);
   **換目標提示**(`#retarget-note`,「已換成新的目標，其他設定都留著。」)。
@@ -648,6 +650,8 @@ iframe 可能是「先點按鈕才出現」,所以 1、2 層是**輪詢**等待(
   `rowHeader(row)`(該列第一個非空文字格)、`getDataRows(el)`(排除表頭的資料列元素)。
   表頭列只認 `thead` 內的列,或表格**開頭連續**的表頭列——表格中段整列 `th` 的分組標題
   (「亞洲貨幣」那種)是資料的一部分,把它當表頭會讓整份表頭被那一列洗掉。
+- **CSS 假表格的資料列判準也只有一份**(`cssGridRowsOf`):選取端與解析端各寫一份的話,
+  兩邊對「哪些是列」的認知會漂移——本輪修掉的正是這種漂移。
 - **「哪些列／格屬於這張表」的判準只有 `shared/table.js` 一份**(AF-10):
   `tableOf` / `cellOf` / `isHeaderCell` / `tableRowsOf` / `rowCellsOf` / `isHeaderRowOf`
   加上 `CELL_SELECTOR` / `TABLE_SELECTOR`,`content/picker-mode.js`(選取)與

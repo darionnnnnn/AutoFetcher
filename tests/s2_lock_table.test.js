@@ -4,6 +4,7 @@ process.env.TZ = 'Asia/Taipei'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { JSDOM } from 'jsdom'
+import { readFileSync } from 'node:fs'
 import { installChromeMock, resetChromeMock } from './chrome-mock.js'
 
 // 兩張不相干的表 + 一段非表格文字（模擬「滑鼠往右上角工具列移動時經過的頁面內容」）
@@ -304,4 +305,47 @@ test('C-7 工具列的判定來源是「已選那張表」，不是滑鼠底下�
   move(win, doc.getElementById('gap'))
   assert.equal(disabledCount(doc), 0, '已選非空時三段一律可用')
   pm.exitPickMode()
+})
+
+// ---------- C-8 規劃定案 6：送出前補回只是保險，鎖表後不該再被觸發 ----------
+
+test('C-8 滑鼠移出表格後送出，目標從頭到尾都沒離開過已選那張表', async () => {
+  const { c, doc, pm, win } = await boot(TWO_TABLES)
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.body })
+  move(win, doc.getElementById('a1'))
+  click(win, doc.getElementById('a1'))
+
+  // 滑鼠一路刮過非表格區域再送出——鎖表生效的話，目標全程都是那張表
+  move(win, doc.getElementById('gap'))
+  assert.equal(pm.currentTarget()?.id, 'ta', '前置：鎖表要成立')
+  move(win, doc.querySelector('p#gap'))
+  key(doc, win, 'Enter')
+
+  const msg = picked(c)[0]
+  assert.ok(msg?.picks?.[0]?.cell, `送出的要是那一格，實得 ${JSON.stringify(msg?.picks)}`)
+  assert.equal(msg.picks[0].cell.col.index, 1)
+})
+
+// ---------- C-9 CSS 假表格的列判準與解析端同一份 ----------
+
+test('C-9 CSS 假表格的列判準只有一份：選取端與解析端都用 shared/table.js', async () => {
+  // 兩邊的寫法字面上等價，行為測不出差異——會出事的是「哪天有一邊改了」。
+  // 所以守的是結構事實：選取端不得自己組列陣列。
+  const pmSrc = readFileSync(new URL('../src/content/picker-mode.js', import.meta.url), 'utf8')
+  const fn = pmSrc.slice(pmSrc.indexOf('function resolveDataRows'), pmSrc.indexOf('function resolveDataRows') + 400)
+  assert.ok(fn.includes('cssGridRowsOf'),
+    'CSS 假表格的列要走 shared/table.js 的那一份')
+  assert.ok(!/Array\.from\(tableEl\.children/.test(fn),
+    `選取端不得自己組一份列陣列（漂移就是這樣開始的），實得：${fn.slice(0, 200)}`)
+
+  // 而且兩邊對同一個假表格要算出一樣的列數
+  const { parseTable, cssGridRowsOf } = await import('../src/shared/table.js?t=' + Math.random())
+  const doc = new JSDOM(`<!doctype html><body><div id="g">
+      <div><span>甲</span><span>乙</span></div>
+      <div><span>1</span><span>2</span></div>
+      <div><span>3</span><span>4</span></div>
+    </div></body>`).window.document
+  const el = doc.getElementById('g')
+  assert.equal(cssGridRowsOf(el).length, parseTable(el).cells.length,
+    '選取端看到的列數要等於解析端解出來的列數')
 })

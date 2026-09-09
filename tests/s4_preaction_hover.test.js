@@ -5,6 +5,7 @@ process.env.TZ = 'Asia/Taipei'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { JSDOM } from 'jsdom'
+import { readFileSync } from 'node:fs'
 import { installChromeMock, resetChromeMock } from './chrome-mock.js'
 import { waitMsOf, preActionLabel, preActionFailure } from '../src/shared/preaction.js'
 
@@ -209,4 +210,38 @@ test('A-6 立即測試成功時回報前置動作逐步軌跡', async () => {
   assert.equal(res.preActionTrace[0].type, 'hover')
   assert.equal(res.preActionTrace[0].ok, true)
   assert.equal(typeof res.preActionTrace[0].ms, 'number')
+})
+
+// ---------- A-7 前置動作那一列被重畫之後，回填不得寫進孤兒節點 ----------
+
+test('A-7 選好元素回填時，那一列已經不在畫面上就不寫（否則使用者看到「選好了卻沒反應」）', async () => {
+  resetChromeMock()
+  const c = installChromeMock()
+  const st = await import('../src/shared/storage.js?t=' + Math.random())
+  await st.init()
+  const html = readFileSync(new URL('../src/ui/picker/picker.html', import.meta.url), 'utf8')
+  const jd = new JSDOM(html, { url: 'chrome-extension://abc/ui/picker/picker.html' })
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  const pk = await import('../src/ui/picker/picker.js?t=' + Math.random())
+  const doc = jd.window.document
+
+  // 事件在 render 時綁定（測試環境沒有 chrome.runtime.id，模組底部的 init 區塊不會跑）
+  pk.render({ locator: { css: '#v' }, url: 'https://a.test/p', tabId: 3 })
+  doc.getElementById('preaction-add')?.click()
+  const row = doc.querySelector('[data-preaction-row]')
+  assert.ok(row, `前置：按「新增動作」要長出一列，實得 ${doc.getElementById('preaction-list')?.childElementCount}`)
+  row.querySelector('[data-action="preaction-pick"]')?.click()
+  await new Promise(r => setTimeout(r, 5))
+
+  // 那一列被整份重畫掉（編輯既有任務時會 replaceChildren）
+  doc.getElementById('preaction-list').replaceChildren()
+
+  // 選取結果晚一步回來
+  for (const fn of c.runtime.onMessage._listeners) {
+    fn({ type: 'PICKED', purpose: 'preaction', locator: { css: '#x' } }, {}, () => {})
+  }
+  await new Promise(r => setTimeout(r, 5))
+  assert.equal(row._locator ?? null, null,
+    '寫進已經被丟掉的節點等於什麼都沒發生，使用者會以為選取失敗')
 })
