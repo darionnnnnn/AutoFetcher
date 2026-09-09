@@ -28,9 +28,12 @@ async function freshBg() {
   globalThis.navigator = { onLine: true }
   const st = await import('../src/shared/storage.js?t=' + Math.random())
   await st.init()
-  await import('../src/background/main.js?t=' + Math.random())
-  return { c, st }
+  const bg = await import('../src/background/main.js?t=' + Math.random())
+  return { c, st, bg }
 }
+
+// 驗回傳形狀的直接呼叫 handleMessage，執行選項走第三參數（訊息裡塞不進去）
+const runTask = (bg, taskId, opts) => bg.handleMessage({ type: 'RUN_TASK', taskId }, {}, opts)
 
 function sendTo(c, msg, sender = {}) {
   const listener = [...c.runtime.onMessage._listeners][0]
@@ -94,7 +97,7 @@ test('開抽屜改個標題不會把按天分列改掉', async () => {
 // ---- 立即抓取的逐值回饋 ----
 
 test('多值任務按立即抓取要看得到每個值', async () => {
-  const { c, st } = await freshBg()
+  const { c, st, bg } = await freshBg()
   await st.saveTask(multi())
   c.__setTabResponder(() => ({
     ok: true,
@@ -103,7 +106,7 @@ test('多值任務按立即抓取要看得到每個值', async () => {
       k2: { ok: false, error: 'not_found' }
     }
   }))
-  const res = await sendTo(c, { type: 'RUN_TASK', taskId: 'bank', __testOpts: FAST })
+  const res = await runTask(bg, 'bank', FAST)
   assert.ok(Array.isArray(res.values), '多值任務要回傳每個值的結果')
   assert.equal(res.values.length, 2)
   const buy = res.values.find(v => v.name === '美金買入')
@@ -113,13 +116,13 @@ test('多值任務按立即抓取要看得到每個值', async () => {
 })
 
 test('單值任務的回傳形狀不變', async () => {
-  const { c, st } = await freshBg()
+  const { c, st, bg } = await freshBg()
   await st.saveTask({
     id: 't1', name: '總量', url: 'https://a.test/p', mode: 'number', enabled: true,
     locator: { css: '#v' }, spec: { strategy: 'auto' }, schedule: { type: 'daily', times: ['09:30'] }
   })
   c.__setTabResponder(() => ({ ok: true, value: 12, raw: '12', status: 'ok' }))
-  const res = await sendTo(c, { type: 'RUN_TASK', taskId: 't1', __testOpts: FAST })
+  const res = await runTask(bg, 't1', FAST)
   assert.equal(res.value, 12)
   assert.equal(res.values, undefined)
 })

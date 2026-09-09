@@ -191,3 +191,34 @@ test('D13 守門:tabs.sendMessage 一律指名 frameId(否則會廣播給每個 
   }
   assert.deepEqual(offenders, [], `tabs.sendMessage 必須帶第 3 個引數指定 frameId:${offenders.join(', ')}`)
 })
+
+// AF-12:正式碼不得留測試用的後門。
+// `src/background/main.js` 的 `RUN_TASK` 曾把 `msg.__testOpts` 展開進 `runTask`——
+// 等於任何送得出 runtime 訊息的來源都能改抓取時序、把這次改成 dryRun、或改成 scheduled 去偷排程槽。
+// 它從開案活到第 12 輪,因為這條規則以前只寫在 CLAUDE.md 靠人工 grep。
+// 測試要縮短等待就走函式參數(`handleAlarm(alarm, testOpts)`、`handleMessage(msg, sender, runOpts)`),
+// 正式接線不傳,那條路就不存在。
+test('D14 守門:正式碼不得含測試後門(__test、測試檔名、Error().stack)', () => {
+  const files = jsFiles()
+  assert.ok(files.length > 10, `掃不到 src 的 js 檔就等於這條規則沒生效,實得 ${files.length} 個`)
+  // 測試檔名(不含副檔名)一律不該出現在 src/,否則就是「跑到某個測試就改行為」
+  const TESTS = fileURLToPath(new URL('../tests/', import.meta.url))
+  const testNames = readdirSync(TESTS).filter(n => n.endsWith('.test.js')).map(n => n.slice(0, -8))
+  assert.ok(testNames.length > 10, `列不到測試檔就等於這半條規則沒生效,實得 ${testNames.length} 個`)
+  const NL = String.fromCharCode(10)
+  const offenders = []
+  for (const p of files) {
+    const src = read(p)
+    const lines = src.split(String.fromCharCode(10))
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      if (line.includes('__test')) offenders.push(`${rel(p)}:${i + 1} 有 __test`)
+      if (/Error\s*\(\s*\)\s*\.stack/.test(line)) offenders.push(`${rel(p)}:${i + 1} 讀呼叫堆疊`)
+      for (const n of testNames) {
+        if (line.includes(`${n}.test`)) offenders.push(`${rel(p)}:${i + 1} 提到測試檔 ${n}`)
+      }
+    }
+  }
+  assert.deepEqual(offenders, [],
+    `正式碼裡有測試後門(測試要縮短等待請走函式參數,不要走訊息欄位):${NL}${offenders.join(NL)}`)
+})

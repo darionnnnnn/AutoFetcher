@@ -134,12 +134,40 @@ test('重試 alarm 觸發時帶著遞增的 attempt 再抓一次', async () => {
   assert.equal(recs[0].status, 'not_found')
 })
 
+// 這一條驗的是**接線**（監聽器有註冊、會轉給 handleMessage、非同步回覆送得回來），
+// 所以送的必須是正式訊息長的樣子：只有 type 與 taskId。
+// 時序不必另外縮短——mock 的分頁預設就是 complete（載入輪詢一次都不進），
+// 額外等待走正式設定 extraDelaySec。
 test('訊息 RUN_TASK 會抓指定任務', async () => {
   const { c, st } = await fresh()
   await st.saveTask(daily('t1'))
-  await c.__emitMessage({ type: 'RUN_TASK', taskId: 't1', __testOpts: FAST })
+  await st.saveSettings({ extraDelaySec: 0 })
+  await c.__emitMessage({ type: 'RUN_TASK', taskId: 't1' })
   const today = localToday()
   assert.equal((await st.getRecordsByDate(today)).length, 1)
+})
+
+// AF-12：執行選項只有直接呼叫 handleMessage 的人給得了。
+// 以前 RUN_TASK 會把 msg.__testOpts 展開進 runTask，等於任何送得出 runtime 訊息的來源
+// 都能改抓取時序、把這一次改成 dryRun、或改成 scheduled 去偷排程槽。
+test('訊息裡帶的執行選項一律不生效（dryRun／reason／__testOpts 都塞不進 runTask）', async () => {
+  const { c, st } = await fresh()
+  await st.saveTask(daily('t1'))
+  await st.saveSettings({ extraDelaySec: 0 })
+  await c.storage.local.set({ runs: {} })
+  await c.__emitMessage({
+    type: 'RUN_TASK',
+    taskId: 't1',
+    dryRun: true,
+    reason: 'scheduled',
+    slot: '2000-01-01T00:00',
+    __testOpts: { dryRun: true }
+  })
+  const recs = await st.getRecordsByDate(localToday())
+  assert.equal(recs.length, 1, 'dryRun 生效的話就不會寫紀錄——訊息塞得進執行選項')
+  assert.notEqual(recs[0].slot, '2000-01-01T00:00', 'slot 也不得由訊息指定')
+  const runs = (await c.storage.local.get('runs')).runs || {}
+  assert.deepEqual(runs, {}, 'reason 被改成 scheduled 的話會寫帳本，偷走同一分鐘的排程槽')
 })
 
 test('訊息 REBUILD_ALARMS 會重建排程與預檢', async () => {

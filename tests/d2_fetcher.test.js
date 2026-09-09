@@ -226,3 +226,19 @@ test('例外不會讓 runTask 炸掉,會寫成 error 紀錄', async () => {
   assert.equal(rec.status, 'error')
   assert.ok(String(rec.error).includes('boom'))
 })
+
+// AF-12：擷取逾時的計時器要清掉。
+// 以前 Promise.race 裡那個 setTimeout 從不清除，抓取成功之後它還吊著事件迴圈
+// 到 extractTimeoutMs（預設 15 秒）為止——MV3 的 service worker 因此遲遲不能閒置回收，
+// 測試套件也會憑空多等 15 秒。
+test('抓完不留計時器（不指定 extractTimeoutMs，用正式的 15 秒）', async () => {
+  const { c, st, fe } = await fresh()
+  c.__setTabResponder(() => ({ ok: true, value: 7, raw: '7', status: 'ok', strategyUsed: 'auto', layer: 'css' }))
+  await st.saveSettings({ extraDelaySec: 0 })
+  const timers = () => process.getActiveResourcesInfo().filter(r => r === 'Timeout').length
+  const before = timers()
+  const rec = await fe.runTask(task(), { slot: '2026-09-06T09:00', pollMs: 1, loadTimeoutMs: 200 })
+  assert.equal(rec.status, 'ok')
+  assert.equal(timers(), before,
+    '擷取逾時的計時器沒清掉：service worker 會被它多吊 15 秒，整套測試也跟著等')
+})

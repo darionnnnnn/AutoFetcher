@@ -436,10 +436,15 @@ export async function runTask(task, opts = {}) {
       // 10. 擷取：先 SCROLL_INTO_VIEW，再 EXTRACT
       await chrome.tabs.sendMessage(tabId, { type: MSG.SCROLL_INTO_VIEW, locator: task.locator }, { frameId: loc.frameId })
 
+      // 逾時計時器**贏了要清、輸了更要清**:不清的話每抓一次就留一個 extractTimeoutMs（預設 15 秒）
+      // 的計時器吊著事件迴圈，MV3 的 service worker 因此遲遲不能閒置回收（AF-12 發現）
+      let extractTimer = null
       const res = await Promise.race([
         chrome.tabs.sendMessage(tabId, { type: MSG.EXTRACT, locator: task.locator, spec: task.spec }, { frameId: loc.frameId }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Extract timeout')), extractTimeoutMs))
-      ])
+        new Promise((_, reject) => {
+          extractTimer = setTimeout(() => reject(new Error('Extract timeout')), extractTimeoutMs)
+        })
+      ]).finally(() => { if (extractTimer !== null) clearTimeout(extractTimer) })
 
       // 演練模式：直接回傳 content script 擷取回覆（附上前置動作做了哪幾步）
       if (dryRun) return preActionTrace.length > 0 ? { ...res, preActionTrace } : res

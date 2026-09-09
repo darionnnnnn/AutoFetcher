@@ -475,7 +475,7 @@ iframe 可能是「先點按鈕才出現」,所以 1、2 層是**輪詢**等待(
 | 看門狗 | 上述任一環節漏掉,沒有人發現 | 固定 alarm `__watchdog` 每 15 分鐘:①確認每個啟用任務的 alarms 存在,缺就重建;②確認 `__sitecheck`(每日站台檢查)還在,不在才補建;③以帳本比對「上次檢查以來應有的槽」,缺的補進錯過清單;④清理超過 3 分鐘的中途 run(`startedAt` 存的是 ISO 字串);⑤記錄一筆心跳 |
 | 沒有任何視窗 | macOS 上 Chrome 可在無視窗狀態執行,`tabs.create` 失敗 | 抓取前 `windows.getAll()` 為空時 `windows.create({state:"minimized"})`,用完關閉 |
 | 背景分頁被 Chrome 丟棄(discard)/ 省電模式 | 分頁存在但內容被卸載,注入失敗 | `tabs.get` 檢查 `discarded`,是則 `tabs.reload` 再等 `complete`;自開的分頁設 `autoDiscardable:false` |
-| 頁面永遠不到 `complete` | 有些頁長連線不結束 | 載入等待上限 30 秒,到時仍嘗試注入擷取;擷取本身逾時 15 秒 |
+| 頁面永遠不到 `complete` | 有些頁長連線不結束 | 載入等待上限 30 秒,到時仍嘗試注入擷取;擷取本身逾時 15 秒(**計時器在擷取結束時清掉**,不清的話每抓一次都把 service worker 多吊 15 秒不能閒置) |
 | 離線 / 網路錯誤 | 抓到錯誤頁 | `navigator.onLine` 為 false 直接排 10 分鐘後重試;找不到目標元素走重試(2 分鐘、10 分鐘,共兩次;HTTP 錯誤頁的判定見 BACKLOG) |
 | 同時多任務 | 同站台互相干擾、開太多分頁 | 同站台嚴格串行並共用同一個分頁(全域並行佇列見 BACKLOG) |
 | 時鐘/時區變更 | 排程槽算錯 | 看門狗每次比較 `Intl.DateTimeFormat().resolvedOptions().timeZone`,變了就 `rebuildAlarms()` |
