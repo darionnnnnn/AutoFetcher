@@ -55,6 +55,7 @@
 | 告警觸發時 POST 到 webhook | 使用者要接自動化時(`shared/alerts.js` 的 hits 就是觸發點) |
 | 登入表單在 iframe 內 | 自動登入固定走最上層 frame(SPEC §6);有站台把登入表單放在 iframe 時 |
 | `about:blank` / `srcdoc` iframe 的煙霧驗證 | 網址沒有辨識度,只剩 SPEC §3 第 3 層定位;有使用者回報這種站台時 |
+| iframe 代理層貼進 iframe 自己的堆疊脈絡祖先 | 目前貼在 `<body>` 底下、`z-index` 取 iframe 最外層堆疊祖先的值(SPEC §2);選單與 iframe **同在一個有 z-index 的容器裡**時,代理層在 body 層級贏過整個容器,只剩讓路(零延遲收合的選單救不回來)。正解是把代理層貼進那個容器、`z-index` 取 iframe 自己的;代價是代理層會落在頁面的表格裡,`upgradeTarget`、`onMouseMove` 的表格分支、`onClick` 的表格分支三處都要加「代理層不算格子」的守衛。有使用者回報這種版面時 |
 | 進入選取模式**之後**才插入的 iframe 沒有代理層 | 代理層在 `ENTER_PICK` 當下依當時的 `<iframe>` 清單建好(位置會隨滑鼠移動重算,但不會補建新的);有站台回報「後來出現的 iframe 指不到」時,改用 `MutationObserver` |
 | 選取模式從 iframe 往上回到父頁面 | 目前只能往下鑽,要換目標得 `Esc` 重來;使用者反映麻煩時 |
 | 英文介面 / i18n | 上架 Chrome Web Store 或要分享給非中文使用者時 |

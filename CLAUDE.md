@@ -82,7 +82,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1846 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1848 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -152,7 +152,8 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   兩次都是「清單清了、旁邊那份索引沒清」,`Ctrl+Z` 或送出就把 A 表的索引配上 B 表的定位。
 - **蓋在頁面上、又接指標事件的東西要讓得開**:iframe 代理層曾貼在 z-index 最高的 overlay 底下,
   把站台疊在 iframe 上的下拉選單整個擋掉(站台收到 `mouseout` 就收合,使用者點不到選單項目)。
-  規則見 SPEC §2:貼在 `<body>` 底下、`z-index` 跟著 iframe 走、沒有 z-index 時靠 `elementFromPoint` 讓路。
+  規則見 SPEC §2:貼在 `<body>` 底下、`z-index` 跟著 iframe **最外層有數字 z-index 的祖先**走
+  (只看 iframe 自己會被 `.content { z-index: 2 }` 這種容器蓋住,iframe 反而選不到)、沒有 z-index 時靠 `elementFromPoint` 讓路。
   **父文件收不到「指標進入跨網域 iframe」的任何事件**,別再想用 `mouseover` 之類的訊號開關它。
 - **選取模式的模組狀態要在 `exitPickMode` 全部重設**:漏一個(例如「已選屬於哪張表」)
   會讓同一頁的下一次選取沿用上一張表的 locator、配上新表的列欄索引送出,抓到的永遠是錯的值。

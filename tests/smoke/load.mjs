@@ -168,7 +168,7 @@ try {
 <div id="menu" style="position:absolute;left:0;top:30px;width:200px;height:120px;background:#fff;border:1px solid #999;display:none;z-index:10">
   <a id="item" href="#" style="display:block;padding:8px">Intelligent</a>
 </div>
-<iframe id="fr" src="http://localhost:48124/inner" style="width:600px;height:400px;border:0"></iframe>
+<div id="wrap"><iframe id="fr" src="http://localhost:48124/inner" style="width:600px;height:400px;border:0"></iframe></div>
 <script>
   const bar = document.getElementById('bar'), menu = document.getElementById('menu')
   const inside = (n) => n && (n === bar || n === menu || menu.contains(n))
@@ -526,8 +526,10 @@ try {
   }
   await olPage.evaluate(() => { window.__delay = false })
 
-  // (3) 裸露的 iframe 仍要指得到、點得進去
+  // (3) 裸露的 iframe 仍要指得到、點得進去——而且 iframe 包在有 z-index 的容器裡
+  //     (體檢抓到的退化:代理層只看 iframe 自己的 z-index 會拿到 0,被容器整個蓋住)
   await setMenuZ('10')
+  await olPage.evaluate(() => { const w = document.getElementById('wrap'); w.style.position = 'relative'; w.style.zIndex = '2' })
   await enterPick('task')
   await olPage.mouse.move(700, 550)               // 先離開選單,讓代理層裝回去
   await olPage.mouse.move(400, 300)               // iframe 上沒有東西疊著的地方
@@ -541,6 +543,9 @@ try {
   if (onFrame.proxy !== 'auto') {
     errors.push(`AF-11:裸露的 iframe 上代理層要接得到指標,實得 ${onFrame.proxy}`)
   }
+  if (onFrame.zIndex !== '2') {
+    errors.push(`AF-11:iframe 在 z-index 2 的容器裡,代理層要跟到 2 才蓋得住,實得 ${onFrame.zIndex}`)
+  }
   if (!/框架/.test(onFrame.panel)) {
     errors.push(`AF-11:指到 iframe 時面板要說是框架,實得 ${onFrame.panel.slice(0, 40)}`)
   }
@@ -551,8 +556,8 @@ try {
   if (!afterFrameClick.includes('DESCEND_FRAME')) {
     errors.push(`AF-11:點裸露的 iframe 要下鑽,實得 ${JSON.stringify(afterFrameClick)}`)
   }
-  if (onFrame.proxy === 'auto' && afterFrameClick.includes('DESCEND_FRAME')) {
-    console.log(`${browserName}:裸露的 iframe 仍指得到並下鑽`)
+  if (onFrame.proxy === 'auto' && onFrame.zIndex === '2' && afterFrameClick.includes('DESCEND_FRAME')) {
+    console.log(`${browserName}:包在 z-index 容器裡的 iframe 仍指得到並下鑽`)
   }
   await olPage.close()
 

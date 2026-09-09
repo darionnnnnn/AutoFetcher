@@ -426,15 +426,26 @@ function syncProxyRects() {
 // **但不能蓋在頁面自己疊上來的東西上**（下拉選單、彈窗）——
 // 指標被代理層攔走的話，站台收到 mouseout 就把選單收起來，使用者永遠點不到選單項目。
 // 所以代理層貼在 <body> 底下（不放進 z-index 拉到最高的 overlay，那是獨立堆疊脈絡，
-// 放進去就一定蓋過所有頁面內容），z-index 跟著 iframe 自己那一層走：
+// 放進去就一定蓋過所有頁面內容）。
+// 跟它在 body 這一層比高低的不是 iframe 自己，是 iframe **最外層那個有數字 z-index 的祖先**
+// （`.content { position: relative; z-index: 2 }` 這種容器很常見）：
+// 只看 iframe 自己會拿到 0，整個容器蓋在代理層上面，iframe 反而選不到（體檢抓到的退化）。
+// 取那個值，代理層與容器同層、又排在 DOM 後面，就蓋得住 iframe；
 // 頁面把選單疊在 iframe 上時一定給了更高的 z-index，那就由選單勝出。
 function proxyZIndexFor(frame) {
   let z = 0
   try {
-    const cs = typeof window !== 'undefined' && typeof window.getComputedStyle === 'function'
-      ? window.getComputedStyle(frame) : null
-    const raw = Number(cs?.zIndex)
-    if (Number.isFinite(raw)) z = raw
+    const gcs = typeof window !== 'undefined' && typeof window.getComputedStyle === 'function'
+      ? window.getComputedStyle.bind(window) : null
+    if (gcs) {
+      let node = frame
+      while (node && node !== document.body && node !== document.documentElement) {
+        const raw = Number(gcs(node)?.zIndex)
+        // 一路往上覆寫，留下的就是最外層那個
+        if (Number.isFinite(raw)) z = raw
+        node = node.parentElement
+      }
+    }
   } catch {}
   return String(Math.max(0, z))
 }

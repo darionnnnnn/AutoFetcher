@@ -215,8 +215,13 @@
     三件事:
     1. **代理層貼在 `<body>` 底下,不放進 overlay**——overlay 的 `z-index` 是 2147483647
        且自成堆疊脈絡,放進去的東西一定蓋過所有頁面內容。
-    2. **`z-index` 跟著它代表的那個 iframe 走**(`getComputedStyle(frame).zIndex`,非數字取 `0`):
-       蓋得住 iframe,但頁面把選單疊上來時一定給了更高的 `z-index`,那就由選單勝出。這是主要機制。
+    2. **`z-index` 跟著 iframe 在 body 層級的堆疊祖先走**:取 iframe 往上到 `<body>` 這條鏈上
+       **最外層**那個有數字 `z-index` 的祖先(或 iframe 自己)的值,整條鏈都沒有取 `0`,負值取 `0`。
+       只看 iframe 自己會拿到 `0`,而 iframe 常包在 `.content { position: relative; z-index: 2 }` 這種容器裡,
+       整個容器就蓋在代理層上面、iframe 反而選不到。與容器同層、又排在 DOM 後面,就蓋得住 iframe;
+       頁面把選單疊上來時一定給了更高的 `z-index`,那就由選單勝出。這是主要機制。
+       **已知上限**:選單與 iframe 同在一個有 `z-index` 的容器裡時,代理層在 body 層級贏過整個容器,
+       只剩第 3 條的讓路(見 BACKLOG)。
     3. **只靠 DOM 順序疊上來(沒有 `z-index`)時讓路**:指標落在代理層上的那次 `mousemove`,
        暫時關掉代理層問一次 `document.elementFromPoint`,底下是頁面元素就把 `pointer-events` 收成 `none`
        並改以它為目標;指標離開它(`mousemove` 到別處,或它自己的 `mouseout`)再裝回去。

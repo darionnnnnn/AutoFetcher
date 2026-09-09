@@ -58,22 +58,48 @@ test('代理層貼在 body 底下，不得放進 z-index 最高的 overlay 裡',
   pm.exitPickMode()
 })
 
-test('代理層的 z-index 跟著 iframe 那一層走（頁面疊上來的選單才贏得了）', async () => {
-  const { doc, win, pm } = await setup(OVERLAP)
-  const frame = doc.getElementById('fr')
-  win.getComputedStyle = () => ({ zIndex: '3' })
+// 代理層貼在 body 底下，跟它比高低的是 iframe 在 body 層級的堆疊祖先。
+// 替身依元素 id 回 z-index，才驗得出「取哪一個」。
+function stubZ(win, table) {
+  win.getComputedStyle = (el) => ({ zIndex: table[el?.id] ?? 'auto' })
+}
+
+const WRAPPED = `
+  <div id="bar">投資先生</div>
+  <div id="menu" style="position:absolute;z-index:10"><a id="item" href="#">Intelligent</a></div>
+  <div id="outer"><div id="inner"><iframe id="fr" src="https://b.example/inner.html"></iframe></div></div>`
+
+test('iframe 包在有 z-index 的容器裡：代理層要拿容器那個值，否則被容器蓋住、iframe 選不到', async () => {
+  const { doc, win, pm } = await setup(WRAPPED)
+  stubZ(win, { outer: '2' })
   pm.enterPickMode({ purpose: 'preaction', initialTarget: doc.getElementById('bar') })
   const proxy = proxyOf(doc, 'fr')
-  assert.equal(proxy.style.zIndex, '3',
-    `代理層要跟 iframe 同一層，實得 ${proxy.style.zIndex}；拉到最高就會蓋掉頁面的選單`)
-  assert.ok(Number(proxy.style.zIndex) < 10, '必須輸給 z-index 10 的下拉選單')
-  assert.equal(frame.tagName, 'IFRAME')
+  assert.equal(proxy.style.zIndex, '2',
+    `只看 iframe 自己會拿到 0，整個容器就蓋在代理層上面；實得 ${proxy.style.zIndex}`)
+  assert.ok(Number(proxy.style.zIndex) < 10, '仍必須輸給 z-index 10 的下拉選單')
   pm.exitPickMode()
 })
 
-test('iframe 沒有 z-index 時代理層用 0（仍蓋得住 iframe，但輸給任何疊上來的東西）', async () => {
-  const { doc, win, pm } = await setup(OVERLAP)
-  win.getComputedStyle = () => ({ zIndex: 'auto' })
+test('巢狀容器都有 z-index 時取最外層那個（那才是在 body 層級比高低的值）', async () => {
+  const { doc, win, pm } = await setup(WRAPPED)
+  stubZ(win, { outer: '1', inner: '999', fr: '5' })
+  pm.enterPickMode({ purpose: 'preaction', initialTarget: doc.getElementById('bar') })
+  assert.equal(proxyOf(doc, 'fr').style.zIndex, '1',
+    '拿內層的 999 會讓代理層蓋過頁面所有 z-index < 999 的選單')
+  pm.exitPickMode()
+})
+
+test('整條鏈都沒有 z-index 時代理層用 0（仍蓋得住 iframe，但輸給任何疊上來的東西）', async () => {
+  const { doc, win, pm } = await setup(WRAPPED)
+  stubZ(win, {})
+  pm.enterPickMode({ purpose: 'preaction', initialTarget: doc.getElementById('bar') })
+  assert.equal(proxyOf(doc, 'fr').style.zIndex, '0')
+  pm.exitPickMode()
+})
+
+test('負的 z-index 不照抄（代理層跑到頁面底下就永遠指不到）', async () => {
+  const { doc, win, pm } = await setup(WRAPPED)
+  stubZ(win, { outer: '-1' })
   pm.enterPickMode({ purpose: 'preaction', initialTarget: doc.getElementById('bar') })
   assert.equal(proxyOf(doc, 'fr').style.zIndex, '0')
   pm.exitPickMode()
