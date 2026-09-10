@@ -57,6 +57,9 @@ export function preActionFailure(index, action, code) {
   if (code === 'preaction_not_found') return `${step}找不到元素`
   if (code === 'preaction_timeout') return `${step}等不到元素出現（逾時）`
   if (code === 'frame_not_found') return `${step}找不到元素所在的框架`
+  // 「沒有回應」與「動作失敗」是兩件事:探針顯示回應正常會在幾毫秒內回來,
+  // 一旦逾時,最可能的原因是這一步讓頁面換掉了,回應跟著舊文件一起消失
+  if (code === 'no_response') return `${step}沒有回應（這一步可能讓頁面換頁了）`
   return `${step}失敗：${code || '未知錯誤'}`
 }
 
@@ -69,4 +72,25 @@ export function preActionFailure(index, action, code) {
 export function timeoutMsOf(action) {
   const n = Number(action?.timeoutMs)
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_WAIT_TIMEOUT_MS
+}
+
+/** 送 `RUN_PRE_ACTIONS` 之後，等回應的緩衝毫秒 */
+export const PRE_ACTION_MESSAGE_BUFFER_MS = 5000
+
+/**
+ * 送 `RUN_PRE_ACTIONS` 給 content 之後要等多久才算沒有回應。
+ * **必須涵蓋動作自己需要的時間**：`hover` 的 `holdMs` 沒有上限，
+ * 固定 20 秒會把「使用者刻意設長的 hover」誤報成沒有回應，那是自己製造的假失敗。
+ * @param {{type?: string, holdMs?: number|string, timeoutMs?: number|string}} action 動作
+ * @returns {number} 毫秒數
+ */
+export function messageTimeoutMs(action) {
+  const type = action?.type
+  if (type === 'waitFor') return timeoutMsOf(action) + PRE_ACTION_MESSAGE_BUFFER_MS
+  if (type === 'hover') {
+    const n = Number(action?.holdMs)
+    const hold = Number.isFinite(n) && n >= 0 ? n : DEFAULT_HOVER_HOLD_MS
+    return hold + PRE_ACTION_MESSAGE_BUFFER_MS
+  }
+  return DEFAULT_WAIT_TIMEOUT_MS
 }

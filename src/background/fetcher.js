@@ -1,6 +1,6 @@
 // AutoFetcher 擷取流程：開分頁、注入、擷取、寫紀錄、重試
 import { getTask, saveTask, appendRecord, appendRecords, getRecordsInRange, getSettings, getAlertLog, setAlertLog, setLastValue, setLastValues } from '../shared/storage.js'
-import { waitMsOf, timeoutMsOf, preActionFailure, DEFAULT_WAIT_TIMEOUT_MS } from '../shared/preaction.js'
+import { waitMsOf, timeoutMsOf, preActionFailure, DEFAULT_WAIT_TIMEOUT_MS, messageTimeoutMs } from '../shared/preaction.js'
 import { seriesIdOf, parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
 import { MSG } from '../shared/messages.js'
 import { slotOf } from './scheduler.js'
@@ -16,6 +16,35 @@ import * as diag from '../shared/diag.js'
 // 短暫等待輔助函式（非排程）
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// 文件在抓取途中被換掉時，使用者看到的是這一句——**唯一一份**，
+// 立即測試、紀錄、任務頁、popup 都吃它。
+// Chrome 的原文只說了「送不到」，沒說發生什麼、也沒說能怎麼辦；原文留給診斷。
+const PAGE_GONE_MESSAGE =
+  '頁面在抓取途中換頁或重新載入，來不及取值。若有前置動作，請在會換頁的那一步後面加一個「等待」動作（建議 3 秒）；也請確認目標就在換頁後的那一頁。'
+
+// 我們自己丟的逾時要**帶得出身分**：判斷「該不該重試」不得比對 Chrome 的英文錯誤字串，
+// 那串字會隨瀏覽器版本與語系變，比對它就是把契約押在別人的文案上（AF-13）。
+function timeoutError(message) {
+  const err = new Error(message)
+  err.afTimeout = true
+  return err
+}
+
+/**
+ * 送訊息給 content，並且**一定要有逾時**。
+ * 計時器贏了要清、輸了更要清：不清的話每送一次就留一個計時器吊著事件迴圈，
+ * MV3 的 service worker 因此遲遲不能閒置回收（AF-12 發現，AF-13 把捲動與前置動作也納入）。
+ */
+function sendToFrame(tabId, message, frameId, timeoutMs, label) {
+  let timer = null
+  return Promise.race([
+    chrome.tabs.sendMessage(tabId, message, { frameId }),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(timeoutError(`${label} timeout`)), timeoutMs)
+    })
+  ]).finally(() => { if (timer !== null) clearTimeout(timer) })
 }
 
 // 解析 URL 取得 origin
@@ -247,6 +276,12 @@ export async function runTask(task, opts = {}) {
     pollMs = 250,
     loadTimeoutMs = 30000,
     extractTimeoutMs = 15000,
+    // 捲動到可視區只是捲動，不該比擷取還久
+    scrollTimeoutMs = 10000,
+    // 存活重試的間隔（AF-13）。探針顯示 150ms 一次就夠，這個額度很寬。
+    // **與排程層的重試是兩件事**：那是「這一輪失敗，隔一段時間整個重跑」，
+    // 這是「同一次執行內，文件被換掉就再抓一次」，兩者各自計數。
+    reviveDelaysMs = [300, 600, 1200],
     dryRun = false
   } = opts
   const isManual = reason === 'manual'
@@ -345,10 +380,16 @@ export async function runTask(task, opts = {}) {
         } else {
           const newTab = await chrome.tabs.create({
             url: task.url,
-            active: task.foreground === true,
-            autoDiscardable: false
+            active: task.foreground === true
           })
           tabId = newTab.id
+          // `autoDiscardable` **不是 `tabs.create` 的屬性**，只有 `tabs.update` 吃它。
+          // 放進 create 會讓整個呼叫被 Chrome 擋下（Unexpected property），
+          // 等於「目標頁沒開著」的排程抓取一律失敗——開案就寫錯，AF-13 的煙霧測試才抓到。
+          // 省電模式會卸載背景分頁，所以還是要設，只是要設在對的地方。
+          try {
+            await chrome.tabs.update(tabId, { autoDiscardable: false })
+          } catch {}
           queueCtx.createdTabs.add(tabId)
         }
       }
@@ -386,7 +427,8 @@ export async function runTask(task, opts = {}) {
 
       // 執行前置動作（若有指定）：一次一個，各自定位自己的 frame。
       // 「先點按鈕，iframe 才出現」是常見情境，整批送給同一個 frame 一定失敗。
-      if (Array.isArray(task.preActions) && task.preActions.length > 0) {
+      const ranPreActions = Array.isArray(task.preActions) && task.preActions.length > 0
+      if (ranPreActions) {
         for (let i = 0; i < task.preActions.length; i++) {
           const action = task.preActions[i]
           const startedAt = Date.now()
@@ -405,10 +447,19 @@ export async function runTask(task, opts = {}) {
             throw new Error(preActionFailure(i, action, 'frame_not_found'))
           }
           await injectContent(tabId, { frameId: actionLoc.frameId })
-          const preRes = await chrome.tabs.sendMessage(tabId, {
-            type: MSG.RUN_PRE_ACTIONS,
-            actions: [action]
-          }, { frameId: actionLoc.frameId })
+          // 沒有逾時的話，回應一旦跟著換掉的文件消失，整個抓取會吊到 service worker 被回收。
+          // 逾時值必須涵蓋動作自己需要的時間（`messageTimeoutMs`，唯一一份）。
+          let preRes
+          try {
+            preRes = await sendToFrame(tabId, {
+              type: MSG.RUN_PRE_ACTIONS,
+              actions: [action]
+            }, actionLoc.frameId, opts.preActionTimeoutMs ?? messageTimeoutMs(action), 'Pre-action')
+          } catch (err) {
+            preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
+            if (err?.afTimeout) throw new Error(preActionFailure(i, action, 'no_response'))
+            throw err
+          }
           if (preRes?.ok !== true) {
             preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
             // 訊息要說得出「第幾步、哪一種動作、怎麼了」，使用者才知道要調哪一列
@@ -418,8 +469,44 @@ export async function runTask(task, opts = {}) {
         }
       }
 
-      // 定位目標所在的 frame
-      const loc = await locateFrame(tabId, task.frame, task.locator, { pollMs, timeoutMs: opts.frameTimeoutMs ?? 20000 })
+      // 前置動作跑完之後再等一次「額外等待秒數」（AF-13）：
+      // 前置動作的點擊常常讓頁面換頁，擷取若趕在導覽生效前打中**舊文件**，
+      // 而 locator 剛好在舊頁面上匹配得到，就會回一個成功的錯誤值靜靜寫進紀錄——那比看到錯誤更糟。
+      // **這只是縮小窗口，不是關閉窗口**：真實瀏覽器實測，子框架導覽時分頁狀態全程 `complete`，
+      // 沒有任何訊號能證明「頁面已經安定」。
+      if (ranPreActions && extraDelayMs > 0) await sleep(extraDelayMs)
+
+      // 10. 取得目標並擷取：定位 → 注入 → 捲動 → 擷取，四步是一個整體。
+      // 中間任何一步「送不到」都代表文件被換掉了（content script 隨舊文件一起消失），
+      // 這時重新走一次就好；**逾時不重試**（那是頁面沒回應，重試只會把 15 秒乘以四），
+      // **找不到框架也不重試**（`locateFrame` 自己已經輪詢到逾時才放棄）。
+      // 前置動作留在這個區塊**外面**：它有副作用，重放就是把按鈕再按一次。
+      let loc = null
+      let res
+      let lastLiveErr = null
+      const maxAttempts = 1 + reviveDelaysMs.length
+      for (let a = 0; a < maxAttempts; a++) {
+        if (a > 0) await sleep(reviveDelaysMs[a - 1])
+        loc = await locateFrame(tabId, task.frame, task.locator, { pollMs, timeoutMs: opts.frameTimeoutMs ?? 20000 })
+        if (loc === null) break
+        try {
+          await injectContent(tabId, { frameId: loc.frameId })
+          // 捲動到可視區是**盡力而為**：它逾時不代表擷取也會失敗，
+          // 為它重試就是把 10 秒乘以四卡住同站台佇列，所以逾時就往下走，讓擷取自己去判定。
+          // 但捲動「送不到」是另一回事——那是文件被換掉的訊號，要讓它往上冒出去觸發重試。
+          try {
+            await sendToFrame(tabId, { type: MSG.SCROLL_INTO_VIEW, locator: task.locator }, loc.frameId, scrollTimeoutMs, 'Scroll')
+          } catch (err) {
+            if (!err?.afTimeout) throw err
+          }
+          res = await sendToFrame(tabId, { type: MSG.EXTRACT, locator: task.locator, spec: task.spec }, loc.frameId, extractTimeoutMs, 'Extract')
+          lastLiveErr = null
+          break
+        } catch (err) {
+          if (err?.afTimeout) throw err
+          lastLiveErr = err
+        }
+      }
       if (loc === null) {
         if (dryRun) return { ok: false, error: 'frame_not_found' }
         return await writeRecord({
@@ -430,21 +517,11 @@ export async function runTask(task, opts = {}) {
           error: '找不到目標所在的框架'
         }, { parentId: task.id, skipLedger: isManual })
       }
-
-      await injectContent(tabId, { frameId: loc.frameId })
-
-      // 10. 擷取：先 SCROLL_INTO_VIEW，再 EXTRACT
-      await chrome.tabs.sendMessage(tabId, { type: MSG.SCROLL_INTO_VIEW, locator: task.locator }, { frameId: loc.frameId })
-
-      // 逾時計時器**贏了要清、輸了更要清**:不清的話每抓一次就留一個 extractTimeoutMs（預設 15 秒）
-      // 的計時器吊著事件迴圈，MV3 的 service worker 因此遲遲不能閒置回收（AF-12 發現）
-      let extractTimer = null
-      const res = await Promise.race([
-        chrome.tabs.sendMessage(tabId, { type: MSG.EXTRACT, locator: task.locator, spec: task.spec }, { frameId: loc.frameId }),
-        new Promise((_, reject) => {
-          extractTimer = setTimeout(() => reject(new Error('Extract timeout')), extractTimeoutMs)
-        })
-      ]).finally(() => { if (extractTimer !== null) clearTimeout(extractTimer) })
+      if (lastLiveErr !== null) {
+        // 重試耗盡：標成「頁面沒了」，錯誤訊息在最外層的 catch 統一轉譯
+        lastLiveErr.afPageGone = true
+        throw lastLiveErr
+      }
 
       // 演練模式：直接回傳 content script 擷取回覆（附上前置動作做了哪幾步）
       if (dryRun) return preActionTrace.length > 0 ? { ...res, preActionTrace } : res
@@ -648,10 +725,19 @@ export async function runTask(task, opts = {}) {
       }, { parentId: task.id, skipLedger: isManual })
 
     } catch (err) {
+      // 存活重試耗盡才會走到這裡：把 Chrome 的英文原文換成說得出怎麼辦的中文，
+      // **原文寫進診斷不丟掉**（除錯時找不到原文就等於什麼線索都沒有）。
+      // 轉譯只能在這裡做一次：放進重試迴圈的話，每重試一次就把原文覆蓋一次。
+      const raw = String(err?.message || err)
+      let shown = raw
+      if (err?.afPageGone === true) {
+        shown = PAGE_GONE_MESSAGE
+        try { await diag.log('fetch_page_gone', `「${task.name}」${raw}`) } catch {}
+      }
       // 立即測試失敗時也要帶軌跡：使用者最需要知道的是「hover 有做、卡在第幾步」，
       // 只回一句錯誤訊息就是把軌跡丟掉
       if (dryRun) {
-        const out = { ok: false, error: String(err?.message || err) }
+        const out = { ok: false, error: shown }
         if (preActionTrace.length > 0) out.preActionTrace = preActionTrace
         return out
       }
@@ -664,7 +750,7 @@ export async function runTask(task, opts = {}) {
         slot,
         capturedAt: new Date().toISOString(),
         status: 'error',
-        error: String(err?.message || err)
+        error: shown
       }, { parentId: task.id, skipLedger: isManual })
     } finally {
       // 若有記錄前景抓取前作用中的分頁，將焦點還原
