@@ -7,6 +7,7 @@ import { seriesIdOf } from '../../shared/series-index.js'
 import { describeSchedule, describeTarget, describeDashboard, POS_TEXT } from '../../shared/describe.js'
 import { nextIntervalRun } from '../../shared/schedule-math.js'
 import { isAnchorText } from '../../shared/table.js'
+import { download } from '../../shared/export.js'
 
 let currentCtx = null
 let currentBlock = null
@@ -2138,12 +2139,47 @@ export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs =
   }
 }
 
+// 上一次「立即測試」失敗時 background 給的診斷包。**只存在記憶體**：
+// 不寫 storage、不進 diag 環形緩衝，使用者按下按鈕才落地成檔案（SPEC §3、§5）。
+let lastDebug = null
+
+// 匯出鈕與它的說明一起顯示或收起（收起時要把上一次的內容也丟掉，
+// 否則使用者在下一次成功之後匯出到的是舊的那一份）
+function setDiagAvailable(debug) {
+  lastDebug = debug || null
+  const btn = document.getElementById('export-diag')
+  const note = document.getElementById('export-diag-note')
+  const on = Boolean(lastDebug)
+  if (btn) btn.hidden = !on
+  if (note) note.hidden = !on
+}
+
+function diagFilename(name) {
+  const d = new Date()
+  const p = (n) => String(n).padStart(2, '0')
+  const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`
+  const safe = String(name || '').trim().replace(/[\/:*?"<>|\s]+/g, '-').slice(0, 40) || 'preview'
+  return `autofetcher-diag-${safe}-${stamp}.json`
+}
+
+export async function handleExportDiag() {
+  if (!lastDebug) return
+  try {
+    await download({
+      filename: diagFilename(document.getElementById('name')?.value),
+      content: JSON.stringify(lastDebug, null, 2)
+    })
+  } catch {}
+}
+
 export async function handleTestNow() {
   const previewEl = document.getElementById('preview')
   const errorsEl = document.getElementById('errors')
   if (errorsEl) errorsEl.textContent = ''
   const noteAtStart = document.getElementById('test-note')
   if (noteAtStart) noteAtStart.textContent = ''
+  // 這一次的結果還沒出來，上一次的診斷先收起來
+  setDiagAvailable(null)
   const busy = setBusy('test-now', '測試中…')
 
   const values = getFormData()
@@ -2197,6 +2233,8 @@ export async function handleTestNow() {
       if (errorsEl) errorsEl.textContent = err
       if (previewEl) previewEl.textContent = '—'
       setPreviewState('error')
+      // 失敗才有診斷可以匯出（成功時 background 不組）
+      setDiagAvailable(res?.debug)
       // 走到第幾步也要說：調 hover 選單時，「hover 有做、click 沒點到」與「hover 就失敗」是兩種修法
       const noteEl = document.getElementById('test-note')
       if (noteEl && Array.isArray(res?.preActionTrace) && res.preActionTrace.length > 0) {
@@ -2403,6 +2441,7 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
     } catch {}
   })
   document.getElementById('test-now')?.addEventListener('click', () => handleTestNow())
+  document.getElementById('export-diag')?.addEventListener('click', () => handleExportDiag())
   bindModeEvents()
   bindAlertEvents()
   bindPreActionEvents()

@@ -11,6 +11,43 @@ import { isSuccess, healthStatusOf } from '../shared/record-status.js'
 import { setTaskHealth, refreshBadge } from './health.js'
 import { ensureLoggedIn } from './login.js'
 import { locateFrame, sameOriginPath } from './frames.js'
+
+// `locateFrame` 找到才有 frameId；失敗時回的是帶候選清單的物件（給診斷用），不是 null
+function frameFound(loc) {
+  return Boolean(loc) && typeof loc.frameId === 'number'
+}
+
+// 「立即測試」失敗時給使用者匯出的診斷包（SPEC §3）。
+// **只在 dryRun 走這裡**：正式抓取不組（不寫紀錄、不進 diag 環形緩衝）。
+async function buildDebug(task, tabId, loc, preActionTrace, err, page) {
+  let tabUrl = ''
+  try {
+    // 轉址後的實際位置，不是任務設定的網址
+    tabUrl = (await chrome.tabs.get(tabId))?.url || ''
+  } catch {}
+  return {
+    version: chrome.runtime?.getManifest?.()?.version || '',
+    at: new Date().toISOString(),
+    tabUrl,
+    task: {
+      name: task?.name || '',
+      url: task?.url || '',
+      spec: task?.spec,
+      locator: task?.locator,
+      frame: task?.frame,
+      // 前置動作可能含站台帳號設定的 id，密碼一類永遠不在這裡（登入資料另存）
+      preActions: task?.preActions
+    },
+    frame: {
+      frameId: frameFound(loc) ? loc.frameId : null,
+      matchedBy: loc?.matchedBy ?? null,
+      candidates: Array.isArray(loc?.candidates) ? loc.candidates : []
+    },
+    ...(preActionTrace && preActionTrace.length > 0 ? { preActionTrace } : {}),
+    error: err || {},
+    ...(page ? { page } : {})
+  }
+}
 import * as diag from '../shared/diag.js'
 
 // 短暫等待輔助函式（非排程）
@@ -325,6 +362,8 @@ export async function runTask(task, opts = {}) {
     // 前置動作的逐步軌跡：立即測試要說得出「hover 有做、是 click 沒點到」，
     // 只回一句「成功」的話，使用者在調 hover 選單時完全沒有線索
     const preActionTrace = []
+    // 分頁 id 在 try 外面宣告：最外層的 catch 要用它組診斷包（讀分頁實際網址）
+    let tabId
     // 佇列中再次確認冪等，防止併發重複執行（dryRun 與手動抓取略過）
     if (!dryRun && !isManual) {
       const currentLedger = await getLedger()
@@ -356,7 +395,6 @@ export async function runTask(task, opts = {}) {
       }
 
       // 5. 分頁檢查：指定分頁存在則直接用，無則沿用既有網址分頁或新建
-      let tabId
       if (opts.tabId !== undefined && opts.tabId !== null) {
         try {
           const tab = await chrome.tabs.get(opts.tabId)
@@ -442,7 +480,8 @@ export async function runTask(task, opts = {}) {
             ? timeoutMsOf(action)
             : (opts.frameTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS)
           let actionLoc = await locateFrame(tabId, action?.frame, action?.locator, { pollMs, timeoutMs: actionTimeout })
-          if (actionLoc === null) {
+          // `locateFrame` 失敗時回的是帶候選清單的物件（診斷用），判定一律看有沒有 frameId
+          if (!frameFound(actionLoc)) {
             preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
             throw new Error(preActionFailure(i, action, 'frame_not_found'))
           }
@@ -460,7 +499,7 @@ export async function runTask(task, opts = {}) {
             if (pa > 0) {
               await sleep(reviveDelaysMs[pa - 1])
               const again = await locateFrame(tabId, action?.frame, action?.locator, { pollMs, timeoutMs: actionTimeout })
-              if (again === null) break
+              if (!frameFound(again)) break
               actionLoc = again
             }
             try {
@@ -513,7 +552,7 @@ export async function runTask(task, opts = {}) {
       for (let a = 0; a < maxAttempts; a++) {
         if (a > 0) await sleep(reviveDelaysMs[a - 1])
         loc = await locateFrame(tabId, task.frame, task.locator, { pollMs, timeoutMs: opts.frameTimeoutMs ?? 20000 })
-        if (loc === null) break
+        if (!frameFound(loc)) break
         try {
           await injectContent(tabId, { frameId: loc.frameId })
           // 捲動到可視區是**盡力而為**：它逾時不代表擷取也會失敗，
@@ -532,8 +571,8 @@ export async function runTask(task, opts = {}) {
           lastLiveErr = err
         }
       }
-      if (loc === null) {
-        if (dryRun) return { ok: false, error: 'frame_not_found' }
+      if (!frameFound(loc)) {
+        if (dryRun) return { ok: false, error: 'frame_not_found', debug: await buildDebug(task, tabId, loc, preActionTrace, { error: 'frame_not_found' }) }
         return await writeRecord({
           taskId: task.id,
           slot,
@@ -549,7 +588,17 @@ export async function runTask(task, opts = {}) {
       }
 
       // 演練模式：直接回傳 content script 擷取回覆（附上前置動作做了哪幾步）
-      if (dryRun) return preActionTrace.length > 0 ? { ...res, preActionTrace } : res
+      if (dryRun) {
+        const out = preActionTrace.length > 0 ? { ...res, preActionTrace } : { ...res }
+        // 失敗才附診斷：成功時沒有人要看，白帶一份大字串
+        if (res?.ok !== true) {
+          const page = res?.debug?.page
+          delete out.debug
+          out.debug = await buildDebug(task, tabId, loc, preActionTrace,
+            { error: res?.error, message: res?.message }, page)
+        }
+        return out
+      }
 
       // 結果處理：成功路徑
       if (res?.ok === true) {
@@ -764,6 +813,7 @@ export async function runTask(task, opts = {}) {
       if (dryRun) {
         const out = { ok: false, error: shown }
         if (preActionTrace.length > 0) out.preActionTrace = preActionTrace
+        out.debug = await buildDebug(task, tabId, null, preActionTrace, { error: shown, raw })
         return out
       }
       if (!isManual && attempt < 3) {

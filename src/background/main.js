@@ -598,7 +598,8 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       }
 
       const loc = await locateFrame(tab.id, task.frame, task.locator, { pollMs })
-      if (!loc) {
+      // 失敗時回的是帶候選清單的物件（診斷用），判定看有沒有 frameId
+      if (!loc || typeof loc.frameId !== 'number') {
         return { ok: false, error: 'frame_not_found' }
       }
 

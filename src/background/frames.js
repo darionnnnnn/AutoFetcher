@@ -42,7 +42,7 @@ export function matchFrameByUrl(frames, frameUrl) {
   // 第一層：完全相同
   const exactMatches = frames.filter((f) => f && f.url === frameUrl)
   if (exactMatches.length === 1) {
-    return { frameId: exactMatches[0].frameId }
+    return { frameId: exactMatches[0].frameId, matchedBy: 'exact' }
   }
   if (exactMatches.length > 1) {
     return { ambiguous: exactMatches.map((f) => f.frameId) }
@@ -53,7 +53,7 @@ export function matchFrameByUrl(frames, frameUrl) {
   const pathMatches = frames.filter((f) => f && typeof f.url === 'string' && sameOriginPath(f.url, frameUrl))
 
   if (pathMatches.length === 1) {
-    return { frameId: pathMatches[0].frameId }
+    return { frameId: pathMatches[0].frameId, matchedBy: 'path' }
   }
   if (pathMatches.length > 1) {
     return { ambiguous: pathMatches.map((f) => f.frameId) }
@@ -65,7 +65,7 @@ export function matchFrameByUrl(frames, frameUrl) {
 // 定位目標所在的 frame
 export async function locateFrame(tabId, frame, locator, opts = {}) {
   if (!frame?.url) {
-    return { frameId: 0 }
+    return { frameId: 0, matchedBy: 'top', candidates: [] }
   }
 
   const pollMs = opts?.pollMs ?? 250
@@ -79,7 +79,7 @@ export async function locateFrame(tabId, frame, locator, opts = {}) {
     latestFrames = await listFrames(tabId)
     const match = matchFrameByUrl(latestFrames, frame.url)
     if (match?.frameId !== undefined) {
-      return { frameId: match.frameId }
+      return { frameId: match.frameId, matchedBy: match.matchedBy, candidates: latestFrames }
     }
     if (match?.ambiguous) {
       ambiguousCandidates = match.ambiguous
@@ -97,7 +97,7 @@ export async function locateFrame(tabId, frame, locator, opts = {}) {
     : latestFrames.map((f) => f.frameId).filter((id) => id !== 0 && id != null)
 
   if (candidateIds.length === 0) {
-    return null
+    return { frameId: null, matchedBy: null, candidates: latestFrames, failed: true }
   }
 
   const matchedFrameIds = []
@@ -118,8 +118,9 @@ export async function locateFrame(tabId, frame, locator, opts = {}) {
   }
 
   if (matchedFrameIds.length === 1) {
-    return { frameId: matchedFrameIds[0] }
+    return { frameId: matchedFrameIds[0], matchedBy: 'locator', candidates: latestFrames }
   }
 
-  return null
+  // 失敗時把候選清單留給呼叫端做診斷（試抓失敗時使用者最需要看的就是「有哪些框架」）
+  return { frameId: null, matchedBy: null, candidates: latestFrames, failed: true }
 }
