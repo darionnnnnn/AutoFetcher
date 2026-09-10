@@ -346,6 +346,32 @@ export function rowHeader(row) {
 }
 
 /**
+ * 判定文字是否可當定位錨點。
+ * 純數值（去掉千分位逗號與所有空白後整段是「可選負號＋數字＋可選小數」）→ false；
+ * 其餘非空字串 → true；空字串、只有空白、非字串 → false。
+ * @param {unknown} text 待檢測的文字
+ * @returns {boolean}
+ */
+export function isAnchorText(text) {
+  if (typeof text !== 'string') return false
+  // 去掉千分位逗號與所有空白
+  const stripped = text.replace(/[,\s]/g, '')
+  if (stripped === '') return false
+  // 可選負號 + 數字 + 可選小數，整段要完全符合
+  return !/^-?\d+(?:\.\d+)?$/.test(stripped)
+}
+
+/**
+ * 取得適合當定位錨點的列標題：rowHeader 的結果若 isAnchorText 為真就回它，否則回空字串。
+ * @param {Element|string[]} row 列元素或儲存格字串陣列
+ * @returns {string}
+ */
+export function anchorHeader(row) {
+  const header = rowHeader(row)
+  return isAnchorText(header) ? header : ''
+}
+
+/**
  * 取得表格所有的資料列 DOM 元素（排除表頭列）。
  * @param {Element} el 表格元素
  * @returns {Element[]} 資料列 DOM 元素陣列
