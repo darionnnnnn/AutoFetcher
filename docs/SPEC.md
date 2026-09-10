@@ -414,6 +414,22 @@
 (取錯 frame 會靜默抓到隔壁那張表的數字,比抓不到更糟)。
 iframe 可能是「先點按鈕才出現」,所以 1、2 層是**輪詢**等待(預設 20 秒)。
 定位失敗一律寫 `status: "not_found"`、`error: "找不到目標所在的框架"`——**不新增 status 種類**。
+`locateFrame` 的回傳一律是物件:命中是 `{ frameId, matchedBy: 'exact'|'path'|'locator'|'top', candidates }`,
+失敗是 `{ frameId: null, matchedBy: null, candidates, failed: true }`(**不再回 `null`**,AF-14)。
+`candidates` 是當下列到的全部 frame,失敗時正是使用者要看的東西;呼叫端判定一律看**有沒有 `frameId`**,
+不得比對 `=== null`。`frameId` 仍然**存不得**。
+
+**試抓失敗的診斷包**(AF-14):「立即測試」失敗時,回應多帶一個 `debug`,Picker 顯示「匯出診斷」鈕,
+使用者按下才存成 JSON 檔(`autofetcher-diag-<任務名>-<時戳>.json`,`saveAs` 由使用者選位置,SPEC §5)。
+內容:`version`(manifest)、`at`、`tabUrl`(**`chrome.tabs.get` 的實際網址**,不是任務設定的)、
+`task`(`name`/`url`/`spec`/`locator`/`frame`/`preActions`,**不含登入資料**)、
+`frame`(`frameId`/`matchedBy`/`candidates`)、`preActionTrace`、`error`,
+以及 content script 給的 `page`:`resolvedLayer`、表格摘要(`source`/`headers`/`rowHeaders`(**原文**,
+不是過濾過的錨點)/`rowCount`/`colCount`/前 20 列 `cells`/`partial`)與那張表的 `outerHTML` 前 4000 字
+(截到就標 `truncated: true`,**不靜默截**)。
+**只在 `dryRun` 組**:正式抓取不帶,**不寫紀錄、不進 `diag` 環形緩衝**(500 筆會被擠掉),
+只活在這一次回應與 Picker 的記憶體裡。成功時完全不帶(沒有消費端)。
+按鈕旁明講「內含目標表格的 HTML 片段與頁面網址」——使用者要知道自己送出去的是什麼。
 列 frame 用 `chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: () => location.href })`,
 **不需要 `webNavigation` 權限**。`about:blank` / `srcdoc` 的 iframe 網址沒有辨識度,只剩第 3 層,盡力而為。
 
@@ -699,9 +715,25 @@ iframe 可能是「先點按鈕才出現」,所以 1、2 層是**輪詢**等待(
   表頭對得上原索引 → 用它、`ok`;搬家了 → 跟著表頭走、`fallback`;
   **同名表頭有多個時取離原索引最近的那一個**;表頭整個不見 → `not_found`。
   **整列聚合也走這一套**(只吃 `index` 的話,表格前面插一列就靜默抓錯列)。
-  代價是**那一列的第一格會變動時會硬性失敗**(照索引取值仍會動);這是刻意的:
+  代價是**那一列的第一格會變動時會硬性失敗**(照索引取值仍會動);對**文字型**標題這是刻意的:
   安靜地聚合到別一列,抓到的數字看起來很正常卻是別人的資料。失敗訊息會建議改用位置定位。
-  表頭不見時的 `message` 要指向解法:「標題『…』找不到;若這張表每天新增一列,請改用位置定位」,
+- **純數值的標題不當定位錨點**(AF-14;判準唯一一份在 `shared/table.js` 的 `isAnchorText`,
+  `anchorHeader(row)` 是它套在列標題上的版本)。判準是**嚴格**的:去掉千分位逗號與空白後
+  整段是「可選負號+數字+可選小數」才算純數值(`4318`、`1,234`、`-5`、`3.5`);
+  `2024年度`、`No.4318`、`A-100`、日期字串**仍然是錨點**——`parseNumber` 解得出數字不足以當判準。
+  單列無表頭的表(`<tr><td>4318</td><td>38605</td></tr>`)第一格本身就是每天會變的資料,
+  拿它當錨點隔天必定 `not_found`,而且沒有任何東西可以當錨點。
+  - **四個消費端走同一份判準**:選取端寫進規格的 `row.header`/`col.header`/`block.headerText`、
+    preselect 回選與重存、擷取端的 `locateByHeader`、命名鏈(`singleCellName`/`defaultFieldName`)。
+  - **舊任務零遷移**:規格裡已經存了 `"4318"` 的任務不必重存,擷取端遇到純數值 header 視同沒有 header,
+    走 `index`、狀態 `ok`(**不是 `fallback`**——`fallback` 屬警示狀態,那種表會天天亮黃燈)。
+  - **選取當下要說出來**:摘要卡多一句「這一列的第一格是數字(4318),不能當標題,改以位置抓;
+    若這張表會新增列,請改用『列定位』」(`shared/describe.js` 的 `anchorNote`,白話只有一份)。
+    原文靠 pick 上的 `rawHeader` 帶到 Picker,**只給畫面看**(面板 chip 也用它),
+    `buildSpec` 會濾掉它——進了規格就會被存進 storage、參與規格比對,下一輪又被當成錨點。
+  表頭不見時的 `message` 要指向解法,並說出現況:
+  「標題『…』找不到;目前這張表的列標題是:A、B、C(超過 5 個只列 5 個並說總數);
+  若這張表每天新增一列,請到任務設定改用位置定位」,列與欄各說各的軸。
   而且**要一路走到使用者眼前**:多值任務的每個值各自帶、寫進紀錄的 `error`、「立即測試」優先顯示它
   (只顯示 `not_found` 等於告訴使用者「壞了」卻不說能怎麼辦)。
   儲存格的欄或列任一為 `fallback`,整格就是 `fallback`。

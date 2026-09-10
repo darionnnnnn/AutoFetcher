@@ -141,7 +141,12 @@ try {
   const fixtureHtml = `<!doctype html><meta charset="utf-8">
 <div id="v">1,234</div>
 <table id="t"><thead><tr><th>日期</th><th>數量</th></tr></thead>
-<tbody><tr><td>09-01</td><td>10</td></tr><tr><td>09-02</td><td>32</td></tr></tbody></table>`
+<tbody><tr><td>09-01</td><td>10</td></tr><tr><td>09-02</td><td>32</td></tr></tbody></table>
+<!-- AF-14:使用者實站那種表——單列、無表頭,第一格本身就是每天會變的數值。
+     選取當下存的是 4318,擷取時第一格已經變成 4269,拿它當錨點必定抓不到。 -->
+<table id="t2" class="type2"><tbody>
+<tr align="center"><td width="70">4269</td><td>38605</td></tr>
+</tbody></table>`
   const loginHtml = `<!doctype html><meta charset="utf-8">
 <form><input id="u"><input id="p" type="password"><button id="go" type="button">送出</button></form>
 <script>document.getElementById('go').onclick = () => {
@@ -288,6 +293,52 @@ try {
     errors.push(`區塊聚合應得 42,實得 ${blockResult.value}`)
   } else {
     console.log(`${browserName}:區塊聚合正常 (數量欄加總 = ${blockResult.value})`)
+  }
+
+  // 5d. AF-14:純數值標題不當錨點——存的 header 是選取當日的 4318,
+  // 頁面上現在是 4269,要照樣抓到同一格(38605)且狀態 ok,不是 fallback。
+  // 這一輪的 bug 在單元測試層全綠、實站才壞,所以要在真的瀏覽器裡走一次。
+  const anchorResult = await ext2.evaluate(async () => {
+    const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/*' })
+    return chrome.tabs.sendMessage(tabs[0].id, {
+      type: 'EXTRACT',
+      locator: { css: '#t2', path: '', anchor: null, xpath: '' },
+      spec: { mode: 'block', block: { cell: {
+        row: { index: 0, header: '4318' },
+        col: { index: 1, header: '' }
+      } } }
+    })
+  })
+  if (anchorResult?.ok !== true) {
+    errors.push(`純數值標題的舊任務抓不到:${JSON.stringify(anchorResult)}`)
+  } else if (anchorResult.value !== 38605) {
+    errors.push(`純數值標題應得 38605,實得 ${anchorResult.value}`)
+  } else if (anchorResult.status !== 'ok') {
+    errors.push(`純數值標題走索引的狀態應為 ok(fallback 會天天亮黃燈),實得 ${anchorResult.status}`)
+  } else {
+    console.log(`${browserName}:純數值標題改走索引正常 (${anchorResult.value})`)
+  }
+
+  // 5e. AF-14:擷取失敗時要附得出頁面現況,使用者才有東西可以匯出
+  const diagResult = await ext2.evaluate(async () => {
+    const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/*' })
+    return chrome.tabs.sendMessage(tabs[0].id, {
+      type: 'EXTRACT',
+      locator: { css: '#t', path: '', anchor: null, xpath: '' },
+      spec: { mode: 'block', block: { cell: {
+        row: { index: 0, header: '不存在的列' },
+        col: { index: 1, header: '數量' }
+      } } }
+    })
+  })
+  if (diagResult?.ok !== false) {
+    errors.push(`找不到的標題應該要失敗,實得 ${JSON.stringify(diagResult)}`)
+  } else if (!diagResult?.debug?.page?.html) {
+    errors.push(`擷取失敗沒有附頁面現況:${JSON.stringify(diagResult).slice(0, 200)}`)
+  } else if (!String(diagResult.message || '').includes('目前這張表的列標題是')) {
+    errors.push(`失敗訊息沒說出現況:${diagResult.message}`)
+  } else {
+    console.log(`${browserName}:擷取失敗附得出診斷現況`)
   }
 
   // 5b. 選取模式:真的在網頁上畫出 overlay,離開時收乾淨

@@ -82,7 +82,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1874 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1916 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -158,6 +158,12 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   規則見 SPEC §2:貼在 `<body>` 底下、`z-index` 跟著 iframe **最外層有數字 z-index 的祖先**走
   (只看 iframe 自己會被 `.content { z-index: 2 }` 這種容器蓋住,iframe 反而選不到)、沒有 z-index 時靠 `elementFromPoint` 讓路。
   **父文件收不到「指標進入跨網域 iframe」的任何事件**,別再想用 `mouseover` 之類的訊號開關它。
+- **要當定位錨點的標題必須先過 `shared/table.js` 的 `isAnchorText`**:不得把 `rowHeader()`/`columnHeaders()`
+  取到的字串直接存進規格。純數值(`4318` 這種每天會變的值)當錨點,隔天必定 `not_found`,
+  而單列無表頭的表根本沒有東西可以當錨點。**顯示端相反**:面板 chip 與摘要卡要看得到原文,
+  靠 pick 上的 `rawHeader`,而它**不得進 `task.spec`**(`buildSpec` 會濾掉)。
+- **`locateFrame` 失敗回的是物件不是 `null`**(帶 `candidates` 給診斷用):
+  判定一律看有沒有 `frameId`,寫 `=== null` 會把失敗當成成功。
 - **選取模式的模組狀態要在 `exitPickMode` 全部重設**:漏一個(例如「已選屬於哪張表」)
   會讓同一頁的下一次選取沿用上一張表的 locator、配上新表的列欄索引送出,抓到的永遠是錯的值。
   只驗「DOM 元素被移除」的測試抓不到這種殘留,要驗「連續選兩次」的行為。
