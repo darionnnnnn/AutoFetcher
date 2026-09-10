@@ -363,3 +363,63 @@ test('立即測試拿到的是同一句中文（訊息只有一份）', async ()
   assert.match(String(res.error), /換頁|重新載入/)
   assert.equal(res.preActionTrace?.length, 1, '軌跡不得因為換訊息而弄丟')
 })
+
+// ---- 體檢補洞：前置動作自己「送不到」的時候 ----
+// SPEC §4 推薦「點擊（切頁籤）→ 等元素出現」，點擊換頁之後下一步的訊息會打中將死的文件。
+// 這正是本輪要消滅的那條路，但原實作只保護了前置動作**之後**的擷取。
+
+test('前置動作之間換頁：waitFor 送不到要重試（它只是觀察，重放沒有副作用）', async () => {
+  const { c, st, fe } = await fresh()
+  const t = task({
+    preActions: [
+      { type: 'click', locator: { css: '#tab2' } },
+      { type: 'waitFor', locator: { css: '#ready' } }
+    ]
+  })
+  await st.saveTask(t)
+  let waits = 0
+  c.__setTabResponder((tabId, msg) => {
+    if (msg.type === 'RUN_PRE_ACTIONS') {
+      const act = msg.actions?.[0]
+      if (act?.type === 'waitFor') {
+        waits++
+        if (waits === 1) throw new Error(CONN_ERR)   // 點擊換頁，舊文件連 content script 一起沒了
+      }
+      return { ok: true }
+    }
+    return msg.type === 'EXTRACT' ? ok(55) : { ok: true }
+  })
+  const rec = await fe.runTask(t, { slot: '2026-09-05T09:00', reason: 'manual', ...FAST })
+  assert.equal(rec.status, 'ok', `waitFor 送不到就整個失敗，實得 ${JSON.stringify(rec)}`)
+  assert.equal(rec.value, 55)
+  assert.equal(waits, 2, 'waitFor 要重送一次')
+  const clicks = msgsOf(c, 'RUN_PRE_ACTIONS').filter(x => x.args[1].actions?.[0]?.type === 'click').length
+  assert.equal(clicks, 1, '點擊有副作用，不得跟著重放')
+})
+
+test('前置動作之間換頁：click 送不到不重試，但訊息要是中文、說得出第幾步', async () => {
+  const { c, st, fe } = await fresh()
+  const t = task({
+    preActions: [
+      { type: 'click', locator: { css: '#tab2' } },
+      { type: 'click', locator: { css: '#confirm' } }
+    ]
+  })
+  await st.saveTask(t)
+  let n = 0
+  c.__setTabResponder((tabId, msg) => {
+    if (msg.type === 'RUN_PRE_ACTIONS') {
+      n++
+      if (n === 2) throw new Error(CONN_ERR)
+      return { ok: true }
+    }
+    return ok(1)
+  })
+  const rec = await fe.runTask(t, { slot: '2026-09-05T09:00', reason: 'manual', ...FAST })
+  assert.notEqual(rec.status, 'ok')
+  assert.equal(msgsOf(c, 'RUN_PRE_ACTIONS').length, 2, '點擊送不到不得重放')
+  assert.doesNotMatch(String(rec.error), /Could not establish/, `英文原文不該落到使用者眼前：${rec.error}`)
+  assert.match(String(rec.error), /第 2 步/, `要說得出第幾步：${rec.error}`)
+  assert.match(String(rec.error), /換頁|等待/, `要說出怎麼辦：${rec.error}`)
+  assert.equal(extractCount(c), 0)
+})

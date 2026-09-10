@@ -51,7 +51,7 @@
 | 含密碼的設定匯出(換機沿用) | 使用者要換電腦時;本機金鑰的密文換機解不開,需改以密語重新加密 |
 | `web_accessible_resources` 收斂成單一 bundle | 上架審核要求、或有人反映網頁可探測到本擴充功能時(需要打包步驟,與「無框架原生 JS」慣例衝突) |
 | 煙霧測試裡「整頁換頁」的排程案會 60 秒不回應 | AF-13 的隔離探針證明這個任務本身是好的（單獨跑、連跑兩次、接在 iframe 任務之後都成功，取到換頁後的值 8888），但放進整輪煙霧就必定不回應；把它移出煙霧、原因未明。已排除：AF-13 的改動（dev 上只套 `autoDiscardable` 修正也重現過類似卡住）、段落順序（移到 AF-11 之前一樣）、殘留瀏覽器行程。下次動 `fetcher` 或煙霧時再追 |
-| `ensureLoggedIn` 的三則訊息沒有逾時 | `background/login.js` 的 `CHECK_LOGIN`／`FILL_LOGIN` 三處 `sendMessage` 都沒有逾時（AF-13 修掉的是前置動作與擷取那幾則）；登入頁在檢查途中換頁時回應會遺失，整個抓取吊到 service worker 被回收。有站台回報「抓取卡住不動」時，比照 `sendToFrame` 加逾時 |
+| `background` 其餘沒有逾時的 `tabs.sendMessage` | AF-13 只把前置動作、捲動、擷取三則包進 `sendToFrame`(有逾時、會清計時器)。同型普查還有:`login.js` 三處(`CHECK_LOGIN`×2、`FILL_LOGIN`)、`frames.js:107`(`locateFrame` 收尾判定的 `RESOLVE_LOCATOR`,有 try/catch 但沒逾時)、`main.js` 七處(UI 面板相關)。回應遺失就吊到 service worker 被回收。有站台回報「抓取卡住不動」時,先從 `login.js` 與 `frames.js` 那四處加起 |
 | `fetcher` 其餘錯誤訊息的中文化 | AF-13 只把「文件被換掉」那一類轉成中文,其餘仍是原文;使用者回報看不懂某則錯誤時 |
 | 最上層目標的定位不做任何驗證 | `task.frame` 缺省時 `locateFrame` 直接回 `frameId 0`,不比對網址也不驗 locator;AF-13 用前置動作後的安定等待縮小風險,但沒有關掉。有使用者回報「抓到別的頁面的值」時,改成先驗 locator 解析得到 |
 | 前置動作支援輸入文字、捲動到底 | 目前有 hover／等元素／點元素／等待四種;有站台需要時 |

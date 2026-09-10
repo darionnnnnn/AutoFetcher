@@ -195,8 +195,8 @@ try {
     window.__overs.push(e.target.id || e.target.tagName)
   }, true)
 </script>`
-  // AF-13:前置動作的點擊會讓頁面換頁——子框架換頁與整頁換頁各一個入口。
-  // 兩個頁面都**不加任何人工延遲**:靠 sleep 讓自己過的測試驗的是等待,不是重試。
+  // AF-13:前置動作的點擊會讓子框架換頁。**不加任何人工延遲**:靠 sleep 讓自己過的測試驗的是等待,不是重試。
+  // （整頁換頁的案子在隔離探針裡通過、放進整輪煙霧卻必定卡住,已移出並進 BACKLOG,fixture 一併拿掉。）
   const navHtml = `<!doctype html><meta charset="utf-8">
 <body style="margin:0">
 <a id="navchild" href="#">換子框架</a>
@@ -206,18 +206,8 @@ try {
     document.getElementById('fr').src = 'http://localhost:48124/b'
   }
 </script>`
-  const navTopHtml = `<!doctype html><meta charset="utf-8">
-<body style="margin:0">
-<div id="v">1111</div>
-<a id="navtop" href="#">換整頁</a>
-<script>
-  document.getElementById('navtop').onclick = () => { location.href = '/navtop2' }
-</script>`
-  const navTop2Html = `<!doctype html><meta charset="utf-8"><body><div id="v">8888</div>`
   const server = http.createServer((req, res) => {
     res.setHeader('content-type', 'text/html; charset=utf-8')
-    if (req.url.startsWith('/navtop2')) return res.end(navTop2Html)
-    if (req.url.startsWith('/navtop')) return res.end(navTopHtml)
     if (req.url.startsWith('/navchild')) return res.end(navHtml)
     if (req.url.startsWith('/login')) return res.end(loginHtml)
     if (req.url.startsWith('/overlapframe')) return res.end(overlapHtml)

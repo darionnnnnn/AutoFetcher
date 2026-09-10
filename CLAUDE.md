@@ -82,7 +82,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1872 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1874 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -170,7 +170,8 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **跨文件邊界送訊息前不能假設文件還是原來那一個**:前置動作的點擊常常讓頁面換頁,
   舊文件連同 content script 一起被丟掉,接著送訊息就是 `Could not establish connection`。
   規則見 SPEC §4:定位/注入/捲動/擷取是一個整體、送不到就整段重來(最多 3 次),
-  **逾時、找不到框架、前置動作都不重試**,判定不得比對 Chrome 的英文錯誤字串。
+  **逾時、找不到框架、前置動作都不重試**(`waitFor` 例外:它只觀察,前一步換頁害它送不到時可重送),
+  判定不得比對 Chrome 的英文錯誤字串。
   **「等分頁回到 `complete`」對子框架導覽無效**(實測:`iframe.src` 改變時分頁狀態全程 `complete`)。
 - **送給 content 的每一則訊息都要有逾時**:沒有逾時的 `sendMessage` 只要回應遺失就會吊到
   service worker 被回收。逾時值要涵蓋動作自己需要的時間(`hover` 的 `holdMs` 沒有上限)。

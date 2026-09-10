@@ -60,6 +60,8 @@ export function preActionFailure(index, action, code) {
   // 「沒有回應」與「動作失敗」是兩件事:探針顯示回應正常會在幾毫秒內回來,
   // 一旦逾時,最可能的原因是這一步讓頁面換掉了,回應跟著舊文件一起消失
   if (code === 'no_response') return `${step}沒有回應（這一步可能讓頁面換頁了）`
+  // 「送不到」不是這一步壞了，是它之前頁面就換掉了（多半是前一步的點擊）
+  if (code === 'page_gone') return `${step}送不到（頁面在這一步之前換頁或重新載入了；若前一步會換頁，請在它後面加一個「等待」動作）`
   return `${step}失敗：${code || '未知錯誤'}`
 }
 

@@ -441,24 +441,49 @@ export async function runTask(task, opts = {}) {
           const actionTimeout = action?.type === 'waitFor'
             ? timeoutMsOf(action)
             : (opts.frameTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS)
-          const actionLoc = await locateFrame(tabId, action?.frame, action?.locator, { pollMs, timeoutMs: actionTimeout })
+          let actionLoc = await locateFrame(tabId, action?.frame, action?.locator, { pollMs, timeoutMs: actionTimeout })
           if (actionLoc === null) {
             preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
             throw new Error(preActionFailure(i, action, 'frame_not_found'))
           }
-          await injectContent(tabId, { frameId: actionLoc.frameId })
-          // 沒有逾時的話，回應一旦跟著換掉的文件消失，整個抓取會吊到 service worker 被回收。
+          // 前置動作自己也可能「送不到」：前一步的點擊讓頁面換掉，這一步就打中將死的文件
+          // （SPEC §4 推薦的「點擊切頁籤 → 等元素出現」正是這種）。
+          // **只有 `waitFor` 可以重送**——它只觀察不動頁面；`hover`／`click` 有副作用，
+          // 重放就是再按一次，所以只能停下來用中文說清楚。
+          // 沒有逾時的話，回應一旦跟著換掉的文件消失，整個抓取會吊到 service worker 被回收；
           // 逾時值必須涵蓋動作自己需要的時間（`messageTimeoutMs`，唯一一份）。
-          let preRes
-          try {
-            preRes = await sendToFrame(tabId, {
-              type: MSG.RUN_PRE_ACTIONS,
-              actions: [action]
-            }, actionLoc.frameId, opts.preActionTimeoutMs ?? messageTimeoutMs(action), 'Pre-action')
-          } catch (err) {
+          const resendable = action?.type === 'waitFor'
+          const preAttempts = resendable ? 1 + reviveDelaysMs.length : 1
+          let preRes = null
+          let preLiveErr = null
+          for (let pa = 0; pa < preAttempts; pa++) {
+            if (pa > 0) {
+              await sleep(reviveDelaysMs[pa - 1])
+              const again = await locateFrame(tabId, action?.frame, action?.locator, { pollMs, timeoutMs: actionTimeout })
+              if (again === null) break
+              actionLoc = again
+            }
+            try {
+              await injectContent(tabId, { frameId: actionLoc.frameId })
+              preRes = await sendToFrame(tabId, {
+                type: MSG.RUN_PRE_ACTIONS,
+                actions: [action]
+              }, actionLoc.frameId, opts.preActionTimeoutMs ?? messageTimeoutMs(action), 'Pre-action')
+              preLiveErr = null
+              break
+            } catch (err) {
+              if (err?.afTimeout) {
+                preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
+                throw new Error(preActionFailure(i, action, 'no_response'))
+              }
+              preLiveErr = err
+            }
+          }
+          if (preLiveErr !== null) {
             preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
-            if (err?.afTimeout) throw new Error(preActionFailure(i, action, 'no_response'))
-            throw err
+            // 原文留給診斷（與擷取那條同一個鍵），使用者看的是說得出怎麼辦的中文
+            try { await diag.log('fetch_page_gone', `「${task.name}」${String(preLiveErr?.message || preLiveErr)}`) } catch {}
+            throw new Error(preActionFailure(i, action, 'page_gone'))
           }
           if (preRes?.ok !== true) {
             preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
