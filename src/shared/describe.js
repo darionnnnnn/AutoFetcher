@@ -90,6 +90,19 @@ export const POS_TEXT = {
   'last-1': '倒數第二筆'
 }
 
+// 標題是純數值時定位不拿它當錨點（`shared/table.js` 的判準）。
+// 使用者在畫面上看得到那個數字，系統卻默默改用位置抓，不講的話
+// 表格哪天多一列就會抓到別人的資料——所以選取當下就要說出來。
+function anchorNote(rawHeader, axis) {
+  const raw = typeof rawHeader === 'string' ? rawHeader.trim() : ''
+  if (!raw) return ''
+  const isCol = axis === 'col'
+  const which = isCol ? '欄' : '列'
+  const first = isCol ? '這一欄的第一格' : '這一列的第一格'
+  return `。${first}是數字（${raw}），不能當標題，改以位置抓；` +
+    `若這張表會新增${which}，請改用「${which}定位」`
+}
+
 /**
  * 目標轉白話：「抓 www.twse.com.tw 的表格，取「115/09/07 · 成交金額」這一格」
  * @param {Object} target
@@ -100,16 +113,19 @@ export const POS_TEXT = {
  * @param {Object} [target.block] { axis: 'col'|'row', headerText, aggregate }
  * @param {string} [target.rowPos] 列定位
  * @param {string} [target.colPos] 欄定位
+ * @param {string} [target.rawHeader] 那一軸的標題是純數值而不能當錨點時的原文（只用於說明）
+ * @param {string} [target.rawHeaderAxis] 被擋下的是哪一軸：'row'（預設）或 'col'
  * @returns {string}
  */
 export function describeTarget(target) {
   const t = target || {}
   const host = hostOf(t.url)
   const where = host ? `抓 ${host} ` : '抓 '
+  const note = anchorNote(t.rawHeader, t.rawHeaderAxis)
 
   if (t.mode !== 'block') {
     const kind = t.mode === 'text' ? '文字' : '數字'
-    return `${where}頁面上的${kind}`
+    return `${where}頁面上的${kind}${note}`
   }
 
   const posNote = []
@@ -118,15 +134,15 @@ export function describeTarget(target) {
   const posText = posNote.length > 0 ? `，${posNote.join('、')}` : ''
 
   if (typeof t.fieldCount === 'number' && t.fieldCount >= 2) {
-    return `${where}的表格，取 ${t.fieldCount} 個值${posText}`
+    return `${where}的表格，取 ${t.fieldCount} 個值${posText}${note}`
   }
 
   if (t.cell) {
     const rowH = t.cell.row?.header || ''
     const colH = t.cell.col?.header || ''
     const label = [rowH, colH].filter((x) => x !== '').join(' · ')
-    if (label !== '') return `${where}的表格，取「${label}」這一格${posText}`
-    return `${where}的表格，取其中一格${posText}`
+    if (label !== '') return `${where}的表格，取「${label}」這一格${posText}${note}`
+    return `${where}的表格，取其中一格${posText}${note}`
   }
 
   if (t.block) {
@@ -134,11 +150,11 @@ export function describeTarget(target) {
     const header = t.block.headerText || ''
     const agg = t.block.aggregate ? AGG_TEXT[t.block.aggregate] || '' : ''
     const aggText = agg ? `的${agg}` : ''
-    if (header !== '') return `${where}的表格，取「${header}」${axis}${aggText}${posText}`
-    return `${where}的表格，取${axis}${aggText}${posText}`
+    if (header !== '') return `${where}的表格，取「${header}」${axis}${aggText}${posText}${note}`
+    return `${where}的表格，取${axis}${aggText}${posText}${note}`
   }
 
-  return `${where}的表格${posText}`
+  return `${where}的表格${posText}${note}`
 }
 
 /**

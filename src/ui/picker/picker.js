@@ -6,6 +6,7 @@ import { getLayout, addCard } from '../../shared/layout-store.js'
 import { seriesIdOf } from '../../shared/series-index.js'
 import { describeSchedule, describeTarget, describeDashboard, POS_TEXT } from '../../shared/describe.js'
 import { nextIntervalRun } from '../../shared/schedule-math.js'
+import { isAnchorText } from '../../shared/table.js'
 
 let currentCtx = null
 let currentBlock = null
@@ -245,25 +246,38 @@ export const BUILTIN_DEFAULTS = {
   cardTypes: []
 }
 
+// `rawHeader` 是選取端附上的顯示用原文（純數值標題的原字），
+// **只給畫面看**：進了規格就會被存進 storage、參與規格比對，
+// 下一輪又被當成錨點，等於這一輪修掉的問題重新長回來。
+function stripRawHeader(part) {
+  if (!part || typeof part !== 'object') return part
+  const out = {}
+  for (const [k, v] of Object.entries(part)) {
+    if (k === 'rawHeader') continue
+    out[k] = (v && typeof v === 'object' && !Array.isArray(v)) ? stripRawHeader(v) : v
+  }
+  return out
+}
+
 export function buildSpec(values) {
   const spec = { strategy: values.strategy }
   if (values.fields) {
     spec.mode = 'block'
     spec.fields = values.fields.map(f => {
       const item = { key: f.key }
-      if (f.cell) item.cell = f.cell
-      if (f.block) item.block = f.block
+      if (f.cell) item.cell = stripRawHeader(f.cell)
+      if (f.block) item.block = stripRawHeader(f.block)
       return item
     })
   } else if (values.block && values.block.cell) {
     spec.mode = 'block'
-    spec.block = { cell: values.block.cell }
+    spec.block = { cell: stripRawHeader(values.block.cell) }
   } else {
     if (values.mode === 'text') spec.mode = 'text'
     if (values.mode === 'block' && values.block) {
       // extract.js 是看 spec.mode 分派的，少了這一行會落回數值策略鏈、抓到整張表的第一個數字
       spec.mode = 'block'
-      spec.block = values.block
+      spec.block = stripRawHeader(values.block)
     }
   }
   for (const k of ['regex', 'attr', 'childSel', 'labelText']) {
@@ -909,8 +923,11 @@ function refreshDefaultNames() {
 function singleCellName(cell) {
   const rowPos = posValueOf('row-pos')
   const colPos = posValueOf('col-pos')
-  const colH = colPos ? '' : String(cell?.col?.header || '').trim()
-  const rowH = rowPos ? '' : String(cell?.row?.header || '').trim()
+  // 純數值的標題不當名稱：那個數字明天就變了（判準與定位同一份）
+  const rawColH = colPos ? '' : String(cell?.col?.header || '').trim()
+  const rawRowH = rowPos ? '' : String(cell?.row?.header || '').trim()
+  const colH = isAnchorText(rawColH) ? rawColH : ''
+  const rowH = isAnchorText(rawRowH) ? rawRowH : ''
   const base = colH || rowH
   if (!base) return ''
   const suffix = [
@@ -1075,6 +1092,18 @@ function updateBlockSection() {
  * 使用者不必把散在各區的欄位在腦中組起來，久沒用回來也一眼看得出這個任務在做什麼。
  * 文字一律走 shared/describe.js，與任務頁、popup 同一份。
  */
+// 哪一軸的標題因為是純數值而沒能當錨點：取選取端附上的原文給 describeTarget 說明用。
+// 列優先（單列數值表是最常見的形狀），兩軸都被擋下時先講列。
+function rawHeaderNoteOf(cell, block) {
+  const rowRaw = String(cell?.row?.rawHeader || '').trim()
+  const colRaw = String(cell?.col?.rawHeader || '').trim()
+  const blockRaw = String(block?.rawHeader || '').trim()
+  if (rowRaw) return { rawHeader: rowRaw, rawHeaderAxis: 'row' }
+  if (colRaw) return { rawHeader: colRaw, rawHeaderAxis: 'col' }
+  if (blockRaw) return { rawHeader: blockRaw, rawHeaderAxis: block?.axis === 'row' ? 'row' : 'col' }
+  return {}
+}
+
 export function updateSetupSummary() {
   const box = document.getElementById('setup-summary')
   if (!box) return
@@ -1091,7 +1120,9 @@ export function updateSetupSummary() {
       cell: values.block?.cell || first?.cell,
       block: values.block?.axis ? values.block : first?.block,
       rowPos: document.getElementById('row-pos')?.value || '',
-      colPos: document.getElementById('col-pos')?.value || ''
+      colPos: document.getElementById('col-pos')?.value || '',
+      // 純數值標題被判準擋下時，摘要卡要當場說出來（原文只在這裡用，不進規格）
+      ...rawHeaderNoteOf(values.block?.cell || first?.cell, values.block?.axis ? values.block : first?.block)
     })
   }
 

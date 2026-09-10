@@ -26,6 +26,7 @@ import {
 } from './precheck.js'
 import { injectContent } from './inject.js'
 import { locateFrame, listFrames, matchFrameByUrl } from './frames.js'
+import { isAnchorText } from '../shared/table.js'
 import { scheduleSiteCheck, runSiteCheck } from './sitecheck.js'
 import { isSuccess } from '../shared/record-status.js'
 import { parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
@@ -52,11 +53,17 @@ function sameSpec(a, b) {
   return JSON.stringify(stripPos(pickSpecOf(a))) === JSON.stringify(stripPos(pickSpecOf(b)))
 }
 const POS_NAMES = { first: '第一', last: '最後一', 'last-1': '倒數第二' }
+// 能當定位錨點的標題才能拿來命名；純數值（4318 這種每天會變的值）退回下一層
+function anchorOnly(header) {
+  const text = typeof header === 'string' ? header.trim() : ''
+  return isAnchorText(text) ? text : ''
+}
 function defaultFieldName(pick, n, pos = {}) {
   if (pick?.cell) {
-    // 用位置定位的軸不能把標題寫進名稱：每天取最後一列的話，那個日期明天就變了
-    const r = pos.rowPos ? '' : (pick.cell.row?.header || '')
-    const c = pos.colPos ? '' : (pick.cell.col?.header || '')
+    // 用位置定位的軸不能把標題寫進名稱：每天取最後一列的話，那個日期明天就變了；
+    // 純數值的標題同理（判準與定位同一份，`shared/table.js`）
+    const r = pos.rowPos ? '' : anchorOnly(pick.cell.row?.header)
+    const c = pos.colPos ? '' : anchorOnly(pick.cell.col?.header)
     const suffix = [
       pos.rowPos ? `${POS_NAMES[pos.rowPos]}列` : '',
       pos.colPos ? `${POS_NAMES[pos.colPos]}欄` : ''
@@ -64,7 +71,7 @@ function defaultFieldName(pick, n, pos = {}) {
     const base = (r && c) ? `${r} · ${c}` : (r || c || (suffix ? '值' : `值 ${n}`))
     return suffix ? `${base}（${suffix}）` : base
   }
-  return pick?.block?.headerText || `值 ${n}`
+  return anchorOnly(pick?.block?.headerText) || `值 ${n}`
 }
 
 // 任務目前用的定位方式（重選新增的值要跟著它命名）
