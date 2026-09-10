@@ -77,12 +77,12 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 
 - 改任何行為 → `docs/SPEC.md`(現況規格,§編號會被程式碼註解引用,勿拆檔)
 - 想做但刻意沒做 → `docs/BACKLOG.md`(每項附觸發條件)
-- 本輪規劃 → `docs/AF-<N>-PLAN.md`;完工搬 `docs/archive/`(按需讀,勿全掃)。AF-1~AF-12 已歸檔。
+- 本輪規劃 → `docs/AF-<N>-PLAN.md`;完工搬 `docs/archive/`(按需讀,勿全掃)。AF-1~AF-13 已歸檔。
 
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1852 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1874 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -167,6 +167,18 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   (Report 有自己那一份、選取模式 overlay 拿不到樣式表),定義了卻沒人掛的類別就是死規則。
 - **樣式不要用 `content: attr(...)` 指向沒有人設定的屬性**:動態產生的清單不會帶你想像的
   `data-*`,那條規則會永遠是空白的死規則(序號一類用 CSS 計數器)。
+- **跨文件邊界送訊息前不能假設文件還是原來那一個**:前置動作的點擊常常讓頁面換頁,
+  舊文件連同 content script 一起被丟掉,接著送訊息就是 `Could not establish connection`。
+  規則見 SPEC §4:定位/注入/捲動/擷取是一個整體、送不到就整段重來(最多 3 次),
+  **逾時、找不到框架、前置動作都不重試**(`waitFor` 例外:它只觀察,前一步換頁害它送不到時可重送),
+  判定不得比對 Chrome 的英文錯誤字串。
+  **「等分頁回到 `complete`」對子框架導覽無效**(實測:`iframe.src` 改變時分頁狀態全程 `complete`)。
+- **送給 content 的每一則訊息都要有逾時**:沒有逾時的 `sendMessage` 只要回應遺失就會吊到
+  service worker 被回收。逾時值要涵蓋動作自己需要的時間(`hover` 的 `holdMs` 沒有上限)。
+- **`chrome.tabs.create` 只吃它自己那幾個屬性**:多帶一個(例如 `autoDiscardable`,那是 `tabs.update` 的)
+  Chrome 會**擋下整個呼叫**,不是忽略它。開案時就把 `autoDiscardable` 寫進 `create`,
+  等於「目標頁沒開著」的排程抓取與每日站台檢查一直在失敗,到 AF-13 的煙霧測試才抓到——
+  **測試替身不驗參數,而且當時的單元測試把這個 bug 寫進了斷言**。
 - **不要用任務設定的網址判斷「現在在哪一頁」**:要讀 `chrome.tabs.get(tabId).url`(轉址後的實際位置)。
 - **不要把每日排程算出來的時間直接當 alarm**:算出來若已經過去(例如現在剛好在預檢與抓取之間),
   Chrome 會立刻觸發、alarm 隨即消失,要跳過這一輪排到下一次。

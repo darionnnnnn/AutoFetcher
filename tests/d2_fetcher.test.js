@@ -33,7 +33,12 @@ test('成功路徑:開背景分頁、擷取、寫紀錄、關掉自己開的分�
   assert.equal(rec.slot, '2026-09-05T09:00')
   const created = c.__calls.find(x => x.api === 'tabs.create')
   assert.equal(created.args[0].active, false, '必須是背景分頁')
-  assert.equal(created.args[0].autoDiscardable, false, 'Edge/Chrome 省電模式會卸載分頁')
+  // AF-13：`autoDiscardable` 不是 `tabs.create` 的屬性，Chrome 會擋下整個呼叫。
+  // 原本的斷言把這個 bug 寫死了，反而讓「排程抓取一律失敗」在單元測試裡完全看不出來。
+  assert.equal(created.args[0].autoDiscardable, undefined,
+    'tabs.create 不吃 autoDiscardable，帶了它整個呼叫會被 Chrome 擋下')
+  const upd = c.__calls.find(x => x.api === 'tabs.update' && x.args[1]?.autoDiscardable === false)
+  assert.ok(upd, '省電模式仍會卸載背景分頁，要改用 tabs.update 設')
   assert.equal(c.__calls.filter(x => x.api === 'tabs.remove').length, 1, '自己開的分頁要關掉')
   assert.equal((await st.getRecordsByDate('2026-09-05')).length, 1)
 })
@@ -218,13 +223,19 @@ test('執行中狀態寫入 storage.session,結束後清除', async () => {
   assert.ok(c.__calls.some(x => x.api === 'session.set'), '執行期間要寫狀態機')
 })
 
+// AF-13 起：送不到訊息會先重試（文件被換掉是最常見的原因），重試耗盡後
+// 使用者看到的是說得出怎麼辦的中文，原文只留給診斷——所以這裡不再斷言原文出現在紀錄裡。
 test('例外不會讓 runTask 炸掉,會寫成 error 紀錄', async () => {
   const { c, st, fe } = await fresh()
   c.__setTabResponder(() => { throw new Error('boom') })
   await st.saveTask(task())
-  const rec = await fe.runTask(task(), { slot: '2026-09-05T09:00', attempt: 3, ...FAST })
+  const rec = await fe.runTask(task(), {
+    slot: '2026-09-05T09:00', attempt: 3, ...FAST, reviveDelaysMs: [1, 1, 1]
+  })
   assert.equal(rec.status, 'error')
-  assert.ok(String(rec.error).includes('boom'))
+  assert.ok(String(rec.error).length > 0, '要留下看得懂的原因，不能是空字串')
+  const list = await st.getDiagList()
+  assert.match(JSON.stringify(list), /boom/, '原文丟掉的話，除錯時什麼線索都沒有')
 })
 
 // AF-12：擷取逾時的計時器要清掉。

@@ -39,7 +39,11 @@ export async function runSiteCheck(opts = {}) {
 
     let tab = null
     try {
-      tab = await chrome.tabs.create({ url: site.loginUrl, active: false, autoDiscardable: false })
+      // `autoDiscardable` 只有 `tabs.update` 吃得下（見 fetcher.js 的同一處修正）
+      tab = await chrome.tabs.create({ url: site.loginUrl, active: false })
+      try {
+        await chrome.tabs.update(tab.id, { autoDiscardable: false })
+      } catch {}
       let tabInfo = await chrome.tabs.get(tab.id)
       const loadStart = Date.now()
       while (tabInfo?.status !== 'complete' && Date.now() - loadStart < loadTimeoutMs) {
