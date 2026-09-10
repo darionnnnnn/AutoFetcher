@@ -132,3 +132,38 @@ test('A3-9 已選 chip 仍要看得到原本那格的文字', async () => {
   assert.ok(panel.textContent.includes('4318'),
     `使用者要能從面板認出自己選了哪一格，實際：${panel.textContent}`)
 })
+
+test('A3-10 說了「請改用列定位」就要讓使用者到得了那個下拉', async () => {
+  const { pk, doc } = await fresh()
+  pk.render({ locator: LOCATOR, url: 'https://rate.test/x', picks: [NUMERIC_PICK] })
+  pk.updateSetupSummary()
+  const btn = doc.getElementById('goto-rowpos')
+  assert.ok(btn, '要有到得了那個下拉的入口')
+  assert.equal(btn.hidden, false)
+  assert.equal(btn.dataset.target, 'row-pos')
+  assert.ok(btn.textContent.includes('列定位'), btn.textContent)
+
+  // 真的把焦點送過去（下拉在「抓什麼」區，不是進階區）
+  pk.focusPositionSelect(btn.dataset.target)
+  assert.equal(doc.activeElement?.id, 'row-pos')
+})
+
+test('A3-11 一般表格不出現這個入口', async () => {
+  const { pk, doc } = await fresh()
+  pk.render({ locator: LOCATOR, url: 'https://rate.test/x', picks: [TEXT_PICK] })
+  pk.updateSetupSummary()
+  assert.equal(doc.getElementById('goto-rowpos').hidden, true)
+})
+
+test('A3-12 欄那一側被擋下時，入口指向欄定位', async () => {
+  const { pk, doc } = await fresh()
+  pk.render({
+    locator: LOCATOR,
+    url: 'https://rate.test/x',
+    picks: [{ cell: { row: { index: 0, header: '美金' }, col: { index: 1, header: '', rawHeader: '4319' } } }]
+  })
+  pk.updateSetupSummary()
+  const btn = doc.getElementById('goto-rowpos')
+  assert.equal(btn.dataset.target, 'col-pos')
+  assert.ok(btn.textContent.includes('欄定位'), btn.textContent)
+})

@@ -481,3 +481,153 @@ test('位置定位經過設定匯出再匯入還在', async () => {
   assert.equal(back?.spec?.block?.cell?.row?.pos, 'last', '匯出入不得把定位方式弄丟')
   void c
 })
+
+// ---- AF-14：純數值標題不當錨點，鏈要從選取端一路接到擷取端 ----
+
+test('選取端把純數值列標題送成空字串，擷取端要照樣抓得到（兩段各自綠，斷點在中間）', async () => {
+  resetChromeMock()
+  const c = installChromeMock()
+  // 發訊端：選取模式對「單列、無表頭、第一格是數值」的表送出一個值
+  const jd = new JSDOM(`<!doctype html><html><body>
+    <table id="t"><tbody><tr><td id="n1">4318</td><td id="n2">38605</td></tr></tbody></table>
+  </body></html>`)
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  globalThis.Event = jd.window.Event
+  globalThis.MouseEvent = jd.window.MouseEvent
+  globalThis.KeyboardEvent = jd.window.KeyboardEvent
+  const pm = await import('../src/content/picker-mode.js?t=' + Math.random())
+  const doc = jd.window.document
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('t') })
+  const cell = doc.getElementById('n2')
+  cell.dispatchEvent(new jd.window.MouseEvent('mousemove', { bubbles: true }))
+  cell.dispatchEvent(new jd.window.MouseEvent('click', { bubbles: true }))
+  cell.dispatchEvent(new jd.window.MouseEvent('dblclick', { bubbles: true }))
+  const sentPicks = (c.__calls
+    .filter(x => x.api === 'runtime.sendMessage')
+    .map(x => x.args[0])
+    .find(m => m?.type === 'PICKED' && !m.cancelled) || {}).picks
+  assert.ok(Array.isArray(sentPicks) && sentPicks.length === 1, '選取端要送出一個值')
+  assert.equal(sentPicks[0].cell.row.header, '', '4318 不得當錨點送出')
+
+  // 收訊端：把送出的那份規格原封不動交給擷取端，換一天（第一格變成 4269）也要抓到同一格
+  const EX = await import('../src/shared/extract.js?t=' + Math.random())
+  const later = new JSDOM(`<!doctype html><body>
+    <table id="t"><tbody><tr><td>4269</td><td>38605</td></tr></tbody></table></body>`)
+  const res = EX.extractValue(later.window.document.getElementById('t'), {
+    mode: 'block',
+    block: { cell: sentPicks[0].cell }
+  })
+  assert.equal(res.ok, true, `選取端送出的規格在擷取端要用得起來，實得 ${JSON.stringify(res)}`)
+  assert.equal(res.value, 38605)
+  assert.equal(res.status, 'ok')
+})
+
+test('試抓的診斷從 content 一路帶到 Picker 匯出的檔案內容', async () => {
+  resetChromeMock()
+  const c = installChromeMock()
+  globalThis.navigator = { onLine: true }
+  const st = await import('../src/shared/storage.js?t=' + Math.random())
+  await st.init()
+  const fe = await import('../src/background/fetcher.js?t=' + Math.random())
+
+  // 產生端：content 回一份帶頁面現況的失敗
+  // 分頁沿用的條件是 origin + pathname 相同（query 可以不同），
+  // 診斷要記的是**帶 query 的實際網址**，不是任務設定的那個
+  const tab = await c.tabs.create({ url: 'https://real.test/x?session=9' })
+  c.__setTabState(tab.id, { status: 'complete' })
+  c.__setScriptResponder((opts) => (opts?.target?.allFrames === true
+    ? [{ frameId: 0, result: 'https://real.test/x?session=9' }]
+    : []))
+  c.__setTabResponder((tabId, msg) => (msg.type === 'EXTRACT'
+    ? {
+      ok: false,
+      error: 'not_found',
+      message: '標題「美金」找不到；目前這張表的列標題是：歐元',
+      debug: { page: { table: { headers: ['幣別'], rowHeaders: ['歐元'] }, html: '<table id="x"></table>', truncated: false } }
+    }
+    : { ok: true }))
+  const task = {
+    id: '__preview', name: '鏈結', url: 'https://real.test/x',
+    locator: { css: '#t' },
+    spec: { mode: 'block', block: { cell: { row: { index: 0, header: '美金' }, col: { index: 1, header: '' } } } }
+  }
+  const res = await fe.runTask(task, { dryRun: true, reason: 'manual', tabId: tab.id, ...FAST })
+  assert.ok(res.debug, 'background 要把 content 的現況包成診斷')
+
+  // 消費端：Picker 拿到同一份回應後，匯出的檔案內容要看得到那些欄位
+  const PICKER_HTML = readFileSync(new URL('../src/ui/picker/picker.html', import.meta.url), 'utf8')
+  const jd = new JSDOM(PICKER_HTML, { url: 'chrome-extension://abc/ui/picker/picker.html' })
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  const pk = await import('../src/ui/picker/picker.js?t=' + Math.random())
+  pk.render({ locator: { css: '#t' }, url: 'https://real.test/x' })
+  c.__setRuntimeResponder((msg) => (msg?.type === 'TEST_TASK' ? res : undefined))
+  await pk.handleTestNow()
+  await pk.handleExportDiag()
+
+  const dl = c.__calls.filter(x => x.api === 'downloads.download')
+  assert.equal(dl.length, 1, '匯出要真的送出下載')
+  const json = JSON.parse(decodeURIComponent(dl[0].args[0].url.split(',')[1]))
+  assert.equal(json.tabUrl, 'https://real.test/x?session=9', '分頁的實際網址要一路到檔案裡，不是任務設定的那個')
+  assert.deepEqual(json.page.table.rowHeaders, ['歐元'], 'content 給的現況不得在中途被丟掉')
+  assert.ok(json.error.message.includes('目前這張表的列標題是'), '訊息也要在檔案裡')
+})
+
+// ---- AF-14：多值任務的預設值名（命名鏈的第四個消費端）----
+
+test('重選存回任務時，規格不得夾帶顯示用的 rawHeader（存進去就再也拿不掉）', async () => {
+  const { c, st } = await freshBg()
+  const task = {
+    id: 'rp', name: '重選', url: 'https://a.test/p', mode: 'block', enabled: true,
+    locator: { css: '#t' },
+    spec: { strategy: 'auto', mode: 'block', block: { cell: { row: { index: 0, header: '' }, col: { index: 1, header: '' } } } },
+    schedule: { type: 'daily', times: ['09:30'] }
+  }
+  await st.saveTask(task)
+  await sendTo(c, {
+    type: 'PICKED',
+    purpose: 'repick',
+    taskId: 'rp',
+    locator: { css: '#t' },
+    picks: [{ cell: {
+      row: { index: 0, header: '', rawHeader: '4318' },
+      col: { index: 1, header: '' }
+    } }]
+  }, { tab: { id: 5, url: 'https://a.test/p' } })
+
+  const saved = await st.getTask('rp')
+  const json = JSON.stringify(saved.spec)
+  assert.ok(!json.includes('rawHeader'),
+    `顯示用欄位進了規格就會被 sameSpec 的全等比對絆倒（key 重生、歷史斷掉），實得 ${json}`)
+  assert.ok(!json.includes('4318'), `那個數字本身也不能進規格：${json}`)
+})
+
+test('多值任務的預設值名不得用純數值標題', async () => {
+  const { c, st } = await freshBg()
+  const task = {
+    id: 'mv', name: '多值', url: 'https://a.test/p', mode: 'block', enabled: true,
+    locator: { css: '#t' },
+    spec: { strategy: 'auto', mode: 'block', fields: [] },
+    fields: [],
+    schedule: { type: 'daily', times: ['09:30'] }
+  }
+  await st.saveTask(task)
+  await sendTo(c, {
+    type: 'PICKED',
+    purpose: 'repick',
+    taskId: 'mv',
+    locator: { css: '#t' },
+    picks: [
+      { cell: { row: { index: 0, header: '' }, col: { index: 1, header: '' } } },
+      { cell: { row: { index: 0, header: '4318' }, col: { index: 2, header: '' } } }
+    ]
+  }, { tab: { id: 5, url: 'https://a.test/p' } })
+
+  const saved = await st.getTask('mv')
+  const names = (saved.fields || []).map(f => f.name)
+  assert.equal(names.length, 2, `要存回兩個值，實得 ${JSON.stringify(saved.fields)}`)
+  for (const n of names) {
+    assert.ok(!String(n).includes('4318'), `4318 明天就變了，不該變成值的名字，實得 ${n}`)
+  }
+})

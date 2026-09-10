@@ -590,8 +590,12 @@ export async function runTask(task, opts = {}) {
       // 演練模式：直接回傳 content script 擷取回覆（附上前置動作做了哪幾步）
       if (dryRun) {
         const out = preActionTrace.length > 0 ? { ...res, preActionTrace } : { ...res }
-        // 失敗才附診斷：成功時沒有人要看，白帶一份大字串
-        if (res?.ok !== true) {
+        // 失敗才附診斷：成功時沒有人要看，白帶一份大字串。
+        // **多值任務要看逐值結果**：表格解析得出來就是 ok:true，即使每個值都失敗（SPEC §7），
+        // 只看 res.ok 的話，本輪主打的情境（多值表格試抓失敗）反而沒有匯出入口。
+        const fieldsFailed = res?.fields && typeof res.fields === 'object'
+          && Object.values(res.fields).some(f => f?.ok !== true)
+        if (res?.ok !== true || fieldsFailed) {
           const page = res?.debug?.page
           delete out.debug
           out.debug = await buildDebug(task, tabId, loc, preActionTrace,

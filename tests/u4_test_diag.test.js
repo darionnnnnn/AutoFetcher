@@ -103,9 +103,12 @@ const TASK = {
 
 test('B2-1 試抓失敗的回應要帶得出分頁網址、框架候選與錯誤', async () => {
   const { c, fetcher } = await freshBg()
-  c.__setTabState(1, { url: 'https://target.test/page', status: 'complete' })
+  // 真的建一個分頁：它的網址帶 query，與任務設定的網址不同字，
+  // 才驗得出診斷讀的是「分頁實際網址」而不是任務設定
+  const tab = await c.tabs.create({ url: 'https://target.test/page?session=7' })
+  c.__setTabState(tab.id, { status: 'complete' })
   c.__setScriptResponder((opts) => (opts?.target?.allFrames === true
-    ? [{ frameId: 0, result: 'https://target.test/page' },
+    ? [{ frameId: 0, result: 'https://target.test/page?session=7' },
        { frameId: 7, result: 'https://target.test/inner?token=zzz' }]
     : []))
   c.__setTabResponder((tabId, msg) => {
@@ -117,12 +120,12 @@ test('B2-1 試抓失敗的回應要帶得出分頁網址、框架候選與錯誤
       debug: { page: { table: { headers: ['幣別'] }, html: '<table></table>', truncated: false } }
     }
   })
-  const res = await fetcher.runTask(TASK, { dryRun: true, reason: 'manual', tabId: 1, ...FAST })
+  const res = await fetcher.runTask(TASK, { dryRun: true, reason: 'manual', tabId: tab.id, ...FAST })
   assert.equal(res.ok, false)
   const d = res.debug
   assert.ok(d, '沒有 debug 就沒有匯出的東西')
   assert.ok(typeof d.at === 'string' && d.at.includes('T'))
-  assert.equal(d.tabUrl, 'https://target.test/page', '要讀分頁實際網址，不是任務設定的網址')
+  assert.equal(d.tabUrl, 'https://target.test/page?session=7', '要讀分頁實際網址，不是任務設定的網址')
   assert.equal(d.frame.frameId, 7)
   assert.equal(d.frame.matchedBy, 'path')
   assert.ok(Array.isArray(d.frame.candidates) && d.frame.candidates.length === 2)
@@ -152,8 +155,15 @@ test('B2-3 正式抓取（非試抓）不得帶診斷，紀錄裡也不得有這
   const { c, st, fetcher } = await freshBg()
   c.__setTabState(1, { url: 'https://target.test/page', status: 'complete' })
   c.__setScriptResponder(() => [])
+  // content script 是不分模式一律附 debug.page 的，所以這裡要真的回一份，
+  // 否則「紀錄裡沒有 debug」在任何實作下都成立（假通過）
   c.__setTabResponder((tabId, msg) => (msg.type === 'EXTRACT'
-    ? { ok: false, error: 'not_found', message: '標題「美金」找不到' }
+    ? {
+      ok: false,
+      error: 'not_found',
+      message: '標題「美金」找不到',
+      debug: { page: { table: { headers: ['幣別'] }, html: '<table></table>', truncated: false } }
+    }
     : { ok: true }))
   const task = { ...TASK, id: 't1', frame: undefined }
   await st.saveTask(task)
@@ -240,4 +250,81 @@ test('B3-4 匯出鈕要真的接上去（mock 沒有 runtime.id，模組層級�
   const wired = src.match(/getElementById\('export-diag'\)\?\.addEventListener/g) || []
   assert.equal(wired.length, 1, '按鈕沒接事件的話，功能寫好了也沒人叫得動')
   assert.ok(/handleExportDiag\(\)/.test(src), '接的要是匯出那個函式')
+})
+
+test('B2-4 多值任務個別值失敗時也要有診斷（本輪主打的情境正是多值表格）', async () => {
+  const { c, fetcher } = await freshBg()
+  c.__setTabState(1, { url: 'https://target.test/page', status: 'complete' })
+  c.__setScriptResponder(() => [])
+  c.__setTabResponder((tabId, msg) => (msg.type === 'EXTRACT'
+    ? {
+      ok: true,
+      fields: {
+        a: { ok: true, value: 1 },
+        b: { ok: false, error: 'not_found', message: '標題「美金」找不到；目前這張表的列標題是：歐元' }
+      }
+    }
+    : { ok: true }))
+  const task = { ...TASK, frame: undefined, spec: { mode: 'block', fields: [{ key: 'a' }, { key: 'b' }] } }
+  const res = await fetcher.runTask(task, { dryRun: true, reason: 'manual', tabId: 1, ...FAST })
+  assert.equal(res.ok, true, '表格解析得出來就是 ok（SPEC §7），只有個別值失敗')
+  assert.ok(res.debug, '整體 ok 但有值失敗時仍要附診斷，否則多值任務永遠匯不出來')
+  // 要是 background 真的組的那一份，不是把 content 的回應原樣轉發
+  assert.ok(res.debug.version, '診斷包要有版本（只有 background 拿得到 manifest）')
+  assert.ok(res.debug.tabUrl, '診斷包要有分頁實際網址')
+  assert.ok(res.debug.frame, '診斷包要有框架資訊')
+})
+
+test('B2-5 多值任務全部成功時不附診斷', async () => {
+  const { c, fetcher } = await freshBg()
+  c.__setTabState(1, { url: 'https://target.test/page', status: 'complete' })
+  c.__setScriptResponder(() => [])
+  c.__setTabResponder((tabId, msg) => (msg.type === 'EXTRACT'
+    ? { ok: true, fields: { a: { ok: true, value: 1 }, b: { ok: true, value: 2 } } }
+    : { ok: true }))
+  const task = { ...TASK, frame: undefined, spec: { mode: 'block', fields: [{ key: 'a' }, { key: 'b' }] } }
+  const res = await fetcher.runTask(task, { dryRun: true, reason: 'manual', tabId: 1, ...FAST })
+  assert.equal(res.debug, undefined)
+})
+
+test('B3-5 換了目標之後，上一個目標的診斷不得還留在畫面上', async () => {
+  const { c, pk, doc } = await freshPicker()
+  pk.render({ locator: LOC, url: 'https://a.test/one' })
+  c.__setRuntimeResponder((msg) => (msg?.type === 'TEST_TASK'
+    ? { ok: false, error: 'not_found', message: 'x', debug: DEBUG }
+    : undefined))
+  await pk.handleTestNow()
+  assert.equal(doc.getElementById('export-diag').hidden, false)
+
+  // 右鍵重選另一個目標：面板不重開，表單留著，但診斷屬於上一頁
+  pk.render({ locator: { css: '#other' }, url: 'https://b.test/two' })
+  assert.equal(doc.getElementById('export-diag').hidden, true,
+    '按下去會匯出上一頁的網址與 HTML 片段')
+})
+
+test('B1-4 多值任務裡有值失敗時，content 也要附頁面現況（整體 ok 不代表沒事）', async () => {
+  const { listener } = await contentWith(TABLE)
+  const spec = {
+    mode: 'block',
+    fields: [
+      { key: 'a', cell: { row: { index: 0, header: '歐元' }, col: { index: 1, header: '買入' } } },
+      { key: 'b', cell: { row: { index: 0, header: '美金' }, col: { index: 1, header: '買入' } } }
+    ]
+  }
+  const res = await send(listener, { type: 'EXTRACT', locator: LOC, spec })
+  assert.equal(res.ok, true, '表格解析得出來就是 ok（SPEC §7）')
+  assert.equal(res.fields.b.ok, false)
+  assert.ok(res.debug?.page?.table, '有值失敗就要附現況，否則診斷包看不到那張表')
+  assert.deepEqual(res.debug.page.table.rowHeaders, ['歐元', '日圓'])
+})
+
+test('B1-5 多值任務全部成功時不附現況', async () => {
+  const { listener } = await contentWith(TABLE)
+  const spec = {
+    mode: 'block',
+    fields: [{ key: 'a', cell: { row: { index: 0, header: '歐元' }, col: { index: 1, header: '買入' } } }]
+  }
+  const res = await send(listener, { type: 'EXTRACT', locator: LOC, spec })
+  assert.equal(res.ok, true)
+  assert.equal(res.debug, undefined)
 })

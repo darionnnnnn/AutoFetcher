@@ -72,7 +72,17 @@ function handleExtract(msg, sendResponse) {
   // 整包轉發：白名單會把 used / skipped / partial / fields 這些欄位丟掉，
   // background 的 partial 黃燈與多值分支都靠它們（AF-5 X3）
   if (extracted.ok) {
-    sendResponse({ ...extracted, ok: true, layer: resolved.layer })
+    // 多值任務即使整體 ok，個別值仍可能失敗（SPEC §7）：那時一樣要附現況，
+    // 否則本輪主打的情境（多值表格抓不到）在診斷包裡看不到那張表長什麼樣
+    const anyFieldFailed = extracted.fields && typeof extracted.fields === 'object'
+      && Object.values(extracted.fields).some(f => f?.ok !== true)
+    const page = anyFieldFailed ? pageDebugOf(resolved.el) : null
+    sendResponse({
+      ...extracted,
+      ok: true,
+      layer: resolved.layer,
+      ...(page ? { debug: { page: { ...page, resolvedLayer: resolved.layer } } } : {})
+    })
   } else {
     // 失敗才附現況：使用者按「匯出診斷」時，我們要看得到那張表當下長什麼樣
     const page = pageDebugOf(resolved.el)

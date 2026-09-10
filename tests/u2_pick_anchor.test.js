@@ -124,3 +124,16 @@ test('A2-7 舊任務存的是純數值 header：回選時照樣找得到那一�
   assert.equal(p.length, 1, '純數值 header 不得讓既有的值被丟掉')
   assert.equal(p[0].cell.row.header, '', '重存時要改成空的')
 })
+
+test('A2-8 送出的 picks 可以帶顯示用的原文，但那是唯一的例外欄位', async () => {
+  const { c, doc, win } = await enter(NUMERIC_PAGE, 't')
+  const cell = doc.getElementById('n2')
+  move(win, cell)
+  click(win, cell)
+  dbl(win, cell)
+  const p = picks(c)
+  // 顯示端要看得到 4318（面板 chip、Picker 摘要卡）
+  assert.equal(p[0].cell.row.rawHeader, '4318')
+  // 但定位欄位必須是空的
+  assert.equal(p[0].cell.row.header, '')
+})
