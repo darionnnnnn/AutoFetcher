@@ -251,13 +251,15 @@ test('擷取一直不回時逾時失敗，寫成錯誤紀錄', async () => {
   c.__setTabResponder((tabId, msg) => (
     msg?.type === 'EXTRACT' ? new Promise(() => {}) : { ok: true }
   ))
+  const timers = () => process.getActiveResourcesInfo().filter(r => r === 'Timeout').length
+  const before = timers()
   const rec = await fe.runTask(task(), {
     slot: '2026-09-06T09:00', reason: 'manual',
     pollMs: 1, loadTimeoutMs: 100, extraDelayMs: 0, extractTimeoutMs: 30
   })
   assert.ok(rec, '逾時要留下紀錄，不能靜靜地什麼都沒有')
   assert.notEqual(rec.status, 'ok', `逾時卻寫成成功：${JSON.stringify(rec)}`)
-  const timers = process.getActiveResourcesInfo().filter(r => r === 'Timeout').length
-  assert.ok(timers <= 1, `逾時路徑也不該留計時器，實得 ${timers} 個`)
+  // 逾時路徑的計時器已經到期，這裡比的是「沒有別的東西留下來」，要跟進場前等值
+  assert.equal(timers(), before, '逾時路徑也不該留計時器')
   assert.equal((await st.getRecordsByDate('2026-09-06')).length, 1)
 })
