@@ -352,7 +352,15 @@ function frameIdentityOf(sender) {
   return { frameId: sender.frameId, frameUrl: sender.url }
 }
 
-export async function handleMessage(msg, sender) {
+/**
+ * 訊息處理。
+ * @param {object} msg 訊息本身——**訊息裡的欄位一律只當資料看**，不得拿來改執行方式。
+ * @param {object} sender
+ * @param {object} runOpts 執行選項（時序、dryRun 等），**只有直接呼叫的人給得了**：
+ *   正式接線只傳 `(msg, sender)`，所以網頁或任何送得出 runtime 訊息的來源都影響不到。
+ *   測試要縮短等待就從這裡傳，形狀比照 `handleAlarm(alarm, testOpts)`。
+ */
+export async function handleMessage(msg, sender, runOpts = {}) {
   try {
     if (!msg || typeof msg !== 'object') return undefined
 
@@ -371,7 +379,7 @@ export async function handleMessage(msg, sender) {
       }
       const record = await runTask(task, {
         slot: slotOf(Date.now()),
-        ...(msg.__testOpts || {}),
+        ...runOpts,
         reason: 'manual'
       })
       if (!record) {

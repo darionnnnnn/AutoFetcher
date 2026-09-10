@@ -127,7 +127,7 @@ test('同一分鐘按兩次立即抓取，逐值回報每個值只出現一次',
   globalThis.navigator = { onLine: true }
   const st = await import('../src/shared/storage.js?t=' + Math.random())
   await st.init()
-  await import('../src/background/main.js?t=' + Math.random())
+  const bg = await import('../src/background/main.js?t=' + Math.random())
   await st.saveTask({
     id: 'bank', name: '臺銀', url: 'https://bank.test/rate', mode: 'block', enabled: true,
     locator: { css: '#rate' },
@@ -136,8 +136,8 @@ test('同一分鐘按兩次立即抓取，逐值回報每個值只出現一次',
     schedule: { type: 'daily', times: ['09:30'] }
   })
   c.__setTabResponder(() => ({ ok: true, fields: { k1: { ok: true, value: 31.2, raw: '31.2', status: 'ok' } } }))
-  const listener = [...c.runtime.onMessage._listeners][0]
-  const send = () => new Promise(res => listener({ type: 'RUN_TASK', taskId: 'bank', __testOpts: FAST }, {}, res))
+  // 驗的是「同一分鐘按兩次，每個值只回最新那筆」，不是接線；執行選項走第三參數
+  const send = () => bg.handleMessage({ type: 'RUN_TASK', taskId: 'bank' }, {}, FAST)
   await send()
   const second = await send()
   assert.equal(second.values.length, 1, `實得 ${second.values.length} 筆`)

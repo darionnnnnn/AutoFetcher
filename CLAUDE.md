@@ -82,15 +82,18 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1848 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1852 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
 - **突變要改到真正的守門那一行**:數呼叫次數、把門檻設在本來就不會命中的位置,都是任何實作下都會過的假斷言。
 - **段與段之間要有鏈結測試**:每段驗收都自己造輸入時,訊息欄位(`picks`、`locator`、`preselect`)沒有人從發訊端一路斷言到收訊端;
   `tests/m2_chain.test.js` 是這種測試,新增跨模組欄位時要補進去。
-- **驗收時 grep 正式碼有無測試檔名、`__test`、`Error().stack`**:委派端曾在正式碼塞測試替身呼叫,
-  也曾用「呼叫堆疊是某測試檔就跳過去重」讓整套測試假綠。
+- **正式碼不得留測試後門**(測試檔名、`__test`、`Error().stack`;`tests/a4_conventions.test.js` 的 D14 會擋):
+  委派端曾在正式碼塞測試替身呼叫,也曾用「呼叫堆疊是某測試檔就跳過去重」讓整套測試假綠。
+  **測試要縮短等待一律走函式參數**(`handleAlarm(alarm, testOpts)`、`handleMessage(msg, sender, runOpts)`),
+  正式接線不傳那個參數,那條路就不存在;**不得走訊息欄位**——`RUN_TASK` 曾把 `msg.__testOpts` 展開進 `runTask`,
+  等於任何送得出 runtime 訊息的來源都能改抓取時序、把這次改成 dryRun、或改成 scheduled 去偷排程槽(AF-12 拔掉)。
 - 分支:`dev` 開發、`master` 由使用者併;每輪一個 `r<N>` 分支。
 - **每輪收尾要把版本號 minor +1**(`src/manifest.json` 與 `package.json` **兩處同步**,
   `tests/a4_conventions.test.js` 的 D3b 會擋不一致)。AF-6 與 AF-7 都漏升,

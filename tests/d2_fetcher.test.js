@@ -226,3 +226,40 @@ test('例外不會讓 runTask 炸掉,會寫成 error 紀錄', async () => {
   assert.equal(rec.status, 'error')
   assert.ok(String(rec.error).includes('boom'))
 })
+
+// AF-12：擷取逾時的計時器要清掉。
+// 以前 Promise.race 裡那個 setTimeout 從不清除，抓取成功之後它還吊著事件迴圈
+// 到 extractTimeoutMs（預設 15 秒）為止——MV3 的 service worker 因此遲遲不能閒置回收，
+// 測試套件也會憑空多等 15 秒。
+test('抓完不留計時器（不指定 extractTimeoutMs，用正式的 15 秒）', async () => {
+  const { c, st, fe } = await fresh()
+  c.__setTabResponder(() => ({ ok: true, value: 7, raw: '7', status: 'ok', strategyUsed: 'auto', layer: 'css' }))
+  await st.saveSettings({ extraDelaySec: 0 })
+  const timers = () => process.getActiveResourcesInfo().filter(r => r === 'Timeout').length
+  const before = timers()
+  const rec = await fe.runTask(task(), { slot: '2026-09-06T09:00', pollMs: 1, loadTimeoutMs: 200 })
+  assert.equal(rec.status, 'ok')
+  assert.equal(timers(), before,
+    '擷取逾時的計時器沒清掉：service worker 會被它多吊 15 秒，整套測試也跟著等')
+})
+
+// AF-12：擷取逾時仍要走失敗路徑（改計時器清除時把這條補上——這段程式碼以前沒有任何測試）。
+// `.finally(clearTimeout)` 不會吞掉 rejection，但沒有測試就沒有人保證下一個人改它時還是這樣。
+test('擷取一直不回時逾時失敗，寫成錯誤紀錄', async () => {
+  const { c, st, fe } = await fresh()
+  // EXTRACT 永不回應；SCROLL_INTO_VIEW 之類的照常回，否則卡在前一步就看不到逾時
+  c.__setTabResponder((tabId, msg) => (
+    msg?.type === 'EXTRACT' ? new Promise(() => {}) : { ok: true }
+  ))
+  const timers = () => process.getActiveResourcesInfo().filter(r => r === 'Timeout').length
+  const before = timers()
+  const rec = await fe.runTask(task(), {
+    slot: '2026-09-06T09:00', reason: 'manual',
+    pollMs: 1, loadTimeoutMs: 100, extraDelayMs: 0, extractTimeoutMs: 30
+  })
+  assert.ok(rec, '逾時要留下紀錄，不能靜靜地什麼都沒有')
+  assert.notEqual(rec.status, 'ok', `逾時卻寫成成功：${JSON.stringify(rec)}`)
+  // 逾時路徑的計時器已經到期，這裡比的是「沒有別的東西留下來」，要跟進場前等值
+  assert.equal(timers(), before, '逾時路徑也不該留計時器')
+  assert.equal((await st.getRecordsByDate('2026-09-06')).length, 1)
+})
