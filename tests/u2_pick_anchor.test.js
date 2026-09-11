@@ -137,3 +137,30 @@ test('A2-8 送出的 picks 可以帶顯示用的原文，但那是唯一的例�
   // 但定位欄位必須是空的
   assert.equal(p[0].cell.row.header, '')
 })
+
+test('A2-9 連續選兩張表：第二張表的判定不得沿用第一張的狀態', async () => {
+  // 第一張是單列數值表（header 會被判準擋下、原文進 rawHeader）
+  const { c, doc, win, pm } = await enter(NUMERIC_PAGE + TEXT_PAGE, 't')
+  const first = doc.getElementById('n2')
+  move(win, first)
+  click(win, first)
+  dbl(win, first)
+  assert.equal(picks(c)[0].cell.row.header, '')
+
+  // 第二張是有文字標題的表：離開選取模式後重新進入，不得沿用上一張的結果
+  pm.exitPickMode()
+  resetChromeMock()
+  const c2 = installChromeMock()
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('t2') })
+  const second = doc.getElementById('a1')
+  move(win, second)
+  click(win, second)
+  dbl(win, second)
+  const p2 = (c2.__calls
+    .filter(x => x.api === 'runtime.sendMessage')
+    .map(x => x.args[0])
+    .find(m => m?.type === 'PICKED' && !m.cancelled) || {}).picks
+  assert.ok(Array.isArray(p2) && p2.length === 1, `第二張表要送得出值，實得 ${JSON.stringify(p2)}`)
+  assert.equal(p2[0].cell.row.header, '美金', '第二張表有真的列標題，不得被上一張的判定蓋掉')
+  assert.equal(p2[0].cell.row.rawHeader, undefined, '沒有被擋下就不該留下顯示用原文')
+})

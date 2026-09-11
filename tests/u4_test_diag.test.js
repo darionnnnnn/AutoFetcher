@@ -328,3 +328,46 @@ test('B1-5 多值任務全部成功時不附現況', async () => {
   assert.equal(res.ok, true)
   assert.equal(res.debug, undefined)
 })
+
+test('B2-6 最外層例外（頁面被換掉）的出口也要帶診斷', async () => {
+  const { c, fetcher } = await freshBg()
+  const tab = await c.tabs.create({ url: 'https://target.test/page' })
+  c.__setTabState(tab.id, { status: 'complete' })
+  c.__setScriptResponder(() => [])
+  // 一直送不到：存活重試耗盡後走最外層 catch（訊息轉成中文那一條路）
+  c.__setTabResponder((tabId, msg) => {
+    if (msg.type !== 'EXTRACT') return { ok: true }
+    throw new Error('Could not establish connection. Receiving end does not exist.')
+  })
+  const task = { ...TASK, frame: undefined }
+  const res = await fetcher.runTask(task, {
+    dryRun: true, reason: 'manual', tabId: tab.id, ...FAST, reviveDelaysMs: [1, 1, 1]
+  })
+  assert.equal(res.ok, false)
+  assert.ok(res.debug, '例外出口沒有診斷的話，最難查的那一類失敗反而查不到')
+  assert.equal(res.debug.tabUrl, 'https://target.test/page', '例外時仍要讀得到分頁網址')
+  assert.ok(res.debug.error.raw, '轉成中文之前的原文要留著，沒有它就沒有線索')
+  assert.ok(res.debug.version)
+})
+
+// ---- 訊息要一路走到紀錄（PLAN：產生端到畫面）----
+
+test('B2-7 正式抓取失敗時，新訊息要寫進紀錄的 error（使用者在歷史頁看得到怎麼辦）', async () => {
+  const { c, st, fetcher } = await freshBg()
+  const tab = await c.tabs.create({ url: 'https://target.test/page' })
+  c.__setTabState(tab.id, { status: 'complete' })
+  c.__setScriptResponder(() => [])
+  c.__setTabResponder((tabId, msg) => (msg.type === 'EXTRACT'
+    ? {
+      ok: false,
+      error: 'not_found',
+      message: '標題「美金」找不到；目前這張表的列標題是：歐元、日圓；若這張表每天新增一列，請到任務設定改用位置定位（第一筆／最後一筆／倒數第二筆）'
+    }
+    : { ok: true }))
+  const task = { ...TASK, id: 'rec1', frame: undefined }
+  await st.saveTask(task)
+  const rec = await fetcher.runTask(task, { reason: 'manual', slot: '2026-09-11T09:00', tabId: tab.id, ...FAST })
+  assert.equal(rec.status, 'not_found')
+  assert.ok(String(rec.error).includes('目前這張表的列標題是'),
+    `只寫 not_found 等於告訴使用者「壞了」卻不說能怎麼辦，實得 ${rec.error}`)
+})
