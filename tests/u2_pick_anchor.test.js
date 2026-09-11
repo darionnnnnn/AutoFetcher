@@ -149,3 +149,14 @@ test('A2-8 連續選兩張表：第二張表的判定不得沿用第一張的狀
   assert.ok(Array.isArray(p2) && p2.length === 1, `第二張表要送得出值，實得 ${JSON.stringify(p2)}`)
   assert.equal(p2[0].cell.row.header, '美金', '第二張表有真的列標題，不得被上一張的判定蓋掉')
 })
+
+test('A2-9 純數值 header 不見、退回的欄索引已超出表格寬度：那個值要被略過，不得加進一個指不到格子的已選項', async () => {
+  // 舊任務存的是第 5 欄；今天這張表只有 2 欄、第一格也變了
+  const preselect = [{ cell: { row: { index: 0, header: '4318' }, col: { index: 5, header: '9999' } } }]
+  const page = NUMERIC_PAGE.replace('4318', '4269')
+  const { c, doc, win } = await enter(page, 't', { preselect })
+  dbl(win, doc.getElementById('n2'))
+  const p = picks(c)
+  assert.ok(Array.isArray(p) && p.length === 1, `只該有雙擊選進來的那一格，實得 ${JSON.stringify(p)}`)
+  assert.equal(p[0].cell.col.index, 1)
+})

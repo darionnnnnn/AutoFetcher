@@ -362,8 +362,10 @@ export async function runTask(task, opts = {}) {
     // 前置動作的逐步軌跡：立即測試要說得出「hover 有做、是 click 沒點到」，
     // 只回一句「成功」的話，使用者在調 hover 選單時完全沒有線索
     const preActionTrace = []
-    // 分頁 id 在 try 外面宣告：最外層的 catch 要用它組診斷包（讀分頁實際網址）
+    // 分頁 id 與框架定位結果在 try 外面宣告：最外層的 catch 要用它們組診斷包
+    // （讀分頁實際網址；框架其實找到了、是擷取階段斷線，診斷包不能長得跟「找不到框架」一樣）
     let tabId
+    let loc = null
     // 佇列中再次確認冪等，防止併發重複執行（dryRun 與手動抓取略過）
     if (!dryRun && !isManual) {
       const currentLedger = await getLedger()
@@ -545,7 +547,6 @@ export async function runTask(task, opts = {}) {
       // 這時重新走一次就好；**逾時不重試**（那是頁面沒回應，重試只會把 15 秒乘以四），
       // **找不到框架也不重試**（`locateFrame` 自己已經輪詢到逾時才放棄）。
       // 前置動作留在這個區塊**外面**：它有副作用，重放就是把按鈕再按一次。
-      let loc = null
       let res
       let lastLiveErr = null
       const maxAttempts = 1 + reviveDelaysMs.length
@@ -817,7 +818,7 @@ export async function runTask(task, opts = {}) {
       if (dryRun) {
         const out = { ok: false, error: shown }
         if (preActionTrace.length > 0) out.preActionTrace = preActionTrace
-        out.debug = await buildDebug(task, tabId, null, preActionTrace, { error: shown, raw })
+        out.debug = await buildDebug(task, tabId, loc, preActionTrace, { error: shown, raw })
         return out
       }
       if (!isManual && attempt < 3) {

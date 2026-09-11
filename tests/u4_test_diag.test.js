@@ -348,6 +348,9 @@ test('B2-6 最外層例外（頁面被換掉）的出口也要帶診斷', async 
   assert.equal(res.debug.tabUrl, 'https://target.test/page', '例外時仍要讀得到分頁網址')
   assert.ok(res.debug.error.raw, '轉成中文之前的原文要留著，沒有它就沒有線索')
   assert.ok(res.debug.version)
+  // 框架其實找到了（最上層），是擷取階段斷線：診斷包不能長得跟「找不到框架」一樣
+  assert.equal(res.debug.frame.frameId, 0)
+  assert.equal(res.debug.frame.matchedBy, 'top')
 })
 
 // ---- 訊息要一路走到紀錄（PLAN：產生端到畫面）----

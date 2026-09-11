@@ -4,7 +4,7 @@ import { DEFAULT_HOVER_HOLD_MS, DEFAULT_WAIT_TIMEOUT_MS } from '../../shared/pre
 import { MSG } from '../../shared/messages.js'
 import { getLayout, addCard } from '../../shared/layout-store.js'
 import { seriesIdOf } from '../../shared/series-index.js'
-import { describeSchedule, describeTarget, describeDashboard, POS_TEXT } from '../../shared/describe.js'
+import { describeSchedule, describeTarget, describeDashboard, numericHeaderAxis, POS_TEXT } from '../../shared/describe.js'
 import { nextIntervalRun } from '../../shared/schedule-math.js'
 import { isAnchorText } from '../../shared/table.js'
 import { download } from '../../shared/export.js'
@@ -1088,17 +1088,6 @@ function updateBlockSection() {
  * 使用者不必把散在各區的欄位在腦中組起來，久沒用回來也一眼看得出這個任務在做什麼。
  * 文字一律走 shared/describe.js，與任務頁、popup 同一份。
  */
-// 哪一軸的標題是純數值（'row' | 'col' | ''）；沒有就回空字串
-function numericHeaderAxis(cell, block) {
-  const rowH = String(cell?.row?.header || '').trim()
-  const colH = String(cell?.col?.header || '').trim()
-  const blockH = String(block?.headerText || '').trim()
-  if (rowH && !isAnchorText(rowH)) return 'row'
-  if (colH && !isAnchorText(colH)) return 'col'
-  if (blockH && !isAnchorText(blockH)) return block?.axis === 'row' ? 'row' : 'col'
-  return ''
-}
-
 export function updateSetupSummary() {
   const box = document.getElementById('setup-summary')
   if (!box) return
@@ -1111,8 +1100,10 @@ export function updateSetupSummary() {
     const cellArg = values.block?.cell || first?.cell
     const blockArg = values.block?.axis ? values.block : first?.block
     // 摘要卡說了「請改用列定位」就要讓使用者到得了那個下拉（它在「抓什麼」區，不是進階區）。
-    // 哪一軸是純數值標題，判準與 describe.js 的提示句同一份（列優先）
-    const numericAxis = numericHeaderAxis(cellArg, blockArg)
+    // 哪一軸要提示，只由 describe.js 的 numericHeaderAxis 決定（整欄／整列沒有可換的下拉，不出鈕）
+    const rowPosNow = document.getElementById('row-pos')?.value || ''
+    const colPosNow = document.getElementById('col-pos')?.value || ''
+    const numericAxis = numericHeaderAxis(cellArg, rowPosNow, colPosNow)
     const gotoBtn = document.getElementById('goto-rowpos')
     if (gotoBtn) {
       gotoBtn.hidden = !numericAxis
@@ -1125,8 +1116,8 @@ export function updateSetupSummary() {
       fieldCount: fieldRows.length,
       cell: values.block?.cell || first?.cell,
       block: values.block?.axis ? values.block : first?.block,
-      rowPos: document.getElementById('row-pos')?.value || '',
-      colPos: document.getElementById('col-pos')?.value || ''
+      rowPos: rowPosNow,
+      colPos: colPosNow
     })
   }
 
@@ -1474,7 +1465,23 @@ function updateFieldListState() {
   updateBlockSection()
 }
 
-// 一個值在表格裡的位置說明（「美金 · 買入」／「買入 整欄」）
+// 「用「列 · 欄」命名」用的文字：與 fieldWhereText 同形，但純數值標題不進名稱
+function fieldNameText(spec) {
+  if (!spec) return ''
+  if (spec.cell) {
+    const r = anchorOnly(spec.cell.row?.header) || (spec.cell.row?.pos ? POS_TEXT[spec.cell.row.pos] : '')
+    const c = anchorOnly(spec.cell.col?.header) || (spec.cell.col?.pos ? POS_TEXT[spec.cell.col.pos] : '')
+    return [r, c].filter(Boolean).join(' · ')
+  }
+  if (spec.block) {
+    const axis = spec.block.axis === 'row' ? '整列' : '整欄'
+    const h = anchorOnly(spec.block.headerText)
+    return h ? `${h} ${axis}` : axis
+  }
+  return ''
+}
+
+// 一個值在表格裡的位置說明（「美金 · 買入」／「買入 整欄」），純顯示，原文照給
 function fieldWhereText(spec) {
   if (!spec) return ''
   if (spec.cell) {
@@ -1528,11 +1535,12 @@ export function renameFields(style) {
     if (!input) continue
     if (input.value !== input._afAutoName) continue
     const spec = row._spec || fieldSpecs.get(row.dataset.fieldKey || '')
+    // 純數值標題不進名稱（命名鏈的第四個入口，判準與其他三處同一份）
     let next = ''
     if (style === 'col') {
-      next = spec?.cell?.col?.header || spec?.block?.headerText || ''
+      next = anchorOnly(spec?.cell?.col?.header) || anchorOnly(spec?.block?.headerText)
     } else {
-      next = fieldWhereText(spec)
+      next = fieldNameText(spec)
     }
     if (!next) continue
     input.value = next

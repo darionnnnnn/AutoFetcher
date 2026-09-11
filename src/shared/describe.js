@@ -92,23 +92,37 @@ export const POS_TEXT = {
   'last-1': '倒數第二筆'
 }
 
+// 哪一軸的標題是純數值而**還沒有**改用位置定位（'row' | 'col' | ''）。
+// 這是「要不要提示、捷徑鈕指向哪個下拉」的唯一判定，Picker 不得自己再算一份
+// （句子叫你改列、按鈕卻指到欄，就是兩份判定各說各話）。
+// 已經設了位置定位的軸不再提示：擷取端 pos 先於 header 生效，警語此時是假的、而且永遠關不掉。
+export function numericHeaderAxis(cell, rowPos, colPos) {
+  const rowH = String(cell?.row?.header || '').trim()
+  const colH = String(cell?.col?.header || '').trim()
+  if (!rowPos && rowH && !isAnchorText(rowH)) return 'row'
+  if (!colPos && colH && !isAnchorText(colH)) return 'col'
+  return ''
+}
+
 // 標題是純數值時（4318 這種），它可能是鍵也可能只是那一格的資料：擷取端只在它當下唯一出現時
 // 才拿來定位，不見了就改以位置抓（`shared/extract.js` 的 locateByHeader）。使用者在畫面上看得到
 // 那個數字、系統卻可能默默改用位置，不講的話表格哪天多一列就會抓到別人的資料——選取當下就要說出來。
-// 列優先（單列數值表是最常見的形狀），兩軸都是純數值時先講列。
-function anchorNote(cell, block) {
-  const rowH = String(cell?.row?.header || '').trim()
-  const colH = String(cell?.col?.header || '').trim()
+// 儲存格：指向那一軸的位置定位下拉。整欄／整列：那一軸是使用者自己點的、沒有位置定位可換
+// （pos 是給另一軸用的），只說明行為，不給做不到的建議。
+function anchorNote(cell, block, rowPos, colPos) {
+  const axis = numericHeaderAxis(cell, rowPos, colPos)
+  if (axis) {
+    const which = axis === 'row' ? '列' : '欄'
+    const raw = String(axis === 'row' ? cell.row.header : cell.col.header).trim()
+    return `。這一${which}的標題是數字（${raw}），不一定是標題：它還在表上就跟著它，` +
+      `不在就改以位置抓；若這張表會新增${which}，請改用「${which}定位」`
+  }
   const blockH = String(block?.headerText || '').trim()
-  let raw = ''
-  let isCol = false
-  if (rowH && !isAnchorText(rowH)) raw = rowH
-  else if (colH && !isAnchorText(colH)) { raw = colH; isCol = true }
-  else if (blockH && !isAnchorText(blockH)) { raw = blockH; isCol = block?.axis !== 'row' }
-  if (!raw) return ''
-  const which = isCol ? '欄' : '列'
-  return `。這一${which}的標題是數字（${raw}），不一定是標題：它還在表上就跟著它，` +
-    `不在就改以位置抓；若這張表會新增${which}，請改用「${which}定位」`
+  if (blockH && !isAnchorText(blockH)) {
+    const which = block?.axis === 'row' ? '列' : '欄'
+    return `。這一${which}的標題是數字（${blockH}），不一定是標題：它還在表上就跟著它，不在就照原本的位置抓`
+  }
+  return ''
 }
 
 /**
@@ -127,7 +141,7 @@ export function describeTarget(target) {
   const t = target || {}
   const host = hostOf(t.url)
   const where = host ? `抓 ${host} ` : '抓 '
-  const note = t.mode === 'block' ? anchorNote(t.cell, t.block) : ''
+  const note = t.mode === 'block' ? anchorNote(t.cell, t.block, t.rowPos, t.colPos) : ''
 
   if (t.mode !== 'block') {
     const kind = t.mode === 'text' ? '文字' : '數字'

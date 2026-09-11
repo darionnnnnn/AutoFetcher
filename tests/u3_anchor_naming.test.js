@@ -55,7 +55,7 @@ test('A3-4 整欄聚合的 headerText 是純數值時也提示', () => {
     url: 'https://a.test/p', mode: 'block',
     block: { axis: 'col', index: 1, headerText: '2025', aggregate: 'sum' }
   })
-  assert.ok(text.includes('2025') && text.includes('欄定位'), text)
+  assert.ok(text.includes('2025') && text.includes('不一定是標題'), text)
 })
 
 // ---- Picker 摘要卡與捷徑 ----
@@ -116,4 +116,56 @@ test('A3-10 規格原文照存：不因為命名不用它就把 header 洗掉（
   pk.render({ locator: LOCATOR, url: 'https://rate.test/x', picks: [NUMERIC_PICK] })
   const spec = pk.buildSpec(pk.getFormData())
   assert.equal(spec.block.cell.row.header, '4318')
+})
+
+// ---- 收尾體檢補的三條：pos 已設就不提示、整欄整列不給做不到的建議、一鍵命名 ----
+
+test('A3-11 使用者照做改了列定位之後，提示句與捷徑鈕都要消失（警語不能永遠關不掉）', async () => {
+  const { pk, doc } = await fresh()
+  pk.render({ locator: LOCATOR, url: 'https://rate.test/x', picks: [NUMERIC_PICK] })
+  pk.updateSetupSummary()
+  assert.equal(doc.getElementById('goto-rowpos').hidden, false, '前提：一開始要有提示')
+
+  doc.getElementById('row-pos').value = 'last'
+  pk.updateSetupSummary()
+  assert.ok(!summary(doc, 'summary-target').includes('不一定是標題'),
+    `pos 先於 header 生效，警語此時是假的，實際：${summary(doc, 'summary-target')}`)
+  assert.equal(doc.getElementById('goto-rowpos').hidden, true)
+})
+
+test('A3-12 整欄聚合的標題是純數值：只說明行為，不叫使用者去改一個被停用的下拉', async () => {
+  const text = describeTarget({
+    url: 'https://a.test/p', mode: 'block',
+    block: { axis: 'col', index: 1, headerText: '2025', aggregate: 'sum' }
+  })
+  assert.ok(text.includes('2025') && text.includes('不一定是標題'), text)
+  assert.ok(!text.includes('定位」'), `整欄的欄是使用者自己點的，沒有位置定位可換，實際：${text}`)
+
+  const { pk, doc } = await fresh()
+  pk.render({
+    locator: LOCATOR, url: 'https://rate.test/x',
+    picks: [{ block: { axis: 'col', index: 1, headerText: '2025' } }]
+  })
+  pk.updateSetupSummary()
+  assert.equal(doc.getElementById('goto-rowpos').hidden, true, '按下去只會 focus 到 disabled 的下拉')
+})
+
+test('A3-13 一鍵命名（命名鏈第四個入口）也不得用純數值標題', async () => {
+  const { pk, doc } = await fresh()
+  pk.render({
+    locator: LOCATOR, url: 'https://rate.test/x', nameHint: '統計',
+    picks: [
+      { cell: { row: { index: 0, header: '4318' }, col: { index: 1, header: '38605' } } },
+      { cell: { row: { index: 0, header: '4318' }, col: { index: 2, header: '賣出' } } }
+    ]
+  })
+  for (const style of ['col', 'cell']) {
+    pk.renameFields(style)
+    const names = Array.from(doc.querySelectorAll('#field-list input[data-field-name]')).map(i => i.value)
+    assert.equal(names.length, 2, `要有兩個值，實得 ${JSON.stringify(names)}`)
+    for (const n of names) {
+      assert.ok(!n.includes('4318') && !n.includes('38605'),
+        `「${style}」命名後名字裡不得有明天就會變的數字，實得 ${JSON.stringify(names)}`)
+    }
+  }
 })

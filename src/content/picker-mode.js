@@ -1430,6 +1430,9 @@ function applyPreselect(preselect, tableEl) {
   const dataRows = resolveDataRows(tableEl)
   const colHeaders = columnHeaders(tableEl)
   const rowHeaders = dataRows.map((row) => rowHeader(row))
+  // 欄數以最寬的那一列為準（無表頭的表 colHeaders 是空的）：純數值標題不見時會退回原索引，
+  // 表格變窄了那個索引就指不到任何格子，不能把它加進已選清單
+  const colCount = dataRows.reduce((max, row) => Math.max(max, getRowCells(row).length), colHeaders.length)
 
   for (const item of preselect) {
     if (!item) continue
@@ -1469,7 +1472,7 @@ function applyPreselect(preselect, tableEl) {
         }
       }
 
-      if (rIdx !== null && cIdx !== null && rIdx >= 0 && rIdx < dataRows.length && cIdx >= 0) {
+      if (rIdx !== null && cIdx !== null && rIdx >= 0 && rIdx < dataRows.length && cIdx >= 0 && cIdx < colCount) {
         const targetRow = dataRows[rIdx]
         const actualRowHeader = rHeader || (targetRow ? rowHeader(targetRow) : '')
         const actualColHeader = cHeader || (colHeaders[cIdx] || '')
@@ -1494,7 +1497,7 @@ function applyPreselect(preselect, tableEl) {
             bIdx = loc.index
           }
         }
-        if (bIdx !== null && bIdx >= 0) {
+        if (bIdx !== null && bIdx >= 0 && bIdx < colCount) {
           addPick({ block: { axis: 'col', index: bIdx, headerText: bHeader || colHeaders[bIdx] || '' } })
         }
       } else if (axis === 'row') {
