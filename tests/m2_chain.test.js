@@ -484,7 +484,7 @@ test('位置定位經過設定匯出再匯入還在', async () => {
 
 // ---- AF-14：純數值標題不當錨點，鏈要從選取端一路接到擷取端 ----
 
-test('選取端把純數值列標題送成空字串，擷取端要照樣抓得到（兩段各自綠，斷點在中間）', async () => {
+test('選取端送出純數值列標題，擷取端在它不在表上時退回索引（兩段各自綠，斷點在中間）', async () => {
   resetChromeMock()
   const c = installChromeMock()
   // 發訊端：選取模式對「單列、無表頭、第一格是數值」的表送出一個值
@@ -508,7 +508,7 @@ test('選取端把純數值列標題送成空字串，擷取端要照樣抓得�
     .map(x => x.args[0])
     .find(m => m?.type === 'PICKED' && !m.cancelled) || {}).picks
   assert.ok(Array.isArray(sentPicks) && sentPicks.length === 1, '選取端要送出一個值')
-  assert.equal(sentPicks[0].cell.row.header, '', '4318 不得當錨點送出')
+  assert.equal(sentPicks[0].cell.row.header, '4318', '原文照存，由擷取端決定拿不拿它定位')
 
   // 收訊端：把送出的那份規格原封不動交給擷取端，換一天（第一格變成 4269）也要抓到同一格
   const EX = await import('../src/shared/extract.js?t=' + Math.random())
@@ -576,7 +576,7 @@ test('試抓的診斷從 content 一路帶到 Picker 匯出的檔案內容', asy
 
 // ---- AF-14：多值任務的預設值名（命名鏈的第四個消費端）----
 
-test('重選存回任務時，規格不得夾帶顯示用的 rawHeader（存進去就再也拿不掉）', async () => {
+test('重選存回任務時，pick 上多出來的欄位不得進規格（進了就再也拿不掉）', async () => {
   const { c, st } = await freshBg()
   const task = {
     id: 'rp', name: '重選', url: 'https://a.test/p', mode: 'block', enabled: true,
@@ -590,17 +590,17 @@ test('重選存回任務時，規格不得夾帶顯示用的 rawHeader（存進�
     purpose: 'repick',
     taskId: 'rp',
     locator: { css: '#t' },
+    // pick 來自 content script 的訊息，哪天多帶一個欄位（顯示用、除錯用）都不該落地
     picks: [{ cell: {
-      row: { index: 0, header: '', rawHeader: '4318' },
+      row: { index: 0, header: '', extraForDisplay: 'x' },
       col: { index: 1, header: '' }
     } }]
   }, { tab: { id: 5, url: 'https://a.test/p' } })
 
   const saved = await st.getTask('rp')
   const json = JSON.stringify(saved.spec)
-  assert.ok(!json.includes('rawHeader'),
-    `顯示用欄位進了規格就會被 sameSpec 的全等比對絆倒（key 重生、歷史斷掉），實得 ${json}`)
-  assert.ok(!json.includes('4318'), `那個數字本身也不能進規格：${json}`)
+  assert.ok(!json.includes('extraForDisplay'),
+    `多出來的欄位進了規格就會被 sameSpec 的全等比對絆倒（key 重生、歷史斷掉），實得 ${json}`)
 })
 
 test('多值任務的預設值名不得用純數值標題', async () => {

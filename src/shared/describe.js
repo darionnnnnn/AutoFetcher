@@ -3,6 +3,8 @@
 // 各寫一份會讓同一個任務在三個畫面上長得不一樣（AF-9 定案）。
 // 純函式：無 DOM、無 chrome.
 
+import { isAnchorText } from './table.js'
+
 const WEEKDAY_NAMES = ['日', '一', '二', '三', '四', '五', '六']
 // 以週一為起點排序：使用者看的是「週一～五」，不是「週日、週一…」
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0]
@@ -90,17 +92,23 @@ export const POS_TEXT = {
   'last-1': '倒數第二筆'
 }
 
-// 標題是純數值時定位不拿它當錨點（`shared/table.js` 的判準）。
-// 使用者在畫面上看得到那個數字，系統卻默默改用位置抓，不講的話
-// 表格哪天多一列就會抓到別人的資料——所以選取當下就要說出來。
-function anchorNote(rawHeader, axis) {
-  const raw = typeof rawHeader === 'string' ? rawHeader.trim() : ''
+// 標題是純數值時（4318 這種），它可能是鍵也可能只是那一格的資料：擷取端只在它當下唯一出現時
+// 才拿來定位，不見了就改以位置抓（`shared/extract.js` 的 locateByHeader）。使用者在畫面上看得到
+// 那個數字、系統卻可能默默改用位置，不講的話表格哪天多一列就會抓到別人的資料——選取當下就要說出來。
+// 列優先（單列數值表是最常見的形狀），兩軸都是純數值時先講列。
+function anchorNote(cell, block) {
+  const rowH = String(cell?.row?.header || '').trim()
+  const colH = String(cell?.col?.header || '').trim()
+  const blockH = String(block?.headerText || '').trim()
+  let raw = ''
+  let isCol = false
+  if (rowH && !isAnchorText(rowH)) raw = rowH
+  else if (colH && !isAnchorText(colH)) { raw = colH; isCol = true }
+  else if (blockH && !isAnchorText(blockH)) { raw = blockH; isCol = block?.axis !== 'row' }
   if (!raw) return ''
-  const isCol = axis === 'col'
   const which = isCol ? '欄' : '列'
-  const first = isCol ? '這一欄的第一格' : '這一列的第一格'
-  return `。${first}是數字（${raw}），不能當標題，改以位置抓；` +
-    `若這張表會新增${which}，請改用「${which}定位」`
+  return `。這一${which}的標題是數字（${raw}），不一定是標題：它還在表上就跟著它，` +
+    `不在就改以位置抓；若這張表會新增${which}，請改用「${which}定位」`
 }
 
 /**
@@ -113,19 +121,17 @@ function anchorNote(rawHeader, axis) {
  * @param {Object} [target.block] { axis: 'col'|'row', headerText, aggregate }
  * @param {string} [target.rowPos] 列定位
  * @param {string} [target.colPos] 欄定位
- * @param {string} [target.rawHeader] 那一軸的標題是純數值而不能當錨點時的原文（只用於說明）
- * @param {string} [target.rawHeaderAxis] 被擋下的是哪一軸：'row'（預設）或 'col'
  * @returns {string}
  */
 export function describeTarget(target) {
   const t = target || {}
   const host = hostOf(t.url)
   const where = host ? `抓 ${host} ` : '抓 '
-  const note = anchorNote(t.rawHeader, t.rawHeaderAxis)
+  const note = t.mode === 'block' ? anchorNote(t.cell, t.block) : ''
 
   if (t.mode !== 'block') {
     const kind = t.mode === 'text' ? '文字' : '數字'
-    return `${where}頁面上的${kind}${note}`
+    return `${where}頁面上的${kind}`
   }
 
   const posNote = []

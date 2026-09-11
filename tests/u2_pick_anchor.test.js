@@ -1,4 +1,4 @@
-// AF-14 批次 A-2：選取端不把純數值標題存進 spec（草稿，等 A-1 驗收後搬進 tests/）
+// AF-14 批次 A-2：選取端原文照存；勾回既有的值（preselect）與擷取端共用同一份定位
 process.env.TZ = 'Asia/Taipei'
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -43,9 +43,9 @@ const tool = (doc, name) => doc.querySelector(`[data-af-tool="${name}"]`)
 const sent = (c) => c.__calls.filter(x => x.api === 'runtime.sendMessage').map(x => x.args[0])
 const picks = (c) => (sent(c).find(m => m?.type === 'PICKED' && !m.cancelled) || {}).picks
 
-// ---- 送出的 spec ----
+// ---- 送出的 spec：原文照存，拿不拿它定位由擷取端決定 ----
 
-test('A2-1 單列數值表選一格：送出的列標題是空字串，索引照舊正確', async () => {
+test('A2-1 單列數值表選一格：列標題原文照存、索引正確', async () => {
   const { c, doc, win } = await enter(NUMERIC_PAGE, 't')
   const cell = doc.getElementById('n2')
   move(win, cell)
@@ -53,12 +53,12 @@ test('A2-1 單列數值表選一格：送出的列標題是空字串，索引照
   dbl(win, cell)
   const p = picks(c)
   assert.ok(Array.isArray(p) && p.length === 1, '要送出一個值')
-  assert.equal(p[0].cell.row.header, '', '4318 是純數值，不得當錨點存進去')
+  assert.equal(p[0].cell.row.header, '4318')
   assert.equal(p[0].cell.row.index, 0)
   assert.equal(p[0].cell.col.index, 1)
 })
 
-test('A2-2 文字型列標題照舊存進去（本輪只改純數值那一類）', async () => {
+test('A2-2 文字型列標題照舊存進去', async () => {
   const { c, doc, win } = await enter(TEXT_PAGE, 't2')
   const cell = doc.getElementById('a1')
   move(win, cell)
@@ -69,85 +69,71 @@ test('A2-2 文字型列標題照舊存進去（本輪只改純數值那一類）
   assert.equal(p[0].cell.col.header, '買入')
 })
 
-test('A2-3 整列聚合的 headerText 是純數值時也不存', async () => {
-  const { c, doc, win } = await enter(NUMERIC_PAGE, 't')
-  click(win, tool(doc, 'row'))
+test('A2-3 面板的已選 chip 要看得到那一格的原文（使用者要認得出自己選了什麼）', async () => {
+  const { doc, win } = await enter(NUMERIC_PAGE, 't')
   const cell = doc.getElementById('n2')
   move(win, cell)
   click(win, cell)
-  dbl(win, cell)
-  const p = picks(c)
-  assert.equal(p[0].block.axis, 'row')
-  assert.equal(p[0].block.headerText, '')
-  assert.equal(p[0].block.index, 0)
+  const panel = doc.querySelector('[data-af-panel]')
+  assert.ok(panel.textContent.includes('4318'), `實際：${panel.textContent}`)
 })
 
-test('A2-4 純數值的欄標題也不存', async () => {
-  const page = `<table id="t3">
-    <thead><tr><th>4318</th><th>4319</th></tr></thead>
-    <tbody><tr><td id="x1">10</td><td id="x2">20</td></tr></tbody></table>`
-  const { c, doc, win } = await enter(page, 't3')
-  click(win, tool(doc, 'col'))
-  const cell = doc.getElementById('x2')
-  move(win, cell)
-  click(win, cell)
-  dbl(win, cell)
-  const p = picks(c)
-  assert.equal(p[0].block.headerText, '')
-  assert.equal(p[0].block.index, 1)
-})
+// ---- preselect 回選：與擷取端同一份定位（extract.js 的 locateByHeader）----
 
-// ---- preselect 回選與重存 ----
-
-test('A2-5 帶 header:"" 的既有任務回選：勾得回同一格', async () => {
-  const preselect = [{ cell: { row: { index: 0, header: '' }, col: { index: 1, header: '' } } }]
-  const { c, doc, win } = await enter(NUMERIC_PAGE, 't', { preselect })
+test('A2-4 舊任務存的純數值 header 已不在表上：回選時退回索引，不得把值丟掉', async () => {
+  const preselect = [{ cell: { row: { index: 0, header: '4318' }, col: { index: 1, header: '' } } }]
+  // 頁面上第一格今天已經是 4269
+  const page = NUMERIC_PAGE.replace('4318', '4269')
+  const { c, doc, win } = await enter(page, 't', { preselect })
   dbl(win, doc.getElementById('n2'))
   const p = picks(c)
-  assert.equal(p.length, 1, '既有的值要被勾回來，不能整個消失')
+  assert.equal(p.length, 1, '純數值 header 不見了不得讓既有的值被丟掉')
   assert.equal(p[0].cell.row.index, 0)
   assert.equal(p[0].cell.col.index, 1)
 })
 
-test('A2-6 回選後重存，不得把當下的數值第一格補回 header', async () => {
-  const preselect = [{ cell: { row: { index: 0, header: '' }, col: { index: 1, header: '' } } }]
-  const { c, doc, win } = await enter(NUMERIC_PAGE, 't', { preselect })
-  dbl(win, doc.getElementById('n2'))
-  assert.equal(picks(c)[0].cell.row.header, '', '重存又把 4318 塞回去的話，明天照樣壞')
-})
-
-test('A2-7 舊任務存的是純數值 header：回選時照樣找得到那一列', async () => {
+test('A2-5 純數值 header 唯一出現且位移：回選要跟著它走（與擷取端一致）', async () => {
+  const page = `<table id="t"><tbody>
+    <tr><td>9999</td><td>1</td></tr>
+    <tr><td id="k">4318</td><td id="v">38605</td></tr>
+  </tbody></table>`
   const preselect = [{ cell: { row: { index: 0, header: '4318' }, col: { index: 1, header: '' } } }]
-  const { c, doc, win } = await enter(NUMERIC_PAGE, 't', { preselect })
-  dbl(win, doc.getElementById('n2'))
+  const { c, doc, win } = await enter(page, 't', { preselect })
+  dbl(win, doc.getElementById('v'))
   const p = picks(c)
-  assert.equal(p.length, 1, '純數值 header 不得讓既有的值被丟掉')
-  assert.equal(p[0].cell.row.header, '', '重存時要改成空的')
+  assert.equal(p.length, 1)
+  assert.equal(p[0].cell.row.index, 1, '4318 今天在第 1 列，勾回的要是那一列')
 })
 
-test('A2-8 送出的 picks 可以帶顯示用的原文，但那是唯一的例外欄位', async () => {
-  const { c, doc, win } = await enter(NUMERIC_PAGE, 't')
-  const cell = doc.getElementById('n2')
-  move(win, cell)
-  click(win, cell)
-  dbl(win, cell)
+test('A2-6 純數值 header 在表上重複出現：回選退回索引，不得跳到別列', async () => {
+  const page = `<table id="t"><tbody>
+    <tr><td>0</td><td>10</td></tr><tr><td>0</td><td>20</td></tr><tr><td>5</td><td id="v">30</td></tr>
+  </tbody></table>`
+  const preselect = [{ cell: { row: { index: 2, header: '0' }, col: { index: 1, header: '' } } }]
+  const { c, doc, win } = await enter(page, 't', { preselect })
+  dbl(win, doc.getElementById('v'))
   const p = picks(c)
-  // 顯示端要看得到 4318（面板 chip、Picker 摘要卡）
-  assert.equal(p[0].cell.row.rawHeader, '4318')
-  // 但定位欄位必須是空的
-  assert.equal(p[0].cell.row.header, '')
+  assert.equal(p.length, 1)
+  assert.equal(p[0].cell.row.index, 2)
 })
 
-test('A2-9 連續選兩張表：第二張表的判定不得沿用第一張的狀態', async () => {
-  // 第一張是單列數值表（header 會被判準擋下、原文進 rawHeader）
+test('A2-7 文字型 header 不見了仍然略過那個值（既有行為不變）', async () => {
+  const preselect = [{ cell: { row: { index: 0, header: '英鎊' }, col: { index: 1, header: '買入' } } }]
+  const { c, doc, win } = await enter(TEXT_PAGE, 't2', { preselect })
+  dbl(win, doc.getElementById('a1'))
+  const p = picks(c)
+  // 雙擊 a1 會把它自己選進去；被略過的英鎊不會出現
+  assert.ok(p.every(x => x.cell.row.header !== '英鎊'))
+})
+
+test('A2-8 連續選兩張表：第二張表的判定不得沿用第一張的狀態', async () => {
   const { c, doc, win, pm } = await enter(NUMERIC_PAGE + TEXT_PAGE, 't')
   const first = doc.getElementById('n2')
   move(win, first)
   click(win, first)
   dbl(win, first)
-  assert.equal(picks(c)[0].cell.row.header, '')
+  assert.equal(picks(c)[0].cell.row.header, '4318')
 
-  // 第二張是有文字標題的表：離開選取模式後重新進入，不得沿用上一張的結果
   pm.exitPickMode()
   resetChromeMock()
   const c2 = installChromeMock()
@@ -162,5 +148,4 @@ test('A2-9 連續選兩張表：第二張表的判定不得沿用第一張的狀
     .find(m => m?.type === 'PICKED' && !m.cancelled) || {}).picks
   assert.ok(Array.isArray(p2) && p2.length === 1, `第二張表要送得出值，實得 ${JSON.stringify(p2)}`)
   assert.equal(p2[0].cell.row.header, '美金', '第二張表有真的列標題，不得被上一張的判定蓋掉')
-  assert.equal(p2[0].cell.row.rawHeader, undefined, '沒有被擋下就不該留下顯示用原文')
 })

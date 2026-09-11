@@ -247,38 +247,25 @@ export const BUILTIN_DEFAULTS = {
   cardTypes: []
 }
 
-// `rawHeader` 是選取端附上的顯示用原文（純數值標題的原字），
-// **只給畫面看**：進了規格就會被存進 storage、參與規格比對，
-// 下一輪又被當成錨點，等於這一輪修掉的問題重新長回來。
-function stripRawHeader(part) {
-  if (!part || typeof part !== 'object') return part
-  const out = {}
-  for (const [k, v] of Object.entries(part)) {
-    if (k === 'rawHeader') continue
-    out[k] = (v && typeof v === 'object' && !Array.isArray(v)) ? stripRawHeader(v) : v
-  }
-  return out
-}
-
 export function buildSpec(values) {
   const spec = { strategy: values.strategy }
   if (values.fields) {
     spec.mode = 'block'
     spec.fields = values.fields.map(f => {
       const item = { key: f.key }
-      if (f.cell) item.cell = stripRawHeader(f.cell)
-      if (f.block) item.block = stripRawHeader(f.block)
+      if (f.cell) item.cell = f.cell
+      if (f.block) item.block = f.block
       return item
     })
   } else if (values.block && values.block.cell) {
     spec.mode = 'block'
-    spec.block = { cell: stripRawHeader(values.block.cell) }
+    spec.block = { cell: values.block.cell }
   } else {
     if (values.mode === 'text') spec.mode = 'text'
     if (values.mode === 'block' && values.block) {
       // extract.js 是看 spec.mode 分派的，少了這一行會落回數值策略鏈、抓到整張表的第一個數字
       spec.mode = 'block'
-      spec.block = stripRawHeader(values.block)
+      spec.block = values.block
     }
   }
   for (const k of ['regex', 'attr', 'childSel', 'labelText']) {
@@ -1101,16 +1088,15 @@ function updateBlockSection() {
  * 使用者不必把散在各區的欄位在腦中組起來，久沒用回來也一眼看得出這個任務在做什麼。
  * 文字一律走 shared/describe.js，與任務頁、popup 同一份。
  */
-// 哪一軸的標題因為是純數值而沒能當錨點：取選取端附上的原文給 describeTarget 說明用。
-// 列優先（單列數值表是最常見的形狀），兩軸都被擋下時先講列。
-function rawHeaderNoteOf(cell, block) {
-  const rowRaw = String(cell?.row?.rawHeader || '').trim()
-  const colRaw = String(cell?.col?.rawHeader || '').trim()
-  const blockRaw = String(block?.rawHeader || '').trim()
-  if (rowRaw) return { rawHeader: rowRaw, rawHeaderAxis: 'row' }
-  if (colRaw) return { rawHeader: colRaw, rawHeaderAxis: 'col' }
-  if (blockRaw) return { rawHeader: blockRaw, rawHeaderAxis: block?.axis === 'row' ? 'row' : 'col' }
-  return {}
+// 哪一軸的標題是純數值（'row' | 'col' | ''）；沒有就回空字串
+function numericHeaderAxis(cell, block) {
+  const rowH = String(cell?.row?.header || '').trim()
+  const colH = String(cell?.col?.header || '').trim()
+  const blockH = String(block?.headerText || '').trim()
+  if (rowH && !isAnchorText(rowH)) return 'row'
+  if (colH && !isAnchorText(colH)) return 'col'
+  if (blockH && !isAnchorText(blockH)) return block?.axis === 'row' ? 'row' : 'col'
+  return ''
 }
 
 export function updateSetupSummary() {
@@ -1122,15 +1108,16 @@ export function updateSetupSummary() {
   const targetEl = document.getElementById('summary-target')
   if (targetEl) {
     const first = values.fields?.[0]
-    const noteOpts = rawHeaderNoteOf(values.block?.cell || first?.cell,
-      values.block?.axis ? values.block : first?.block)
-    // 說了「請改用列定位」就要讓使用者到得了那個下拉（它在「抓什麼」區，不是進階區）
+    const cellArg = values.block?.cell || first?.cell
+    const blockArg = values.block?.axis ? values.block : first?.block
+    // 摘要卡說了「請改用列定位」就要讓使用者到得了那個下拉（它在「抓什麼」區，不是進階區）。
+    // 哪一軸是純數值標題，判準與 describe.js 的提示句同一份（列優先）
+    const numericAxis = numericHeaderAxis(cellArg, blockArg)
     const gotoBtn = document.getElementById('goto-rowpos')
     if (gotoBtn) {
-      const axis = noteOpts.rawHeaderAxis === 'col' ? '欄' : '列'
-      gotoBtn.hidden = !noteOpts.rawHeader
-      gotoBtn.textContent = `去設定「${axis}定位」`
-      gotoBtn.dataset.target = noteOpts.rawHeaderAxis === 'col' ? 'col-pos' : 'row-pos'
+      gotoBtn.hidden = !numericAxis
+      gotoBtn.textContent = `去設定「${numericAxis === 'col' ? '欄' : '列'}定位」`
+      gotoBtn.dataset.target = numericAxis === 'col' ? 'col-pos' : 'row-pos'
     }
     targetEl.textContent = describeTarget({
       url: values.url || currentCtx?.url || '',
@@ -1139,9 +1126,7 @@ export function updateSetupSummary() {
       cell: values.block?.cell || first?.cell,
       block: values.block?.axis ? values.block : first?.block,
       rowPos: document.getElementById('row-pos')?.value || '',
-      colPos: document.getElementById('col-pos')?.value || '',
-      // 純數值標題被判準擋下時，摘要卡要當場說出來（原文只在這裡用，不進規格）
-      ...noteOpts
+      colPos: document.getElementById('col-pos')?.value || ''
     })
   }
 

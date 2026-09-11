@@ -159,9 +159,12 @@ function positionOf(spec) {
   return (pos === 'first' || pos === 'last' || pos === 'last-1') ? pos : ''
 }
 
-// 依表頭定位索引（欄與列同一套規則：表頭對得上照用，搬家了跟著表頭走並標記備援）；
-// 帶 pos 的軸走位置定位，count 是當下這個軸有幾筆。
-function locateByHeader(headers, spec, count, axis) {
+// 表頭對得上照用，搬家了跟著表頭走並標記備援；帶 pos 的軸走位置定位，count 是當下這個軸有幾筆。
+/**
+ * 依表頭定位索引（欄與列同一套規則）。選取模式的 preselect 也用這一份勾回既有的值，
+ * 兩邊各寫一份的話，畫面勾到的格子與擷取抓到的格子會不一樣。
+ */
+export function locateByHeader(headers, spec, count, axis) {
   const s = spec || {}
   const pos = positionOf(s)
   if (pos) {
@@ -170,9 +173,16 @@ function locateByHeader(headers, spec, count, axis) {
     return { ok: true, index, status: 'ok', pos }
   }
   const header = typeof s.header === 'string' ? s.header.trim() : ''
-  // 純數值的標題不當定位錨點——視同沒有 header，直接走 index
-  if (!header || !isAnchorText(header)) {
+  if (!header) {
     return { ok: true, index: s.index, status: 'ok' }
+  }
+  // 純數值的標題（4318 這種）可能是鍵、也可能只是那一格的資料，單看一格分不出來。
+  // 規則：**當下唯一出現才拿它定位**（年度欄 2024/2025 插了一欄照樣跟得上、亮黃燈）；
+  // 不見了或重複出現（第一欄是 0/1 這種小整數）就視同沒有標題、走 index、狀態 ok
+  // ——不見了就硬性失敗的話，單列無表頭的表永遠抓不到；重複還去比對會跳到別列。
+  if (!isAnchorText(header)) {
+    const hits = (headers || []).filter((h) => h === header).length
+    if (hits !== 1) return { ok: true, index: s.index, status: 'ok' }
   }
   const foundIndex = findClosestIndex(headers || [], header, s.index)
   if (foundIndex === -1) {

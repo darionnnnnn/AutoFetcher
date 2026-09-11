@@ -158,10 +158,11 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   規則見 SPEC §2:貼在 `<body>` 底下、`z-index` 跟著 iframe **最外層有數字 z-index 的祖先**走
   (只看 iframe 自己會被 `.content { z-index: 2 }` 這種容器蓋住,iframe 反而選不到)、沒有 z-index 時靠 `elementFromPoint` 讓路。
   **父文件收不到「指標進入跨網域 iframe」的任何事件**,別再想用 `mouseover` 之類的訊號開關它。
-- **要當定位錨點的標題必須先過 `shared/table.js` 的 `isAnchorText`**:不得把 `rowHeader()`/`columnHeaders()`
-  取到的字串直接存進規格。純數值(`4318` 這種每天會變的值)當錨點,隔天必定 `not_found`,
-  而單列無表頭的表根本沒有東西可以當錨點。**顯示端相反**:面板 chip 與摘要卡要看得到原文,
-  靠 pick 上的 `rawHeader`,而它**不得進 `task.spec`**(`buildSpec` 會濾掉)。
+- **純數值標題(`4318`、`2025`)拿不拿來定位,只由 `extract.js` 的 `locateByHeader` 決定**
+  (當下唯一出現才用;不見了或重複就走索引,SPEC §7)。選取端**原文照存**、preselect 直接呼叫同一個函式,
+  不得各自寫一份比對——兩份會讓畫面勾到的格子與擷取抓到的格子不一樣。判準 `isAnchorText` 只給
+  「命名不用它」與「摘要卡提示」用,不得拿來在選取端過濾標題(AF-14 先這麼做過:單列數值表是好了,
+  年度欄的表卻從黃燈警示變成靜默抓錯欄)。
 - **`locateFrame` 失敗回的是物件不是 `null`**(帶 `candidates` 給診斷用):
   判定一律看有沒有 `frameId`,寫 `=== null` 會把失敗當成成功。
 - **選取模式的模組狀態要在 `exitPickMode` 全部重設**:漏一個(例如「已選屬於哪張表」)

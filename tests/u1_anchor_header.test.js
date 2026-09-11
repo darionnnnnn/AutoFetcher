@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { JSDOM } from 'jsdom'
-import { isAnchorText, anchorHeader, rowHeader } from '../src/shared/table.js'
+import { isAnchorText, rowHeader } from '../src/shared/table.js'
 import { extractValue } from '../src/shared/extract.js'
 
 function el(html) {
@@ -37,12 +37,8 @@ test('空字串與非字串不是錨點', () => {
   }
 })
 
-test('anchorHeader：可當錨點才回文字，純數值回空字串，rowHeader 本身不受影響', () => {
+test('rowHeader 本身不受判準影響（label 顯示仍要看得到 4318）', () => {
   const numeric = el('<table><tr><td>4318</td><td>38605</td></tr></table>').querySelector('tr')
-  const textual = el('<table><tr><td>美金</td><td>31.2</td></tr></table>').querySelector('tr')
-  assert.equal(anchorHeader(numeric), '')
-  assert.equal(anchorHeader(textual), '美金')
-  // label 顯示仍要看得到 4318，所以 rowHeader 不能跟著改
   assert.equal(rowHeader(numeric), '4318')
 })
 
@@ -57,6 +53,38 @@ const cellSpec = (over = {}) => ({
   mode: 'block',
   block: { cell: { row: { index: 0, header: '4318' }, col: { index: 1, header: '' } } },
   ...over
+})
+
+// ---- 純數值標題：當下唯一出現才拿來定位，否則走 index ----
+
+test('純數值標題還在表上、位置沒變 → ok', () => {
+  const r = extractValue(el(SINGLE_ROW('4318')), cellSpec())
+  assert.equal(r.ok, true, r.message || r.error)
+  assert.equal(r.value, 38605)
+  assert.equal(r.status, 'ok')
+})
+
+test('年度欄前面插了一欄：純數值標題唯一出現就跟著它走並標 fallback（不得靜默抓到隔壁年度）', () => {
+  const html = `<table>
+    <thead><tr><th>項目</th><th>2026</th><th>2025</th><th>2024</th></tr></thead>
+    <tbody><tr><td>營收</td><td>30</td><td>20</td><td>10</td></tr></tbody></table>`
+  // 選取當時 2025 在第 1 欄；今天前面插了 2026
+  const spec = { mode: 'block', block: { cell: { row: { index: 0, header: '營收' }, col: { index: 1, header: '2025' } } } }
+  const r = extractValue(el(html), spec)
+  assert.equal(r.value, 20, '要跟著 2025 走，不是照索引抓到 2026 的值')
+  assert.equal(r.status, 'fallback', '位移要亮黃燈讓使用者看得到')
+})
+
+test('純數值標題在表上重複出現（第一欄是小整數）→ 視同沒有標題，走 index、狀態 ok', () => {
+  const html = `<table><tbody>
+    <tr><td>0</td><td>10</td></tr><tr><td>0</td><td>20</td></tr><tr><td>5</td><td>30</td></tr>
+  </tbody></table>`
+  // 存的是第 2 列（index 2），當時第一格是 0；今天那一列變成 5、前兩列都是 0——
+  // 拿 0 去比對會跳到最近的第 1 列（值 20），照索引才是同一列（值 30）
+  const spec = { mode: 'block', block: { cell: { row: { index: 2, header: '0' }, col: { index: 1, header: '' } } } }
+  const r = extractValue(el(html), spec)
+  assert.equal(r.value, 30, '重複的數字不是鍵，不得跳到別列')
+  assert.equal(r.status, 'ok')
 })
 
 test('存了純數值列標題的舊任務，第一格變了照樣抓得到（走 index、狀態 ok）', () => {

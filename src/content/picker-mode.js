@@ -4,9 +4,9 @@
 import { MSG } from '../shared/messages.js'
 import { describe } from '../shared/selector.js'
 import { detectKind } from '../shared/block-detect.js'
-import { parseNumber, resolveByPosition } from '../shared/extract.js'
+import { parseNumber, resolveByPosition, locateByHeader } from '../shared/extract.js'
 import {
-  columnHeaders, rowHeader, anchorHeader, isAnchorText, innermostTable,
+  columnHeaders, rowHeader, innermostTable,
   // 「哪些列／格屬於這張表」的判準只有 shared/table.js 一份（AF-10 作業 D）：
   // 這裡以原本的區域名稱引入，呼叫端一律不變
   CELL_SELECTOR,
@@ -188,13 +188,12 @@ function resolveHeaderTarget(target, tableEl) {
   const idx = cells.indexOf(cell)
   if (idx < 0) return null
   if (isHeaderRow(row)) {
-    const rawCol = columnHeaders(tableEl)[idx] || (cell.textContent || '').trim()
-    return { axis: 'col', index: idx, headerText: isAnchorText(rawCol) ? rawCol : '' }
+    return { axis: 'col', index: idx, headerText: columnHeaders(tableEl)[idx] || (cell.textContent || '').trim() }
   }
   const dataRows = resolveDataRows(tableEl)
   const rIdx = dataRows.indexOf(row)
   if (rIdx < 0) return null
-  return { axis: 'row', index: rIdx, headerText: anchorHeader(row) }
+  return { axis: 'row', index: rIdx, headerText: rowHeader(row) }
 }
 
 // 把滑鼠下的位置換算成「點下去會選到什麼」，點擊與雙擊共用同一份
@@ -205,11 +204,10 @@ function candidateAt(target) {
   const info = resolveCell(target, currentTargetEl)
   if (!info) return null
   if (pickMode === 'col') {
-    const rawCol = columnHeaders(currentTargetEl)[info.cIdx] || ''
-    return { block: { axis: 'col', index: info.cIdx, headerText: isAnchorText(rawCol) ? rawCol : '' } }
+    return { block: { axis: 'col', index: info.cIdx, headerText: columnHeaders(currentTargetEl)[info.cIdx] || '' } }
   }
   if (pickMode === 'row') {
-    return { block: { axis: 'row', index: info.rIdx, headerText: info.row ? anchorHeader(info.row) : '' } }
+    return { block: { axis: 'row', index: info.rIdx, headerText: info.row ? rowHeader(info.row) : '' } }
   }
   return makeCellPick(info.rIdx, info.cIdx, currentTargetEl, info.dataRows)
 }
@@ -354,16 +352,14 @@ function updateHighlight(hl, el) {
 
 // 取得已選項目的顯示名稱
 function getPickName(pick) {
-  // 顯示看得到原文（rawHeader）：定位不拿純數值當錨點，但畫面上要認得出選了哪一格
   if (pick.cell) {
-    const r = pick.cell.row ? (pick.cell.row.header || pick.cell.row.rawHeader || '') : ''
-    const c = pick.cell.col ? (pick.cell.col.header || pick.cell.col.rawHeader || '') : ''
+    const r = pick.cell.row ? pick.cell.row.header : ''
+    const c = pick.cell.col ? pick.cell.col.header : ''
     if (r && c) return `${r} · ${c}`
     return r || c || '儲存格'
   }
   if (pick.block) {
-    return pick.block.headerText || pick.block.rawHeader ||
-      (pick.block.axis === 'col' ? '整欄' : '整列')
+    return pick.block.headerText || (pick.block.axis === 'col' ? '整欄' : '整列')
   }
   return '目標'
 }
@@ -875,10 +871,9 @@ function setTarget(el) {
 // 取得待選欄或列之表頭文字
 function getHeaderText() {
   if (!currentTargetEl || !isTableMode(currentTargetEl)) return ''
-  if (pickMode === 'row') return currentRowEl ? anchorHeader(currentRowEl) : ''
+  if (pickMode === 'row') return currentRowEl ? rowHeader(currentRowEl) : ''
   if (colIndex === null) return ''
-  const rawCol = columnHeaders(currentTargetEl)[colIndex] || ''
-  return isAnchorText(rawCol) ? rawCol : ''
+  return columnHeaders(currentTargetEl)[colIndex] || ''
 }
 
 // 處理表格內滑鼠移動
@@ -1110,37 +1105,37 @@ function confirmPick() {
         if (rowIndex !== null && colIndex !== null) {
           const dataRows = resolveDataRows(currentTargetEl)
           const row = dataRows[rowIndex]
-          picks = [withRawHeader({
+          picks = [{
             cell: {
-              row: { index: rowIndex, header: row ? anchorHeader(row) : '' },
-              col: { index: colIndex, header: (isAnchorText(columnHeaders(currentTargetEl)[colIndex]) ? columnHeaders(currentTargetEl)[colIndex] : '') }
+              row: { index: rowIndex, header: row ? rowHeader(row) : '' },
+              col: { index: colIndex, header: columnHeaders(currentTargetEl)[colIndex] || '' }
             }
-          }, currentTargetEl)]
+          }]
         } else {
-          picks = [withRawHeader({
+          picks = [{
             block: {
               axis: 'col',
               index: currentCellIndex() !== null ? currentCellIndex() : 0,
               headerText: getHeaderText()
             }
-          }, currentTargetEl)]
+          }]
         }
       } else if (pickMode === 'row') {
-        picks = [withRawHeader({
+        picks = [{
           block: {
             axis: 'row',
             index: rowIndex !== null ? rowIndex : (currentCellIndex() !== null ? currentCellIndex() : 0),
-            headerText: currentRowEl ? anchorHeader(currentRowEl) : getHeaderText()
+            headerText: currentRowEl ? rowHeader(currentRowEl) : getHeaderText()
           }
-        }, currentTargetEl)]
+        }]
       } else {
-        picks = [withRawHeader({
+        picks = [{
           block: {
             axis: 'col',
             index: colIndex !== null ? colIndex : (currentCellIndex() !== null ? currentCellIndex() : 0),
-            headerText: colIndex !== null ? (isAnchorText(columnHeaders(currentTargetEl)[colIndex]) ? columnHeaders(currentTargetEl)[colIndex] : '') : getHeaderText()
+            headerText: colIndex !== null ? (columnHeaders(currentTargetEl)[colIndex] || '') : getHeaderText()
           }
-        }, currentTargetEl)]
+        }]
       }
     } else {
       picks = [{ locator: describe(currentTargetEl) }]
@@ -1348,7 +1343,7 @@ function handleMenuAction(action) {
   if (action === 'col') {
     if (tableEl && isTableMode(tableEl)) {
       const cIdx = cellInfo ? cellInfo.cIdx : (colIndex !== null ? colIndex : (currentCellIndex() !== null ? currentCellIndex() : 0))
-      addPick({ block: { axis: 'col', index: cIdx, headerText: isAnchorText(columnHeaders(tableEl)[cIdx]) ? columnHeaders(tableEl)[cIdx] : '' } })
+      addPick({ block: { axis: 'col', index: cIdx, headerText: columnHeaders(tableEl)[cIdx] || '' } })
       applyPickedMarks(tableEl)
       updatePanel(panelEl, tableEl)
     }
@@ -1360,7 +1355,7 @@ function handleMenuAction(action) {
       const dataRows = resolveDataRows(tableEl)
       const rIdx = cellInfo ? cellInfo.rIdx : (rowIndex !== null ? rowIndex : 0)
       const row = dataRows[rIdx]
-      addPick({ block: { axis: 'row', index: rIdx, headerText: row ? anchorHeader(row) : '' } })
+      addPick({ block: { axis: 'row', index: rIdx, headerText: row ? rowHeader(row) : '' } })
       applyPickedMarks(tableEl)
       updatePanel(panelEl, tableEl)
     }
@@ -1374,8 +1369,8 @@ function makeCellPick(r, c, tableEl, dataRows) {
   const row = rows[r]
   return {
     cell: {
-      row: { index: r, header: row ? anchorHeader(row) : '' },
-      col: { index: c, header: isAnchorText(columnHeaders(tableEl)[c]) ? columnHeaders(tableEl)[c] : '' }
+      row: { index: r, header: row ? rowHeader(row) : '' },
+      col: { index: c, header: columnHeaders(tableEl)[c] || '' }
     }
   }
 }
@@ -1392,42 +1387,9 @@ function samePick(a, b) {
 }
 
 // 加入一個值：去重與上限的判斷只有這一份，所有加選路徑都走它
-// 標題是純數值、被錨點判準擋下時，把原文附在 pick 上**只給畫面看**
-// （面板的已選 chip、Picker 的摘要卡）。使用者選的是「4318」那一列，
-// 畫面上卻只寫「儲存格」的話，他認不出自己選了什麼。
-// **這個欄位不得進定位規格**：進了規格會被存進 storage、參與規格比對，
-// 下一輪又被當成錨點，等於這一輪修掉的問題重新長回來（Picker 存任務前會濾掉）。
-function withRawHeader(pick, tableEl) {
-  const el = tableEl || pickedTableEl || currentTargetEl
-  if (!pick || !el || !isTableMode(el)) return pick
-  const rows = resolveDataRows(el)
-  const cols = columnHeaders(el)
-  const rawOf = (axis, index) => {
-    const text = axis === 'row'
-      ? (rows[index] ? rowHeader(rows[index]) : '')
-      : (cols[index] || '')
-    return (text && !isAnchorText(text)) ? text : ''
-  }
-  if (pick.cell) {
-    if (pick.cell.row && !pick.cell.row.header) {
-      const raw = rawOf('row', pick.cell.row.index)
-      if (raw) pick.cell.row.rawHeader = raw
-    }
-    if (pick.cell.col && !pick.cell.col.header) {
-      const raw = rawOf('col', pick.cell.col.index)
-      if (raw) pick.cell.col.rawHeader = raw
-    }
-  } else if (pick.block && !pick.block.headerText) {
-    const raw = rawOf(pick.block.axis === 'row' ? 'row' : 'col', pick.block.index)
-    if (raw) pick.block.rawHeader = raw
-  }
-  return pick
-}
-
 function addPick(pick) {
   // 任何加選都讓復原快照失效（取代之後又加了東西，就沒有「上一步」可回了）
   clearUndoSnapshot()
-  withRawHeader(pick)
   if (selectedList.some(p => samePick(p, pick))) return false
   if (selectedList.length >= maxPicks) {
     limitReached = true
@@ -1467,6 +1429,7 @@ function applyPreselect(preselect, tableEl) {
   if (!Array.isArray(preselect) || !tableEl || !isTableMode(tableEl)) return
   const dataRows = resolveDataRows(tableEl)
   const colHeaders = columnHeaders(tableEl)
+  const rowHeaders = dataRows.map((row) => rowHeader(row))
 
   for (const item of preselect) {
     if (!item) continue
@@ -1487,33 +1450,29 @@ function applyPreselect(preselect, tableEl) {
       const cPos = posIndexOf(item.cell.col?.pos, colHeaders.length)
       if (cPos !== null) { cIdx = cPos; cHeader = '' }
 
-      if (cHeader && isAnchorText(cHeader)) {
-        const found = colHeaders.indexOf(cHeader)
-        if (found === -1) continue
-        if (found !== cIdx) {
+      // 勾回既有的值要與擷取端同一份定位（extract.js 的 locateByHeader）：
+      // 文字標題不見了就略過這個值；純數值標題不見或重複就退回索引（AF-14）
+      if (cHeader) {
+        const loc = locateByHeader(colHeaders, { index: cIdx, header: cHeader }, colHeaders.length, 'col')
+        if (!loc.ok) continue
+        if (loc.index !== cIdx) {
           headerChangedNotice = true
-          cIdx = found
+          cIdx = loc.index
         }
       }
-      if (rHeader && isAnchorText(rHeader)) {
-        let found = -1
-        for (let i = 0; i < dataRows.length; i++) {
-          if (rowHeader(dataRows[i]) === rHeader) {
-            found = i
-            break
-          }
-        }
-        if (found === -1) continue
-        if (found !== rIdx) {
+      if (rHeader) {
+        const loc = locateByHeader(rowHeaders, { index: rIdx, header: rHeader }, dataRows.length, 'row')
+        if (!loc.ok) continue
+        if (loc.index !== rIdx) {
           headerChangedNotice = true
-          rIdx = found
+          rIdx = loc.index
         }
       }
 
       if (rIdx !== null && cIdx !== null && rIdx >= 0 && rIdx < dataRows.length && cIdx >= 0) {
         const targetRow = dataRows[rIdx]
-        const actualRowHeader = (rHeader && isAnchorText(rHeader)) ? rHeader : anchorHeader(targetRow)
-        const actualColHeader = (cHeader && isAnchorText(cHeader)) ? cHeader : (isAnchorText(colHeaders[cIdx]) ? colHeaders[cIdx] : '')
+        const actualRowHeader = rHeader || (targetRow ? rowHeader(targetRow) : '')
+        const actualColHeader = cHeader || (colHeaders[cIdx] || '')
         addPick({
           cell: {
             row: { index: rIdx, header: actualRowHeader },
@@ -1527,35 +1486,28 @@ function applyPreselect(preselect, tableEl) {
       const bHeader = item.block.headerText || ''
 
       if (axis === 'col') {
-        if (bHeader && isAnchorText(bHeader)) {
-          const found = colHeaders.indexOf(bHeader)
-          if (found === -1) continue
-          if (found !== bIdx) {
+        if (bHeader) {
+          const loc = locateByHeader(colHeaders, { index: bIdx, header: bHeader }, colHeaders.length, 'col')
+          if (!loc.ok) continue
+          if (loc.index !== bIdx) {
             headerChangedNotice = true
-            bIdx = found
+            bIdx = loc.index
           }
         }
         if (bIdx !== null && bIdx >= 0) {
-          const fallback = isAnchorText(colHeaders[bIdx]) ? colHeaders[bIdx] : ''
-          addPick({ block: { axis: 'col', index: bIdx, headerText: (bHeader && isAnchorText(bHeader)) ? bHeader : fallback } })
+          addPick({ block: { axis: 'col', index: bIdx, headerText: bHeader || colHeaders[bIdx] || '' } })
         }
       } else if (axis === 'row') {
-        if (bHeader && isAnchorText(bHeader)) {
-          let found = -1
-          for (let i = 0; i < dataRows.length; i++) {
-            if (rowHeader(dataRows[i]) === bHeader) {
-              found = i
-              break
-            }
-          }
-          if (found === -1) continue
-          if (found !== bIdx) {
+        if (bHeader) {
+          const loc = locateByHeader(rowHeaders, { index: bIdx, header: bHeader }, dataRows.length, 'row')
+          if (!loc.ok) continue
+          if (loc.index !== bIdx) {
             headerChangedNotice = true
-            bIdx = found
+            bIdx = loc.index
           }
         }
         if (bIdx !== null && bIdx >= 0 && bIdx < dataRows.length) {
-          addPick({ block: { axis: 'row', index: bIdx, headerText: (bHeader && isAnchorText(bHeader)) ? bHeader : anchorHeader(dataRows[bIdx]) } })
+          addPick({ block: { axis: 'row', index: bIdx, headerText: bHeader || rowHeader(dataRows[bIdx]) || '' } })
         }
       }
     }

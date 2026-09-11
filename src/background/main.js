@@ -34,9 +34,8 @@ import { parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
 
 // 重選時把選好的值寫回任務：沒動的值保留原本的 key 與名稱（紀錄靠 key），新值配新 key
 function pickSpecOf(pick) {
-  // **逐欄挑，不得整包照抄**：選取端會在 pick 上掛顯示用的 `rawHeader`（純數值標題的原文），
-  // 它進了規格就會被存進 storage、讓 `sameSpec` 的全等比對永遠對不上
-  // （key 重生、歷史序列斷掉、使用者改過的名稱被預設名蓋掉），下一輪還會被當成錨點。
+  // **逐欄挑，不得整包照抄**：pick 來自 content script 的訊息，多帶任何一個欄位都會進 storage、
+  // 讓 `sameSpec` 的全等比對永遠對不上（key 重生、歷史序列斷掉、使用者改過的名稱被預設名蓋掉）。
   if (pick?.cell) {
     return {
       cell: {
