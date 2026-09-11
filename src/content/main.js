@@ -2,6 +2,7 @@ import { MSG } from '../shared/messages.js'
 import { waitMsOf, timeoutMsOf, DEFAULT_HOVER_HOLD_MS } from '../shared/preaction.js'
 import { describe, resolve } from '../shared/selector.js'
 import { extractValue, parseNumber } from '../shared/extract.js'
+import { parseTable, getDataRows, rowHeader, innermostTable } from '../shared/table.js'
 import { enterPickMode, exitPickMode } from './picker-mode.js'
 
 // 記住使用者最後右鍵點擊的元素
@@ -26,6 +27,39 @@ function handleDescribe(sendResponse) {
   })
 }
 
+// 診斷包裡那張表的 HTML 上限（SPEC §3）。截到就標 truncated，不靜默截。
+const DIAG_HTML_MAX = 4000
+// 二維陣列只留前幾列：整張表倒進訊息會讓大表的診斷包大到沒人看得完
+const DIAG_ROWS_MAX = 20
+
+// 擷取失敗時，把「當下這個頁面長什麼樣」整理成一份給人看的現況。
+// 只在失敗時產生：成功時沒有消費端，白帶一份大字串。
+function pageDebugOf(el) {
+  try {
+    const table = parseTable(el)
+    const dataRows = getDataRows(el)
+    const tableEl = el?.tagName === 'TABLE' ? innermostTable(el) : (el?.querySelector?.('table') || el)
+    const html = String(tableEl?.outerHTML || el?.outerHTML || '')
+    return {
+      table: {
+        source: table.source,
+        headers: table.headers,
+        // 列標題是**原文**（`rowHeader`），不是過濾過的錨點：
+        // 使用者要看的正是「那一格現在寫什麼」
+        rowHeaders: table.cells.map((row, i) => (dataRows[i] ? rowHeader(dataRows[i]) : rowHeader(row))),
+        rowCount: table.cells.length,
+        colCount: table.cells.reduce((max, row) => (row.length > max ? row.length : max), 0),
+        cells: table.cells.slice(0, DIAG_ROWS_MAX),
+        partial: table.partial
+      },
+      html: html.slice(0, DIAG_HTML_MAX),
+      truncated: html.length > DIAG_HTML_MAX
+    }
+  } catch {
+    return null
+  }
+}
+
 // 處理 EXTRACT 訊息：依 locator 尋找元素並擷取數值
 function handleExtract(msg, sendResponse) {
   const resolved = resolve(document, msg.locator)
@@ -38,9 +72,25 @@ function handleExtract(msg, sendResponse) {
   // 整包轉發：白名單會把 used / skipped / partial / fields 這些欄位丟掉，
   // background 的 partial 黃燈與多值分支都靠它們（AF-5 X3）
   if (extracted.ok) {
-    sendResponse({ ...extracted, ok: true, layer: resolved.layer })
+    // 多值任務即使整體 ok，個別值仍可能失敗（SPEC §7）：那時一樣要附現況，
+    // 否則本輪主打的情境（多值表格抓不到）在診斷包裡看不到那張表長什麼樣
+    const anyFieldFailed = extracted.fields && typeof extracted.fields === 'object'
+      && Object.values(extracted.fields).some(f => f?.ok !== true)
+    const page = anyFieldFailed ? pageDebugOf(resolved.el) : null
+    sendResponse({
+      ...extracted,
+      ok: true,
+      layer: resolved.layer,
+      ...(page ? { debug: { page: { ...page, resolvedLayer: resolved.layer } } } : {})
+    })
   } else {
-    sendResponse({ ...extracted, ok: false })
+    // 失敗才附現況：使用者按「匯出診斷」時，我們要看得到那張表當下長什麼樣
+    const page = pageDebugOf(resolved.el)
+    sendResponse({
+      ...extracted,
+      ok: false,
+      ...(page ? { debug: { page: { ...page, resolvedLayer: resolved.layer } } } : {})
+    })
   }
 }
 

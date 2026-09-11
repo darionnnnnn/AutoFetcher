@@ -1,3 +1,10 @@
+import { readFileSync } from 'node:fs'
+
+// 版本取自真的 manifest：測試不該自己記一份版本號（會與升版脫節）
+const MANIFEST_VERSION = JSON.parse(
+  readFileSync(new URL('../src/manifest.json', import.meta.url), 'utf8')
+).version
+
 function createEvent() {
   const listeners = new Set()
   return {
@@ -299,6 +306,12 @@ function buildChromeMock() {
     },
 
     runtime: {
+      // 真實的 `chrome.runtime.getManifest()` 是同步的，而且擴充功能自己讀得到版本
+      // （診斷包要記下是哪一版程式碼抓失敗的）
+      getManifest() {
+        recordCall('runtime.getManifest', [])
+        return { version: MANIFEST_VERSION }
+      },
       async getPlatformInfo() {
         recordCall('runtime.getPlatformInfo', [])
         return { os: 'mac', arch: 'arm64' }

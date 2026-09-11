@@ -1,5 +1,5 @@
 // AutoFetcher 數值擷取策略鏈與後處理
-import { parseTable, rowHeader, getDataRows } from './table.js'
+import { parseTable, rowHeader, getDataRows, isAnchorText } from './table.js'
 import { aggregateCells } from './aggregate.js'
 
 const STRATEGY_ORDER = ['auto', 'regex', 'attr', 'child', 'label']
@@ -159,9 +159,12 @@ function positionOf(spec) {
   return (pos === 'first' || pos === 'last' || pos === 'last-1') ? pos : ''
 }
 
-// 依表頭定位索引（欄與列同一套規則：表頭對得上就照用，搬家了跟著表頭走並標記備援）；
-// 帶 pos 的軸走位置定位，count 是當下這個軸有幾筆。
-function locateByHeader(headers, spec, count) {
+// 表頭對得上照用，搬家了跟著表頭走並標記備援；帶 pos 的軸走位置定位，count 是當下這個軸有幾筆。
+/**
+ * 依表頭定位索引（欄與列同一套規則）。選取模式的 preselect 也用這一份勾回既有的值，
+ * 兩邊各寫一份的話，畫面勾到的格子與擷取抓到的格子會不一樣。
+ */
+export function locateByHeader(headers, spec, count, axis) {
   const s = spec || {}
   const pos = positionOf(s)
   if (pos) {
@@ -173,9 +176,17 @@ function locateByHeader(headers, spec, count) {
   if (!header) {
     return { ok: true, index: s.index, status: 'ok' }
   }
+  // 純數值的標題（4318 這種）可能是鍵、也可能只是那一格的資料，單看一格分不出來。
+  // 規則：**當下唯一出現才拿它定位**（年度欄 2024/2025 插了一欄照樣跟得上、亮黃燈）；
+  // 不見了或重複出現（第一欄是 0/1 這種小整數）就視同沒有標題、走 index、狀態 ok
+  // ——不見了就硬性失敗的話，單列無表頭的表永遠抓不到；重複還去比對會跳到別列。
+  if (!isAnchorText(header)) {
+    const hits = (headers || []).filter((h) => h === header).length
+    if (hits !== 1) return { ok: true, index: s.index, status: 'ok' }
+  }
   const foundIndex = findClosestIndex(headers || [], header, s.index)
   if (foundIndex === -1) {
-    return { ok: false, error: 'not_found', message: headerGoneMessage(header) }
+    return { ok: false, error: 'not_found', message: headerGoneMessage(header, headers, axis) }
   }
   return foundIndex === s.index
     ? { ok: true, index: s.index, status: 'ok' }
@@ -183,8 +194,21 @@ function locateByHeader(headers, spec, count) {
 }
 
 // 標題不見時的錯誤訊息要指向解法，不然使用者只看到「找不到」
-function headerGoneMessage(header) {
-  return `標題「${header}」找不到；若這張表每天新增一列，請到任務設定改用位置定位（第一筆／最後一筆／倒數第二筆）`
+function headerGoneMessage(header, currentHeaders, axis) {
+  const axisName = axis === 'col' ? '欄' : '列'
+  const opening = `標題「${header}」找不到`
+  const guide = '若這張表每天新增一列，請到任務設定改用位置定位（第一筆／最後一筆／倒數第二筆）'
+  // 只列非空字串的標題
+  const valid = (currentHeaders || []).filter((h) => typeof h === 'string' && h.trim() !== '')
+  let situation
+  if (valid.length === 0) {
+    situation = `目前這張表沒有${axisName}標題`
+  } else if (valid.length <= 5) {
+    situation = `目前這張表的${axisName}標題是：${valid.join('、')}`
+  } else {
+    situation = `目前這張表的${axisName}標題是：${valid.slice(0, 5).join('、')}…共 ${valid.length} 個`
+  }
+  return `${opening}；${situation}；${guide}`
 }
 
 function positionShortage(pos) {
@@ -212,11 +236,11 @@ function extractCellFromTable(table, dataRows, cellSpec, specOpts = {}) {
   for (const row of table.cells) {
     if (row.length > colCount) colCount = row.length
   }
-  const colLoc = locateByHeader(table.headers, cellSpec.col, colCount)
+  const colLoc = locateByHeader(table.headers, cellSpec.col, colCount, 'col')
   if (!colLoc.ok) return { ok: false, error: 'not_found', message: colLoc.message }
 
   const rowHeaders = getTableRowHeaders(table.cells, dataRows)
-  const rowLoc = locateByHeader(rowHeaders, cellSpec.row, table.cells.length)
+  const rowLoc = locateByHeader(rowHeaders, cellSpec.row, table.cells.length, 'row')
   if (!rowLoc.ok) return { ok: false, error: 'not_found', message: rowLoc.message }
 
   const targetRow = rowLoc.index
@@ -294,7 +318,7 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
     const rowLoc = locateByHeader(rowHeaders, {
       index: targetIndex,
       header: typeof block.headerText === 'string' ? block.headerText : ''
-    }, table.cells.length)
+    }, table.cells.length, 'row')
     if (!rowLoc.ok) return { ok: false, error: 'not_found', message: rowLoc.message }
     targetIndex = rowLoc.index
     status = rowLoc.status
@@ -303,18 +327,14 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
     }
     values = table.cells[targetIndex]
   } else {
-    // 欄模式（col）
-    const headerText = typeof block.headerText === 'string' ? block.headerText.trim() : ''
-    if (headerText) {
-      const foundIndex = findClosestIndex(table.headers || [], headerText, targetIndex)
-      if (foundIndex === -1) {
-        return { ok: false, error: 'not_found', message: headerGoneMessage(headerText) }
-      }
-      if (foundIndex !== targetIndex) {
-        targetIndex = foundIndex
-        status = 'fallback'
-      }
-    }
+    // 欄模式（col）：改用 locateByHeader，判準只維護一份
+    const colLoc = locateByHeader(table.headers || [], {
+      index: targetIndex,
+      header: typeof block.headerText === 'string' ? block.headerText : ''
+    }, (table.headers || []).length, 'col')
+    if (!colLoc.ok) return { ok: false, error: 'not_found', message: colLoc.message }
+    targetIndex = colLoc.index
+    status = colLoc.status
 
     // 取值：每一列的第 targetIndex 格
     // 超出範圍：若所有列都沒有那一格，回 not_found

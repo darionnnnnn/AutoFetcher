@@ -31,7 +31,7 @@ test('matchFrameByUrl:網址完全相同優先', async () => {
     { frameId: 0, url: 'https://a.test/p' },
     { frameId: 7, url: 'https://b.example/w.html?token=abc' }
   ]
-  assert.deepEqual(fr.matchFrameByUrl(frames, 'https://b.example/w.html?token=abc'), { frameId: 7 })
+  assert.deepEqual(fr.matchFrameByUrl(frames, 'https://b.example/w.html?token=abc'), { frameId: 7, matchedBy: 'exact' })
 })
 
 test('matchFrameByUrl:query 變了仍以 origin + pathname 認得出來', async () => {
@@ -40,7 +40,7 @@ test('matchFrameByUrl:query 變了仍以 origin + pathname 認得出來', async 
     { frameId: 0, url: 'https://a.test/p' },
     { frameId: 9, url: 'https://b.example/w.html?token=zzz&t=1700000000' }
   ]
-  assert.deepEqual(fr.matchFrameByUrl(frames, 'https://b.example/w.html?token=abc'), { frameId: 9 })
+  assert.deepEqual(fr.matchFrameByUrl(frames, 'https://b.example/w.html?token=abc'), { frameId: 9, matchedBy: 'path' })
 })
 
 test('matchFrameByUrl:兩個 frame 同 origin+pathname 時不得亂猜', async () => {
@@ -70,7 +70,7 @@ test('matchFrameByUrl:網址不合法不得整個炸掉', async () => {
 test('locateFrame:任務沒有 frame 就是最上層，連列 frame 都不必做', async () => {
   const { c, fr } = await fresh()
   const r = await fr.locateFrame(3, undefined, { css: '#v' }, FAST)
-  assert.deepEqual(r, { frameId: 0 })
+  assert.deepEqual(r, { frameId: 0, matchedBy: 'top', candidates: [] })
   assert.equal(c.__calls.some((x) => x.api === 'scripting.executeScript'), false, '舊任務不該多付列 frame 的成本')
 })
 
@@ -84,7 +84,8 @@ test('locateFrame:iframe 晚一點才出現也要等得到', async () => {
       : [{ frameId: 0, result: 'https://a.test/p' }, { frameId: 7, result: 'https://b.example/w.html' }]
   })
   const r = await fr.locateFrame(3, { url: 'https://b.example/w.html' }, { css: '#v' }, { pollMs: 1, timeoutMs: 500 })
-  assert.deepEqual(r, { frameId: 7 })
+  assert.equal(r.frameId, 7)
+  assert.equal(r.matchedBy, 'exact')
   assert.ok(round >= 2, '第一次沒看到就放棄的話，先點按鈕才出現的 iframe 永遠抓不到')
 })
 
@@ -92,7 +93,10 @@ test('locateFrame:等到逾時仍然沒有就判失敗', async () => {
   const { c, fr } = await fresh()
   c.__setScriptResponder(framesAs([[0, 'https://a.test/p']]))
   const r = await fr.locateFrame(3, { url: 'https://b.example/w.html' }, { css: '#v' }, { pollMs: 1, timeoutMs: 30 })
-  assert.equal(r, null)
+  // 失敗回的是帶候選清單的物件（診斷用），判定看有沒有 frameId
+  assert.equal(r.frameId, null)
+  assert.equal(r.matchedBy, null)
+  assert.equal(r.failed, true)
 })
 
 test('locateFrame:兩個候選時用 locator 問出唯一那個', async () => {
@@ -105,7 +109,8 @@ test('locateFrame:兩個候選時用 locator 問出唯一那個', async () => {
     return { ok: true, found: options.frameId === 8 }
   })
   const r = await fr.locateFrame(3, { url: 'https://b.example/w.html?id=9' }, { css: '#v' }, { pollMs: 1, timeoutMs: 50 })
-  assert.deepEqual(r, { frameId: 8 })
+  assert.equal(r.frameId, 8)
+  assert.equal(r.matchedBy, 'locator')
   const asked = sent(c).filter((a) => a[1].type === 'RESOLVE_LOCATOR').map((a) => a[2].frameId)
   assert.deepEqual(asked.sort(), [7, 8], '兩個候選都要問過才知道是不是唯一')
 })
@@ -117,7 +122,8 @@ test('locateFrame:兩個候選都找得到目標時寧可失敗，不得取第�
   ]))
   c.__setTabResponder((tabId, msg) => (msg.type === 'RESOLVE_LOCATOR' ? { ok: true, found: true } : undefined))
   const r = await fr.locateFrame(3, { url: 'https://b.example/w.html?id=9' }, { css: '#v' }, { pollMs: 1, timeoutMs: 50 })
-  assert.equal(r, null, '抓到隔壁那張表的數字，比抓不到更糟')
+  assert.equal(r.frameId, null, '抓到隔壁那張表的數字，比抓不到更糟')
+  assert.equal(r.failed, true)
 })
 
 test('locateFrame:網址全都對不上時，改用 locator 問每個非最上層 frame', async () => {
@@ -130,7 +136,8 @@ test('locateFrame:網址全都對不上時，改用 locator 問每個非最上�
     return { ok: true, found: options.frameId === 5 }
   })
   const r = await fr.locateFrame(3, { url: 'https://b.example/w.html' }, { css: '#v' }, { pollMs: 1, timeoutMs: 30 })
-  assert.deepEqual(r, { frameId: 5 })
+  assert.equal(r.frameId, 5)
+  assert.equal(r.matchedBy, 'locator')
   const asked = sent(c).filter((a) => a[1].type === 'RESOLVE_LOCATOR').map((a) => a[2].frameId)
   assert.equal(asked.includes(0), false, '最上層本來就找不到，不必問')
 })

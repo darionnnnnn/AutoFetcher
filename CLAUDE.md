@@ -77,12 +77,12 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 
 - 改任何行為 → `docs/SPEC.md`(現況規格,§編號會被程式碼註解引用,勿拆檔)
 - 想做但刻意沒做 → `docs/BACKLOG.md`(每項附觸發條件)
-- 本輪規劃 → `docs/AF-<N>-PLAN.md`;完工搬 `docs/archive/`(按需讀,勿全掃)。AF-1~AF-13 已歸檔。
+- 本輪規劃 → `docs/AF-<N>-PLAN.md`;完工搬 `docs/archive/`(按需讀,勿全掃)。AF-1~AF-14 已歸檔。
 
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1874 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 1936 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -158,6 +158,13 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   規則見 SPEC §2:貼在 `<body>` 底下、`z-index` 跟著 iframe **最外層有數字 z-index 的祖先**走
   (只看 iframe 自己會被 `.content { z-index: 2 }` 這種容器蓋住,iframe 反而選不到)、沒有 z-index 時靠 `elementFromPoint` 讓路。
   **父文件收不到「指標進入跨網域 iframe」的任何事件**,別再想用 `mouseover` 之類的訊號開關它。
+- **純數值標題(`4318`、`2025`)拿不拿來定位,只由 `extract.js` 的 `locateByHeader` 決定**
+  (當下唯一出現才用;不見了或重複就走索引,SPEC §7)。選取端**原文照存**、preselect 直接呼叫同一個函式,
+  不得各自寫一份比對——兩份會讓畫面勾到的格子與擷取抓到的格子不一樣。判準 `isAnchorText` 只給
+  「命名不用它」與「摘要卡提示」用,不得拿來在選取端過濾標題(AF-14 先這麼做過:單列數值表是好了,
+  年度欄的表卻從黃燈警示變成靜默抓錯欄)。
+- **`locateFrame` 失敗回的是物件不是 `null`**(帶 `candidates` 給診斷用):
+  判定一律看有沒有 `frameId`,寫 `=== null` 會把失敗當成成功。
 - **選取模式的模組狀態要在 `exitPickMode` 全部重設**:漏一個(例如「已選屬於哪張表」)
   會讓同一頁的下一次選取沿用上一張表的 locator、配上新表的列欄索引送出,抓到的永遠是錯的值。
   只驗「DOM 元素被移除」的測試抓不到這種殘留,要驗「連續選兩次」的行為。

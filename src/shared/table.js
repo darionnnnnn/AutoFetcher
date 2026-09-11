@@ -346,6 +346,24 @@ export function rowHeader(row) {
 }
 
 /**
+ * 判定文字是不是「可靠的」定位錨點（AF-14）。
+ * 純數值（去掉千分位逗號與所有空白後整段是「可選負號＋數字＋可選小數」）→ false：
+ * 它可能是鍵（年度 2024）也可能只是那一格的資料（4318），擷取端只在它當下唯一出現時才拿來定位，
+ * 命名一律不用它。其餘非空字串 → true；空字串、只有空白、非字串 → false。
+ * `2024年度`、`No.4318`、日期字串都含數字以外的字，仍是錨點——`parseNumber` 解得出數字不足以當判準。
+ * @param {unknown} text 待檢測的文字
+ * @returns {boolean}
+ */
+export function isAnchorText(text) {
+  if (typeof text !== 'string') return false
+  // 去掉千分位逗號與所有空白
+  const stripped = text.replace(/[,\s]/g, '')
+  if (stripped === '') return false
+  // 可選負號 + 數字 + 可選小數，整段要完全符合
+  return !/^-?\d+(?:\.\d+)?$/.test(stripped)
+}
+
+/**
  * 取得表格所有的資料列 DOM 元素（排除表頭列）。
  * @param {Element} el 表格元素
  * @returns {Element[]} 資料列 DOM 元素陣列

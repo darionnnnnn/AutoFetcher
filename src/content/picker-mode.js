@@ -4,7 +4,7 @@
 import { MSG } from '../shared/messages.js'
 import { describe } from '../shared/selector.js'
 import { detectKind } from '../shared/block-detect.js'
-import { parseNumber, resolveByPosition } from '../shared/extract.js'
+import { parseNumber, resolveByPosition, locateByHeader } from '../shared/extract.js'
 import {
   columnHeaders, rowHeader, innermostTable,
   // 「哪些列／格屬於這張表」的判準只有 shared/table.js 一份（AF-10 作業 D）：
@@ -1429,6 +1429,10 @@ function applyPreselect(preselect, tableEl) {
   if (!Array.isArray(preselect) || !tableEl || !isTableMode(tableEl)) return
   const dataRows = resolveDataRows(tableEl)
   const colHeaders = columnHeaders(tableEl)
+  const rowHeaders = dataRows.map((row) => rowHeader(row))
+  // 欄數以最寬的那一列為準（無表頭的表 colHeaders 是空的）：純數值標題不見時會退回原索引，
+  // 表格變窄了那個索引就指不到任何格子，不能把它加進已選清單
+  const colCount = dataRows.reduce((max, row) => Math.max(max, getRowCells(row).length), colHeaders.length)
 
   for (const item of preselect) {
     if (!item) continue
@@ -1449,30 +1453,26 @@ function applyPreselect(preselect, tableEl) {
       const cPos = posIndexOf(item.cell.col?.pos, colHeaders.length)
       if (cPos !== null) { cIdx = cPos; cHeader = '' }
 
+      // 勾回既有的值要與擷取端同一份定位（extract.js 的 locateByHeader）：
+      // 文字標題不見了就略過這個值；純數值標題不見或重複就退回索引（AF-14）
       if (cHeader) {
-        const found = colHeaders.indexOf(cHeader)
-        if (found === -1) continue
-        if (found !== cIdx) {
+        const loc = locateByHeader(colHeaders, { index: cIdx, header: cHeader }, colHeaders.length, 'col')
+        if (!loc.ok) continue
+        if (loc.index !== cIdx) {
           headerChangedNotice = true
-          cIdx = found
+          cIdx = loc.index
         }
       }
       if (rHeader) {
-        let found = -1
-        for (let i = 0; i < dataRows.length; i++) {
-          if (rowHeader(dataRows[i]) === rHeader) {
-            found = i
-            break
-          }
-        }
-        if (found === -1) continue
-        if (found !== rIdx) {
+        const loc = locateByHeader(rowHeaders, { index: rIdx, header: rHeader }, dataRows.length, 'row')
+        if (!loc.ok) continue
+        if (loc.index !== rIdx) {
           headerChangedNotice = true
-          rIdx = found
+          rIdx = loc.index
         }
       }
 
-      if (rIdx !== null && cIdx !== null && rIdx >= 0 && rIdx < dataRows.length && cIdx >= 0) {
+      if (rIdx !== null && cIdx !== null && rIdx >= 0 && rIdx < dataRows.length && cIdx >= 0 && cIdx < colCount) {
         const targetRow = dataRows[rIdx]
         const actualRowHeader = rHeader || (targetRow ? rowHeader(targetRow) : '')
         const actualColHeader = cHeader || (colHeaders[cIdx] || '')
@@ -1490,29 +1490,23 @@ function applyPreselect(preselect, tableEl) {
 
       if (axis === 'col') {
         if (bHeader) {
-          const found = colHeaders.indexOf(bHeader)
-          if (found === -1) continue
-          if (found !== bIdx) {
+          const loc = locateByHeader(colHeaders, { index: bIdx, header: bHeader }, colHeaders.length, 'col')
+          if (!loc.ok) continue
+          if (loc.index !== bIdx) {
             headerChangedNotice = true
-            bIdx = found
+            bIdx = loc.index
           }
         }
-        if (bIdx !== null && bIdx >= 0) {
+        if (bIdx !== null && bIdx >= 0 && bIdx < colCount) {
           addPick({ block: { axis: 'col', index: bIdx, headerText: bHeader || colHeaders[bIdx] || '' } })
         }
       } else if (axis === 'row') {
         if (bHeader) {
-          let found = -1
-          for (let i = 0; i < dataRows.length; i++) {
-            if (rowHeader(dataRows[i]) === bHeader) {
-              found = i
-              break
-            }
-          }
-          if (found === -1) continue
-          if (found !== bIdx) {
+          const loc = locateByHeader(rowHeaders, { index: bIdx, header: bHeader }, dataRows.length, 'row')
+          if (!loc.ok) continue
+          if (loc.index !== bIdx) {
             headerChangedNotice = true
-            bIdx = found
+            bIdx = loc.index
           }
         }
         if (bIdx !== null && bIdx >= 0 && bIdx < dataRows.length) {

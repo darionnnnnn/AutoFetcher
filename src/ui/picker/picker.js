@@ -4,8 +4,10 @@ import { DEFAULT_HOVER_HOLD_MS, DEFAULT_WAIT_TIMEOUT_MS } from '../../shared/pre
 import { MSG } from '../../shared/messages.js'
 import { getLayout, addCard } from '../../shared/layout-store.js'
 import { seriesIdOf } from '../../shared/series-index.js'
-import { describeSchedule, describeTarget, describeDashboard, POS_TEXT } from '../../shared/describe.js'
+import { describeSchedule, describeTarget, describeDashboard, numericHeaderAxis, POS_TEXT } from '../../shared/describe.js'
 import { nextIntervalRun } from '../../shared/schedule-math.js'
+import { isAnchorText } from '../../shared/table.js'
+import { download } from '../../shared/export.js'
 
 let currentCtx = null
 let currentBlock = null
@@ -507,6 +509,9 @@ export function render(ctx) {
   applyPositionDefaults(currentCtx)
   renderHeader(currentCtx)
   setPreviewState(null)
+  // 換了目標就不能留著上一個目標的診斷：按下去會匯出別一頁的網址與 HTML 片段
+  // （與 AF-7 的 pickedTableEl、AF-9 的 undoSnapshot 同型的狀態殘留）
+  setDiagAvailable(null)
   const previewEl = document.getElementById('preview')
   if (previewEl) {
     // 比較要正規化成字串：preview 是文字、previewValue 是數字，直接比永遠不相等，
@@ -909,8 +914,9 @@ function refreshDefaultNames() {
 function singleCellName(cell) {
   const rowPos = posValueOf('row-pos')
   const colPos = posValueOf('col-pos')
-  const colH = colPos ? '' : String(cell?.col?.header || '').trim()
-  const rowH = rowPos ? '' : String(cell?.row?.header || '').trim()
+  // 純數值的標題不當名稱：那個數字明天就變了（判準與定位同一份）
+  const colH = colPos ? '' : anchorOnly(cell?.col?.header)
+  const rowH = rowPos ? '' : anchorOnly(cell?.row?.header)
   const base = colH || rowH
   if (!base) return ''
   const suffix = [
@@ -921,12 +927,19 @@ function singleCellName(cell) {
 }
 
 // 多值任務裡每個值的預設名稱；用位置定位的那一軸不放會變動的標題
+// 能當定位錨點的標題才能拿來命名；純數值退回下一層
+function anchorOnly(header) {
+  const text = typeof header === 'string' ? header.trim() : ''
+  return isAnchorText(text) ? text : ''
+}
+
 function defaultPickName(pick, index) {
   if (pick?.cell) {
     const rowPos = posValueOf('row-pos')
     const colPos = posValueOf('col-pos')
-    const rowH = rowPos ? '' : (pick.cell.row?.header?.trim() || '')
-    const colH = colPos ? '' : (pick.cell.col?.header?.trim() || '')
+    // 純數值的標題不進名稱（判準與定位同一份）——這是命名鏈的第四個消費端
+    const rowH = rowPos ? '' : anchorOnly(pick.cell.row?.header)
+    const colH = colPos ? '' : anchorOnly(pick.cell.col?.header)
     const suffix = [
       rowPos ? `${POS_LABELS[rowPos]}列` : '',
       colPos ? `${POS_LABELS[colPos]}欄` : ''
@@ -937,7 +950,7 @@ function defaultPickName(pick, index) {
     else base = suffix ? '值' : `值 ${index + 1}`
     return suffix ? `${base}（${suffix}）` : base
   }
-  if (pick?.block) return pick.block.headerText?.trim() || `值 ${index + 1}`
+  if (pick?.block) return anchorOnly(pick.block.headerText) || `值 ${index + 1}`
   return `值 ${index + 1}`
 }
 
@@ -1084,14 +1097,27 @@ export function updateSetupSummary() {
   const targetEl = document.getElementById('summary-target')
   if (targetEl) {
     const first = values.fields?.[0]
+    const cellArg = values.block?.cell || first?.cell
+    const blockArg = values.block?.axis ? values.block : first?.block
+    // 摘要卡說了「請改用列定位」就要讓使用者到得了那個下拉（它在「抓什麼」區，不是進階區）。
+    // 哪一軸要提示，只由 describe.js 的 numericHeaderAxis 決定（整欄／整列沒有可換的下拉，不出鈕）
+    const rowPosNow = document.getElementById('row-pos')?.value || ''
+    const colPosNow = document.getElementById('col-pos')?.value || ''
+    const numericAxis = numericHeaderAxis(cellArg, rowPosNow, colPosNow)
+    const gotoBtn = document.getElementById('goto-rowpos')
+    if (gotoBtn) {
+      gotoBtn.hidden = !numericAxis
+      gotoBtn.textContent = `去設定「${numericAxis === 'col' ? '欄' : '列'}定位」`
+      gotoBtn.dataset.target = numericAxis === 'col' ? 'col-pos' : 'row-pos'
+    }
     targetEl.textContent = describeTarget({
       url: values.url || currentCtx?.url || '',
       mode: values.fields ? 'block' : values.mode,
       fieldCount: fieldRows.length,
       cell: values.block?.cell || first?.cell,
       block: values.block?.axis ? values.block : first?.block,
-      rowPos: document.getElementById('row-pos')?.value || '',
-      colPos: document.getElementById('col-pos')?.value || ''
+      rowPos: rowPosNow,
+      colPos: colPosNow
     })
   }
 
@@ -1439,7 +1465,23 @@ function updateFieldListState() {
   updateBlockSection()
 }
 
-// 一個值在表格裡的位置說明（「美金 · 買入」／「買入 整欄」）
+// 「用「列 · 欄」命名」用的文字：與 fieldWhereText 同形，但純數值標題不進名稱
+function fieldNameText(spec) {
+  if (!spec) return ''
+  if (spec.cell) {
+    const r = anchorOnly(spec.cell.row?.header) || (spec.cell.row?.pos ? POS_TEXT[spec.cell.row.pos] : '')
+    const c = anchorOnly(spec.cell.col?.header) || (spec.cell.col?.pos ? POS_TEXT[spec.cell.col.pos] : '')
+    return [r, c].filter(Boolean).join(' · ')
+  }
+  if (spec.block) {
+    const axis = spec.block.axis === 'row' ? '整列' : '整欄'
+    const h = anchorOnly(spec.block.headerText)
+    return h ? `${h} ${axis}` : axis
+  }
+  return ''
+}
+
+// 一個值在表格裡的位置說明（「美金 · 買入」／「買入 整欄」），純顯示，原文照給
 function fieldWhereText(spec) {
   if (!spec) return ''
   if (spec.cell) {
@@ -1493,11 +1535,12 @@ export function renameFields(style) {
     if (!input) continue
     if (input.value !== input._afAutoName) continue
     const spec = row._spec || fieldSpecs.get(row.dataset.fieldKey || '')
+    // 純數值標題不進名稱（命名鏈的第四個入口，判準與其他三處同一份）
     let next = ''
     if (style === 'col') {
-      next = spec?.cell?.col?.header || spec?.block?.headerText || ''
+      next = anchorOnly(spec?.cell?.col?.header) || anchorOnly(spec?.block?.headerText)
     } else {
-      next = fieldWhereText(spec)
+      next = fieldNameText(spec)
     }
     if (!next) continue
     input.value = next
@@ -2107,12 +2150,55 @@ export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs =
   }
 }
 
+// 上一次「立即測試」失敗時 background 給的診斷包。**只存在記憶體**：
+// 不寫 storage、不進 diag 環形緩衝，使用者按下按鈕才落地成檔案（SPEC §3、§5）。
+let lastDebug = null
+
+// 匯出鈕與它的說明一起顯示或收起（收起時要把上一次的內容也丟掉，
+// 否則使用者在下一次成功之後匯出到的是舊的那一份）
+function setDiagAvailable(debug) {
+  lastDebug = debug || null
+  const btn = document.getElementById('export-diag')
+  const note = document.getElementById('export-diag-note')
+  const on = Boolean(lastDebug)
+  if (btn) btn.hidden = !on
+  if (note) note.hidden = !on
+}
+
+function diagFilename(name) {
+  const d = new Date()
+  const p = (n) => String(n).padStart(2, '0')
+  const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`
+  const safe = String(name || '').trim().replace(/[\/:*?"<>|\s]+/g, '-').slice(0, 40) || 'preview'
+  return `autofetcher-diag-${safe}-${stamp}.json`
+}
+
+// 把使用者送到定位下拉那裡：說了「請改用列定位」卻要他自己找，等於沒說
+export function focusPositionSelect(id) {
+  const el = document.getElementById(id === 'col-pos' ? 'col-pos' : 'row-pos')
+  if (!el) return
+  if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center' })
+  if (typeof el.focus === 'function') el.focus()
+}
+
+export async function handleExportDiag() {
+  if (!lastDebug) return
+  try {
+    await download({
+      filename: diagFilename(document.getElementById('name')?.value),
+      content: JSON.stringify(lastDebug, null, 2)
+    })
+  } catch {}
+}
+
 export async function handleTestNow() {
   const previewEl = document.getElementById('preview')
   const errorsEl = document.getElementById('errors')
   if (errorsEl) errorsEl.textContent = ''
   const noteAtStart = document.getElementById('test-note')
   if (noteAtStart) noteAtStart.textContent = ''
+  // 這一次的結果還沒出來，上一次的診斷先收起來
+  setDiagAvailable(null)
   const busy = setBusy('test-now', '測試中…')
 
   const values = getFormData()
@@ -2143,6 +2229,8 @@ export async function handleTestNow() {
         if (previewEl) previewEl.textContent = lines.join('\n')
         // 逐值結果也要回到各自那一列，使用者才不必在預覽區裡對照名字
         applyFieldResults(values.fields, res)
+        // 多值任務即使整體 ok，個別值仍可能失敗（SPEC §7）：那時 background 會附診斷
+        setDiagAvailable(res.debug)
       } else {
         if (previewEl) previewEl.textContent = res.value !== undefined ? String(res.value) : (res.raw ?? '')
       }
@@ -2166,6 +2254,8 @@ export async function handleTestNow() {
       if (errorsEl) errorsEl.textContent = err
       if (previewEl) previewEl.textContent = '—'
       setPreviewState('error')
+      // 失敗才有診斷可以匯出（成功時 background 不組）
+      setDiagAvailable(res?.debug)
       // 走到第幾步也要說：調 hover 選單時，「hover 有做、click 沒點到」與「hover 就失敗」是兩種修法
       const noteEl = document.getElementById('test-note')
       if (noteEl && Array.isArray(res?.preActionTrace) && res.preActionTrace.length > 0) {
@@ -2372,6 +2462,8 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
     } catch {}
   })
   document.getElementById('test-now')?.addEventListener('click', () => handleTestNow())
+  document.getElementById('export-diag')?.addEventListener('click', () => handleExportDiag())
+  document.getElementById('goto-rowpos')?.addEventListener('click', (e) => focusPositionSelect(e.currentTarget?.dataset?.target))
   bindModeEvents()
   bindAlertEvents()
   bindPreActionEvents()
