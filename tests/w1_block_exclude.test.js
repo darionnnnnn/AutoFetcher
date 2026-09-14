@@ -118,6 +118,24 @@ test('排除項的標題在頁面上找不到：不排除任何列，但狀態�
   assert.equal('excluded' in r, false)
 })
 
+test('排除項標題是空字串、索引又越界：算找不到（fallback），不得當成找到而靜默不排除', () => {
+  const r = extractValue(el(MONITOR), col({ exclude: [{ index: 99, header: '' }] }))
+  assert.equal(r.ok, true)
+  assert.equal(r.value, 300)
+  assert.equal(r.status, 'fallback', '空標題的定位直接回原索引、不檢查範圍；越界要算找不到')
+  assert.match(r.message, /第 100 列/)
+})
+
+test('整列帶 inner：排除項指到被 colspan 涵蓋的欄，定位成功卻濾不到任何格子——同樣算找不到', () => {
+  const html = `<table><thead><tr><th>主機</th><th>甲</th><th>乙</th></tr></thead><tbody>
+    <tr><td><span>h</span><span>1</span></td><td colspan="2"><span>x</span><span>2</span></td></tr></tbody></table>`
+  const r = extractValue(el(html), { mode: 'block', block: { axis: 'row', index: 0, headerText: '', aggregate: 'sum', inner: [{ tag: 'span', index: 2 }], exclude: [{ index: 2, header: '乙' }] } })
+  assert.equal(r.ok, true)
+  assert.equal(r.value, 3, '前提：清單只有每格的網格起點（0 與 1），第 2 欄被 colspan 涵蓋')
+  assert.equal(r.status, 'fallback')
+  assert.match(r.message, /乙/)
+})
+
 test('skip 與 exclude 指到同一列只算一次', () => {
   const r = extractValue(el(MONITOR), col({ skip: { head: 0, tail: 1 }, exclude: [TOTAL] }))
   assert.equal(r.value, 150)

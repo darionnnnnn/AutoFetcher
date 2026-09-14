@@ -432,7 +432,7 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
     return {
       ok: false,
       error: 'not_found',
-      message: `略過開頭 ${head} 筆、結尾 ${tail} 筆後沒有剩下的格子（${subject}只有 ${initialCount} ${unit}）`
+      message: `略過開頭 ${head} ${unit}、結尾 ${tail} ${unit}後沒有剩下的格子（${subject}只有 ${initialCount} ${unit}）`
     }
   }
 
@@ -454,9 +454,13 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
     const otherAxis = isRow ? 'col' : 'row'
 
     const excludeIndicesToRemove = new Set()
+    // 「找得到」＝定位成功，而且那個索引在排除前的完整清單裡。定位成功卻濾不到任何格子的兩種情形都算找不到：
+    // 標題是空字串時 locateByHeader 直接回原索引、不檢查範圍（越界）；整列帶 inner 時清單只有每格的網格起點，
+    // 排除項指到被 colspan 涵蓋的欄。算成找到的話，狀態 ok、什麼都沒排除，合計就默默被加進去
+    const listedIndices = new Set(items.map((it) => it.index))
     for (const item of excludeList) {
       const loc = locateByHeader(otherHeaders, item, otherCount, otherAxis)
-      if (loc.ok) {
+      if (loc.ok && listedIndices.has(loc.index)) {
         excludeIndicesToRemove.add(loc.index)
       } else {
         const label = item.header || (isRow ? `第 ${item.index + 1} 格` : `第 ${item.index + 1} 列`)
@@ -476,7 +480,8 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
     return {
       ok: false,
       error: 'not_found',
-      message: `排除 ${excluded} 筆後沒有剩下的格子`
+      // excluded 含 skip 移掉的：只寫「排除」會比使用者設的排除清單還大
+      message: `略過與排除共 ${excluded} ${isRow ? '格' : '列'}後沒有剩下的格子`
     }
   }
 

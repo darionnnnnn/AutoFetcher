@@ -114,6 +114,29 @@ test('preselect 帶回來的整欄值不再自動加表尾（使用者之前取�
   assert.equal('exclude' in lastMsg(c).picks[0].block, false)
 })
 
+test('表尾提示只在真的加進清單時說：Ctrl 點取消已選的整欄不得說「已自動排除表尾」', async () => {
+  const { pm, doc } = await setup()
+  enter(pm, doc, { purpose: 'repick', preselect: [{ block: { axis: 'col', index: 1, headerText: '點金靈' } }] })
+  hover(doc, 'h1')
+  doc.getElementById('h1').dispatchEvent(new globalThis.MouseEvent('click', { bubbles: true, ctrlKey: true }))
+  assert.doesNotMatch(panelText(doc), /已自動排除表尾/, '這一下是取消，沒有建立任何整欄值')
+})
+
+test('右鍵排除之後按 Ctrl+Z 不得跳回排除之前的快照（排除也是改動，快照要失效）', async () => {
+  const { c, pm, doc } = await setup()
+  enter(pm, doc)
+  menu(doc, 'c0-2', 'col')
+  menu(doc, 'c0-1', 'col-each')
+  click(trimTail(doc))
+  menu(doc, 'c1-2', 'exclude')
+  key(doc, 'z', { ctrlKey: true })
+  confirm(doc)
+  const picks = lastMsg(c).picks
+  assert.deepEqual(picks[0].block.exclude, [{ index: 3, header: '合計' }, { index: 1, header: '10.0.0.2' }],
+    '排除的改動被 Ctrl+Z 一起丟掉了')
+  assert.equal(picks.length, 3, 'Ctrl+Z 退回「移除最後一項」：整欄值＋去尾後剩下 3 格，再移除 1 格')
+})
+
 // ---- 右鍵排除／取消排除 ----
 
 test('右鍵選單：格子在已選整欄範圍內才多一項「從整欄聚合排除這一列」', async () => {
@@ -297,14 +320,16 @@ test('上限 100：101 列的表每格各一個值只選到 100 個，面板顯�
 test('連續選兩次：排除、去頭去尾狀態與計數不得殘留到下一次', async () => {
   const { c, pm, doc } = await setup()
   enter(pm, doc)
-  menu(doc, 'c0-1', 'col-each')
+  menu(doc, 'c0-1', 'col')
+  menu(doc, 'c1-1', 'exclude')
+  menu(doc, 'c0-2', 'col-each')
   pm.exitPickMode()
   enter(pm, doc)
   assert.equal(trimHead(doc).hidden, true, '上一次的「最近動作是每格各一個值」不得殘留')
   assert.match(doc.querySelector('[data-af-count]').textContent, /已選 0／100/)
-  menu(doc, 'c0-1', 'row')
+  menu(doc, 'c0-1', 'col')
   confirm(doc)
   const picks = lastMsg(c).picks
   assert.equal(picks.length, 1)
-  assert.equal('exclude' in picks[0].block, false)
+  assert.deepEqual(picks[0].block.exclude, [{ index: 3, header: '合計' }], '上一次右鍵排除的第 2 列不得殘留')
 })

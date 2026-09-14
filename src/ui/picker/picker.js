@@ -663,8 +663,12 @@ export function render(ctx) {
     const modeEl = document.getElementById('mode')
     if (modeEl) modeEl.value = 'block'
   } else if (ctx?.picks && Array.isArray(ctx.picks) && ctx.picks.length === 1 && ctx.picks[0].block) {
+    // 換目標時 render 會再跑一次：舊目標的排除清單、格內子路徑、略過與位置不得併進新 pick——
+    // 新 pick 沒帶那個鍵就會殘留，排除列套到新表錯誤的列上（AF-16 終檢；inner 是 AF-15 起的同型缺陷）
+    const prevBlock = { ...(currentBlock || {}) }
+    for (const k of ['exclude', 'inner', 'skip', 'pos']) delete prevBlock[k]
     currentBlock = {
-      ...(currentBlock || {}),
+      ...prevBlock,
       ...ctx.picks[0].block
     }
     const modeEl = document.getElementById('mode')

@@ -119,6 +119,17 @@ test('多值編輯：該軸改用位置定位（略過欄位藏起來）時，�
   }
 })
 
+test('換目標（render 再跑一次）：舊目標的排除清單與格內子路徑不得併進新的單值整欄', async () => {
+  const { pk } = await fresh()
+  pk.render(ctxFor([colPick({ exclude: [TOTAL], inner: [{ tag: 'span', index: 2 }] })]))
+  assert.deepEqual(pk.buildSpec(pk.getFormData()).block.exclude, [TOTAL], '前提：第一次的 exclude 有進規格')
+  pk.render(ctxFor([{ block: { axis: 'col', index: 2, headerText: 'TSWEB' } }]))
+  const block = pk.buildSpec(pk.getFormData()).block
+  assert.equal(block.headerText, 'TSWEB')
+  assert.equal('exclude' in block, false, '舊表的排除列會套到新表錯誤的列上')
+  assert.equal('inner' in block, false, '舊表的格內路徑會讓新目標抓不到')
+})
+
 // ---- 顯示條件與標籤 ----
 
 test('顯示條件與聚合下拉同一條：全是儲存格時藏起來', async () => {

@@ -71,6 +71,36 @@ test('新任務：pick 帶 exclude 要原樣進到面板 ctx（background 不得
   assert.deepEqual(ctx.picks[0].block.exclude, [TOTAL])
 })
 
+test('重選一路貫穿：任務規格的 exclude 經 ENTER_PICK 的 preselect 送到選取模式，勾回後原樣送回（AF-15 inner 同型位置）', async () => {
+  const { c, st } = await freshBg()
+  await st.saveTask(baseTask({ spec: { mode: 'block', block: { ...colBlock(), aggregate: 'sum', exclude: [TOTAL] } } }))
+  const listener = [...c.runtime.onMessage._listeners][0]
+  await new Promise((resolve) => listener({ type: 'ENTER_PICK', purpose: 'repick', taskId: 't1', tabId: 11 }, {}, resolve))
+  const sent = c.__calls.filter(x => x.api === 'tabs.sendMessage').map(x => x.args[1]).filter(m => m?.type === 'ENTER_PICK').pop()
+  assert.ok(sent, '要送 ENTER_PICK 給分頁')
+  assert.deepEqual(sent.preselect?.[0]?.block?.exclude, [TOTAL], 'background 由任務規格推 preselect 時不得逐欄挑掉 exclude')
+
+  // content 端：同一份 preselect 勾回，送出時排除清單還在
+  const jd = new JSDOM(`<!doctype html><body><table id="t">
+    <thead><tr><th>主機</th><th>點金靈</th></tr></thead>
+    <tbody><tr><td>10.0.0.1</td><td id="c0">53</td></tr><tr><td>10.0.0.2</td><td>49</td></tr><tr><td>10.0.0.3</td><td>48</td></tr></tbody>
+    <tfoot><tr><td>合計</td><td>150</td></tr></tfoot></table></body>`)
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  globalThis.Event = jd.window.Event
+  globalThis.MouseEvent = jd.window.MouseEvent
+  globalThis.KeyboardEvent = jd.window.KeyboardEvent
+  const pm = await import('../src/content/picker-mode.js?t=' + Math.random())
+  pm.enterPickMode({ purpose: 'repick', taskId: 't1', initialTarget: jd.window.document.getElementById('t'), preselect: sent.preselect })
+  const cell = jd.window.document.getElementById('c0')
+  cell.dispatchEvent(new jd.window.MouseEvent('mousemove', { bubbles: true }))
+  cell.dispatchEvent(new jd.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+  jd.window.document.querySelector('[data-af-menu-item="done"]').dispatchEvent(new jd.window.MouseEvent('click', { bubbles: true }))
+  const picked = c.__calls.filter(x => x.api === 'runtime.sendMessage').map(x => x.args[0]).filter(m => m?.type === 'PICKED').pop()
+  assert.ok(picked, '要送出 PICKED')
+  assert.deepEqual(picked.picks[0].block.exclude, [TOTAL])
+})
+
 // ---- 重選：exclude 以新的為準、skip 從舊任務保回來、key 不變 ----
 
 test('多值重選：排除清單改了仍是同一個值（key 與名稱不變），exclude 換成新的、skip 留著', async () => {

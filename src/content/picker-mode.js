@@ -52,6 +52,11 @@ let pickMode = 'cell', cellIndex = null, colIndex = null, rowIndex = null, curre
 let selectedList = [], maxPicks = 100, limitReached = false, headerChangedNotice = false
 // 每格各一個值後是否處於可去頭去尾的狀態
 let trimReady = false
+// 建立整欄值時自動排除了幾列表尾，等那個值真的加進清單（addPick 成功）才說出來
+let pendingFooterNotice = 0
+function footerNotice(added) {
+  if (added > 0) toolbarNotice = `已自動排除表尾 ${added} 列（合計），右鍵可取消`
+}
 // 非表格元素被「點一下鎖定」後不再跟著滑鼠跑（檔案總管點一下選取的習慣）
 let lockedEl = null
 // 帶 preselect 進來的多個已選值，第一次「點一下取代」只提示、再點一次才真的換掉
@@ -313,12 +318,13 @@ function resolveHeaderTarget(target, tableEl) {
 
 // 把滑鼠下的位置換算成「點下去會選到什麼」，點擊與雙擊共用同一份
 function candidateAt(target) {
+  // 候選值只記待提示數：點下去可能是 Ctrl 取消、或與已選重複，那時不能說「已自動排除表尾」
+  pendingFooterNotice = 0
   if (!currentTargetEl || !isTableMode(currentTargetEl)) return null
   const head = resolveHeaderTarget(target, currentTargetEl)
   if (head) {
     const block = { axis: head.axis, index: head.index, headerText: head.headerText }
-    const added = withFooterExclude(block, currentTargetEl)
-    if (added > 0) toolbarNotice = `已自動排除表尾 ${added} 列（合計），右鍵可取消`
+    pendingFooterNotice = withFooterExclude(block, currentTargetEl)
     return { block }
   }
   const info = resolveCell(target, currentTargetEl)
@@ -326,8 +332,7 @@ function candidateAt(target) {
   if (pickMode === 'col') {
     const block = { axis: 'col', index: info.cIdx, headerText: columnHeaders(currentTargetEl)[info.cIdx] || '' }
     putInner(block, info.inner)
-    const added = withFooterExclude(block, currentTargetEl)
-    if (added > 0) toolbarNotice = `已自動排除表尾 ${added} 列（合計），右鍵可取消`
+    pendingFooterNotice = withFooterExclude(block, currentTargetEl)
     return { block }
   }
   if (pickMode === 'row') {
@@ -1628,8 +1633,7 @@ function handleMenuAction(action) {
       const cIdx = cellInfo ? cellInfo.cIdx : (colIndex !== null ? colIndex : (currentCellIndex() !== null ? currentCellIndex() : 0))
       const block = { axis: 'col', index: cIdx, headerText: columnHeaders(tableEl)[cIdx] || '' }
       putInner(block, inner)
-      const added = withFooterExclude(block, tableEl)
-      if (added > 0) toolbarNotice = `已自動排除表尾 ${added} 列（合計），右鍵可取消`
+      pendingFooterNotice = withFooterExclude(block, tableEl)
       addPick({ block })
       applyPickedMarks(tableEl)
       if (isSingleRowNestedTable(tableEl)) {
@@ -1680,6 +1684,8 @@ function handleMenuAction(action) {
         }
         delete newBlock.exclude
         putExclude(newBlock, currentExcludes)
+        // 排除也是改動：留著快照的話 Ctrl+Z 會跳回排除之前，連這次的排除一起丟掉
+        clearUndoSnapshot()
         selectedList = selectedList.slice()
         selectedList[pickIdx] = { ...oldPick, block: newBlock }
         applyPickedMarks(tableEl)
@@ -1734,6 +1740,8 @@ function samePick(a, b) {
 // 加入一個值：去重與上限的判斷只有這一份，所有加選路徑都走它
 function addPick(pick) {
   trimReady = false
+  const footer = pendingFooterNotice
+  pendingFooterNotice = 0
   // 任何加選都讓復原快照失效（取代之後又加了東西，就沒有「上一步」可回了）
   clearUndoSnapshot()
   if (selectedList.some(p => samePick(p, pick))) return false
@@ -1742,6 +1750,7 @@ function addPick(pick) {
     return false
   }
   selectedList.push(pick)
+  if (pick.block) footerNotice(footer)
   if (!pickedTableEl && currentTargetEl && isTableMode(currentTargetEl)) pickedTableEl = currentTargetEl
   return true
 }
@@ -2439,8 +2448,8 @@ function upgradeLastPickTo(mode) {
   const block = { axis, index, headerText }
   putInner(block, last.cell.inner)
   // 單格升級成整欄也是「建立」整欄值：表尾合計照樣預設排除（整列不動）
-  const added = withFooterExclude(block, judgeEl)
-  if (added > 0) toolbarNotice = `已自動排除表尾 ${added} 列（合計），右鍵可取消`
+  // 升級不經 addPick（是取代最後一項），直接說
+  footerNotice(withFooterExclude(block, judgeEl))
   const upgraded = { block }
   const previous = takeUndoSnapshot(selectedList, pickedTableEl)
   if (selectedList.some(p => samePick(p, upgraded))) {
@@ -2810,6 +2819,9 @@ export function exitPickMode(opts = {}) {
   panelBodyEl = null
   panelDoneEl = null
   panelUndoEl = null
+  panelTrimHeadEl = null
+  panelTrimTailEl = null
+  pendingFooterNotice = 0
   panelCorner = 'right'
   panelAvoidLatched = false
   // 這兩個漏清會讓下一次選取沿用上一次的預選、以及舊的表格列欄數快取
