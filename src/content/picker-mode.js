@@ -10,8 +10,10 @@ import {
   // 「哪些列／格屬於這張表」的判準只有 shared/table.js 一份（AF-10 作業 D）：
   // 這裡以原本的區域名稱引入，呼叫端一律不變
   CELL_SELECTOR,
-  tableOf, isHeaderCell,
+  tableOf, cellOf, isHeaderCell,
   cssGridRowsOf,
+  gridIndexOf, cellAtGridIndex,
+  innerPathOf, resolveInner, hasInner, resolveInnerAt,
   tableRowsOf as getTableRows,
   rowCellsOf as getRowCells,
   isHeaderRowOf as isHeaderRow
@@ -68,6 +70,12 @@ let titledEls = []
 let reduceMotion = false
 // 已選的值屬於哪一張表格：滑鼠漂出表格不清空，換到另一張表格才清
 let pickedTableEl = null
+// 明確選定的表要鎖（按 ↑ / ↓ 選定之表格，滑鼠移動不覆寫）
+let deliberateTableEl = null
+// 當前滑鼠 hover 的元素（Enter 快速路徑與子單位判定使用）
+let currentHoverEl = null
+// 當前 hover 格子的子路徑（標示與切換模式使用）
+let currentInner = null
 let originalUserSelect = '', dragStart = null, isDragging = false, suppressClick = false, menuTargetContext = null
 
 // detectKind 會掃整棵子樹，而滑鼠每移動一格都要問一次，因此記住最後一次的結果
@@ -106,23 +114,24 @@ function upgradeTarget(el, opts = {}) {
   if (cell) upgraded = tableOf(cell)
   if (!upgraded) upgraded = tableOf(el)
   // 找不到任何表格＝滑鼠落在頁面的別處（往右上角工具列移動途中經過的段落、空白）。
-  // 已經選了值的時候不換目標：換掉的話工具列三段會立刻反灰、hover 標示被清掉，
+  // 已經選了值或明確選定表格時不換目標：換掉的話工具列三段會立刻反灰、hover 標示被清掉，
   // 使用者根本走不到工具列去改「單格／整欄／整列」——這就是 P4 回饋的根因。
+  const anchor = (selectedList.length > 0 && pickedTableEl) ? pickedTableEl : deliberateTableEl
   if (!upgraded) {
-    if (!opts.deliberate && selectedList.length > 0 && pickedTableEl) return pickedTableEl
+    if (!opts.deliberate && anchor) return anchor
     return el
   }
   // 擷取端（shared/table.js 的 parseTable / getDataRows）對純包裝的外層表會鑽到內層，
   // 選取端不跟著鑽的話，索引以外層算、值以內層取，會靜默抓到別一格（AF-10 作業 D）
   upgraded = innermostTable(upgraded)
-  // 已經選了值就鎖在那張表（AF-10 作業 C）：
-  // 巢狀內外層是「同一張表的事」，鎖回已選那張（只擋一個方向的話，內層已選後
+  // 已經選了值或明確選定表格就鎖在那張表（AF-10 作業 C）：
+  // 巢狀內外層是「同一張表的事」，鎖回已選或選定那張（只擋一個方向的話，內層已選後
   // Ctrl 點外層格子會混進另一張表的索引，再用內層 locator 送出）；
   // **另一張不相干的表**才把目標換過去，讓使用者看得到「可以改點這張」——
   // 但換不換得成要等他真的點下去（滑鼠路過不算）。
-  if (!opts.deliberate && selectedList.length > 0 && pickedTableEl && upgraded !== pickedTableEl &&
-      (pickedTableEl.contains(upgraded) || upgraded.contains(pickedTableEl))) {
-    return pickedTableEl
+  if (!opts.deliberate && anchor && upgraded !== anchor &&
+      (anchor.contains(upgraded) || upgraded.contains(anchor))) {
+    return anchor
   }
   return upgraded
 }
@@ -135,6 +144,47 @@ function resolveDataRows(tableEl) {
   }
   // CSS 假表格的列判準也走 shared/table.js 那一份（選取端與解析端不得各寫一份）
   return cssGridRowsOf(tableEl)
+}
+
+// 元素是否直接擁有非空白文字節點
+function ownsText(el) {
+  if (!el || !el.childNodes) return false
+  for (let i = 0; i < el.childNodes.length; i++) {
+    const node = el.childNodes[i]
+    if (node.nodeType === 3 && node.textContent.trim() !== '') {
+      return true
+    }
+  }
+  return false
+}
+
+// 取得複合格內的子單位元素（非複合格或無子單位回 null）
+function subUnitOf(outerCell, el) {
+  if (!outerCell || !el || outerCell === el || !outerCell.contains(el)) return null
+  if (cellWrapsTable(outerCell)) {
+    const sub = cellOf(el)
+    if (sub && sub !== outerCell && outerCell.contains(sub)) {
+      return sub
+    }
+    return null
+  }
+  const textDescendants = Array.from(outerCell.querySelectorAll('*')).filter(ownsText)
+  if (textDescendants.length >= 2) {
+    let curr = el
+    while (curr && curr !== outerCell) {
+      if (ownsText(curr)) return curr
+      curr = curr.parentElement
+    }
+  }
+  return null
+}
+
+// 依網格欄索引與子路徑取得元素（選取端標示與取值共用）
+function targetAtGrid(row, c, inner) {
+  if (hasInner(inner)) {
+    return resolveInnerAt(row, c, inner).target
+  }
+  return cellAtGridIndex(row, c)
 }
 
 // 解析目標所在的資料列與資料欄索引
@@ -162,13 +212,21 @@ function resolveCell(target, tableEl) {
     cell = Array.from(row.children || []).find(c => c === target || c.contains(target))
     if (!cell) return null
   }
-  const cellsInRow = getRowCells(row)
-  let cIdx = cellsInRow.indexOf(cell)
+  let cIdx = gridIndexOf(row, cell)
   if (cIdx < 0) cIdx = null
   let rIdx = dataRows.indexOf(row)
   if (rIdx < 0) rIdx = null
   if (rIdx === null || cIdx === null) return null
-  return { row, cell, rIdx, cIdx, dataRows }
+  const result = { row, cell, rIdx, cIdx, dataRows }
+  const subEl = subUnitOf(cell, target)
+  if (subEl) {
+    const inner = innerPathOf(cell, subEl)
+    if (inner && inner.length > 0) {
+      result.subEl = subEl
+      result.inner = inner
+    }
+  }
+  return result
 }
 
 // 會挑多個值的用途：新任務與重選。前置動作與登入一次只選一個元素，維持點一下就送出。
@@ -184,11 +242,10 @@ function resolveHeaderTarget(target, tableEl) {
   if (!cell || !cellBelongsToTable(cell, tableEl) || !isHeaderCell(cell)) return null
   const row = cell.closest('tr, [role="row"]')
   if (!row || !tableEl.contains(row)) return null
-  const cells = getRowCells(row)
-  const idx = cells.indexOf(cell)
-  if (idx < 0) return null
   if (isHeaderRow(row)) {
-    return { axis: 'col', index: idx, headerText: columnHeaders(tableEl)[idx] || (cell.textContent || '').trim() }
+    const cIdx = gridIndexOf(row, cell)
+    if (cIdx < 0) return null
+    return { axis: 'col', index: cIdx, headerText: columnHeaders(tableEl)[cIdx] || (cell.textContent || '').trim() }
   }
   const dataRows = resolveDataRows(tableEl)
   const rIdx = dataRows.indexOf(row)
@@ -204,12 +261,16 @@ function candidateAt(target) {
   const info = resolveCell(target, currentTargetEl)
   if (!info) return null
   if (pickMode === 'col') {
-    return { block: { axis: 'col', index: info.cIdx, headerText: columnHeaders(currentTargetEl)[info.cIdx] || '' } }
+    const block = { axis: 'col', index: info.cIdx, headerText: columnHeaders(currentTargetEl)[info.cIdx] || '' }
+    putInner(block, info.inner)
+    return { block }
   }
   if (pickMode === 'row') {
-    return { block: { axis: 'row', index: info.rIdx, headerText: info.row ? rowHeader(info.row) : '' } }
+    const block = { axis: 'row', index: info.rIdx, headerText: info.row ? rowHeader(info.row) : '' }
+    putInner(block, info.inner)
+    return { block }
   }
-  return makeCellPick(info.rIdx, info.cIdx, currentTargetEl, info.dataRows)
+  return makeCellPick(info.rIdx, info.cIdx, currentTargetEl, info.dataRows, info.inner)
 }
 
 // 清除所有標記為待選之表格格子
@@ -227,17 +288,19 @@ function clearMarkedCells(doc) {
 }
 
 // 標示待選格、欄或列之資料格
-function markCells(cell, dataRows, row, mode, cIdx) {
+function markCells(cell, dataRows, row, mode, cIdx, inner) {
   clearMarkedCells(document)
   if (mode === 'cell') {
-    if (cell && !isHeaderCell(cell)) {
-      cell.setAttribute('data-af-cell', '')
-      cell.style.outline = `2px solid ${COLORS.warn}`
-      cell.style.transition = markTransition()
+    const subEl = (cell && currentHoverEl) ? subUnitOf(cell, currentHoverEl) : null
+    const targetCell = subEl || cell
+    if (targetCell && !isHeaderCell(targetCell)) {
+      targetCell.setAttribute('data-af-cell', '')
+      targetCell.style.outline = `2px solid ${COLORS.warn}`
+      targetCell.style.transition = markTransition()
     }
   } else if (mode === 'col' && cIdx !== null && cIdx >= 0 && dataRows) {
     for (const dRow of dataRows) {
-      const targetCell = getRowCells(dRow)[cIdx]
+      const targetCell = targetAtGrid(dRow, cIdx, inner)
       if (targetCell && !isHeaderCell(targetCell)) {
         targetCell.setAttribute('data-af-cell', '')
         targetCell.style.outline = `2px solid ${COLORS.warn}`
@@ -245,9 +308,11 @@ function markCells(cell, dataRows, row, mode, cIdx) {
     }
   } else if (mode === 'row' && row) {
     for (const c of getRowCells(row)) {
-      if (!isHeaderCell(c)) {
-        c.setAttribute('data-af-cell', '')
-        c.style.outline = `2px solid ${COLORS.warn}`
+      const idx = gridIndexOf(row, c)
+      const targetCell = targetAtGrid(row, idx, inner)
+      if (targetCell && !isHeaderCell(targetCell)) {
+        targetCell.setAttribute('data-af-cell', '')
+        targetCell.style.outline = `2px solid ${COLORS.warn}`
       }
     }
   }
@@ -302,8 +367,7 @@ function applyPickedMarks(tableEl) {
     if (pick.cell) {
       const row = dataRows[pick.cell.row.index]
       if (row) {
-        const cells = getRowCells(row)
-        const cell = cells[pick.cell.col.index]
+        const cell = targetAtGrid(row, pick.cell.col.index, pick.cell.inner)
         if (cell && !isHeaderCell(cell)) {
           cell.setAttribute('data-af-picked', '')
           if (!cell.hasAttribute('data-af-cell')) {
@@ -314,8 +378,7 @@ function applyPickedMarks(tableEl) {
     } else if (pick.block) {
       if (pick.block.axis === 'col') {
         for (const row of dataRows) {
-          const cells = getRowCells(row)
-          const cell = cells[pick.block.index]
+          const cell = targetAtGrid(row, pick.block.index, pick.block.inner)
           if (cell && !isHeaderCell(cell)) {
             cell.setAttribute('data-af-picked', '')
             if (!cell.hasAttribute('data-af-cell')) {
@@ -326,8 +389,10 @@ function applyPickedMarks(tableEl) {
       } else if (pick.block.axis === 'row') {
         const row = dataRows[pick.block.index]
         if (row) {
-          for (const cell of getRowCells(row)) {
-            if (!isHeaderCell(cell)) {
+          for (const c of getRowCells(row)) {
+            const idx = gridIndexOf(row, c)
+            const cell = targetAtGrid(row, idx, pick.block.inner)
+            if (cell && !isHeaderCell(cell)) {
               cell.setAttribute('data-af-picked', '')
               if (!cell.hasAttribute('data-af-cell')) {
                 cell.style.outline = `2px solid ${COLORS.primary}`
@@ -839,6 +904,8 @@ function setTarget(el) {
   // 使用者只是要把游標移到右上角工具列，途中經過別的表格就全沒了。
   // 現在換表一律由「點另一張表的格子」觸發（onClick 的表格分支），而且留一步反悔。
   clearMarkedCells(document)
+  currentHoverEl = null
+  currentInner = null
   currentTargetEl = el; currentDataRows = []; currentRowEl = null; colIndex = null; rowIndex = null; cellIndex = null; currentCellEl = null
   if (!el) {
     if (highlightEl) highlightEl.style.display = 'none'
@@ -926,6 +993,7 @@ function markTransition() {
 
 function handleTableMouseMove(target) {
   if (!currentTargetEl || !isTableMode(currentTargetEl)) return
+  currentHoverEl = target
   // 滑鼠在表頭上：先讓使用者看到點下去會選到整欄（或整列），再決定點不點
   const head = resolveHeaderTarget(target, currentTargetEl)
   if (head) {
@@ -934,13 +1002,14 @@ function handleTableMouseMove(target) {
     if (cell) markTitle(cell, head.axis === 'col' ? '選整欄' : '選整列')
     // 記住停在表頭上這件事，Enter 的快速路徑才會選到整欄／整列而不是上一格殘留的索引
     currentCellEl = cell
+    currentInner = null
     rowIndex = null; colIndex = null; cellIndex = null
     const dataRows = resolveDataRows(currentTargetEl)
     clearMarkedCells(document)
     if (head.axis === 'col') {
-      markCells(null, dataRows, null, 'col', head.index)
+      markCells(null, dataRows, null, 'col', head.index, null)
     } else {
-      markCells(null, dataRows, dataRows[head.index], 'row', null)
+      markCells(null, dataRows, dataRows[head.index], 'row', null, null)
     }
     applyPickedMarks(currentTargetEl)
     syncNestedNotice()
@@ -951,6 +1020,8 @@ function handleTableMouseMove(target) {
   // 否則之後切換模式會把標示畫回一個滑鼠早就離開的位置
   if (!info) {
     currentCellEl = null
+    currentInner = null
+    currentHoverEl = null
     clearMarkedCells(document)
     applyPickedMarks(currentTargetEl)
     syncNestedNotice()
@@ -958,12 +1029,13 @@ function handleTableMouseMove(target) {
   }
   setCursor('cell')
   currentCellEl = info.cell
+  currentInner = info.inner || null
   colIndex = info.cIdx
   rowIndex = info.rIdx
   cellIndex = pickMode === 'row' ? rowIndex : colIndex
   currentDataRows = info.dataRows
   currentRowEl = info.row
-  markCells(currentCellEl, info.dataRows, info.row, pickMode, colIndex)
+  markCells(currentCellEl, info.dataRows, info.row, pickMode, colIndex, currentInner)
   applyPickedMarks(currentTargetEl)
   syncNestedNotice()
 }
@@ -1040,9 +1112,8 @@ function getCellText(cellSpec, tableEl) {
   const dataRows = resolveDataRows(tableEl)
   const rowEl = dataRows[cellSpec.row.index]
   if (!rowEl) return ''
-  const cells = getRowCells(rowEl)
-  const cellEl = cells[cellSpec.col.index]
-  return (cellEl && cellEl.textContent ? cellEl.textContent : '').trim()
+  const el = targetAtGrid(rowEl, cellSpec.col.index, cellSpec.inner)
+  return (el && el.textContent ? el.textContent : '').trim()
 }
 
 // 取得整欄或整列聚合的描述文字
@@ -1055,11 +1126,17 @@ function getBlockPreview(blockSpec, tableEl) {
   const idx = (blockSpec.index !== null && blockSpec.index !== undefined) ? blockSpec.index : 0
   if (isRow) {
     const rowEl = dataRows[idx]
-    n = rowEl ? getRowCells(rowEl).length : 0
+    if (rowEl) {
+      for (const cell of getRowCells(rowEl)) {
+        const c = gridIndexOf(rowEl, cell)
+        const el = targetAtGrid(rowEl, c, blockSpec.inner)
+        if (el) n++
+      }
+    }
   } else {
     for (const r of dataRows) {
-      const cells = getRowCells(r)
-      if (idx >= 0 && idx < cells.length) n++
+      const el = targetAtGrid(r, idx, blockSpec.inner)
+      if (el) n++
     }
   }
   const header = typeof blockSpec.headerText === 'string' ? blockSpec.headerText.trim() : ''
@@ -1105,37 +1182,37 @@ function confirmPick() {
         if (rowIndex !== null && colIndex !== null) {
           const dataRows = resolveDataRows(currentTargetEl)
           const row = dataRows[rowIndex]
-          picks = [{
-            cell: {
-              row: { index: rowIndex, header: row ? rowHeader(row) : '' },
-              col: { index: colIndex, header: columnHeaders(currentTargetEl)[colIndex] || '' }
-            }
-          }]
+          const cell = {
+            row: { index: rowIndex, header: row ? rowHeader(row) : '' },
+            col: { index: colIndex, header: columnHeaders(currentTargetEl)[colIndex] || '' }
+          }
+          putInner(cell, currentInner)
+          picks = [{ cell }]
         } else {
-          picks = [{
-            block: {
-              axis: 'col',
-              index: currentCellIndex() !== null ? currentCellIndex() : 0,
-              headerText: getHeaderText()
-            }
-          }]
+          const block = {
+            axis: 'col',
+            index: currentCellIndex() !== null ? currentCellIndex() : 0,
+            headerText: getHeaderText()
+          }
+          putInner(block, currentInner)
+          picks = [{ block }]
         }
       } else if (pickMode === 'row') {
-        picks = [{
-          block: {
-            axis: 'row',
-            index: rowIndex !== null ? rowIndex : (currentCellIndex() !== null ? currentCellIndex() : 0),
-            headerText: currentRowEl ? rowHeader(currentRowEl) : getHeaderText()
-          }
-        }]
+        const block = {
+          axis: 'row',
+          index: rowIndex !== null ? rowIndex : (currentCellIndex() !== null ? currentCellIndex() : 0),
+          headerText: currentRowEl ? rowHeader(currentRowEl) : getHeaderText()
+        }
+        putInner(block, currentInner)
+        picks = [{ block }]
       } else {
-        picks = [{
-          block: {
-            axis: 'col',
-            index: colIndex !== null ? colIndex : (currentCellIndex() !== null ? currentCellIndex() : 0),
-            headerText: colIndex !== null ? (columnHeaders(currentTargetEl)[colIndex] || '') : getHeaderText()
-          }
-        }]
+        const block = {
+          axis: 'col',
+          index: colIndex !== null ? colIndex : (currentCellIndex() !== null ? currentCellIndex() : 0),
+          headerText: colIndex !== null ? (columnHeaders(currentTargetEl)[colIndex] || '') : getHeaderText()
+        }
+        putInner(block, currentInner)
+        picks = [{ block }]
       }
     } else {
       picks = [{ locator: describe(currentTargetEl) }]
@@ -1363,25 +1440,48 @@ function handleMenuAction(action) {
   }
 }
 
-// 加入單一儲存格至已選清單
-function makeCellPick(r, c, tableEl, dataRows) {
-  const rows = dataRows || resolveDataRows(tableEl)
-  const row = rows[r]
-  return {
-    cell: {
-      row: { index: r, header: row ? rowHeader(row) : '' },
-      col: { index: c, header: columnHeaders(tableEl)[c] || '' }
-    }
+// 比較兩組格內子路徑是否相等（缺省、null、空陣列視為無子路徑）
+function sameInner(a, b) {
+  const hasA = hasInner(a)
+  const hasB = hasInner(b)
+  if (!hasA && !hasB) return true
+  if (!hasA || !hasB) return false
+  if (!Array.isArray(a) || !Array.isArray(b)) return false
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i]?.tag !== b[i]?.tag || a[i]?.index !== b[i]?.index) return false
   }
+  return true
 }
 
-// 判定兩個已選項是不是同一個值（儲存格比列欄索引，聚合比軸與索引）
+// pick 只在有子路徑時才帶 inner 這個鍵（不放空陣列，舊形狀零變化）
+function putInner(target, inner) {
+  if (Array.isArray(inner) && inner.length > 0) target.inner = inner
+}
+
+// 加入單一儲存格至已選清單
+function makeCellPick(r, c, tableEl, dataRows, inner) {
+  const rows = dataRows || resolveDataRows(tableEl)
+  const row = rows[r]
+  const cell = {
+    row: { index: r, header: row ? rowHeader(row) : '' },
+    col: { index: c, header: columnHeaders(tableEl)[c] || '' }
+  }
+  putInner(cell, inner)
+  return { cell }
+}
+
+// 判定兩個已選項是不是同一個值（儲存格比列欄索引與 inner，聚合比軸、索引與 inner）
 function samePick(a, b) {
   if (a.cell && b.cell) {
-    return a.cell.row.index === b.cell.row.index && a.cell.col.index === b.cell.col.index
+    return a.cell.row.index === b.cell.row.index &&
+      a.cell.col.index === b.cell.col.index &&
+      sameInner(a.cell.inner, b.cell.inner)
   }
   if (a.block && b.block) {
-    return a.block.axis === b.block.axis && a.block.index === b.block.index
+    return a.block.axis === b.block.axis &&
+      a.block.index === b.block.index &&
+      sameInner(a.block.inner, b.block.inner)
   }
   return false
 }
@@ -1584,6 +1684,10 @@ function onMouseMove(event) {
   if (lockedEl) return
 
   const upgraded = upgradeTarget(target)
+  if (deliberateTableEl && isTableMode(upgraded) &&
+      !deliberateTableEl.contains(upgraded) && !upgraded.contains(deliberateTableEl)) {
+    deliberateTableEl = null
+  }
   if (upgraded !== currentTargetEl) {
     backStack = []
     setTarget(upgraded)
@@ -1617,8 +1721,8 @@ function onKeyDown(event) {
     if (!currentTargetEl) return
     event.preventDefault()
     // 還沒選就按 Enter：把滑鼠停著的那一個選起來再送（鍵盤使用者不必先點一下）
-    if (selectedList.length === 0 && isTableMode(currentTargetEl) && currentCellEl) {
-      const candidate = candidateAt(currentCellEl)
+    if (selectedList.length === 0 && isTableMode(currentTargetEl) && (currentHoverEl || currentCellEl)) {
+      const candidate = candidateAt(currentHoverEl || currentCellEl)
       if (candidate) addPick(candidate)
     }
     confirmPick()
@@ -1685,7 +1789,7 @@ function onKeyDown(event) {
 
         addCellPick(newR, newC, dataRows)
         applyPickedMarks(currentTargetEl)
-        markCells(currentCellEl, dataRows, currentRowEl, pickMode, colIndex)
+        markCells(currentCellEl, dataRows, currentRowEl, pickMode, colIndex, currentInner)
         updatePanel(panelEl, currentTargetEl)
       }
     }
@@ -1696,13 +1800,26 @@ function onKeyDown(event) {
     const anchor = frameOfProxy(currentTargetEl) || currentTargetEl
     if (anchor.parentElement) {
       // `↑` 是使用者明確要換目標（滑鼠路過才需要鎖表保護），不套鎖表
-      backStack.push(currentTargetEl); setTarget(upgradeTarget(anchor.parentElement, { deliberate: true }))
+      backStack.push(currentTargetEl)
+      const nextTarget = upgradeTarget(anchor.parentElement, { deliberate: true })
+      setTarget(nextTarget)
+      if (isTableMode(nextTarget)) {
+        deliberateTableEl = nextTarget
+      } else {
+        deliberateTableEl = null
+      }
       relockAfterMove()
     }
   } else if (event.key === 'ArrowDown') {
     event.preventDefault()
     if (backStack.length > 0) {
-      setTarget(backStack.pop())
+      const nextTarget = backStack.pop()
+      setTarget(nextTarget)
+      if (isTableMode(nextTarget)) {
+        deliberateTableEl = nextTarget
+      } else {
+        deliberateTableEl = null
+      }
       relockAfterMove()
     }
   } else if (event.key === 'Tab') {
@@ -1716,7 +1833,7 @@ function onKeyDown(event) {
         pickMode = availableModes[nextIdx]
         cellIndex = pickMode === 'row' ? rowIndex : colIndex
         updateToolbar()
-        markCells(currentCellEl, currentDataRows, currentRowEl, pickMode, colIndex)
+        markCells(currentCellEl, currentDataRows, currentRowEl, pickMode, colIndex, currentInner)
         applyPickedMarks(currentTargetEl)
         updatePanel(panelEl, currentTargetEl)
       }
@@ -1804,7 +1921,7 @@ function onClick(event) {
       upgradeLastPickTo(mode)
       updateToolbar()
       if (currentTargetEl && isTableMode(currentTargetEl)) {
-        markCells(currentCellEl, currentDataRows, currentRowEl, pickMode, colIndex)
+        markCells(currentCellEl, currentDataRows, currentRowEl, pickMode, colIndex, currentInner)
         applyPickedMarks(currentTargetEl)
       }
       if (panelEl) updatePanel(panelEl, currentTargetEl)
@@ -1969,8 +2086,14 @@ function lastCellPick() {
 
 // 兩個值是不是同一個（面板提示用的字串鍵，判定本身仍走 samePick）
 function pickKey(pick) {
-  if (pick.cell) return `c:${pick.cell.row.index},${pick.cell.col.index}`
-  if (pick.block) return `b:${pick.block.axis},${pick.block.index}`
+  if (pick.cell) {
+    const base = `c:${pick.cell.row.index},${pick.cell.col.index}`
+    return hasInner(pick.cell.inner) ? `${base}:${JSON.stringify(pick.cell.inner)}` : base
+  }
+  if (pick.block) {
+    const base = `b:${pick.block.axis},${pick.block.index}`
+    return hasInner(pick.block.inner) ? `${base}:${JSON.stringify(pick.block.inner)}` : base
+  }
   return 'x'
 }
 
@@ -1992,7 +2115,9 @@ function upgradeLastPickTo(mode) {
   // 這裡卻看 hover 目標的話，會出現「按鈕亮著、按下去卻沒反應」
   const index = axis === 'row' ? last.cell.row.index : last.cell.col.index
   const headerText = (axis === 'row' ? last.cell.row.header : last.cell.col.header) || ''
-  const upgraded = { block: { axis, index, headerText } }
+  const block = { axis, index, headerText }
+  putInner(block, last.cell.inner)
+  const upgraded = { block }
   const previous = takeUndoSnapshot(selectedList, pickedTableEl)
   if (selectedList.some(p => samePick(p, upgraded))) {
     // 已經選過同一欄／列了，只要把那一格拿掉就好
@@ -2337,6 +2462,9 @@ export function exitPickMode(opts = {}) {
   selectedList = []
   // 這一個漏清會讓下一次選取沿用上一張表的 locator，配上新表的列欄索引送出去（AF-7 體檢）
   pickedTableEl = null
+  deliberateTableEl = null
+  currentHoverEl = null
+  currentInner = null
   maxPicks = 20
   limitReached = false
   headerChangedNotice = false
