@@ -1,5 +1,8 @@
 // AutoFetcher 數值擷取策略鏈與後處理
-import { parseTable, rowHeader, getDataRows, isAnchorText } from './table.js'
+import {
+  parseTable, rowHeader, getDataRows, isAnchorText,
+  hasInner, resolveInnerAt, cssGridRowsOf
+} from './table.js'
 import { aggregateCells } from './aggregate.js'
 
 const STRATEGY_ORDER = ['auto', 'regex', 'attr', 'child', 'label']
@@ -225,6 +228,13 @@ function labelOf(rowLoc, colLoc, rowHeaders, colHeaders) {
   return text || undefined
 }
 
+// 依格內子路徑取指定列欄的文字；「對應到哪個元素」的判定唯一一份在 table.js 的 resolveInnerAt
+function resolveInnerCell(dataRows, r, c, inner) {
+  const { cell, target } = resolveInnerAt(dataRows ? dataRows[r] : null, c, inner)
+  if (!target) return { ok: false, cell }
+  return { ok: true, raw: (target.textContent || '').trim(), cell }
+}
+
 // 從已解析的表格中擷取單一儲存格數值
 function extractCellFromTable(table, dataRows, cellSpec, specOpts = {}) {
   if (!cellSpec) {
@@ -255,7 +265,25 @@ function extractCellFromTable(table, dataRows, cellSpec, specOpts = {}) {
   }
 
   const status = (colLoc.status === 'fallback' || rowLoc.status === 'fallback') ? 'fallback' : 'ok'
-  const raw = rowData[targetCol]
+
+  let raw
+  if (hasInner(cellSpec.inner)) {
+    const resolved = resolveInnerCell(dataRows, targetRow, targetCol, cellSpec.inner)
+    if (!resolved.ok) {
+      let message = '這一格裡找不到原本的位置'
+      if (resolved.cell) {
+        const text = (resolved.cell.textContent || '').trim()
+        message = text
+          ? `這一格裡找不到原本的位置；目前這一格的文字是：${text.slice(0, 40)}`
+          : '這一格裡找不到原本的位置；目前這一格是空的'
+      }
+      return { ok: false, error: 'not_found', message }
+    }
+    raw = resolved.raw
+  } else {
+    raw = rowData[targetCol]
+  }
+
   const parsed = parseNumber(raw)
   if (parsed === null) {
     return { ok: false, error: 'parse_error', raw }
@@ -294,6 +322,9 @@ function extractCrossCell(table, block, specOpts, dataRows) {
     ? { row: { index: block.index, header: block.headerText }, col: { pos: block.pos } }
     // 整欄 + 位置：欄照原本的表頭定位，列用位置
     : { row: { pos: block.pos }, col: { index: block.index, header: block.headerText } }
+  if (hasInner(block.inner)) {
+    cellSpec.inner = block.inner
+  }
   const res = extractCellFromTable(table, dataRows || [], cellSpec, specOpts)
   if (!res.ok) return res
   return { ...res, used: 1, skipped: 0, strategyUsed: 'block', partial: Boolean(table.partial) }
@@ -305,12 +336,15 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
   let targetIndex = block.index
   let status = 'ok'
   let values = []
+  let unresolved = 0
 
   // 這一軸挑好了之後，另一軸還帶著位置＝只要那一格，不是整欄整列聚合
   const crossPos = positionOf(block)
   if (crossPos) {
     return extractCrossCell(table, block, specOpts, dataRows)
   }
+
+  const withInner = hasInner(block.inner)
 
   if (block.axis === 'row') {
     // 列模式：欄與列同一套規則，列標題對得上照用、搬家跟著標題走（AF-8 修：原本只吃 index）
@@ -325,7 +359,23 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
     if (typeof targetIndex !== 'number' || targetIndex < 0 || targetIndex >= table.cells.length) {
       return { ok: false, error: 'not_found' }
     }
-    values = table.cells[targetIndex]
+
+    if (withInner) {
+      const colCount = (table.cells[targetIndex] || []).length
+      for (let c = 0; c < colCount; c++) {
+        const resolved = resolveInnerCell(dataRows, targetIndex, c, block.inner)
+        if (resolved.ok) {
+          values.push(resolved.raw)
+        } else {
+          unresolved++
+        }
+      }
+      if (values.length === 0) {
+        return { ok: false, error: 'not_found', message: `這一列裡找不到原本的位置（${unresolved} 格都找不到）` }
+      }
+    } else {
+      values = table.cells[targetIndex]
+    }
   } else {
     // 欄模式（col）：改用 locateByHeader，判準只維護一份
     const colLoc = locateByHeader(table.headers || [], {
@@ -336,16 +386,30 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
     targetIndex = colLoc.index
     status = colLoc.status
 
-    // 取值：每一列的第 targetIndex 格
-    // 超出範圍：若所有列都沒有那一格，回 not_found
-    values = []
-    for (const row of table.cells) {
-      if (targetIndex >= 0 && targetIndex < row.length) {
-        values.push(row[targetIndex])
+    if (withInner) {
+      for (let r = 0; r < table.cells.length; r++) {
+        const resolved = resolveInnerCell(dataRows, r, targetIndex, block.inner)
+        if (resolved.ok) {
+          values.push(resolved.raw)
+        } else {
+          unresolved++
+        }
       }
-    }
-    if (values.length === 0) {
-      return { ok: false, error: 'not_found' }
+      if (values.length === 0) {
+        return { ok: false, error: 'not_found', message: `這一欄裡找不到原本的位置（${unresolved} 格都找不到）` }
+      }
+    } else {
+      // 取值：每一列的第 targetIndex 格
+      // 超出範圍：若所有列都沒有那一格，回 not_found
+      values = []
+      for (const row of table.cells) {
+        if (targetIndex >= 0 && targetIndex < row.length) {
+          values.push(row[targetIndex])
+        }
+      }
+      if (values.length === 0) {
+        return { ok: false, error: 'not_found' }
+      }
     }
   }
 
@@ -380,7 +444,7 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
     status,
     strategyUsed: 'block',
     used: agg.used,
-    skipped: agg.skipped,
+    skipped: agg.skipped + unresolved,
     partial: Boolean(table.partial)
   }
 }
@@ -404,7 +468,10 @@ export function extractValue(el, spec = {}) {
     if (!table.cells || table.cells.length === 0) {
       return { ok: false, error: 'not_found' }
     }
-    const dataRows = getDataRows(el)
+    let dataRows = getDataRows(el)
+    if (dataRows.length === 0 && table.source === 'grid') {
+      dataRows = cssGridRowsOf(el)
+    }
 
     // (b) opts.fields: 一次抓多個值
     if (Array.isArray(opts.fields)) {

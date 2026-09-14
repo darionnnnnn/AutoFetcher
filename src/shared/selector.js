@@ -1,6 +1,6 @@
 // AutoFetcher 四層選擇器：產生與解析
 // 計算元素在同層同標籤兄弟節點中的序號（從 1 起算）
-function getTagIndex(element) {
+export function getTagIndex(element) {
   let index = 1;
   let sibling = element.previousElementSibling;
   const tag = element.tagName.toLowerCase();

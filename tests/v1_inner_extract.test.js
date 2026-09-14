@@ -168,6 +168,33 @@ test('A 單格 inner 解析不到：not_found，訊息帶那一格現在的文�
   assert.ok(String(res.message).includes('PORT:443'), `訊息要帶那一格現在的文字：${res.message}`)
 })
 
+test('A 單格 inner 解析不到、而那一格是空的：訊息仍以「找不到原本的位置」開頭', () => {
+  // 合計列的第 1 格是空的 <td></td>
+  const res = extractValue(monitorTable(), {
+    mode: 'block',
+    block: { cell: { row: { index: 7, header: '' }, col: { index: 0, header: '' }, inner: SMALL_TABLE_2ND } }
+  })
+  assert.equal(res.error, 'not_found')
+  assert.equal(res.message, '這一格裡找不到原本的位置；目前這一格是空的')
+})
+
+test('A resolveInnerAt 是選取端與擷取端共用的唯一判定：起點不在這一欄的格子不算', async () => {
+  const { resolveInnerAt, hasInner } = await import('../src/shared/table.js')
+  const rows = getDataRows(monitorTable())
+  const host = resolveInnerAt(rows[HOST_ROW], VALUE_COL, SMALL_TABLE_2ND)
+  assert.equal(host.target?.textContent.trim(), 'MAX:462')
+  const publicIp = resolveInnerAt(rows[8], VALUE_COL, SMALL_TABLE_2ND)
+  assert.deepEqual(publicIp, { cell: null, target: null }, 'colspan=4 的 PublicIP 列起點在第 1 欄')
+  const port = resolveInnerAt(rows[1], VALUE_COL, SMALL_TABLE_2ND)
+  assert.equal(port.cell?.textContent.trim(), 'PORT:443')
+  assert.equal(port.target, null)
+  assert.equal(resolveInnerAt(null, 0, SMALL_TABLE_2ND).target, null)
+  assert.deepEqual([undefined, null, [], [{ tag: 'td' }], 'x'].map(hasInner), [false, false, false, true, true])
+  const extractSrc = readFileSync(new URL('../src/shared/extract.js', import.meta.url), 'utf8')
+  assert.equal((extractSrc.match(/cellAtGridIndex|gridIndexOf/g) || []).length, 0,
+    'extract.js 不得自己組「列＋欄＋起點」判定，一律走 resolveInnerAt')
+})
+
 test('A 整欄 inner 一格都解析不到：not_found，訊息說幾格都找不到', () => {
   const table = el('<table><tr><td>1</td></tr><tr><td>2</td></tr><tr><td>3</td></tr></table>')
   const res = extractValue(table, {
