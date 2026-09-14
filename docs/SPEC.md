@@ -817,7 +817,9 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
       歷史頁明細「排除格數 (excluded)」、立即測試預覽、白話描述。
     - **規格比對**：`pickSpecOf` 抄 `exclude`（經 `putExclude`）、不抄 `skip`；`sameSpec` 的 `stripPos` 同時剝掉 `block.exclude` 與 `block.skip`——
       排除清單不是值的身分，重選改了排除仍是同一個值、同一條序列。重選時 `exclude` **以這次選的為準**，`skip` 與 `aggregate` 一樣從舊任務保回來（新加的 block 值也套上）。
-    - **白話描述**只在 `describe.js` 的 `exclusionNote` 一份：整欄單位「列」、整列「格」、多值「筆」（多值只說 skip）；
+    - **白話描述**只在 `describe.js` 一份（`exclusionNote`；句中那一段由 `exclusionOfTarget` 產生，`describeTarget` 自己也經它）。
+      **任務頁與 popup 也看得到**：已存任務經 `targetOfTask` 轉成描述輸入，任務頁模式欄在原本的短字後接 `exclusionOfTarget`、`title` 放 `describeTarget` 完整句，popup 任務名稱的 `title` 放完整句。
+      單位與位置規則：整欄單位「列」、整列「格」、多值「筆」（多值只說 skip）；
       該軸用位置定位時不說；沒有設定時句子與改動前一字不差。
     - **數字＋文字**：聚合只取數字是既有行為——`parseNumber` 取第一段數字片段（`MAX:427` → 427），純文字（`合計`、`—`）計入 `skipped`、
       不進聚合，五種聚合方式一致（`avg` 只除以解析得到的格數）。已知代價：`第2季` 會解析成 2。
@@ -929,6 +931,8 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
   單值整欄的逐欄組裝要帶上 pick 的 `exclude`(多值走展開,本來就留得住)。**換目標時 `render` 會再跑一次**:由 pick 建 `currentBlock` 不得把舊目標的 `exclude`、`inner`、`skip`、`pos` 併進來(新 pick 沒帶那個鍵就會殘留,排除列套到新表錯誤的列上)。
   值清單的 `[data-field-where]` 接「(排除 K 列)」／「(排除 K 格)」;位置定位下有排除清單時 `#pos-hint` 加一句「位置定位下排除不生效」;
   「立即測試」對 block 值接「(用了 U 格、略過 S 格、排除 E 格)」,排除項找不到的訊息單值寫進 `#test-note`、多值接在該行的「⚠」之後。
+  **排除項找不到時預覽是警告色**(`#preview` 與 `#test-note` 帶 `data-state="warn"`,樣式用 `--warn`):值抓得到,但合計可能被加進去了,
+  不能跟成功一樣是綠色;下一次測試開始時清掉警告狀態。
   **整欄的值不給選「欄定位」、整列的不給選「列定位」**(那一軸是使用者自己點的,
   留著能選但選了不生效就是一個靜默無效的設定):停用並用 `title` 說明,值一併清掉。
   **`#row-pos` / `#col-pos` 是位置定位的下拉**(依標題／第一筆／最後一筆／倒數第二筆,各有可見標籤與
@@ -940,7 +944,8 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
   (`sameSpec` 的 `stripPos`)——帶著 `pos` 去比會永遠不相等;排除清單與略過設定是值的設定不是值的身分(AF-16,見上面的 skip／exclude 段),
   重選改了排除仍是同一個值。`key` 重生就把歷史紀錄的序列切斷了。
   移除一個值只影響之後的抓取,**舊紀錄保留**(它的子序列 id 還在)。
-  儲存前 `#save-summary` 顯示「將建立 1 個任務、N 個值」。
+  儲存前 `#save-summary` 顯示「將建立 1 個任務、N 個值」;**有略過設定時接上「,略過結尾 1 列」**(白話經 `describe.js` 的 `skipNote`,單位與略過欄位標籤共用 `skipUnitOf`)——
+  略過是整個任務一份、存了就套到每個整欄整列的值,要在按儲存前說出來;欄位藏起來(改用位置定位)時不說。略過欄位與定位下拉一改就更新。
   告警列在多值任務多一個「套用到」下拉(空值 = 全部值),寫進 `alert.field`。
   「立即測試」對多值任務逐值顯示預覽。
 - 解析(`shared/table.js` 的 `parseTable`)→ 聚合(`shared/aggregate.js` 的 `aggregateCells`),

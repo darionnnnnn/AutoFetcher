@@ -183,6 +183,8 @@
     #block-summary { font-size: var(--text-xs, 12px); color: var(--text-muted); line-height: 1.4; }
     #preview[data-state="ok"] { border-color: var(--ok); color: var(--ok); }
     #preview[data-state="error"] { border-color: var(--danger); color: var(--danger); }
+    #preview[data-state="warn"] { border-color: var(--warn); color: var(--warn); }
+    #test-note[data-state="warn"] { color: var(--warn); }
     #field-list { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; counter-reset: field-row; }
     [data-field-row] { display: flex; align-items: center; gap: 6px; counter-increment: field-row; }
     /* 序號用 CSS 計數器自己算：清單是 picker.js 動態產生的，

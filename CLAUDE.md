@@ -82,7 +82,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 2102 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 2115 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -236,6 +236,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   `extract.js` 的指路訊息曾經產生後無人讀,刪掉整個函式測試全綠;`label` 只驗到回傳值,紀錄與畫面兩端零訊號。
 - **`skip`／`exclude` 的「怎樣算有、怎麼讀」只有 `shared/table.js` 的 `skipOf`／`putSkip`／`excludeOf`／`putExclude`**（AF-16）：
   擷取端、background 重選、Picker 收集表單、描述句都經它們；不得各自寫 `Number.isInteger` 判斷。
+  **「略過／排除」的白話只在 `describe.js`**：`exclusionOfTarget`（句中那一段）、`skipNote`（儲存摘要）、`targetOfTask`（已存任務轉描述輸入，任務頁與 popup 共用）。
   **`exclude` 是值的設定不是值的身分**：`sameSpec` 的 `stripPos` 要剝掉它與 `skip`，否則重選改了排除就 key 重生、歷史序列斷掉。
   **重組 `block` 物件的地方都要帶上它們**（background 的 `pickSpecOf` 與 `applyRepick` 兩條、Picker 的多值展開與單值逐欄組裝）——
   與 AF-15 `inner` 同一個坑：每一段自己都綠，規格裡就是沒有。

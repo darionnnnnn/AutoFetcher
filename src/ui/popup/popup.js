@@ -4,7 +4,7 @@ import { openPanel } from '../../shared/panel.js'
 import { MSG } from '../../shared/messages.js'
 import { seriesIdOf } from '../../shared/series-index.js'
 import { computeHealth } from '../../background/health.js'
-import { describeSchedule } from '../../shared/describe.js'
+import { describeSchedule, describeTarget, targetOfTask } from '../../shared/describe.js'
 
 let currentCtx = null
 
@@ -35,6 +35,8 @@ function renderTaskRow(task, { lastValues, nextRuns, healthMap }) {
   const nameSpan = document.createElement('span')
   nameSpan.className = 'task-name'
   nameSpan.textContent = task.name || task.id || ''
+  // 抓什麼的白話（含略過／排除）與 Picker 摘要卡、任務頁同一份
+  nameSpan.title = describeTarget(targetOfTask(task))
   mainDiv.appendChild(nameSpan)
 
   const valueSpan = document.createElement('span')

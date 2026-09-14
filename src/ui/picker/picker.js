@@ -4,7 +4,7 @@ import { DEFAULT_HOVER_HOLD_MS, DEFAULT_WAIT_TIMEOUT_MS } from '../../shared/pre
 import { MSG } from '../../shared/messages.js'
 import { getLayout, addCard } from '../../shared/layout-store.js'
 import { seriesIdOf } from '../../shared/series-index.js'
-import { describeSchedule, describeTarget, describeDashboard, numericHeaderAxis, POS_TEXT, withInnerLabel } from '../../shared/describe.js'
+import { describeSchedule, describeTarget, describeDashboard, numericHeaderAxis, POS_TEXT, withInnerLabel, skipNote } from '../../shared/describe.js'
 import { nextIntervalRun } from '../../shared/schedule-math.js'
 import { isAnchorText, putInner, skipOf, putSkip, excludeOf, putExclude } from '../../shared/table.js'
 import { download } from '../../shared/export.js'
@@ -20,6 +20,27 @@ function skipFromForm() {
   const head = Number(document.getElementById('skip-head')?.value)
   const tail = Number(document.getElementById('skip-tail')?.value)
   return skipOf({ head, tail })
+}
+
+// 整欄用「列」、整列用「格」、混著用「筆」：略過欄位的標籤與儲存摘要共用這一份
+function skipUnitOf(blockSpecs) {
+  if (blockSpecs.length > 0 && blockSpecs.every(b => b.axis === 'col')) return '列'
+  if (blockSpecs.length > 0 && blockSpecs.every(b => b.axis === 'row')) return '格'
+  return '筆'
+}
+
+// 儲存前的摘要：略過是整個任務一份、存了就套到每個整欄整列的值，要在按儲存之前說出來（白話經 describe.js）
+function updateSaveSummary() {
+  const summaryEl = document.getElementById('save-summary')
+  if (!summaryEl) return
+  const n = document.querySelectorAll('#field-list [data-field-row]').length
+  if (n < 2) {
+    summaryEl.hidden = true
+    return
+  }
+  summaryEl.hidden = false
+  const base = currentCtx?.task ? `這個任務有 ${n} 個值` : `將建立 1 個任務、${n} 個值`
+  summaryEl.textContent = base + skipNote(skipFromForm(), skipUnitOf(currentBlockSpecs()))
 }
 
 function currentBlockSpecs() {
@@ -1370,6 +1391,14 @@ function bindModeEvents() {
       el._summaryBound = true
     }
   }
+  // 略過一改，儲存摘要要跟著說（定位下拉改了會藏起略過欄位，也要重算）
+  for (const id of ['skip-head', 'skip-tail', 'row-pos', 'col-pos']) {
+    const el = document.getElementById(id)
+    if (el && !el._saveSummaryBound) {
+      el.addEventListener('change', () => updateSaveSummary())
+      el._saveSummaryBound = true
+    }
+  }
 
   const addBtn = document.getElementById('time-add')
   if (addBtn && !addBtn._timeEventsBound) {
@@ -1492,9 +1521,7 @@ function updateFieldListState() {
     aggLabel.hidden = !hasBlockField || allReplaced
     if (skipRow) skipRow.hidden = aggLabel.hidden
 
-    const allCol = blockSpecs.length > 0 && blockSpecs.every(b => b.axis === 'col')
-    const allRow = blockSpecs.length > 0 && blockSpecs.every(b => b.axis === 'row')
-    const unit = allCol ? '列' : (allRow ? '格' : '筆')
+    const unit = skipUnitOf(blockSpecs)
     const headSpan = document.querySelector('[data-skip-head-label]')
     if (headSpan) headSpan.textContent = `略過開頭（${unit}）`
     const tailSpan = document.querySelector('[data-skip-tail-label]')
@@ -1502,19 +1529,7 @@ function updateFieldListState() {
   }
   applyDefaultCardTypes()
 
-  const summaryEl = document.getElementById('save-summary')
-  if (summaryEl) {
-    if (n >= 2) {
-      summaryEl.hidden = false
-      if (currentCtx?.task) {
-        summaryEl.textContent = `這個任務有 ${n} 個值`
-      } else {
-        summaryEl.textContent = `將建立 1 個任務、${n} 個值`
-      }
-    } else {
-      summaryEl.hidden = true
-    }
-  }
+  updateSaveSummary()
 
   updateAlertRowsFields()
   updateBlockSection()
@@ -2267,7 +2282,10 @@ export async function handleTestNow() {
   const errorsEl = document.getElementById('errors')
   if (errorsEl) errorsEl.textContent = ''
   const noteAtStart = document.getElementById('test-note')
-  if (noteAtStart) noteAtStart.textContent = ''
+  if (noteAtStart) {
+    noteAtStart.textContent = ''
+    delete noteAtStart.dataset.state
+  }
   // 這一次的結果還沒出來，上一次的診斷先收起來
   setDiagAvailable(null)
   const busy = setBusy('test-now', '測試中…')
@@ -2309,7 +2327,11 @@ export async function handleTestNow() {
         if (previewEl) previewEl.textContent = val + blockCountsText(res)
       }
       if (errorsEl) errorsEl.textContent = ''
-      setPreviewState('ok')
+      // 排除項找不到：值抓得到，但合計可能被加進去了——用警告色，不是成功的綠
+      const warned = values.fields
+        ? Object.values(res.fields || {}).some(f => f && f.ok && f.message)
+        : Boolean(res.message)
+      setPreviewState(warned ? 'warn' : 'ok')
       // 這次測試是在使用者眼前這個分頁跑的，iframe 已經開著；排程是開新分頁，
       // 兩者會不一樣，成功不代表排程也會成功
       const noPreActions = !Array.isArray(values.preActions) || values.preActions.length === 0
@@ -2326,7 +2348,11 @@ export async function handleTestNow() {
       if (!values.fields && res.message) {
         notes.push(res.message)
       }
-      if (noteEl) noteEl.textContent = notes.join('\n')
+      if (noteEl) {
+        noteEl.textContent = notes.join('\n')
+        // 警告狀態只在這裡設；清除只有測試開始時那一份（不再各清一次）
+        if (!values.fields && res.message) noteEl.dataset.state = 'warn'
+      }
     } else {
       // 有解法的訊息優先：'not_found' 只說了失敗，沒說使用者能怎麼辦
       const err = res?.message || res?.error || '找不到目標元素'

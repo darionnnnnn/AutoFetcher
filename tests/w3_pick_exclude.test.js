@@ -90,6 +90,19 @@ test('先點一格再按工具列「整欄」（單格升級成整欄）也走�
   assert.deepEqual(picks[0].block.exclude, [{ index: 3, header: '合計' }])
 })
 
+test('表尾預設排除是每個整欄值各自的：取消某欄的表尾排除後，再建另一欄仍會自動排除', async () => {
+  const { c, pm, doc } = await setup()
+  enter(pm, doc)
+  menu(doc, 'c0-1', 'col')
+  menu(doc, 'f1', 'include')
+  menu(doc, 'c0-2', 'col')
+  confirm(doc)
+  const picks = lastMsg(c).picks
+  assert.equal(picks.length, 2)
+  assert.equal('exclude' in picks[0].block, false, '使用者取消的那一欄維持取消')
+  assert.deepEqual(picks[1].block.exclude, [{ index: 3, header: '合計' }], '新建的另一欄照樣預設排除表尾')
+})
+
 test('沒有 tfoot 的表：不帶 exclude 鍵、不提示', async () => {
   const { c, pm, doc } = await setup()
   enter(pm, doc, { table: 'plain' })
