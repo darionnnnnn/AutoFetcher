@@ -26,7 +26,8 @@ import {
 } from './precheck.js'
 import { injectContent } from './inject.js'
 import { locateFrame, listFrames, matchFrameByUrl } from './frames.js'
-import { isAnchorText } from '../shared/table.js'
+import { isAnchorText, putInner } from '../shared/table.js'
+import { withInnerLabel } from '../shared/describe.js'
 import { scheduleSiteCheck, runSiteCheck } from './sitecheck.js'
 import { isSuccess } from '../shared/record-status.js'
 import { parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
@@ -36,15 +37,20 @@ import { parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
 function pickSpecOf(pick) {
   // **逐欄挑，不得整包照抄**：pick 來自 content script 的訊息，多帶任何一個欄位都會進 storage、
   // 讓 `sameSpec` 的全等比對永遠對不上（key 重生、歷史序列斷掉、使用者改過的名稱被預設名蓋掉）。
+  // 格內子路徑也要挑（非空陣列才抄）：漏了它，重選會讓任務默默改回抓整格串接（AF-15）
   if (pick?.cell) {
-    return {
-      cell: {
-        row: { index: pick.cell.row?.index, header: pick.cell.row?.header ?? '' },
-        col: { index: pick.cell.col?.index, header: pick.cell.col?.header ?? '' }
-      }
+    const cell = {
+      row: { index: pick.cell.row?.index, header: pick.cell.row?.header ?? '' },
+      col: { index: pick.cell.col?.index, header: pick.cell.col?.header ?? '' }
     }
+    putInner(cell, pick.cell.inner)
+    return { cell }
   }
-  if (pick?.block) return { block: { axis: pick.block.axis, index: pick.block.index, headerText: pick.block.headerText } }
+  if (pick?.block) {
+    const block = { axis: pick.block.axis, index: pick.block.index, headerText: pick.block.headerText }
+    putInner(block, pick.block.inner)
+    return { block }
+  }
   return null
 }
 // 比對「是不是同一個值」時要忽略定位方式：重選送回來的 pick 沒有 pos，
@@ -77,10 +83,10 @@ function defaultFieldName(pick, n, pos = {}) {
       pos.rowPos ? `${POS_NAMES[pos.rowPos]}列` : '',
       pos.colPos ? `${POS_NAMES[pos.colPos]}欄` : ''
     ].filter(Boolean).join('、')
-    const base = (r && c) ? `${r} · ${c}` : (r || c || (suffix ? '值' : `值 ${n}`))
+    const base = withInnerLabel([r, c].filter(Boolean).join(' · '), pick.cell.inner) || (suffix ? '值' : `值 ${n}`)
     return suffix ? `${base}（${suffix}）` : base
   }
-  return anchorOnly(pick?.block?.headerText) || `值 ${n}`
+  return withInnerLabel(anchorOnly(pick?.block?.headerText), pick?.block?.inner) || `值 ${n}`
 }
 
 // 任務目前用的定位方式（重選新增的值要跟著它命名）

@@ -160,14 +160,14 @@ export function describeTarget(target) {
   if (t.cell) {
     const rowH = t.cell.row?.header || ''
     const colH = t.cell.col?.header || ''
-    const label = [rowH, colH].filter((x) => x !== '').join(' · ')
+    const label = withInnerLabel([rowH, colH].filter((x) => x !== '').join(' · '), t.cell.inner)
     if (label !== '') return `${where}的表格，取「${label}」這一格${posText}${note}`
     return `${where}的表格，取其中一格${posText}${note}`
   }
 
   if (t.block) {
     const axis = t.block.axis === 'row' ? '整列' : '整欄'
-    const header = t.block.headerText || ''
+    const header = withInnerLabel(t.block.headerText || '', t.block.inner)
     const agg = t.block.aggregate ? AGG_TEXT[t.block.aggregate] || '' : ''
     const aggText = agg ? `的${agg}` : ''
     if (header !== '') return `${where}的表格，取「${header}」${axis}${aggText}${posText}${note}`
@@ -189,4 +189,45 @@ export function describeDashboard(dashboardName, cardTypes) {
   const types = Array.isArray(cardTypes) ? cardTypes.map((c) => names[c]).filter(Boolean) : []
   if (types.length === 0) return `加入「${dashboardName}」，尚未選卡片型別`
   return `加入「${dashboardName}」的${types.join('、')}卡`
+}
+
+/**
+ * 格內子路徑的白話標籤。
+ * @param {Array<{tag: string, index: number}>} inner
+ * @returns {string}
+ */
+export function innerLabel(inner) {
+  if (!Array.isArray(inner) || inner.length === 0) return ''
+  for (const seg of inner) {
+    if (!seg || typeof seg !== 'object' || Array.isArray(seg)) return ''
+    if (typeof seg.tag !== 'string' || seg.tag.trim() === '') return ''
+    if (typeof seg.index !== 'number' || !Number.isInteger(seg.index) || seg.index < 1) return ''
+  }
+  const last = inner[inner.length - 1]
+  const lastTag = last.tag.toLowerCase()
+  if (lastTag === 'td' || lastTag === 'th') {
+    let lastTr = null
+    for (let i = inner.length - 2; i >= 0; i--) {
+      if (inner[i].tag && inner[i].tag.toLowerCase() === 'tr') {
+        lastTr = inner[i]
+        break
+      }
+    }
+    if (lastTr) {
+      return `小表第 ${lastTr.index} 列第 ${last.index} 格`
+    }
+  }
+  const suffix = last.index > 1 ? ` ${last.index}` : ''
+  return `內層 ${last.tag}${suffix}`
+}
+
+/**
+ * 既有的名稱文字接上格內標籤（「10.231.1.31 · PORT:443 · 小表第 1 列第 2 格」），空的略過。
+ * 七個命名與描述入口的組法只有這一份；沒有子路徑時原樣回傳 base。
+ * @param {string} base 既有的名稱文字（可為空字串）
+ * @param {unknown} inner 子路徑
+ * @returns {string}
+ */
+export function withInnerLabel(base, inner) {
+  return [base, innerLabel(inner)].filter((x) => typeof x === 'string' && x !== '').join(' · ')
 }

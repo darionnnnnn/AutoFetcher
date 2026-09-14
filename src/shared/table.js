@@ -1,4 +1,5 @@
 // AutoFetcher 表格解析（SPEC §7）：把各種表格寫法解析成二維陣列
+import { getTagIndex } from './selector.js'
 
 // 去除文字頭尾空白
 function cleanText(text) {
@@ -109,6 +110,173 @@ export function rowCellsOf(row) {
     return []
   }
   return Array.from(row.children || [])
+}
+
+// 計算儲存格在網格上的寬度：只有 TD/TH 讀 colspan，其餘一律為 1
+function cellWidth(cell) {
+  if (!cell) return 1
+  const tag = cell.tagName
+  if (tag === 'TD' || tag === 'TH') {
+    return getSpan(cell, 'colspan')
+  }
+  return 1
+}
+
+/**
+ * 取得儲存格在列展開 colspan 後的起始欄索引。
+ * @param {Element} row 列元素
+ * @param {Element} cell 儲存格元素
+ * @returns {number} 起始欄索引（從 0 起算），不在列內回 -1
+ */
+export function gridIndexOf(row, cell) {
+  if (!row || !cell) return -1
+  const cells = rowCellsOf(row)
+  let col = 0
+  for (const c of cells) {
+    if (c === cell) return col
+    col += cellWidth(c)
+  }
+  return -1
+}
+
+/**
+ * 取得展開 colspan 後落在指定欄索引的儲存格。
+ * @param {Element} row 列元素
+ * @param {number} idx 欄索引
+ * @returns {Element|null} 儲存格元素，越界或負數回 null
+ */
+export function cellAtGridIndex(row, idx) {
+  if (!row || typeof idx !== 'number' || !Number.isInteger(idx) || idx < 0) return null
+  const cells = rowCellsOf(row)
+  let col = 0
+  for (const c of cells) {
+    const width = cellWidth(c)
+    if (idx >= col && idx < col + width) return c
+    col += width
+  }
+  return null
+}
+
+/**
+ * 取得從 cell 到 target 的格內結構路徑。
+ * @param {Element} cell 起始儲存格元素
+ * @param {Element} target 目標元素
+ * @returns {{tag: string, index: number}[]|null}
+ */
+export function innerPathOf(cell, target) {
+  if (!cell || !target) return null
+  if (cell === target) return []
+  if (typeof cell.contains === 'function' && !cell.contains(target)) return null
+  const path = []
+  let curr = target
+  while (curr && curr !== cell) {
+    if (!curr.tagName) return null
+    const tag = curr.tagName.toLowerCase()
+    const index = getTagIndex(curr)
+    path.unshift({ tag, index })
+    curr = curr.parentElement
+  }
+  if (curr !== cell) return null
+  return path
+}
+
+/**
+ * 沿格內結構路徑向下解析子元素。
+ * @param {Element} cell 起始儲存格元素
+ * @param {Array<{tag: string, index: number}>} path 結構路徑
+ * @returns {Element|null} 解析出的子元素，失敗回 null
+ */
+export function resolveInner(cell, path) {
+  if (!cell || !Array.isArray(path)) return null
+  if (path.length === 0) return cell
+  for (const seg of path) {
+    if (!seg || typeof seg !== 'object' || Array.isArray(seg)) return null
+    if (typeof seg.tag !== 'string' || seg.tag.trim() === '') return null
+    if (typeof seg.index !== 'number' || !Number.isInteger(seg.index) || seg.index < 1) return null
+  }
+  let curr = cell
+  for (const seg of path) {
+    const targetTag = seg.tag.toLowerCase()
+    let count = 0
+    let next = null
+    const children = curr.children || []
+    for (const child of children) {
+      if (child.tagName && child.tagName.toLowerCase() === targetTag) {
+        count++
+        if (count === seg.index) {
+          next = child
+          break
+        }
+      }
+    }
+    if (!next) return null
+    curr = next
+  }
+  return curr
+}
+
+/**
+ * 規格裡有沒有格內子路徑：缺省、null、空陣列都算沒有（舊規格零變化）。
+ * 形狀不合法仍算「有」，交給 resolveInner 判定為解析不到——不得靜默退回整格文字。
+ * @param {unknown} inner
+ * @returns {boolean}
+ */
+export function hasInner(inner) {
+  if (inner === undefined || inner === null) return false
+  return !(Array.isArray(inner) && inner.length === 0)
+}
+
+/**
+ * 某一列、網格欄 c、沿子路徑對應的元素。選取端的標示與擷取端的取值共用這一份。
+ * 只認「起點就在這一欄」的格子：被左邊格子的 colspan 涵蓋的不算
+ * （監控頁最後一列是 colspan=4、裡面包著 PublicIP 小表，套同一條路徑會把 203.69.51.90 混進整欄聚合）。
+ * @param {Element|null} row 列元素
+ * @param {number} c 網格欄索引
+ * @param {Array<{tag: string, index: number}>} inner 子路徑
+ * @returns {{cell: Element|null, target: Element|null}} 格子不成立時兩者皆 null；路徑走不到時 target 為 null
+ */
+export function resolveInnerAt(row, c, inner) {
+  const cell = row ? cellAtGridIndex(row, c) : null
+  if (!cell || gridIndexOf(row, cell) !== c) return { cell: null, target: null }
+  return { cell, target: resolveInner(cell, inner) }
+}
+
+/**
+ * 這一列每個格子的網格起點（每格一次）。整列逐格取值、整列每格各一個值、整列探測都走它：
+ * 用 0..網格寬 逐欄走的話，被 colspan 涵蓋的欄會把同一格算兩次（或計成解析不到）。
+ * @param {Element} row 列元素
+ * @returns {number[]}
+ */
+export function gridStartsOf(row) {
+  const starts = []
+  let col = 0
+  for (const c of rowCellsOf(row)) {
+    starts.push(col)
+    col += cellWidth(c)
+  }
+  return starts
+}
+
+/**
+ * 只有子路徑是非空陣列時才在物件上放 `inner` 這個鍵（不放空陣列，舊形狀零變化）。
+ * 選取模式建 pick、Picker 收集表單、background 重選逐欄挑，三處都走這一份。
+ * @param {Object} target 要放鍵的 cell 或 block
+ * @param {unknown} inner 子路徑
+ */
+export function putInner(target, inner) {
+  if (Array.isArray(inner) && inner.length > 0) target.inner = inner
+}
+
+/**
+ * 區塊擷取用的資料列元素：CSS 假表格的 `getDataRows` 是空的，改用 `cssGridRowsOf`
+ * （與選取端的列判準同源）。擷取端與診斷包的子路徑探測共用這一份。
+ * @param {Element} el 表格元素
+ * @param {string} source `parseTable(el).source`
+ * @returns {Element[]}
+ */
+export function blockRowsOf(el, source) {
+  const rows = getDataRows(el)
+  return rows.length === 0 && source === 'grid' ? cssGridRowsOf(el) : rows
 }
 
 /**
