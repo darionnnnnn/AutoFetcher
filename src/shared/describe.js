@@ -3,7 +3,7 @@
 // 各寫一份會讓同一個任務在三個畫面上長得不一樣（AF-9 定案）。
 // 純函式：無 DOM、無 chrome.
 
-import { isAnchorText } from './table.js'
+import { isAnchorText, skipOf, excludeOf } from './table.js'
 
 const WEEKDAY_NAMES = ['日', '一', '二', '三', '四', '五', '六']
 // 以週一為起點排序：使用者看的是「週一～五」，不是「週日、週一…」
@@ -125,6 +125,28 @@ function anchorNote(cell, block, rowPos, colPos) {
   return ''
 }
 
+// 產生略過與排除設定的白話字串，讀值一律經 table.js 的 skipOf／excludeOf
+function exclusionNote(block, unit, crossPos, withExclude) {
+  if (crossPos) return ''
+  const parts = []
+  const { head, tail } = skipOf(block)
+  if (head > 0 && tail > 0) {
+    parts.push(`略過開頭 ${head} ${unit}、結尾 ${tail} ${unit}`)
+  } else if (head > 0) {
+    parts.push(`略過開頭 ${head} ${unit}`)
+  } else if (tail > 0) {
+    parts.push(`略過結尾 ${tail} ${unit}`)
+  }
+  if (withExclude) {
+    const excludes = excludeOf(block)
+    if (excludes.length > 0) {
+      parts.push(`排除 ${excludes.length} ${unit}`)
+    }
+  }
+  if (parts.length === 0) return ''
+  return `，${parts.join('、')}`
+}
+
 /**
  * 目標轉白話：「抓 www.twse.com.tw 的表格，取「115/09/07 · 成交金額」這一格」
  * @param {Object} target
@@ -154,7 +176,10 @@ export function describeTarget(target) {
   const posText = posNote.length > 0 ? `，${posNote.join('、')}` : ''
 
   if (typeof t.fieldCount === 'number' && t.fieldCount >= 2) {
-    return `${where}的表格，取 ${t.fieldCount} 個值${posText}${note}`
+    const exText = t.block
+      ? exclusionNote(t.block, '筆', t.block.axis === 'row' ? t.colPos : t.rowPos, false)
+      : ''
+    return `${where}的表格，取 ${t.fieldCount} 個值${exText}${posText}${note}`
   }
 
   if (t.cell) {
@@ -166,12 +191,16 @@ export function describeTarget(target) {
   }
 
   if (t.block) {
-    const axis = t.block.axis === 'row' ? '整列' : '整欄'
+    const isRow = t.block.axis === 'row'
+    const axis = isRow ? '整列' : '整欄'
+    const unit = isRow ? '格' : '列'
+    const crossPos = isRow ? t.colPos : t.rowPos
+    const exText = exclusionNote(t.block, unit, crossPos, true)
     const header = withInnerLabel(t.block.headerText || '', t.block.inner)
     const agg = t.block.aggregate ? AGG_TEXT[t.block.aggregate] || '' : ''
     const aggText = agg ? `的${agg}` : ''
-    if (header !== '') return `${where}的表格，取「${header}」${axis}${aggText}${posText}${note}`
-    return `${where}的表格，取${axis}${aggText}${posText}${note}`
+    if (header !== '') return `${where}的表格，取「${header}」${axis}${aggText}${exText}${posText}${note}`
+    return `${where}的表格，取${axis}${aggText}${exText}${posText}${note}`
   }
 
   return `${where}的表格${posText}${note}`

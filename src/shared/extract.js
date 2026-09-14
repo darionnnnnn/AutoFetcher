@@ -1,7 +1,8 @@
 // AutoFetcher 數值擷取策略鏈與後處理
 import {
   parseTable, rowHeader, isAnchorText,
-  hasInner, resolveInnerAt, blockRowsOf, gridStartsOf
+  hasInner, resolveInnerAt, blockRowsOf, gridStartsOf,
+  skipOf, excludeOf
 } from './table.js'
 import { aggregateCells } from './aggregate.js'
 import { innerLabel } from './describe.js'
@@ -336,8 +337,6 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
   const block = blockSpec || {}
   let targetIndex = block.index
   let status = 'ok'
-  let values = []
-  let unresolved = 0
 
   // 這一軸挑好了之後，另一軸還帶著位置＝只要那一格，不是整欄整列聚合
   const crossPos = positionOf(block)
@@ -346,8 +345,9 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
   }
 
   const withInner = hasInner(block.inner)
+  const isRow = block.axis === 'row'
 
-  if (block.axis === 'row') {
+  if (isRow) {
     // 列模式：欄與列同一套規則，列標題對得上照用、搬家跟著標題走（AF-8 修：原本只吃 index）
     const rowHeaders = getTableRowHeaders(table.cells, dataRows || [])
     const rowLoc = locateByHeader(rowHeaders, {
@@ -360,28 +360,6 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
     if (typeof targetIndex !== 'number' || targetIndex < 0 || targetIndex >= table.cells.length) {
       return { ok: false, error: 'not_found' }
     }
-
-    if (withInner) {
-      // 逐「格」不逐「網格欄」：被 colspan 涵蓋的欄是同一格，逐欄走會把它計成解析不到、skipped 虛報
-      const rowEl = dataRows ? dataRows[targetIndex] : null
-      for (const c of rowEl ? gridStartsOf(rowEl) : []) {
-        const resolved = resolveInnerCell(dataRows, targetIndex, c, block.inner)
-        if (resolved.ok) {
-          values.push(resolved.raw)
-        } else {
-          unresolved++
-        }
-      }
-      if (values.length === 0) {
-        // 取不到列或列裡沒有格子時 unresolved 是 0，「0 格都找不到」是假訊息
-        const message = unresolved === 0
-          ? `這一列在目前的頁面上取不到格子（${innerLabel(block.inner) || '子路徑'}）`
-          : `這一列裡找不到原本的位置（${innerLabel(block.inner) || '子路徑'}；${unresolved} 格都找不到）`
-        return { ok: false, error: 'not_found', message }
-      }
-    } else {
-      values = table.cells[targetIndex]
-    }
   } else {
     // 欄模式（col）：改用 locateByHeader，判準只維護一份
     const colLoc = locateByHeader(table.headers || [], {
@@ -391,32 +369,141 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
     if (!colLoc.ok) return { ok: false, error: 'not_found', message: colLoc.message }
     targetIndex = colLoc.index
     status = colLoc.status
+  }
 
+  // 產生有序清單，每項記住另一軸索引與內容
+  const items = []
+  if (isRow) {
+    if (withInner) {
+      // 逐「格」不逐「網格欄」：被 colspan 涵蓋的欄是同一格，逐欄走會把它計成解析不到、skipped 虛報
+      const rowEl = dataRows ? dataRows[targetIndex] : null
+      for (const c of rowEl ? gridStartsOf(rowEl) : []) {
+        const resolved = resolveInnerCell(dataRows, targetIndex, c, block.inner)
+        if (resolved.ok) {
+          items.push({ index: c, ok: true, raw: resolved.raw })
+        } else {
+          items.push({ index: c, ok: false })
+        }
+      }
+    } else {
+      const rowData = table.cells[targetIndex] || []
+      for (let c = 0; c < rowData.length; c++) {
+        items.push({ index: c, ok: true, raw: rowData[c] })
+      }
+    }
+  } else {
     if (withInner) {
       for (let r = 0; r < table.cells.length; r++) {
         const resolved = resolveInnerCell(dataRows, r, targetIndex, block.inner)
         if (resolved.ok) {
-          values.push(resolved.raw)
+          items.push({ index: r, ok: true, raw: resolved.raw })
         } else {
-          unresolved++
+          items.push({ index: r, ok: false })
         }
-      }
-      if (values.length === 0) {
-        return { ok: false, error: 'not_found', message: `這一欄裡找不到原本的位置（${innerLabel(block.inner) || '子路徑'}；${unresolved} 格都找不到）` }
       }
     } else {
-      // 取值：每一列的第 targetIndex 格
-      // 超出範圍：若所有列都沒有那一格，回 not_found
-      values = []
-      for (const row of table.cells) {
+      for (let r = 0; r < table.cells.length; r++) {
+        const row = table.cells[r]
         if (targetIndex >= 0 && targetIndex < row.length) {
-          values.push(row[targetIndex])
+          items.push({ index: r, ok: true, raw: row[targetIndex] })
         }
       }
-      if (values.length === 0) {
-        return { ok: false, error: 'not_found' }
+    }
+  }
+
+  const initialCount = items.length
+
+  // 本來就沒有格子：維持原本各分支的錯誤
+  if (initialCount === 0) {
+    if (withInner) {
+      const message = isRow
+        ? `這一列在目前的頁面上取不到格子（${innerLabel(block.inner) || '子路徑'}）`
+        : `這一欄裡找不到原本的位置（${innerLabel(block.inner) || '子路徑'}；0 格都找不到）`
+      return { ok: false, error: 'not_found', message }
+    }
+    return { ok: false, error: 'not_found' }
+  }
+
+  // 先套 skip：讀出 head / tail
+  const { head, tail } = skipOf(block)
+  if (head + tail >= initialCount) {
+    const unit = isRow ? '格' : '列'
+    const subject = isRow ? '這一列' : '這一欄'
+    return {
+      ok: false,
+      error: 'not_found',
+      message: `略過開頭 ${head} ${unit}、結尾 ${tail} ${unit}後沒有剩下的格子（${subject}只有 ${initialCount} ${unit}）`
+    }
+  }
+
+  let remaining = items
+  if (head > 0 || tail > 0) {
+    remaining = remaining.slice(head, remaining.length - tail)
+  }
+
+  // 再套 exclude：在另一軸上定位並移除
+  const excludeList = excludeOf(block)
+  const missingExcludeLabels = []
+  if (excludeList.length > 0) {
+    const otherHeaders = isRow
+      ? (table.headers || [])
+      : getTableRowHeaders(table.cells, dataRows || [])
+    const otherCount = isRow
+      ? (table.headers || []).length
+      : table.cells.length
+    const otherAxis = isRow ? 'col' : 'row'
+
+    const excludeIndicesToRemove = new Set()
+    // 「找得到」＝定位成功，而且那個索引在排除前的完整清單裡。定位成功卻濾不到任何格子的兩種情形都算找不到：
+    // 標題是空字串時 locateByHeader 直接回原索引、不檢查範圍（越界）；整列帶 inner 時清單只有每格的網格起點，
+    // 排除項指到被 colspan 涵蓋的欄。算成找到的話，狀態 ok、什麼都沒排除，合計就默默被加進去
+    const listedIndices = new Set(items.map((it) => it.index))
+    for (const item of excludeList) {
+      const loc = locateByHeader(otherHeaders, item, otherCount, otherAxis)
+      if (loc.ok && listedIndices.has(loc.index)) {
+        excludeIndicesToRemove.add(loc.index)
+      } else {
+        const label = item.header || (isRow ? `第 ${item.index + 1} 格` : `第 ${item.index + 1} 列`)
+        missingExcludeLabels.push(label)
       }
     }
+
+    if (excludeIndicesToRemove.size > 0) {
+      remaining = remaining.filter((item) => !excludeIndicesToRemove.has(item.index))
+    }
+  }
+
+  const excluded = initialCount - remaining.length
+
+  // 剩下的清單為空（因為 exclude 移光）
+  if (remaining.length === 0) {
+    return {
+      ok: false,
+      error: 'not_found',
+      // excluded 含 skip 移掉的：只寫「排除」會比使用者設的排除清單還大
+      message: `略過與排除共 ${excluded} ${isRow ? '格' : '列'}後沒有剩下的格子`
+    }
+  }
+
+  // 剩下清單中「解析不到」的計入 unresolved；其餘進聚合
+  let unresolved = 0
+  const values = []
+  for (const item of remaining) {
+    if (item.ok) {
+      values.push(item.raw)
+    } else {
+      unresolved++
+    }
+  }
+
+  if (values.length === 0) {
+    if (withInner) {
+      const message = isRow
+        ? `這一列裡找不到原本的位置（${innerLabel(block.inner) || '子路徑'}；${unresolved} 格都找不到）`
+        : `這一欄裡找不到原本的位置（${innerLabel(block.inner) || '子路徑'}；${unresolved} 格都找不到）`
+      return { ok: false, error: 'not_found', message }
+    }
+    return { ok: false, error: 'not_found' }
   }
 
   const agg = aggregateCells(values, block.aggregate)
@@ -443,15 +530,24 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
     value = 0
   }
 
+  let finalStatus = status
+  let fallbackMessage
+  if (missingExcludeLabels.length > 0) {
+    finalStatus = 'fallback'
+    fallbackMessage = `有 ${missingExcludeLabels.length} 個排除項在目前的頁面找不到（${missingExcludeLabels.join('、')}）`
+  }
+
   return {
     ok: true,
     value,
     raw,
-    status,
+    status: finalStatus,
     strategyUsed: 'block',
     used: agg.used,
     skipped: agg.skipped + unresolved,
-    partial: Boolean(table.partial)
+    partial: Boolean(table.partial),
+    ...(excluded > 0 ? { excluded } : {}),
+    ...(fallbackMessage !== undefined ? { message: fallbackMessage } : {})
   }
 }
 
@@ -510,6 +606,8 @@ export function extractValue(el, spec = {}) {
               status: res.status,
               used: res.used,
               skipped: res.skipped,
+              ...(res.excluded !== undefined ? { excluded: res.excluded } : {}),
+              ...(res.message !== undefined ? { message: res.message } : {}),
               ...(res.label !== undefined ? { label: res.label } : {})
             }
           } else {

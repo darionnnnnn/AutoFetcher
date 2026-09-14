@@ -26,7 +26,7 @@ import {
 } from './precheck.js'
 import { injectContent } from './inject.js'
 import { locateFrame, listFrames, matchFrameByUrl } from './frames.js'
-import { isAnchorText, putInner } from '../shared/table.js'
+import { isAnchorText, putInner, putSkip, putExclude } from '../shared/table.js'
 import { withInnerLabel } from '../shared/describe.js'
 import { scheduleSiteCheck, runSiteCheck } from './sitecheck.js'
 import { isSuccess } from '../shared/record-status.js'
@@ -49,18 +49,23 @@ function pickSpecOf(pick) {
   if (pick?.block) {
     const block = { axis: pick.block.axis, index: pick.block.index, headerText: pick.block.headerText }
     putInner(block, pick.block.inner)
+    putExclude(block, pick.block.exclude)
     return { block }
   }
   return null
 }
-// 比對「是不是同一個值」時要忽略定位方式：重選送回來的 pick 沒有 pos，
-// 帶著 pos 去比會永遠不相等，於是 key 重生、歷史紀錄的序列就斷了
+// 比對「是不是同一個值」時要忽略定位方式與排除／略過設定：重選送回來的 pick 沒有 pos，
+// 且排除清單不是值的身分（重選改了排除仍是同一個值），帶著比會永遠不相等導致 key 重生、歷史序列斷掉
 function stripPos(spec) {
   if (!spec) return spec
   const out = JSON.parse(JSON.stringify(spec))
   if (out.cell) {
     delete out.cell.row?.pos
     delete out.cell.col?.pos
+  }
+  if (out.block) {
+    delete out.block.exclude
+    delete out.block.skip
   }
   return out
 }
@@ -133,9 +138,14 @@ function applyRepick(task, picks) {
     delete task.spec.fields
     const prev = task.spec?.block
     // keepPos 吃的是 {cell} / {block} 兩種包裝，單值的 spec.block 是攤平的，進出都要包／拆
-    const nextWrapped = spec.cell
-      ? { cell: spec.cell }
-      : { block: { ...spec.block, aggregate: task.spec?.block?.aggregate || 'sum' } }
+    let nextWrapped
+    if (spec.cell) {
+      nextWrapped = { cell: spec.cell }
+    } else {
+      const block = { ...spec.block, aggregate: task.spec?.block?.aggregate || 'sum' }
+      putSkip(block, task.spec?.block?.skip)
+      nextWrapped = { block }
+    }
     const prevWrapped = prev ? (prev.cell ? { cell: prev.cell } : { block: prev }) : null
     const kept = keepPos(nextWrapped, prevWrapped)
     task.spec.block = kept.cell ? { cell: kept.cell } : kept.block
@@ -144,6 +154,8 @@ function applyRepick(task, picks) {
   const aggregate = task.spec?.block?.aggregate
     || (task.spec?.fields || []).find(f => f.block?.aggregate)?.block?.aggregate
     || 'sum'
+  const skip = task.spec?.block?.skip
+    || (task.spec?.fields || []).find(f => f.block?.skip)?.block?.skip
   const taskPos = posOfTask(task)
   const oldSpecs = task.spec?.fields || []
   const oldNames = new Map((task.fields || []).map(f => [f.key, f.name]))
@@ -156,7 +168,14 @@ function applyRepick(task, picks) {
     const key = kept ? kept.key : crypto.randomUUID().slice(0, 8)
     const name = kept ? (oldNames.get(kept.key) || defaultFieldName(pick, i + 1, taskPos)) : defaultFieldName(pick, i + 1, taskPos)
     fields.push({ key, name })
-    const nextSpec = spec.cell ? { cell: spec.cell } : { block: { ...spec.block, aggregate } }
+    let nextSpec
+    if (spec.cell) {
+      nextSpec = { cell: spec.cell }
+    } else {
+      const block = { ...spec.block, aggregate }
+      putSkip(block, skip)
+      nextSpec = { block }
+    }
     const prevSpec = kept ? (kept.cell ? { cell: kept.cell } : { block: kept.block }) : null
     const withPos = prevSpec ? keepPos(nextSpec, prevSpec) : nextSpec
     specFields.push(withPos.cell ? { key, cell: withPos.cell } : { key, block: withPos.block })

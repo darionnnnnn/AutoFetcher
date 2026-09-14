@@ -6,13 +6,29 @@ import { getLayout, addCard } from '../../shared/layout-store.js'
 import { seriesIdOf } from '../../shared/series-index.js'
 import { describeSchedule, describeTarget, describeDashboard, numericHeaderAxis, POS_TEXT, withInnerLabel } from '../../shared/describe.js'
 import { nextIntervalRun } from '../../shared/schedule-math.js'
-import { isAnchorText, putInner } from '../../shared/table.js'
+import { isAnchorText, putInner, skipOf, putSkip, excludeOf, putExclude } from '../../shared/table.js'
 import { download } from '../../shared/export.js'
 
 let currentCtx = null
 let currentBlock = null
 const fieldSpecs = new Map()
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
+
+function skipFromForm() {
+  const row = document.querySelector('[data-skip-row]')
+  if (!row || row.hidden) return { head: 0, tail: 0 }
+  const head = Number(document.getElementById('skip-head')?.value)
+  const tail = Number(document.getElementById('skip-tail')?.value)
+  return skipOf({ head, tail })
+}
+
+function currentBlockSpecs() {
+  const rows = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
+  const n = rows.length
+  return n > 0
+    ? rows.map(r => (r._spec || fieldSpecs.get(r.dataset.fieldKey || ''))?.block).filter(Boolean)
+    : ((currentBlock && !currentBlock.cell && currentBlock.axis) ? [currentBlock] : [])
+}
 
 export function getFormData() {
   const name = document.getElementById('name')?.value ?? ''
@@ -107,7 +123,12 @@ export function getFormData() {
       if (spec.cell) item.cell = applyPosToCell(spec.cell, rowPos, colPos)
       // 整欄／整列的值要聚合，聚合方式來自表單（全任務一份）；
       // 少了這一行，抓取端會拿不到設定而預設成加總，下拉等於裝飾品
-      if (spec.block) item.block = applyPosToBlock({ ...spec.block, aggregate: aggregateValue }, rowPos, colPos)
+      if (spec.block) {
+        const block = { ...spec.block, aggregate: aggregateValue }
+        delete block.skip
+        putSkip(block, skipFromForm())
+        item.block = applyPosToBlock(block, rowPos, colPos)
+      }
       return item
     })
   }
@@ -133,6 +154,8 @@ export function getFormData() {
       }
       // 單值整欄只挑這幾個欄位重組，格內子路徑要另外帶上（多值走展開，本來就留得住）
       putInner(block, currentBlock?.inner)
+      putSkip(block, skipFromForm())
+      putExclude(block, currentBlock?.exclude)
       data.block = applyPosToBlock(block, rowPos, colPos)
     }
   }
@@ -595,6 +618,13 @@ export function render(ctx) {
       const aggEl = document.getElementById('block-aggregate')
       if (aggEl && t.spec.block.aggregate) aggEl.value = t.spec.block.aggregate
     }
+    const skipSource = t.spec?.block?.skip
+      || t.spec?.fields?.find(f => f.block?.skip)?.block?.skip
+    const { head, tail } = skipOf(skipSource)
+    const headEl = document.getElementById('skip-head')
+    if (headEl) headEl.value = String(head)
+    const tailEl = document.getElementById('skip-tail')
+    if (tailEl) tailEl.value = String(tail)
   } else {
     const nameEl = document.getElementById('name')
     if (nameEl && !nameEl.value.trim()) {
@@ -633,8 +663,12 @@ export function render(ctx) {
     const modeEl = document.getElementById('mode')
     if (modeEl) modeEl.value = 'block'
   } else if (ctx?.picks && Array.isArray(ctx.picks) && ctx.picks.length === 1 && ctx.picks[0].block) {
+    // 換目標時 render 會再跑一次：舊目標的排除清單、格內子路徑、略過與位置不得併進新 pick——
+    // 新 pick 沒帶那個鍵就會殘留，排除列套到新表錯誤的列上（AF-16 終檢；inner 是 AF-15 起的同型缺陷）
+    const prevBlock = { ...(currentBlock || {}) }
+    for (const k of ['exclude', 'inner', 'skip', 'pos']) delete prevBlock[k]
     currentBlock = {
-      ...(currentBlock || {}),
+      ...prevBlock,
       ...ctx.picks[0].block
     }
     const modeEl = document.getElementById('mode')
@@ -1008,6 +1042,15 @@ function updatePosHint() {
     const el = document.getElementById(id)
     if (el?.disabled && el.getAttribute('title')) text += `（${el.getAttribute('title')}）`
   }
+  const blockSpecs = currentBlockSpecs()
+  const hasExcludeWithPos = blockSpecs.some(b => {
+    if (excludeOf(b).length === 0) return false
+    const pos = b.axis === 'row' ? colPos : rowPos
+    return Boolean(pos)
+  })
+  if (hasExcludeWithPos) {
+    text += '位置定位下排除不生效（取的是那一格）。'
+  }
   hintEl.textContent = text
 }
 
@@ -1320,7 +1363,7 @@ function bindModeEvents() {
   })
   // 摘要卡的第一行吃的是定位、模式與聚合方式，這些欄位一動就要重算，
   // 否則畫面會拿舊事實回答「抓什麼」——比不寫還糟
-  for (const id of ['row-pos', 'col-pos', 'mode', 'block-aggregate']) {
+  for (const id of ['row-pos', 'col-pos', 'mode', 'block-aggregate', 'skip-head', 'skip-tail']) {
     const el = document.getElementById(id)
     if (el && !el._summaryBound) {
       el.addEventListener('change', () => updateSetupSummary())
@@ -1436,10 +1479,9 @@ function updateFieldListState() {
   // 一格就是一個值，沒有東西要聚合；有整欄／整列的值時才需要選聚合方式。
   // 值的數量也決定預設建哪幾張卡，移除／上下移之後都要重算
   const aggLabel = document.getElementById('block-aggregate')?.closest('label')
+  const skipRow = document.querySelector('[data-skip-row]')
   if (aggLabel) {
-    const blockSpecs = n > 0
-      ? rows.map(r => (r._spec || fieldSpecs.get(r.dataset.fieldKey || ''))?.block).filter(Boolean)
-      : ((currentBlock && !currentBlock.cell && currentBlock.axis) ? [currentBlock] : [])
+    const blockSpecs = currentBlockSpecs()
     const hasBlockField = n > 0
       ? blockSpecs.length > 0
       : !(currentBlock && currentBlock.cell)
@@ -1448,6 +1490,15 @@ function updateFieldListState() {
     const allReplaced = blockSpecs.length > 0 && blockSpecs.every(b =>
       Boolean(b.axis === 'row' ? posValueOf('col-pos') : posValueOf('row-pos')))
     aggLabel.hidden = !hasBlockField || allReplaced
+    if (skipRow) skipRow.hidden = aggLabel.hidden
+
+    const allCol = blockSpecs.length > 0 && blockSpecs.every(b => b.axis === 'col')
+    const allRow = blockSpecs.length > 0 && blockSpecs.every(b => b.axis === 'row')
+    const unit = allCol ? '列' : (allRow ? '格' : '筆')
+    const headSpan = document.querySelector('[data-skip-head-label]')
+    if (headSpan) headSpan.textContent = `略過開頭（${unit}）`
+    const tailSpan = document.querySelector('[data-skip-tail-label]')
+    if (tailSpan) tailSpan.textContent = `略過結尾（${unit}）`
   }
   applyDefaultCardTypes()
 
@@ -1496,7 +1547,13 @@ function fieldWhereText(spec) {
   if (spec.block) {
     const axis = spec.block.axis === 'row' ? '整列' : '整欄'
     const h = withInnerLabel(spec.block.headerText || '', spec.block.inner)
-    return h ? `${h} ${axis}` : axis
+    let text = h ? `${h} ${axis}` : axis
+    const k = excludeOf(spec.block).length
+    if (k > 0) {
+      const unit = spec.block.axis === 'row' ? '格' : '列'
+      text += `（排除 ${k} ${unit}）`
+    }
+    return text
   }
   return ''
 }
@@ -2197,6 +2254,14 @@ export async function handleExportDiag() {
   } catch {}
 }
 
+function blockCountsText(res) {
+  if (!res || res.used === undefined) return ''
+  const u = res.used
+  const s = res.skipped ?? 0
+  const e = res.excluded ?? 0
+  return `（用了 ${u} 格、略過 ${s} 格、排除 ${e} 格）`
+}
+
 export async function handleTestNow() {
   const previewEl = document.getElementById('preview')
   const errorsEl = document.getElementById('errors')
@@ -2226,7 +2291,9 @@ export async function handleTestNow() {
           const fieldRes = res.fields?.[f.key]
           if (fieldRes && fieldRes.ok) {
             const val = fieldRes.value !== undefined ? String(fieldRes.value) : (fieldRes.raw ?? '')
-            return `${f.name}: ${val}`
+            let line = `${f.name}: ${val}${blockCountsText(fieldRes)}`
+            if (fieldRes.message) line += ` ⚠ ${fieldRes.message}`
+            return line
           } else {
             const err = fieldRes?.message || fieldRes?.error || '抓取失敗'
             return `${f.name}: ${err}`
@@ -2238,7 +2305,8 @@ export async function handleTestNow() {
         // 多值任務即使整體 ok，個別值仍可能失敗（SPEC §7）：那時 background 會附診斷
         setDiagAvailable(res.debug)
       } else {
-        if (previewEl) previewEl.textContent = res.value !== undefined ? String(res.value) : (res.raw ?? '')
+        const val = res.value !== undefined ? String(res.value) : (res.raw ?? '')
+        if (previewEl) previewEl.textContent = val + blockCountsText(res)
       }
       if (errorsEl) errorsEl.textContent = ''
       setPreviewState('ok')
@@ -2246,14 +2314,19 @@ export async function handleTestNow() {
       // 兩者會不一樣，成功不代表排程也會成功
       const noPreActions = !Array.isArray(values.preActions) || values.preActions.length === 0
       const noteEl = document.getElementById('test-note')
+      const notes = []
       if (noteEl && Array.isArray(res.preActionTrace) && res.preActionTrace.length > 0) {
         // 調 hover 選單時最需要知道的是「hover 有做、是 click 沒點到」還是「hover 就失敗」，
         // 只回一句「成功」等於什麼都沒說
         const total = res.preActionTrace.reduce((sum, step) => sum + (Number(step.ms) || 0), 0)
-        noteEl.textContent = `前置動作 ${res.preActionTrace.length} 步完成（共 ${(total / 1000).toFixed(1)} 秒）`
+        notes.push(`前置動作 ${res.preActionTrace.length} 步完成（共 ${(total / 1000).toFixed(1)} 秒）`)
       } else if (noteEl && currentCtx?.frameUrl && noPreActions) {
-        noteEl.textContent = '這次測試在目前分頁執行；排程會開新分頁，若那個框架要先點才會出現，請加入前置動作。'
+        notes.push('這次測試在目前分頁執行；排程會開新分頁，若那個框架要先點才會出現，請加入前置動作。')
       }
+      if (!values.fields && res.message) {
+        notes.push(res.message)
+      }
+      if (noteEl) noteEl.textContent = notes.join('\n')
     } else {
       // 有解法的訊息優先：'not_found' 只說了失敗，沒說使用者能怎麼辦
       const err = res?.message || res?.error || '找不到目標元素'

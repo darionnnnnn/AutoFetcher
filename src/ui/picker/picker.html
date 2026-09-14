@@ -360,6 +360,10 @@
             <option value="count">筆數</option>
           </select>
         </label>
+        <div data-skip-row>
+          <label for="skip-head"><span data-skip-head-label>略過開頭</span> <input type="number" id="skip-head" min="0" max="999" step="1" value="0"></label>
+          <label for="skip-tail"><span data-skip-tail-label>略過結尾</span> <input type="number" id="skip-tail" min="0" max="999" step="1" value="0"></label>
+        </div>
       </fieldset>
       <fieldset id="preview-section">
         <legend>先試抓看看</legend>
