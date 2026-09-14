@@ -625,6 +625,7 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
       if (record.strategyUsed === 'block') {
         detailItems.push(['聚合格數 (used)', record.used ?? '—'])
         detailItems.push(['略過格數 (skipped)', record.skipped ?? 0])
+        detailItems.push(['排除格數 (excluded)', record.excluded ?? 0])
         if (record.partial === true) {
           detailItems.push(['只抓到部分 (partial)', '是（表格可能有未載入的列）'])
         }

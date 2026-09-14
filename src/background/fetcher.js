@@ -640,6 +640,12 @@ export async function runTask(task, opts = {}) {
               if (r.label !== undefined) {
                 rec.label = r.label
               }
+              if (r.excluded !== undefined) {
+                rec.excluded = r.excluded
+              }
+              if (r.message !== undefined) {
+                rec.error = r.message
+              }
             } else {
               rec.status = r?.error || 'error'
               if (r?.raw !== undefined) {
@@ -738,6 +744,12 @@ export async function runTask(task, opts = {}) {
         }
         if (res.label !== undefined) {
           record.label = res.label
+        }
+        if (res.excluded !== undefined) {
+          record.excluded = res.excluded
+        }
+        if (res.message !== undefined) {
+          record.error = res.message
         }
         if (res.partial === true) {
           record.partial = true

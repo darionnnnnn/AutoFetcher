@@ -204,7 +204,7 @@ test('歷史頁明細要顯示排除格數', async () => {
   const detail = jd.window.document.querySelector('#record-table .detail-box')
   assert.ok(detail, '點列要展開明細')
   assert.match(detail.textContent, /排除格數/)
-  assert.match(detail.textContent, /排除格數 \(excluded\)\s*1/)
+  assert.match(detail.textContent, /排除格數 \(excluded\)：?\s*1/)
 })
 
 // ---- 白話描述 ----
