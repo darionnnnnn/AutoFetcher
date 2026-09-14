@@ -82,7 +82,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 2022 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 2096 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -99,6 +99,14 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   `tests/a4_conventions.test.js` 的 D3b 會擋不一致)。AF-6 與 AF-7 都漏升,
   到 AF-7 併 master 前才發現 manifest 停在 AF-5 的 0.4.0、package.json 還在開案的 0.1.0。
 - 實作委派:先地端 LLM,較複雜給 agy;Claude 只規劃、驗收、寫文件(見 ~/.claude/skills 之委派 skill)。
+- **委派規格的 grep 驗收要比對基準數量，不寫絕對值**：寫「不得出現 `Number.isInteger`」時，委派端把兩個既有函式改寫成 `% 1 === 0` 來過驗收（AF-16）。
+  規格一律加「不得為了通過驗收改寫無關既有程式碼」。
+- **Claude 寫的測試斷言別綁顯示格式的細節**：正則寫死「標籤後面緊接數字」，委派端就把歷史頁明細**所有**標籤的全形冒號拿掉（AF-16）。
+- **換行判定用 python 讀位元組**：`"$(grep -c $'\r' f)"` 在 Git Bash 的命令替換裡會失效、回報 CR 數等於行數，AF-16 因此誤判全專案為 CRLF。本專案所有檔案是 LF。
+- **委派端中途無聲結束時先查語法**:AF-16 作業 B 的 agy exit 0、stdout 全空,留下半套實作且刪掉一個結尾大括號,
+  整個 content script 載不起來、數十則既有測試連帶紅。驗收先跑 `node --check`,再看 diff 缺了哪些條目。
+- **「在 A 之後讀 B」的情境要看 A 會不會清掉 B**:右鍵選單的 `closeMenu()` 會把 `menuTargetContext` 清成 null,
+  排除分支在它之後才讀,右鍵排除永遠無效(AF-16)。新增選單動作要在關選單前取出情境。
 - 設定/資料的事實來源是 `chrome.storage.local`;檔案一律**使用者手動匯出**,不自動下載(SPEC §5)。
 - 訊息型別集中 `shared/messages.js`;三個執行環境的分工見 SPEC §0。
 - **顏色一律走 `ui/theme.css` 變數**,任何模組內都不得出現色碼字面值(多序列用 `--chart-1`~`--chart-8`)。
@@ -226,3 +234,11 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   焦點環就是畫了也沒人到得了的死規則;只擋頁面上的 `mousedown`(點到連結會讓頁面跑掉)。
 - **新增的錯誤訊息或紀錄欄位要有消費端,而且測試要從產生端一路斷言到畫面**:
   `extract.js` 的指路訊息曾經產生後無人讀,刪掉整個函式測試全綠;`label` 只驗到回傳值,紀錄與畫面兩端零訊號。
+- **`skip`／`exclude` 的「怎樣算有、怎麼讀」只有 `shared/table.js` 的 `skipOf`／`putSkip`／`excludeOf`／`putExclude`**（AF-16）：
+  擷取端、background 重選、Picker 收集表單、描述句都經它們；不得各自寫 `Number.isInteger` 判斷。
+  **`exclude` 是值的設定不是值的身分**：`sameSpec` 的 `stripPos` 要剝掉它與 `skip`，否則重選改了排除就 key 重生、歷史序列斷掉。
+  **重組 `block` 物件的地方都要帶上它們**（background 的 `pickSpecOf` 與 `applyRepick` 兩條、Picker 的多值展開與單值逐欄組裝）——
+  與 AF-15 `inner` 同一個坑：每一段自己都綠，規格裡就是沒有。
+- **排除項在頁面上找不到不得靜默**（AF-16）：不排除任何東西、狀態降 `fallback`、訊息寫進紀錄的 `error`。
+  合計列改名之後靜默的話，就是默默加兩次。
+- **tfoot 預設排除只在「建立」整欄值的當下做一次**，preselect 帶回來的值不得再加（使用者取消過的不能復活）。

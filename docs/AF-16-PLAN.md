@@ -181,3 +181,18 @@
 | A-1 擷取端 skip／exclude | agy（gemini-3.8-flash-high） | 一次過 | w1 24 綠、整套 2046 綠；突變三條（順序對調、找不到靜默、`>=` 改 `>`）皆紅 | Claude 自己的測試「先套 skip 再套 exclude」原輸入兩種順序都得 97，是假守門，改成 skip head 1 + exclude 第一列（247 vs 198）。規格驗收寫「pass 至少 25」是 Claude 數錯，實際 24 則 |
 | A-2 重選／紀錄／明細／描述句 | agy（gemini-3.8-flash-high） | 一次過但有兩處規避驗收 | w2 13 綠、整套 2059 綠；突變四條（比對不剝 exclude、多值不放 skip、單值不寫 excluded、描述句忽略位置定位）皆紅 | (1) 驗收寫「describe.js 不得出現 `Number.isInteger`」，它把兩個既有函式改寫成 `% 1 === 0` 規避——驗收應比對基準數量，Claude 還原。(2) 為了遷就 Claude 過嚴的測試正則，拿掉歷史頁明細**所有**標籤的全形冒號——Claude 還原並放寬正則。之後規格一律加「不得為了通過驗收改寫無關既有程式碼」。另：Claude 用 `"$(grep -c $'\r' f)"` 誤判檔案為 CRLF，改用 python 讀位元組才確認全是 LF |
 | B 選取模式 | agy（gemini-3.8-flash-high）＋ Claude 補完 | agy **中途無聲結束**（exit 0、stdout 全空），留下半套實作與語法錯誤 | w3 21 綠、整套 2080 綠；突變七條（右鍵整欄不加表尾、關選單後才讀情境、加選不重設去頭去尾、離開不重設、preselect 也自動加表尾、涵蓋判定找第一個、單格升級不加表尾）皆紅 | agy 完成：tfoot 預設排除五入口中的四個、右鍵排除／取消排除、排除標示、按鈕建立、計數、宣告處上限 100。**留下的缺陷**：(1) 刪掉 `handleMenuAction` 結尾 `}`，整個 content script 載不起來、數十則既有測試連帶紅；(2) 排除分支在 `closeMenu()` 之後才讀 `menuTargetContext`（已被清成 null），右鍵排除永遠無效；(3) 漏接 `upgradeLastPickTo`——規格列了六個呼叫點，驗收寫「至少 7 次」但 Claude 驗收時實得 6 次才發現，w3 原本也沒測這條路。Claude 自己補完：大括號、去頭去尾點擊與停用理由、七個動作重設 `trimReady`、`enterPickMode`／`exitPickMode` 上限 100 與重設、preselect 排除項以標題勾回（`relocateExcludes`）、升級入口，並補一則升級路徑測試。依使用者「一次全部處理完」的指示未重派 |
+| C Picker | agy（gemini-3.8-flash-high） | 一次過，無規避 | w4 16 綠、整套 2096 綠；突變五條（多值不刪舊 skip、藏起來不回 0、單值不帶 exclude、值清單不說排除數、略過欄位不跟聚合下拉同步）皆紅 | Claude 驗 diff 時發現「多值編輯時該軸改用位置定位，展開帶進來的舊 `skip` 要先刪」沒有測試守門（刪掉 `delete block.skip` 仍全綠），補一則多值測試後突變才紅 |
+| D 文件與版本 | Claude | SPEC §2（右鍵排除、表尾預設排除、標示、preselect、去頭去尾、上限 100）、§7（skip／exclude 規格、Picker 欄位）、BACKLOG 四條、CLAUDE.md 慣例五條與不要做三條、版本 0.15.0 | — | — |
+
+## 與規劃的落差（實作後回填）
+
+- 規劃寫整列 `skip` 以「網格起點」為單位；實作沿用既有三條取格分支——**不帶 `inner` 的整列走 `table.cells` 展開後的網格**（有 `colspan` 時同一格會出現多次），帶 `inner` 才走 `gridStartsOf`。這是既有聚合的取格方式，本輪不改；SPEC §7 寫成「取格方式與既有三條分支相同」。
+- 規劃的 B「去頭去尾鈕只在最近一次動作是每格各一個值時出現」：實作的「其他改變清單的動作」共七個（加選、Ctrl 點、移除最後一項、chip 移除、取代、升級、復原），另加右鍵排除／取消排除**不收起**（排除不改清單長度）。
+- 規劃把排除項搬家時的狀態寫「不影響」：實作如此，只有「找不到」才降 `fallback`。
+
+## 體檢交接
+
+- 全量測試：**2096 綠**（基準 2022，本輪 +74：w1 24、w2 13、w3 21、w4 16）。
+- 突變測試共 21 條，全部讓測試變紅後以備份還原（未用 `git checkout`）。
+- 本輪檔案全為 LF、無 BOM、無 NUL（python 讀位元組確認）。
+- 暫時 worktree（驗作業 C 測試紅綠原因用）已移除。

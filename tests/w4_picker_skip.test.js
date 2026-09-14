@@ -93,6 +93,32 @@ test('非整數或負數輸入當 0，不會寫出壞規格', async () => {
   assert.equal('skip' in pk.buildSpec(pk.getFormData()).block, false)
 })
 
+test('多值編輯：該軸改用位置定位（略過欄位藏起來）時，舊任務帶的 skip 不得偷偷留在規格裡', async () => {
+  const { pk, doc } = await fresh()
+  pk.render({
+    locator: LOCATOR,
+    task: {
+      id: 't1', name: '監控', url: 'https://mon.test/p', mode: 'block',
+      fields: [{ key: 'g', name: '點金靈' }, { key: 'w', name: 'TSWEB' }],
+      spec: {
+        mode: 'block',
+        fields: [
+          { key: 'g', block: { axis: 'col', index: 1, headerText: '點金靈', aggregate: 'sum', skip: { head: 0, tail: 1 } } },
+          { key: 'w', block: { axis: 'col', index: 2, headerText: 'TSWEB', aggregate: 'sum', skip: { head: 0, tail: 1 } } }
+        ]
+      },
+      schedule: { type: 'daily', times: ['09:30'], weekdays: [1, 2, 3, 4, 5] }
+    }
+  })
+  setPos(doc, 'row-pos', 'last')
+  assert.equal(skipBox(doc).hidden, true, '前提：有位置就是取那一格，略過欄位藏起來')
+  const spec = pk.buildSpec(pk.getFormData())
+  assert.equal(spec.fields.length, 2)
+  for (const f of spec.fields) {
+    assert.equal('skip' in f.block, false, `多值是整包展開舊 block 再組的，舊 skip 要先刪，實得 ${JSON.stringify(f.block)}`)
+  }
+})
+
 // ---- 顯示條件與標籤 ----
 
 test('顯示條件與聚合下拉同一條：全是儲存格時藏起來', async () => {
