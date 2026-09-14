@@ -146,6 +146,17 @@ try {
      選取當下存的是 4318,擷取時第一格已經變成 4269,拿它當錨點必定抓不到。 -->
 <table id="t2" class="type2"><tbody>
 <tr align="center"><td width="70">4269</td><td>38605</td></tr>
+</tbody></table>
+<!-- AF-15:監控頁那種「外層每一列的某一格各包一張小表」,最後一列是 colspan 的 PublicIP 小表(陷阱:203.69.51.90 會被解析成 203.69) -->
+<table id="t3" class="type2"><tbody>
+<tr><td>10.231.1.31</td><td id="o31"><table width="100%"><tbody><tr><td width="70">42</td><td id="m31"><span>MAX:462</span></td></tr></tbody></table></td></tr>
+<tr><td>10.231.1.32</td><td><table width="100%"><tbody><tr><td width="70">43</td><td id="m32"><span>MAX:460</span></td></tr></tbody></table></td></tr>
+<tr><td colspan="2"><table><tbody><tr><td>PublicIP:</td><td>203.69.51.90</td></tr></tbody></table></td></tr>
+</tbody></table>
+<!-- AF-15:資料列含 colspan——選取端以前存 DOM 索引、擷取端用網格索引,點 c1 會抓到 ab -->
+<table id="t4"><thead><tr><th>A</th><th>B</th><th>C</th></tr></thead><tbody>
+<tr><td colspan="2" id="ab">ab</td><td id="c1">c1</td></tr>
+<tr><td>a2</td><td id="b2">b2</td><td id="c2">c2</td></tr>
 </tbody></table>`
   const loginHtml = `<!doctype html><meta charset="utf-8">
 <form><input id="u"><input id="p" type="password"><button id="go" type="button">送出</button></form>
@@ -341,6 +352,30 @@ try {
     console.log(`${browserName}:擷取失敗附得出診斷現況`)
   }
 
+  // 5h. AF-15:格內子路徑——外層每一列的小表第 2 格。整欄取 min 應得 460;
+  // PublicIP 那一列是 colspan、起點不在這一欄,混進來的話會得 203.69
+  const SMALL_2ND = [{ tag: 'table', index: 1 }, { tag: 'tbody', index: 1 }, { tag: 'tr', index: 1 }, { tag: 'td', index: 2 }]
+  const innerResult = await ext2.evaluate(async (inner) => {
+    const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/*' })
+    const loc = { css: '#t3', path: '', anchor: null, xpath: '' }
+    const col = await chrome.tabs.sendMessage(tabs[0].id, {
+      type: 'EXTRACT', locator: loc,
+      spec: { mode: 'block', block: { axis: 'col', index: 1, headerText: '', aggregate: 'min', inner } }
+    })
+    const cell = await chrome.tabs.sendMessage(tabs[0].id, {
+      type: 'EXTRACT', locator: loc,
+      spec: { mode: 'block', block: { cell: { row: { index: 0, header: '10.231.1.31' }, col: { index: 1, header: '' }, inner } } }
+    })
+    return { col, cell }
+  }, SMALL_2ND)
+  if (innerResult.col?.ok !== true || innerResult.col.value !== 460) {
+    errors.push(`AF-15:整欄子路徑取 min 應得 460(203.69 代表 colspan 列混進來),實得 ${JSON.stringify(innerResult.col)}`)
+  } else if (innerResult.cell?.ok !== true || innerResult.cell.value !== 462) {
+    errors.push(`AF-15:單格子路徑應得 462(不是整格串接的 42),實得 ${JSON.stringify(innerResult.cell)}`)
+  } else {
+    console.log(`${browserName}:格內子路徑擷取正常 (整欄 min=${innerResult.col.value}, 單格=${innerResult.cell.value})`)
+  }
+
   // 5b. 選取模式:真的在網頁上畫出 overlay,離開時收乾淨
   const pickResult = await ext2.evaluate(async () => {
     const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/*' })
@@ -406,6 +441,61 @@ try {
         const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/*' })
         if (tabs[0]) await chrome.tabs.sendMessage(tabs[0].id, { type: 'EXIT_PICK' }).catch(() => {})
       })
+    }
+  }
+
+  // 5i. AF-15:真實滑鼠——停在小表格子上(目標是內層小表)→ ↑ 切到外層表 → 滑鼠再動仍鎖在外層 → 點下去標的是那個小表格子
+  // 5j. AF-15:真實滑鼠——colspan 表點 c1,已選標記要落在 c1(以前落在網格索引 1 的 ab)
+  if (targetPage) {
+    const centerOf = (sel) => targetPage.evaluate((s) => {
+      const el = document.querySelector(s)
+      if (!el) return null
+      el.scrollIntoView({ block: 'center' })
+      const r = el.getBoundingClientRect()
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+    }, sel)
+    const enterPick = () => ext2.evaluate(async () => {
+      const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/*' })
+      await chrome.tabs.sendMessage(tabs[0].id, { type: 'ENTER_PICK', purpose: 'task' })
+    })
+    const exitPick = () => ext2.evaluate(async () => {
+      const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/*' })
+      if (tabs[0]) await chrome.tabs.sendMessage(tabs[0].id, { type: 'EXIT_PICK' }).catch(() => {})
+    })
+
+    const m31 = await centerOf('#m31')
+    if (!m31) {
+      errors.push('AF-15:測試頁沒有監控小表(#m31)')
+    } else {
+      await enterPick()
+      await targetPage.mouse.move(m31.x, m31.y)
+      await targetPage.keyboard.press('ArrowUp')
+      await targetPage.mouse.move(m31.x + 1, m31.y)
+      await targetPage.mouse.click(m31.x + 1, m31.y)
+      const picked = await targetPage.evaluate(() => Array.from(document.querySelectorAll('[data-af-picked]'))
+        .map(el => ({ id: el.id, text: el.textContent.trim() })))
+      if (picked.length !== 1 || picked[0].id !== 'm31') {
+        errors.push(`AF-15:↑ 鎖外層表後點小表格子,已選要是 #m31,實得 ${JSON.stringify(picked)}`)
+      } else {
+        console.log(`${browserName}:↑ 鎖外層表後選子單位正常 (${picked[0].text})`)
+      }
+      await exitPick()
+    }
+
+    const c1 = await centerOf('#c1')
+    if (!c1) {
+      errors.push('AF-15:測試頁沒有 colspan 表(#c1)')
+    } else {
+      await enterPick()
+      await targetPage.mouse.move(c1.x, c1.y)
+      await targetPage.mouse.click(c1.x, c1.y)
+      const picked = await targetPage.evaluate(() => Array.from(document.querySelectorAll('[data-af-picked]')).map(el => el.id))
+      if (picked.length !== 1 || picked[0] !== 'c1') {
+        errors.push(`AF-15:colspan 表點 c1,已選標記要落在 c1,實得 ${JSON.stringify(picked)}`)
+      } else {
+        console.log(`${browserName}:colspan 表點格的網格索引正常`)
+      }
+      await exitPick()
     }
   }
 

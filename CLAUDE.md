@@ -82,7 +82,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 1936 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 2009 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -165,6 +165,20 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   年度欄的表卻從黃燈警示變成靜默抓錯欄)。
 - **`locateFrame` 失敗回的是物件不是 `null`**(帶 `candidates` 給診斷用):
   判定一律看有沒有 `frameId`,寫 `=== null` 會把失敗當成成功。
+- **格內子路徑 `inner` 的產生／解析、網格索引換算、同層同標籤計數各只有一份**(AF-15):
+  `shared/table.js` 的 `innerPathOf`／`resolveInner`／`hasInner`／`resolveInnerAt`／`gridIndexOf`／`cellAtGridIndex`,
+  計數是 `selector.js` 的 `getTagIndex`。**「某列某欄沿路徑取元素」選取端與擷取端共用 `resolveInnerAt`**,
+  picker-mode.js 只經 `targetAtGrid` 呼叫它——各寫一份就是「畫面框到的格子與擷取抓到的不一樣」。
+  **「非空陣列才放 `inner` 鍵」只有 `table.js` 的 `putInner`**(選取模式、Picker 收集表單、background 重選三處共用);
+  **區塊擷取的列元素只有 `blockRowsOf`**(CSS 假表格改用 `cssGridRowsOf`,擷取端與診斷包探測共用);
+  **「名稱接格內標籤」只有 `describe.js` 的 `withInnerLabel`**(七個命名與描述入口共用)。
+  欄索引一律是網格索引,**不得再用 `getRowCells(row)[c]` 或 `cells.indexOf(cell)` 取欄**(有 `colspan` 就錯位)。
+- **`inner` 的白話標籤只在顯示當下用 `describe.js` 的 `innerLabel` 算,不進 `PICKED` 訊息、ctx、任務與規格**(AF-15):
+  `sameSpec` 是 JSON 全等比對,顯示字串進規格就會讓 key 重生、歷史序列斷掉(與 AF-14 的 `rawHeader` 同一個坑)。
+  **收集表單值與重選時只要有「重組物件」的地方就要保留 `inner`**:Picker 的 `applyPosToCell` 與單值整欄組裝、background 的 `pickSpecOf`
+  都是逐欄挑的,實測漏過一次——整條鏈每一段自己都綠,規格裡就是沒有 `inner`。
+- **`↑`／`↓` 選定的表要鎖,`mousemove` 的升級不得覆寫明確意圖**(AF-15):鎖的判定與「已選值的鎖」是同一份 `anchor`;
+  保護「選了值之後」時要問「選之前」——只鎖已選的話,按 `↑` 切到外層表之後滑鼠一動就回內層,第一次點之前就走不到。
 - **選取模式的模組狀態要在 `exitPickMode` 全部重設**:漏一個(例如「已選屬於哪張表」)
   會讓同一頁的下一次選取沿用上一張表的 locator、配上新表的列欄索引送出,抓到的永遠是錯的值。
   只驗「DOM 元素被移除」的測試抓不到這種殘留,要驗「連續選兩次」的行為。
