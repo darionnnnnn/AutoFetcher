@@ -95,6 +95,17 @@ test('B2 外層表為目標、滑鼠在內含表格的外層格自己上：警�
   pm.exitPickMode()
 })
 
+test('B2 外層表為目標、滑鼠在子單位上：不得再說「會抓到整串文字」（框的就是那一格）', async () => {
+  const { doc, pm, win } = await onOuter()
+  move(win, outerTdOf(inner2(doc)))
+  assert.match(panelText(doc), /會抓到整串文字/, '前置：停在外層格自己時警語要在')
+  move(win, inner2(doc))
+  assert.doesNotMatch(panelText(doc), /會抓到整串文字/, `有子單位時警語是假的，實得：${panelText(doc).slice(0, 200)}`)
+  click(win, inner2(doc))
+  assert.doesNotMatch(panelText(doc), /會抓到整串文字/, '已選之後的面板同一條規則')
+  pm.exitPickMode()
+})
+
 // ---------- 小表只有 1 列時點整欄 ----------
 
 test('B2 內層小表只有 1 列時點「整欄」：照做，但提示整欄只有 1 格、要跨外層每一列請按 ↑', async () => {

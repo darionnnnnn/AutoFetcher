@@ -5,6 +5,7 @@ import { MSG } from '../shared/messages.js'
 import { describe } from '../shared/selector.js'
 import { detectKind } from '../shared/block-detect.js'
 import { parseNumber, resolveByPosition, locateByHeader } from '../shared/extract.js'
+import { innerLabel } from '../shared/describe.js'
 import {
   columnHeaders, rowHeader, innermostTable,
   // 「哪些列／格屬於這張表」的判準只有 shared/table.js 一份（AF-10 作業 D）：
@@ -55,7 +56,9 @@ let preselectPristine = false, replaceConfirmPending = null
 // 工具列被點到停用的那一段時要說原因（點不動卻沒訊息是最容易被當成壞掉的）
 let toolbarNotice = null
 // 這一格內含表格時的警語（面板唯一一份）
-const NESTED_CELL_NOTICE = '這一格內含表格，會抓到整串文字；要抓裡面的值請把滑鼠移進去'
+const NESTED_CELL_NOTICE = '這一格內含表格，會抓到整串文字；要抓裡面某一格，把滑鼠移到那一格上（只會框那一格）'
+// 目標小表只有 1 列時點整欄的提示（三處共用同一句）
+const SINGLE_ROW_NESTED_TABLE_NOTICE = '這張小表只有 1 列，整欄只有 1 格；要跨外層每一列請按 ↑ 切到外層表'
 // 上一次是否已經在說這句話：面板只在目標改變時重畫，
 // hover 換到（或離開）內含表格的格子時要補畫一次，但不能每次 mousemove 都重畫
 let nestedNoticeOn = false
@@ -100,6 +103,17 @@ function isTableMode(el) {
 // 判定儲存格是否屬於指定表格
 function cellBelongsToTable(cell, tableEl) {
   return tableOf(cell) === tableEl
+}
+
+// 判定這張表是不是在另一張表的格子裡：是的話回外層表，否則 null
+function outerTableOf(el) {
+  if (!el || !isTableMode(el) || !el.parentElement) return null
+  return tableOf(el.parentElement) || null
+}
+
+// 目標小表是否只有 1 列
+function isSingleRowNestedTable(tableEl) {
+  return Boolean(tableEl && outerTableOf(tableEl) && resolveDataRows(tableEl).length === 1)
 }
 
 // 把滑鼠下的元素升級成「它所屬的最內層表格」。
@@ -417,16 +431,21 @@ function updateHighlight(hl, el) {
 
 // 取得已選項目的顯示名稱
 function getPickName(pick) {
+  let name = '目標'
   if (pick.cell) {
     const r = pick.cell.row ? pick.cell.row.header : ''
     const c = pick.cell.col ? pick.cell.col.header : ''
-    if (r && c) return `${r} · ${c}`
-    return r || c || '儲存格'
+    if (r && c) name = `${r} · ${c}`
+    else name = r || c || '儲存格'
+  } else if (pick.block) {
+    name = pick.block.headerText || (pick.block.axis === 'col' ? '整欄' : '整列')
   }
-  if (pick.block) {
-    return pick.block.headerText || (pick.block.axis === 'col' ? '整欄' : '整列')
+  const inner = (pick.cell && pick.cell.inner) || (pick.block && pick.block.inner) || null
+  if (hasInner(inner)) {
+    const label = innerLabel(inner)
+    if (label) return `${name} · ${label}`
   }
-  return '目標'
+  return name
 }
 
 // iframe 的 src 一律轉成絕對網址:background 拿它跟 frame 的 location.href 比對，
@@ -729,7 +748,7 @@ function updatePanel(panel, el) {
         ? '已換到另一張表格（可按復原或 Ctrl／⌘＋Z 回上一張）'
         : '已換成新的選取（可按復原或 Ctrl／⌘＋Z 還原）')
     }
-    if (cellWrapsTable(currentCellEl)) noticeLines.push(NESTED_CELL_NOTICE)
+    if (cellWrapsTable(currentCellEl) && !currentInner) noticeLines.push(NESTED_CELL_NOTICE)
     if (toolbarNotice) noticeLines.push(toolbarNotice)
     noticeLines.push(instructionLine(el))
     const footerDiv = document.createElement('div')
@@ -784,7 +803,7 @@ function updatePanel(panel, el) {
   if (limitReached || selectedList.length >= maxPicks) lines.push('（已達選取上限）')
   if (headerChangedNotice) lines.push('（位置已變）')
   if (lockedEl && el === lockedEl) lines.push('（已鎖定：滑鼠移開也不會換目標，點別處解除）')
-  if (cellWrapsTable(currentCellEl)) lines.push(NESTED_CELL_NOTICE)
+  if (cellWrapsTable(currentCellEl) && !currentInner) lines.push(NESTED_CELL_NOTICE)
   if (toolbarNotice) lines.push(toolbarNotice)
   lines.push(instructionLine(el))
   appendPanelText(panel, lines)
@@ -803,6 +822,9 @@ function instructionLine(el) {
     return `已選 ${selectedList.length} 個值，再點可換、Ctrl／⌘ 點可加，好了按完成（或雙擊、Enter）`
   }
   if (el && isTableMode(el)) {
+    if (outerTableOf(el)) {
+      return '這是外層表格裡的小表：要抓外層每一列的這個位置，按 ↑ 切到外層表再點那一格'
+    }
     return '點你要的那一格；點表頭可選整欄'
   }
   if (el) {
@@ -1040,9 +1062,9 @@ function handleTableMouseMove(target) {
   syncNestedNotice()
 }
 
-// hover 的格子是否內含表格，改變時才重畫面板（每次 mousemove 都重畫會把按鈕從指尖換掉）
+// hover 的格子是否內含表格且無子單位，改變時才重畫面板（每次 mousemove 都重畫會把按鈕從指尖換掉）
 function syncNestedNotice() {
-  const on = cellWrapsTable(currentCellEl)
+  const on = Boolean(cellWrapsTable(currentCellEl) && !currentInner)
   if (on === nestedNoticeOn) return
   nestedNoticeOn = on
   if (panelEl) updatePanel(panelEl, currentTargetEl)
@@ -1366,6 +1388,7 @@ function handleMenuAction(action) {
     return
   }
   const { tableEl, cellInfo } = menuTargetContext
+  const inner = menuTargetContext.cellInfo?.inner
   closeMenu()
 
   if (action === 'done') {
@@ -1385,7 +1408,7 @@ function handleMenuAction(action) {
     if (tableEl && isTableMode(tableEl)) {
       const info = cellInfo || (rowIndex !== null && colIndex !== null ? { rIdx: rowIndex, cIdx: colIndex, dataRows: resolveDataRows(tableEl) } : null)
       if (info) {
-        addPick(makeCellPick(info.rIdx, info.cIdx, tableEl, info.dataRows))
+        addPick(makeCellPick(info.rIdx, info.cIdx, tableEl, info.dataRows, inner))
         applyPickedMarks(tableEl)
         updatePanel(panelEl, tableEl)
       }
@@ -1400,15 +1423,22 @@ function handleMenuAction(action) {
         // 一整欄的每一格各是一個值（各幣別的買入），與「整欄加總成一個值」是兩件事
         const cIdx = cellInfo ? cellInfo.cIdx : (colIndex !== null ? colIndex : 0)
         for (let r = 0; r < dataRows.length; r++) {
-          addPick(makeCellPick(r, cIdx, tableEl, dataRows))
-          if (limitReached) break
+          if (targetAtGrid(dataRows[r], cIdx, inner) !== null) {
+            addPick(makeCellPick(r, cIdx, tableEl, dataRows, inner))
+            if (limitReached) break
+          }
+        }
+        if (isSingleRowNestedTable(tableEl)) {
+          toolbarNotice = SINGLE_ROW_NESTED_TABLE_NOTICE
         }
       } else {
         const rIdx = cellInfo ? cellInfo.rIdx : (rowIndex !== null ? rowIndex : 0)
         const cols = columnHeaders(tableEl).length || getRowCells(dataRows[rIdx] || dataRows[0]).length
         for (let c = 0; c < cols; c++) {
-          addPick(makeCellPick(rIdx, c, tableEl, dataRows))
-          if (limitReached) break
+          if (targetAtGrid(dataRows[rIdx], c, inner) !== null) {
+            addPick(makeCellPick(rIdx, c, tableEl, dataRows, inner))
+            if (limitReached) break
+          }
         }
       }
       applyPickedMarks(tableEl)
@@ -1420,8 +1450,13 @@ function handleMenuAction(action) {
   if (action === 'col') {
     if (tableEl && isTableMode(tableEl)) {
       const cIdx = cellInfo ? cellInfo.cIdx : (colIndex !== null ? colIndex : (currentCellIndex() !== null ? currentCellIndex() : 0))
-      addPick({ block: { axis: 'col', index: cIdx, headerText: columnHeaders(tableEl)[cIdx] || '' } })
+      const block = { axis: 'col', index: cIdx, headerText: columnHeaders(tableEl)[cIdx] || '' }
+      putInner(block, inner)
+      addPick({ block })
       applyPickedMarks(tableEl)
+      if (isSingleRowNestedTable(tableEl)) {
+        toolbarNotice = SINGLE_ROW_NESTED_TABLE_NOTICE
+      }
       updatePanel(panelEl, tableEl)
     }
     return
@@ -1432,7 +1467,9 @@ function handleMenuAction(action) {
       const dataRows = resolveDataRows(tableEl)
       const rIdx = cellInfo ? cellInfo.rIdx : (rowIndex !== null ? rowIndex : 0)
       const row = dataRows[rIdx]
-      addPick({ block: { axis: 'row', index: rIdx, headerText: row ? rowHeader(row) : '' } })
+      const block = { axis: 'row', index: rIdx, headerText: row ? rowHeader(row) : '' }
+      putInner(block, inner)
+      addPick({ block })
       applyPickedMarks(tableEl)
       updatePanel(panelEl, tableEl)
     }
@@ -1512,8 +1549,15 @@ function togglePick(pick) {
   addPick(pick)
 }
 
-function addCellPick(r, c, dataRows) {
-  addPick(makeCellPick(r, c, currentTargetEl, dataRows))
+function addCellPick(r, c, dataRows, inner) {
+  if (targetAtGrid(dataRows[r], c, inner) !== null) {
+    addPick(makeCellPick(r, c, currentTargetEl, dataRows, inner))
+  }
+}
+
+// 判定欄索引是否在表格網格範圍內（至少有一列該欄有格子）
+function isColInGrid(dataRows, cIdx) {
+  return typeof cIdx === 'number' && cIdx >= 0 && dataRows.some(row => cellAtGridIndex(row, cIdx) !== null)
 }
 
 // 套用預選項
@@ -1530,9 +1574,6 @@ function applyPreselect(preselect, tableEl) {
   const dataRows = resolveDataRows(tableEl)
   const colHeaders = columnHeaders(tableEl)
   const rowHeaders = dataRows.map((row) => rowHeader(row))
-  // 欄數以最寬的那一列為準（無表頭的表 colHeaders 是空的）：純數值標題不見時會退回原索引，
-  // 表格變窄了那個索引就指不到任何格子，不能把它加進已選清單
-  const colCount = dataRows.reduce((max, row) => Math.max(max, getRowCells(row).length), colHeaders.length)
 
   for (const item of preselect) {
     if (!item) continue
@@ -1572,16 +1613,22 @@ function applyPreselect(preselect, tableEl) {
         }
       }
 
-      if (rIdx !== null && cIdx !== null && rIdx >= 0 && rIdx < dataRows.length && cIdx >= 0 && cIdx < colCount) {
+      if (rIdx !== null && cIdx !== null && rIdx >= 0 && rIdx < dataRows.length && isColInGrid(dataRows, cIdx)) {
+        if (hasInner(item.cell.inner)) {
+          if (targetAtGrid(dataRows[rIdx], cIdx, item.cell.inner) === null) {
+            headerChangedNotice = true
+            continue
+          }
+        }
         const targetRow = dataRows[rIdx]
         const actualRowHeader = rHeader || (targetRow ? rowHeader(targetRow) : '')
         const actualColHeader = cHeader || (colHeaders[cIdx] || '')
-        addPick({
-          cell: {
-            row: { index: rIdx, header: actualRowHeader },
-            col: { index: cIdx, header: actualColHeader }
-          }
-        })
+        const cell = {
+          row: { index: rIdx, header: actualRowHeader },
+          col: { index: cIdx, header: actualColHeader }
+        }
+        putInner(cell, item.cell.inner)
+        addPick({ cell })
       }
     } else if (item.block) {
       const axis = item.block.axis
@@ -1597,8 +1644,16 @@ function applyPreselect(preselect, tableEl) {
             bIdx = loc.index
           }
         }
-        if (bIdx !== null && bIdx >= 0 && bIdx < colCount) {
-          addPick({ block: { axis: 'col', index: bIdx, headerText: bHeader || colHeaders[bIdx] || '' } })
+        if (bIdx !== null && isColInGrid(dataRows, bIdx)) {
+          if (hasInner(item.block.inner)) {
+            if (!dataRows.some(row => targetAtGrid(row, bIdx, item.block.inner) !== null)) {
+              headerChangedNotice = true
+              continue
+            }
+          }
+          const block = { axis: 'col', index: bIdx, headerText: bHeader || colHeaders[bIdx] || '' }
+          putInner(block, item.block.inner)
+          addPick({ block })
         }
       } else if (axis === 'row') {
         if (bHeader) {
@@ -1610,7 +1665,16 @@ function applyPreselect(preselect, tableEl) {
           }
         }
         if (bIdx !== null && bIdx >= 0 && bIdx < dataRows.length) {
-          addPick({ block: { axis: 'row', index: bIdx, headerText: bHeader || rowHeader(dataRows[bIdx]) || '' } })
+          if (hasInner(item.block.inner)) {
+            const row = dataRows[bIdx]
+            if (!row || !getRowCells(row).some(cell => targetAtGrid(row, gridIndexOf(row, cell), item.block.inner) !== null)) {
+              headerChangedNotice = true
+              continue
+            }
+          }
+          const block = { axis: 'row', index: bIdx, headerText: bHeader || rowHeader(dataRows[bIdx]) || '' }
+          putInner(block, item.block.inner)
+          addPick({ block })
         }
       }
     }
@@ -1737,11 +1801,16 @@ function onKeyDown(event) {
     limitReached = false
     pickedTableEl = null
     for (let r = 0; r < dataRows.length; r++) {
-      const cells = getRowCells(dataRows[r])
-      for (let c = 0; c < cells.length; c++) {
+      const row = dataRows[r]
+      const cells = getRowCells(row)
+      for (let i = 0; i < cells.length; i++) {
+        const cell = cells[i]
         // 列標題那一格不是資料（它是這一列的名字），全選不該把它算進來
-        if (isHeaderCell(cells[c])) continue
-        addPick(makeCellPick(r, c, currentTargetEl, dataRows))
+        if (isHeaderCell(cell)) continue
+        const cIdx = gridIndexOf(row, cell)
+        if (cIdx >= 0) {
+          addPick(makeCellPick(r, cIdx, currentTargetEl, dataRows))
+        }
         if (limitReached) break
       }
       if (limitReached) break
@@ -1771,7 +1840,7 @@ function onKeyDown(event) {
         const curC = colIndex !== null ? colIndex : 0
         const numCols = columnHeaders(currentTargetEl).length || getRowCells(dataRows[0]).length
 
-        addCellPick(curR, curC, dataRows)
+        addCellPick(curR, curC, dataRows, currentInner)
 
         let newR = curR
         let newC = curC
@@ -1784,10 +1853,9 @@ function onKeyDown(event) {
         colIndex = newC
         cellIndex = pickMode === 'row' ? rowIndex : colIndex
         currentRowEl = dataRows[rowIndex]
-        const rowCells = getRowCells(currentRowEl)
-        currentCellEl = rowCells[colIndex] || null
+        currentCellEl = currentRowEl ? cellAtGridIndex(currentRowEl, colIndex) : null
 
-        addCellPick(newR, newC, dataRows)
+        addCellPick(newR, newC, dataRows, currentInner)
         applyPickedMarks(currentTargetEl)
         markCells(currentCellEl, dataRows, currentRowEl, pickMode, colIndex, currentInner)
         updatePanel(panelEl, currentTargetEl)
@@ -1923,6 +1991,9 @@ function onClick(event) {
       if (currentTargetEl && isTableMode(currentTargetEl)) {
         markCells(currentCellEl, currentDataRows, currentRowEl, pickMode, colIndex, currentInner)
         applyPickedMarks(currentTargetEl)
+      }
+      if (mode === 'col' && isSingleRowNestedTable(currentTargetEl)) {
+        toolbarNotice = SINGLE_ROW_NESTED_TABLE_NOTICE
       }
       if (panelEl) updatePanel(panelEl, currentTargetEl)
     }
@@ -2176,19 +2247,26 @@ function replaceSelection(candidate) {
   undoSnapshot = previous
 }
 
+// 從起始列欄到結束列欄的矩形範圍加選（Shift 點與拖曳框選共用）
+function addCellRange(tableEl, minR, maxR, minC, maxC, inner) {
+  const dataRows = resolveDataRows(tableEl)
+  for (let r = minR; r <= maxR; r++) {
+    for (let c = minC; c <= maxC; c++) {
+      if (targetAtGrid(dataRows[r], c, inner) !== null) {
+        addPick(makeCellPick(r, c, tableEl, dataRows, inner))
+        if (limitReached || selectedList.length >= maxPicks) return
+      }
+    }
+  }
+}
+
 // 從錨點格到目標格的矩形範圍一次加進來（Shift 點的行為）
 function addRange(anchorCell, targetCell) {
-  const dataRows = resolveDataRows(currentTargetEl)
   const minR = Math.min(anchorCell.row.index, targetCell.row.index)
   const maxR = Math.max(anchorCell.row.index, targetCell.row.index)
   const minC = Math.min(anchorCell.col.index, targetCell.col.index)
   const maxC = Math.max(anchorCell.col.index, targetCell.col.index)
-  for (let r = minR; r <= maxR; r++) {
-    for (let c = minC; c <= maxC; c++) {
-      addPick(makeCellPick(r, c, currentTargetEl, dataRows))
-      if (limitReached) return
-    }
-  }
+  addCellRange(currentTargetEl, minR, maxR, minC, maxC, anchorCell.inner)
 }
 
 // 雙擊＝選這一個並送出（檔案總管開啟檔案的習慣）
@@ -2229,7 +2307,7 @@ function onMouseDown(event) {
   if (currentTargetEl && isTableMode(currentTargetEl)) {
     const info = resolveCell(event.target, currentTargetEl)
     if (info) {
-      dragStart = { rIdx: info.rIdx, cIdx: info.cIdx }
+      dragStart = { rIdx: info.rIdx, cIdx: info.cIdx, inner: info.inner }
       isDragging = false
     }
   }
@@ -2247,16 +2325,7 @@ function onMouseUp(event) {
     const minC = Math.min(dragStart.cIdx, endC)
     const maxC = Math.max(dragStart.cIdx, endC)
 
-    const dataRows = resolveDataRows(currentTargetEl)
-    const colHeaders = columnHeaders(currentTargetEl)
-
-    for (let r = minR; r <= maxR; r++) {
-      for (let c = minC; c <= maxC; c++) {
-        addPick(makeCellPick(r, c, currentTargetEl, dataRows))
-        if (limitReached) break
-      }
-      if (selectedList.length >= maxPicks) break
-    }
+    addCellRange(currentTargetEl, minR, maxR, minC, maxC, dragStart.inner)
 
     suppressClick = true
     setTimeout(() => { suppressClick = false }, 0)

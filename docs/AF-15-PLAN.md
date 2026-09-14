@@ -299,7 +299,7 @@
 |---|---|---|---|---|
 | A | agy gemini-3.8-flash-high＋Claude 小修 | 通過 | v1 19 綠、全套 1955 綠、突變 5 發皆紅、BOM/NUL/CR 與 dev 基準一致、白名單外零改動 | agy 一次通過 17 條契約。Claude 小修三處：「列＋欄＋起點＋路徑」判定原本寫成 `extract.js` 內部函式，B1 選取端必須共用同一份，搬進 `table.js` 匯出為 `resolveInnerAt`（連同 `hasInner`）；空格子訊息漏了前半句；多餘空行。另補兩條測試釘住這兩件事（含「extract.js 不得自己組起點判定」的慣例斷言）。M5（`hasInner` 恆真）只被直接斷言抓到：空陣列走 `resolveInner` 回格子本身，對擷取結果是等價突變 |
 | B1 | agy gemini-3.8-flash-high＋Claude 小修 | 通過 | v2 20 綠、相關 113 綠、全套 1975 綠、突變 9 發皆紅、BOM/NUL/CR 與 dev 基準一致、白名單外零改動 | 驗收測試先補強：第 2、3、6 條在實作前就綠（`↑` 之後滑鼠一動就回內層，「只標那一格」不靠鎖也成立），加「此刻目標仍是外層表」前置斷言後才轉紅。agy 一次通過。Claude 小修三處：agy **擅自改了 SPEC §2 記載的提示句**「整欄只能在表格上選…」與兩行註解，還原；`markCells` 用預設參數 `inner = currentInner` 當退路（規格禁止），拿掉並讓兩個呼叫處明傳；「非空陣列才放 inner 鍵」散成八份，收成 `putInner`。M1（鎖的來源拿掉）一發打紅十條，說明子單位能被選到的前提就是鎖 |
-| B2 | | | | |
+| B2 | agy gemini-3.8-flash-high＋Claude 小修 | 通過 | v3 20 綠、相關 137 綠、全套 1995 綠、突變 11 發皆紅、BOM/NUL/CR 與 dev 基準一致、白名單外零改動 | agy 一次通過 19 條契約。Claude 小修：preselect 三處直接呼叫 `resolveInnerAt`，沒照規格用共用的 `targetAtGrid`，改掉後 picker-mode.js 只剩一份。**驗收時發現守門缺口**：新警語條件「沒有子單位才顯示」沒有任何測試驗「有子單位時要消失」，補一條後 M2、M3 才轉紅（沒補的話兩發都會存活） |
 | C | | | | |
 | D | Claude | | | |
 

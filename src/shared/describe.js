@@ -190,3 +190,33 @@ export function describeDashboard(dashboardName, cardTypes) {
   if (types.length === 0) return `加入「${dashboardName}」，尚未選卡片型別`
   return `加入「${dashboardName}」的${types.join('、')}卡`
 }
+
+/**
+ * 格內子路徑的白話標籤。
+ * @param {Array<{tag: string, index: number}>} inner
+ * @returns {string}
+ */
+export function innerLabel(inner) {
+  if (!Array.isArray(inner) || inner.length === 0) return ''
+  for (const seg of inner) {
+    if (!seg || typeof seg !== 'object' || Array.isArray(seg)) return ''
+    if (typeof seg.tag !== 'string' || seg.tag.trim() === '') return ''
+    if (typeof seg.index !== 'number' || !Number.isInteger(seg.index) || seg.index < 1) return ''
+  }
+  const last = inner[inner.length - 1]
+  const lastTag = last.tag.toLowerCase()
+  if (lastTag === 'td' || lastTag === 'th') {
+    let lastTr = null
+    for (let i = inner.length - 2; i >= 0; i--) {
+      if (inner[i].tag && inner[i].tag.toLowerCase() === 'tr') {
+        lastTr = inner[i]
+        break
+      }
+    }
+    if (lastTr) {
+      return `小表第 ${lastTr.index} 列第 ${last.index} 格`
+    }
+  }
+  const suffix = last.index > 1 ? ` ${last.index}` : ''
+  return `內層 ${last.tag}${suffix}`
+}
