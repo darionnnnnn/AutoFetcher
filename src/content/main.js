@@ -61,7 +61,12 @@ function innerProbeOf(el, source, spec) {
     }
     if (item.block && item.block.axis === 'row') {
       const row = rows[item.block.index]
-      for (const c of row ? gridStartsOf(row) : []) {
+      // 列不存在或列裡沒有格子：空的 rows 沒有說明會像「沒探測」，比照 pos 明講
+      if (!row || gridStartsOf(row).length === 0) {
+        probes.push({ key: item.key, inner, rows: [], unprobed: 'norow' })
+        continue
+      }
+      for (const c of gridStartsOf(row)) {
         if (out.length >= DIAG_ROWS_MAX) break
         probe(row, c)
       }

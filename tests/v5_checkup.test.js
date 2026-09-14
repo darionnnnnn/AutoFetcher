@@ -91,6 +91,29 @@ test('整列聚合帶 inner：被 colspan 涵蓋的欄不計成 skipped', () => 
   assert.equal(res.skipped, 0, `一格都沒略過，實得 skipped=${res.skipped}`)
 })
 
+test('整列帶 inner 取不到列：訊息說「取不到格子」，不得說「0 格都找不到」', () => {
+  const res = extractValue(el('<ul id="l"><li>a 1</li><li>b 2</li></ul>'), { mode: 'block', block: { axis: 'row', index: 0, headerText: '', aggregate: 'sum', inner: [{ tag: 'span', index: 1 }] } })
+  assert.equal(res.ok, false)
+  assert.ok(!/0 格/.test(res.message), res.message)
+  assert.match(res.message, /取不到格子/)
+})
+
+test('診斷包：整列的列不存在時標 unprobed:norow', async () => {
+  resetChromeMock()
+  const c = installChromeMock()
+  const jd = new JSDOM(`<!doctype html><html><body>${COLSPAN_ROW}</body></html>`, { url: 'https://x.test/p' })
+  globalThis.window = jd.window; globalThis.document = jd.window.document
+  delete globalThis.__afContentLoaded
+  await import('../src/content/main.js?t=' + Math.random())
+  const listener = [...c.runtime.onMessage._listeners][0]
+  const res = await new Promise((resolve) => listener({
+    type: 'EXTRACT', locator: { css: '#t', path: '', anchor: null, xpath: '' },
+    spec: { mode: 'block', block: { axis: 'row', index: 9, headerText: '', aggregate: 'sum', inner: [{ tag: 'span', index: 1 }] } }
+  }, {}, resolve))
+  assert.equal(res.ok, false)
+  assert.equal(res.debug?.page?.table?.innerProbe?.[0]?.unprobed, 'norow', JSON.stringify(res.debug?.page?.table?.innerProbe))
+})
+
 test('診斷包：欄用位置定位＋inner 時不逐列報 resolved:false，改標未探測', async () => {
   resetChromeMock()
   const c = installChromeMock()

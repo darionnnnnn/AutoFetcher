@@ -373,7 +373,11 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
         }
       }
       if (values.length === 0) {
-        return { ok: false, error: 'not_found', message: `這一列裡找不到原本的位置（${innerLabel(block.inner) || '子路徑'}；${unresolved} 格都找不到）` }
+        // 取不到列或列裡沒有格子時 unresolved 是 0，「0 格都找不到」是假訊息
+        const message = unresolved === 0
+          ? `這一列在目前的頁面上取不到格子（${innerLabel(block.inner) || '子路徑'}）`
+          : `這一列裡找不到原本的位置（${innerLabel(block.inner) || '子路徑'}；${unresolved} 格都找不到）`
+        return { ok: false, error: 'not_found', message }
       }
     } else {
       values = table.cells[targetIndex]

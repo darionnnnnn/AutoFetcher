@@ -363,6 +363,8 @@
 
 結果：全套 **2020 綠**（體檢前 2009）、煙霧 Chrome／Edge 全過、突變 4 發皆紅（row-each 改回 DOM 格數、`markCells` 改回 hover 再判、`Ctrl+A` 不清、整列改回逐欄）。
 
-## 併回前終檢
+## 終檢輪（併 dev 後，Opus low 代理只掃體檢修正 commit 59fe88a）
 
-（合併後再掃，結果記這裡）
+抓到 1 條屬實：整列帶 `inner` 在 `dataRows` 取不到列（清單來源、假表格列格內包 table）時 `unresolved` 為 0，訊息說「0 格都找不到」→ 改說「取不到格子」；診斷探測同型補 `unprobed: 'norow'`；v5 補兩條。
+另兩條是既有缺陷、本輪讓它更容易撞到，進 BACKLOG：清單來源沒有列元素、假表格列格內包 `<table>` 時 `rowCellsOf` 濾光。
+其餘四項（`gridStartsOf` 邊界、`markCells` 三個呼叫端、`lastCol`、`unprobed: 'pos'` 條件）確認無問題。全套 2022 綠。
