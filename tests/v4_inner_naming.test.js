@@ -149,7 +149,9 @@ test('C 守門：沒有 inner 的值，七個入口的輸出與改動前相同�
 
 test('C Picker 存檔：規格帶 inner、不帶任何顯示用的標籤；擷取端拿這份規格抓得到值（鏈結）', async () => {
   const { st, pk, doc } = await freshPicker()
-  pk.render({ locator: LOCATOR, url: 'https://mon.test/p', picks: [{ cell: INNER_CELL }] })
+  // 存檔後要拿去真的擷取，欄標題用監控頁的實況（外層表沒有欄標題）；命名入口用的 PORT:443 是為了分出列與欄而編的
+  const real = { row: { index: 2, header: '10.231.1.31' }, col: { index: 2, header: '' }, inner: SMALL_TABLE_2ND }
+  pk.render({ locator: LOCATOR, url: 'https://mon.test/p', picks: [{ cell: real }] })
   doc.getElementById('dashboard-select').value = 'none'
   await pk.handleSave()
   await new Promise(r => setTimeout(r, 40))

@@ -14,7 +14,7 @@ import {
   tableOf, cellOf, isHeaderCell,
   cssGridRowsOf,
   gridIndexOf, cellAtGridIndex,
-  innerPathOf, resolveInner, hasInner, resolveInnerAt,
+  innerPathOf, resolveInner, hasInner, resolveInnerAt, putInner,
   tableRowsOf as getTableRows,
   rowCellsOf as getRowCells,
   isHeaderRowOf as isHeaderRow
@@ -1489,11 +1489,6 @@ function sameInner(a, b) {
     if (a[i]?.tag !== b[i]?.tag || a[i]?.index !== b[i]?.index) return false
   }
   return true
-}
-
-// pick 只在有子路徑時才帶 inner 這個鍵（不放空陣列，舊形狀零變化）
-function putInner(target, inner) {
-  if (Array.isArray(inner) && inner.length > 0) target.inner = inner
 }
 
 // 加入單一儲存格至已選清單

@@ -2,7 +2,10 @@ import { MSG } from '../shared/messages.js'
 import { waitMsOf, timeoutMsOf, DEFAULT_HOVER_HOLD_MS } from '../shared/preaction.js'
 import { describe, resolve } from '../shared/selector.js'
 import { extractValue, parseNumber } from '../shared/extract.js'
-import { parseTable, getDataRows, rowHeader, innermostTable } from '../shared/table.js'
+import {
+  parseTable, getDataRows, rowHeader, innermostTable,
+  hasInner, resolveInnerAt, cellAtGridIndex, blockRowsOf
+} from '../shared/table.js'
 import { enterPickMode, exitPickMode } from './picker-mode.js'
 
 // 記住使用者最後右鍵點擊的元素
@@ -32,14 +35,43 @@ const DIAG_HTML_MAX = 4000
 // 二維陣列只留前幾列：整張表倒進訊息會讓大表的診斷包大到沒人看得完
 const DIAG_ROWS_MAX = 20
 
+// 規格裡帶格內子路徑的每個值各探測一份：每一列（整列是每一欄）沿同一條路徑解析得到什麼（SPEC §3）。
+// 「這一列解析不到」與「抓錯欄」在錯誤訊息上長得一樣，沒有這份就查不出是哪一種。
+function innerProbeOf(el, source, spec) {
+  const items = Array.isArray(spec?.fields)
+    ? spec.fields.map((f) => ({ key: f?.key, cell: f?.cell, block: f?.block }))
+    : (spec?.block?.cell ? [{ key: '', cell: spec.block.cell }] : (spec?.block ? [{ key: '', block: spec.block }] : []))
+  const rows = blockRowsOf(el, source)
+  const probes = []
+  for (const item of items) {
+    const inner = item.cell ? item.cell.inner : item.block?.inner
+    if (!hasInner(inner)) continue
+    const out = []
+    const probe = (row, c) => {
+      const { target } = resolveInnerAt(row, c, inner)
+      out.push({ resolved: Boolean(target), text: target ? (target.textContent || '').trim().slice(0, 40) : '' })
+    }
+    if (item.block && item.block.axis === 'row') {
+      const row = rows[item.block.index]
+      for (let c = 0; row && cellAtGridIndex(row, c) && out.length < DIAG_ROWS_MAX; c++) probe(row, c)
+    } else {
+      const c = item.cell ? item.cell.col?.index : item.block.index
+      for (let r = 0; r < rows.length && out.length < DIAG_ROWS_MAX; r++) probe(rows[r], c)
+    }
+    probes.push({ key: item.key, inner, rows: out })
+  }
+  return probes
+}
+
 // 擷取失敗時，把「當下這個頁面長什麼樣」整理成一份給人看的現況。
 // 只在失敗時產生：成功時沒有消費端，白帶一份大字串。
-function pageDebugOf(el) {
+function pageDebugOf(el, spec) {
   try {
     const table = parseTable(el)
     const dataRows = getDataRows(el)
     const tableEl = el?.tagName === 'TABLE' ? innermostTable(el) : (el?.querySelector?.('table') || el)
     const html = String(tableEl?.outerHTML || el?.outerHTML || '')
+    const probes = innerProbeOf(el, table.source, spec)
     return {
       table: {
         source: table.source,
@@ -50,7 +82,8 @@ function pageDebugOf(el) {
         rowCount: table.cells.length,
         colCount: table.cells.reduce((max, row) => (row.length > max ? row.length : max), 0),
         cells: table.cells.slice(0, DIAG_ROWS_MAX),
-        partial: table.partial
+        partial: table.partial,
+        ...(probes.length > 0 ? { innerProbe: probes } : {})
       },
       html: html.slice(0, DIAG_HTML_MAX),
       truncated: html.length > DIAG_HTML_MAX
@@ -76,7 +109,7 @@ function handleExtract(msg, sendResponse) {
     // 否則本輪主打的情境（多值表格抓不到）在診斷包裡看不到那張表長什麼樣
     const anyFieldFailed = extracted.fields && typeof extracted.fields === 'object'
       && Object.values(extracted.fields).some(f => f?.ok !== true)
-    const page = anyFieldFailed ? pageDebugOf(resolved.el) : null
+    const page = anyFieldFailed ? pageDebugOf(resolved.el, msg.spec) : null
     sendResponse({
       ...extracted,
       ok: true,
@@ -85,7 +118,7 @@ function handleExtract(msg, sendResponse) {
     })
   } else {
     // 失敗才附現況：使用者按「匯出診斷」時，我們要看得到那張表當下長什麼樣
-    const page = pageDebugOf(resolved.el)
+    const page = pageDebugOf(resolved.el, msg.spec)
     sendResponse({
       ...extracted,
       ok: false,

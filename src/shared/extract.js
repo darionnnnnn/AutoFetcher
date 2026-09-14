@@ -1,7 +1,7 @@
 // AutoFetcher 數值擷取策略鏈與後處理
 import {
-  parseTable, rowHeader, getDataRows, isAnchorText,
-  hasInner, resolveInnerAt, cssGridRowsOf
+  parseTable, rowHeader, isAnchorText,
+  hasInner, resolveInnerAt, blockRowsOf
 } from './table.js'
 import { aggregateCells } from './aggregate.js'
 
@@ -468,10 +468,7 @@ export function extractValue(el, spec = {}) {
     if (!table.cells || table.cells.length === 0) {
       return { ok: false, error: 'not_found' }
     }
-    let dataRows = getDataRows(el)
-    if (dataRows.length === 0 && table.source === 'grid') {
-      dataRows = cssGridRowsOf(el)
-    }
+    const dataRows = blockRowsOf(el, table.source)
 
     // (b) opts.fields: 一次抓多個值
     if (Array.isArray(opts.fields)) {

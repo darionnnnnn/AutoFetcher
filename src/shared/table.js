@@ -242,6 +242,28 @@ export function resolveInnerAt(row, c, inner) {
 }
 
 /**
+ * 只有子路徑是非空陣列時才在物件上放 `inner` 這個鍵（不放空陣列，舊形狀零變化）。
+ * 選取模式建 pick、Picker 收集表單、background 重選逐欄挑，三處都走這一份。
+ * @param {Object} target 要放鍵的 cell 或 block
+ * @param {unknown} inner 子路徑
+ */
+export function putInner(target, inner) {
+  if (Array.isArray(inner) && inner.length > 0) target.inner = inner
+}
+
+/**
+ * 區塊擷取用的資料列元素：CSS 假表格的 `getDataRows` 是空的，改用 `cssGridRowsOf`
+ * （與選取端的列判準同源）。擷取端與診斷包的子路徑探測共用這一份。
+ * @param {Element} el 表格元素
+ * @param {string} source `parseTable(el).source`
+ * @returns {Element[]}
+ */
+export function blockRowsOf(el, source) {
+  const rows = getDataRows(el)
+  return rows.length === 0 && source === 'grid' ? cssGridRowsOf(el) : rows
+}
+
+/**
  * 判定是否為表頭列：在 `thead` 內，或整列都是表頭格。
  * @param {Element} row 列元素
  * @returns {boolean}

@@ -4,9 +4,9 @@ import { DEFAULT_HOVER_HOLD_MS, DEFAULT_WAIT_TIMEOUT_MS } from '../../shared/pre
 import { MSG } from '../../shared/messages.js'
 import { getLayout, addCard } from '../../shared/layout-store.js'
 import { seriesIdOf } from '../../shared/series-index.js'
-import { describeSchedule, describeTarget, describeDashboard, numericHeaderAxis, POS_TEXT } from '../../shared/describe.js'
+import { describeSchedule, describeTarget, describeDashboard, numericHeaderAxis, POS_TEXT, withInnerLabel } from '../../shared/describe.js'
 import { nextIntervalRun } from '../../shared/schedule-math.js'
-import { isAnchorText } from '../../shared/table.js'
+import { isAnchorText, putInner } from '../../shared/table.js'
 import { download } from '../../shared/export.js'
 
 let currentCtx = null
@@ -125,12 +125,15 @@ export function getFormData() {
       data.block = { cell: applyPosToCell(currentBlock.cell, rowPos, colPos) }
     } else {
       const agg = document.getElementById('block-aggregate')?.value || 'sum'
-      data.block = applyPosToBlock({
+      const block = {
         axis: currentBlock?.axis,
         index: currentBlock?.index,
         headerText: currentBlock?.headerText,
         aggregate: agg
-      }, rowPos, colPos)
+      }
+      // 單值整欄只挑這幾個欄位重組，格內子路徑要另外帶上（多值走展開，本來就留得住）
+      putInner(block, currentBlock?.inner)
+      data.block = applyPosToBlock(block, rowPos, colPos)
     }
   }
 
@@ -157,10 +160,13 @@ function withPos(axisSpec, pos) {
 }
 
 function applyPosToCell(cell, rowPos, colPos) {
-  return {
+  const next = {
     row: withPos(cell?.row, rowPos),
     col: withPos(cell?.col, colPos)
   }
+  // 重組物件時要把格內子路徑帶著走：少了這一行，存下的規格會默默改回抓整格串接（AF-15 實測）
+  putInner(next, cell?.inner)
+  return next
 }
 
 // 整欄／整列加上「另一軸的位置」＝只取那一格：整欄配列的位置、整列配欄的位置
@@ -917,7 +923,7 @@ function singleCellName(cell) {
   // 純數值的標題不當名稱：那個數字明天就變了（判準與定位同一份）
   const colH = colPos ? '' : anchorOnly(cell?.col?.header)
   const rowH = rowPos ? '' : anchorOnly(cell?.row?.header)
-  const base = colH || rowH
+  const base = withInnerLabel(colH || rowH, cell?.inner)
   if (!base) return ''
   const suffix = [
     rowPos ? `${POS_LABELS[rowPos]}列` : '',
@@ -944,13 +950,11 @@ function defaultPickName(pick, index) {
       rowPos ? `${POS_LABELS[rowPos]}列` : '',
       colPos ? `${POS_LABELS[colPos]}欄` : ''
     ].filter(Boolean).join('、')
-    let base
-    if (rowH && colH) base = `${rowH} · ${colH}`
-    else if (rowH || colH) base = rowH || colH
-    else base = suffix ? '值' : `值 ${index + 1}`
+    let base = withInnerLabel([rowH, colH].filter(Boolean).join(' · '), pick.cell.inner)
+    if (!base) base = suffix ? '值' : `值 ${index + 1}`
     return suffix ? `${base}（${suffix}）` : base
   }
-  if (pick?.block) return anchorOnly(pick.block.headerText) || `值 ${index + 1}`
+  if (pick?.block) return withInnerLabel(anchorOnly(pick.block.headerText), pick.block.inner) || `值 ${index + 1}`
   return `值 ${index + 1}`
 }
 
@@ -1471,11 +1475,11 @@ function fieldNameText(spec) {
   if (spec.cell) {
     const r = anchorOnly(spec.cell.row?.header) || (spec.cell.row?.pos ? POS_TEXT[spec.cell.row.pos] : '')
     const c = anchorOnly(spec.cell.col?.header) || (spec.cell.col?.pos ? POS_TEXT[spec.cell.col.pos] : '')
-    return [r, c].filter(Boolean).join(' · ')
+    return withInnerLabel([r, c].filter(Boolean).join(' · '), spec.cell.inner)
   }
   if (spec.block) {
     const axis = spec.block.axis === 'row' ? '整列' : '整欄'
-    const h = anchorOnly(spec.block.headerText)
+    const h = withInnerLabel(anchorOnly(spec.block.headerText), spec.block.inner)
     return h ? `${h} ${axis}` : axis
   }
   return ''
@@ -1487,11 +1491,12 @@ function fieldWhereText(spec) {
   if (spec.cell) {
     const r = spec.cell.row?.header || (spec.cell.row?.pos ? POS_TEXT[spec.cell.row.pos] : '')
     const c = spec.cell.col?.header || (spec.cell.col?.pos ? POS_TEXT[spec.cell.col.pos] : '')
-    return [r, c].filter(Boolean).join(' · ')
+    return withInnerLabel([r, c].filter(Boolean).join(' · '), spec.cell.inner)
   }
   if (spec.block) {
     const axis = spec.block.axis === 'row' ? '整列' : '整欄'
-    return spec.block.headerText ? `${spec.block.headerText} ${axis}` : axis
+    const h = withInnerLabel(spec.block.headerText || '', spec.block.inner)
+    return h ? `${h} ${axis}` : axis
   }
   return ''
 }
@@ -1538,7 +1543,8 @@ export function renameFields(style) {
     // 純數值標題不進名稱（命名鏈的第四個入口，判準與其他三處同一份）
     let next = ''
     if (style === 'col') {
-      next = anchorOnly(spec?.cell?.col?.header) || anchorOnly(spec?.block?.headerText)
+      next = withInnerLabel(anchorOnly(spec?.cell?.col?.header), spec?.cell?.inner) ||
+        withInnerLabel(anchorOnly(spec?.block?.headerText), spec?.block?.inner)
     } else {
       next = fieldNameText(spec)
     }
