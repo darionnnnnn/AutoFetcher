@@ -268,6 +268,68 @@ export function putInner(target, inner) {
 }
 
 /**
+ * 讀取 skip 設定的 head 與 tail。非物件或非整數一律視為 0。
+ * @param {unknown} target block 物件或 skip 物件
+ * @returns {{ head: number, tail: number }}
+ */
+export function skipOf(target) {
+  const skip = (target && typeof target === 'object' && 'skip' in target)
+    ? target.skip
+    : target
+  if (!skip || typeof skip !== 'object') return { head: 0, tail: 0 }
+  const head = Number.isInteger(skip.head) && skip.head >= 0 ? skip.head : 0
+  const tail = Number.isInteger(skip.tail) && skip.tail >= 0 ? skip.tail : 0
+  return { head, tail }
+}
+
+/**
+ * 只有 head 或 tail 大於 0 時才在物件上放 `skip` 鍵。
+ * @param {Object} target 要放鍵的 block 物件
+ * @param {unknown} skip skip 設定
+ */
+export function putSkip(target, skip) {
+  const s = skipOf(skip)
+  if (s.head > 0 || s.tail > 0) {
+    target.skip = s
+  }
+}
+
+/**
+ * 讀取 exclude 設定。只保留 index 是非負整數的項目，每項只取 index 與 header。
+ * @param {unknown} target block 物件或 exclude 陣列
+ * @returns {Array<{ index: number, header: string }>}
+ */
+export function excludeOf(target) {
+  const exclude = (target && typeof target === 'object' && 'exclude' in target)
+    ? target.exclude
+    : target
+  if (!Array.isArray(exclude)) return []
+  const result = []
+  for (const item of exclude) {
+    if (item && Number.isInteger(item.index) && item.index >= 0) {
+      result.push({
+        index: item.index,
+        header: typeof item.header === 'string' ? item.header : ''
+      })
+    }
+  }
+  return result
+}
+
+/**
+ * 只有過濾後的 exclude 陣列非空時才在物件上放 `exclude` 鍵。
+ * @param {Object} target 要放鍵的 block 物件
+ * @param {unknown} exclude exclude 設定
+ */
+export function putExclude(target, exclude) {
+  const items = excludeOf(exclude)
+  if (items.length > 0) {
+    target.exclude = items
+  }
+}
+
+
+/**
  * 區塊擷取用的資料列元素：CSS 假表格的 `getDataRows` 是空的，改用 `cssGridRowsOf`
  * （與選取端的列判準同源）。擷取端與診斷包的子路徑探測共用這一份。
  * @param {Element} el 表格元素

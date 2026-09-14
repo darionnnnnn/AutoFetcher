@@ -126,10 +126,11 @@ test('skip 與 exclude 指到同一列只算一次', () => {
 })
 
 test('先套 skip 再套 exclude：skip 對著完整的表算頭尾', () => {
-  // exclude 先套的話，排掉合計之後「最後 1 列」變成 10.0.0.3，會得到 102
-  const r = extractValue(el(MONITOR), col({ skip: { head: 0, tail: 1 }, exclude: [{ index: 0, header: '10.0.0.1' }] }))
-  assert.equal(r.value, 97)
-  assert.equal(r.excluded, 2)
+  // skip 先套：略過第一列（10.0.0.1）後，排除 10.0.0.1 已經不在清單裡 → 49 + 48 + 150
+  // exclude 先套：先排掉 10.0.0.1，「開頭 1 列」變成 10.0.0.2 → 48 + 150
+  const r = extractValue(el(MONITOR), col({ skip: { head: 1, tail: 0 }, exclude: [{ index: 0, header: '10.0.0.1' }] }))
+  assert.equal(r.value, 247)
+  assert.equal(r.excluded, 1)
 })
 
 test('全部被排除 → not_found，訊息與「本來就沒有格子」分得出來', () => {
