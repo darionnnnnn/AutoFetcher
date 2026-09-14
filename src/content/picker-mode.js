@@ -15,6 +15,7 @@ import {
   cssGridRowsOf,
   gridIndexOf, cellAtGridIndex,
   innerPathOf, resolveInner, hasInner, resolveInnerAt, putInner, gridStartsOf,
+  excludeOf, putExclude,
   tableRowsOf as getTableRows,
   rowCellsOf as getRowCells,
   isHeaderRowOf as isHeaderRow
@@ -40,7 +41,7 @@ let pendingPreselect = null
 let overlayEl = null, highlightEl = null, panelEl = null, toolbarEl = null, menuEl = null
 // 面板拆兩層：內文每次重建，動作列建一次只更新文字——
 // 每次 hover 重建按鈕會把焦點與正在按下的那一顆整個換掉，使用者會覺得「完成鈕點了沒反應」
-let panelBodyEl = null, panelDoneEl = null, panelUndoEl = null
+let panelBodyEl = null, panelDoneEl = null, panelUndoEl = null, panelTrimHeadEl = null, panelTrimTailEl = null
 // 「取代」前的已選清單快照：取代是最容易誤觸的動作，要留一步可以反悔
 let undoSnapshot = null
 // 面板固定在右下角，但游標靠近時要閃到左下角，否則它就擋在使用者要選的內容上
@@ -48,7 +49,9 @@ let panelCorner = 'right'
 // 換角之後先鎖住，等游標離開面板附近才允許再換（避免沿邊緣移動時來回彈跳）
 let panelAvoidLatched = false
 let pickMode = 'cell', cellIndex = null, colIndex = null, rowIndex = null, currentDataRows = [], currentRowEl = null, currentCellEl = null
-let selectedList = [], maxPicks = 20, limitReached = false, headerChangedNotice = false
+let selectedList = [], maxPicks = 100, limitReached = false, headerChangedNotice = false
+// 每格各一個值後是否處於可去頭去尾的狀態
+let trimReady = false
 // 非表格元素被「點一下鎖定」後不再跟著滑鼠跑（檔案總管點一下選取的習慣）
 let lockedEl = null
 // 帶 preselect 進來的多個已選值，第一次「點一下取代」只提示、再點一次才真的換掉
@@ -158,6 +161,47 @@ function resolveDataRows(tableEl) {
   }
   // CSS 假表格的列判準也走 shared/table.js 那一份（選取端與解析端不得各寫一份）
   return cssGridRowsOf(tableEl)
+}
+
+// 判定列元素是否位於屬於該表格之 tfoot
+function isTableFooterRow(row, tableEl) {
+  if (!row || !tableEl || typeof row.closest !== 'function') return false
+  const tfoot = row.closest('tfoot')
+  return Boolean(tfoot && tableOf(tfoot) === tableEl)
+}
+
+// 建立整欄 block 時自動排除屬於該表格的 tfoot 列
+function withFooterExclude(block, tableEl) {
+  if (!block || block.axis !== 'col' || !tableEl || !isTableMode(tableEl)) return 0
+  const dataRows = resolveDataRows(tableEl)
+  const items = []
+  for (let r = 0; r < dataRows.length; r++) {
+    const row = dataRows[r]
+    if (isTableFooterRow(row, tableEl)) {
+      items.push({ index: r, header: rowHeader(row) })
+    }
+  }
+  if (items.length > 0) {
+    putExclude(block, items)
+    return items.length
+  }
+  return 0
+}
+
+// 判定 block 值是否涵蓋指定列與欄索引之儲存格（選單與標示共用）
+function blockCoversCell(block, rIdx, cIdx) {
+  if (!block || typeof block !== 'object') return false
+  if (block.axis === 'col') return block.index === cIdx
+  if (block.axis === 'row') return block.index === rIdx
+  return false
+}
+
+// 判定儲存格是否落在該 block 值的排除清單內（整欄比列索引、整列比欄索引）
+function isExcludedCell(block, rIdx, cIdx) {
+  if (!blockCoversCell(block, rIdx, cIdx)) return false
+  const excludes = excludeOf(block)
+  const targetIdx = block.axis === 'col' ? rIdx : cIdx
+  return excludes.some(item => item.index === targetIdx)
 }
 
 // 元素是否直接擁有非空白文字節點
@@ -271,12 +315,19 @@ function resolveHeaderTarget(target, tableEl) {
 function candidateAt(target) {
   if (!currentTargetEl || !isTableMode(currentTargetEl)) return null
   const head = resolveHeaderTarget(target, currentTargetEl)
-  if (head) return { block: { axis: head.axis, index: head.index, headerText: head.headerText } }
+  if (head) {
+    const block = { axis: head.axis, index: head.index, headerText: head.headerText }
+    const added = withFooterExclude(block, currentTargetEl)
+    if (added > 0) toolbarNotice = `已自動排除表尾 ${added} 列（合計），右鍵可取消`
+    return { block }
+  }
   const info = resolveCell(target, currentTargetEl)
   if (!info) return null
   if (pickMode === 'col') {
     const block = { axis: 'col', index: info.cIdx, headerText: columnHeaders(currentTargetEl)[info.cIdx] || '' }
     putInner(block, info.inner)
+    const added = withFooterExclude(block, currentTargetEl)
+    if (added > 0) toolbarNotice = `已自動排除表尾 ${added} 列（合計），右鍵可取消`
     return { block }
   }
   if (pickMode === 'row') {
@@ -295,6 +346,8 @@ function clearMarkedCells(doc) {
     cell.removeAttribute('data-af-cell')
     if (cell.hasAttribute('data-af-picked')) {
       cell.style.outline = `2px solid ${COLORS.primary}`
+    } else if (cell.hasAttribute('data-af-excluded')) {
+      cell.style.outline = `2px dashed ${COLORS.warn}`
     } else {
       cell.style.outline = ''
     }
@@ -353,6 +406,7 @@ function clearHeldMarks(doc, purpose) {
   for (const el of d.querySelectorAll(sel)) {
     el.removeAttribute('data-af-held')
     el.removeAttribute('data-af-picked')
+    el.removeAttribute('data-af-excluded')
     el.style.outline = ''
   }
 }
@@ -365,6 +419,14 @@ function clearPickedMarks(doc) {
   // 它們的出口是 EXIT_PICK 或下一次同用途的 ENTER_PICK
   for (const cell of d.querySelectorAll('[data-af-picked]:not([data-af-held])')) {
     cell.removeAttribute('data-af-picked')
+    if (cell.hasAttribute('data-af-cell')) {
+      cell.style.outline = `2px solid ${COLORS.warn}`
+    } else {
+      cell.style.outline = ''
+    }
+  }
+  for (const cell of d.querySelectorAll('[data-af-excluded]:not([data-af-held])')) {
+    cell.removeAttribute('data-af-excluded')
     if (cell.hasAttribute('data-af-cell')) {
       cell.style.outline = `2px solid ${COLORS.warn}`
     } else {
@@ -392,8 +454,9 @@ function applyPickedMarks(tableEl) {
       }
     } else if (pick.block) {
       if (pick.block.axis === 'col') {
-        for (const row of dataRows) {
-          const cell = targetAtGrid(row, pick.block.index, pick.block.inner)
+        for (let r = 0; r < dataRows.length; r++) {
+          if (isExcludedCell(pick.block, r, pick.block.index)) continue
+          const cell = targetAtGrid(dataRows[r], pick.block.index, pick.block.inner)
           if (cell && !isHeaderCell(cell)) {
             cell.setAttribute('data-af-picked', '')
             if (!cell.hasAttribute('data-af-cell')) {
@@ -406,11 +469,47 @@ function applyPickedMarks(tableEl) {
         if (row) {
           for (const c of getRowCells(row)) {
             const idx = gridIndexOf(row, c)
+            if (isExcludedCell(pick.block, pick.block.index, idx)) continue
             const cell = targetAtGrid(row, idx, pick.block.inner)
             if (cell && !isHeaderCell(cell)) {
               cell.setAttribute('data-af-picked', '')
               if (!cell.hasAttribute('data-af-cell')) {
                 cell.style.outline = `2px solid ${COLORS.primary}`
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  for (const pick of selectedList) {
+    if (pick.block) {
+      const excludes = excludeOf(pick.block)
+      if (pick.block.axis === 'col') {
+        for (const item of excludes) {
+          const row = dataRows[item.index]
+          if (row) {
+            const cell = targetAtGrid(row, pick.block.index, pick.block.inner)
+            if (cell && !isHeaderCell(cell)) {
+              cell.removeAttribute('data-af-picked')
+              cell.setAttribute('data-af-excluded', '')
+              if (!cell.hasAttribute('data-af-cell')) {
+                cell.style.outline = `2px dashed ${COLORS.warn}`
+              }
+            }
+          }
+        }
+      } else if (pick.block.axis === 'row') {
+        const row = dataRows[pick.block.index]
+        if (row) {
+          for (const item of excludes) {
+            const cell = targetAtGrid(row, item.index, pick.block.inner)
+            if (cell && !isHeaderCell(cell)) {
+              cell.removeAttribute('data-af-picked')
+              cell.setAttribute('data-af-excluded', '')
+              if (!cell.hasAttribute('data-af-cell')) {
+                cell.style.outline = `2px dashed ${COLORS.warn}`
               }
             }
           }
@@ -634,6 +733,7 @@ function updateToolbar() {
 
 // 移除指定序號之已選項
 function removePickAt(index) {
+  trimReady = false
   if (index < 0 || index >= selectedList.length) return
   clearUndoSnapshot()
   selectedList.splice(index, 1)
@@ -647,6 +747,7 @@ function removePickAt(index) {
 
 // 移除最後一項已選項
 function removeLastPick() {
+  trimReady = false
   if (selectedList.length === 0) return
   clearUndoSnapshot()
   selectedList.pop()
@@ -667,6 +768,13 @@ function updatePanel(panel, el) {
     body.removeChild(body.firstChild)
   }
   panel = body
+
+  const countDiv = document.createElement('div')
+  countDiv.setAttribute('data-af-count', '')
+  countDiv.textContent = `已選 ${selectedList.length}／${maxPicks}`
+  countDiv.style.fontWeight = 'bold'
+  countDiv.style.marginBottom = '4px'
+  panel.appendChild(countDiv)
 
   if (selectedList.length > 0) {
     const headerDiv = document.createElement('div')
@@ -872,8 +980,28 @@ function buildPanelActions() {
   undo.hidden = true
   bar.appendChild(undo)
 
+  const trimHead = document.createElement('button')
+  trimHead.type = 'button'
+  trimHead.setAttribute('data-af-trim-head', '')
+  trimHead.textContent = '去掉第一格'
+  styleActionButton(trimHead, false)
+  addFocusRing(trimHead)
+  trimHead.hidden = true
+  bar.appendChild(trimHead)
+
+  const trimTail = document.createElement('button')
+  trimTail.type = 'button'
+  trimTail.setAttribute('data-af-trim-tail', '')
+  trimTail.textContent = '去掉最後一格'
+  styleActionButton(trimTail, false)
+  addFocusRing(trimTail)
+  trimTail.hidden = true
+  bar.appendChild(trimTail)
+
   panelDoneEl = done
   panelUndoEl = undo
+  panelTrimHeadEl = trimHead
+  panelTrimTailEl = trimTail
   return bar
 }
 
@@ -914,6 +1042,25 @@ function updatePanelActions(el) {
   done.style.opacity = disabled ? '0.5' : '1'
 
   if (panelUndoEl) panelUndoEl.hidden = !undoSnapshot
+
+  if (panelTrimHeadEl && panelTrimTailEl) {
+    panelTrimHeadEl.hidden = !trimReady
+    panelTrimTailEl.hidden = !trimReady
+    const trimDisabled = selectedList.length <= 1
+    if (trimDisabled) {
+      panelTrimHeadEl.setAttribute('aria-disabled', 'true')
+      panelTrimTailEl.setAttribute('aria-disabled', 'true')
+    } else {
+      panelTrimHeadEl.removeAttribute('aria-disabled')
+      panelTrimTailEl.removeAttribute('aria-disabled')
+    }
+    styleActionButton(panelTrimHeadEl, false)
+    styleActionButton(panelTrimTailEl, false)
+    panelTrimHeadEl.style.cursor = trimDisabled ? 'not-allowed' : 'pointer'
+    panelTrimTailEl.style.cursor = trimDisabled ? 'not-allowed' : 'pointer'
+    panelTrimHeadEl.style.opacity = trimDisabled ? '0.5' : '1'
+    panelTrimTailEl.style.opacity = trimDisabled ? '0.5' : '1'
+  }
 }
 
 // 設定當前目標元素
@@ -1214,6 +1361,7 @@ function confirmPick() {
             headerText: getHeaderText()
           }
           putInner(block, currentInner)
+          withFooterExclude(block, currentTargetEl)
           picks = [{ block }]
         }
       } else if (pickMode === 'row') {
@@ -1231,6 +1379,7 @@ function confirmPick() {
           headerText: colIndex !== null ? (columnHeaders(currentTargetEl)[colIndex] || '') : getHeaderText()
         }
         putInner(block, currentInner)
+        withFooterExclude(block, currentTargetEl)
         picks = [{ block }]
       }
     } else {
@@ -1342,10 +1491,36 @@ function openMenu(event) {
   menuEl.style.pointerEvents = 'auto'
 
   const cellInfo = isTable ? resolveCell(target, tableEl) : null
-  menuTargetContext = { target, tableEl, cellInfo }
+  let matchedPickIndex = -1
+  let matchedBlock = null
+  if (cellInfo && selectedList.length > 0) {
+    for (let i = selectedList.length - 1; i >= 0; i--) {
+      const pick = selectedList[i]
+      if (pick.block && blockCoversCell(pick.block, cellInfo.rIdx, cellInfo.cIdx)) {
+        matchedPickIndex = i
+        matchedBlock = pick.block
+        break
+      }
+    }
+  }
+  menuTargetContext = { target, tableEl, cellInfo, targetPickIndex: matchedPickIndex }
 
   while (menuEl.firstChild) {
     menuEl.removeChild(menuEl.firstChild)
+  }
+
+  let excludeItem = null
+  if (matchedBlock && cellInfo) {
+    const isExcluded = isExcludedCell(matchedBlock, cellInfo.rIdx, cellInfo.cIdx)
+    if (matchedBlock.axis === 'col') {
+      excludeItem = isExcluded
+        ? { key: 'include', label: '取消排除這一列' }
+        : { key: 'exclude', label: '從整欄聚合排除這一列' }
+    } else if (matchedBlock.axis === 'row') {
+      excludeItem = isExcluded
+        ? { key: 'include', label: '取消排除這一欄' }
+        : { key: 'exclude', label: '從整列聚合排除這一欄' }
+    }
   }
 
   const items = isTable
@@ -1355,6 +1530,7 @@ function openMenu(event) {
         { key: 'col', label: '這一欄：整欄聚合成一個值' },
         { key: 'row-each', label: '這一列：每格各一個值' },
         { key: 'row', label: '這一列：整列聚合成一個值' },
+        ...(excludeItem ? [excludeItem] : []),
         { key: 'done', label: '完成' },
         { key: 'cancel', label: '取消' }
       ]
@@ -1386,6 +1562,8 @@ function handleMenuAction(action) {
   }
   const { tableEl, cellInfo } = menuTargetContext
   const inner = menuTargetContext.cellInfo?.inner
+  // closeMenu 會把 menuTargetContext 清成 null：排除要改哪一個值得在關選單之前取出來
+  const targetPickIndex = menuTargetContext.targetPickIndex
   closeMenu()
 
   if (action === 'done') {
@@ -1439,6 +1617,7 @@ function handleMenuAction(action) {
         }
       }
       applyPickedMarks(tableEl)
+      trimReady = true
       updatePanel(panelEl, tableEl)
     }
     return
@@ -1449,6 +1628,8 @@ function handleMenuAction(action) {
       const cIdx = cellInfo ? cellInfo.cIdx : (colIndex !== null ? colIndex : (currentCellIndex() !== null ? currentCellIndex() : 0))
       const block = { axis: 'col', index: cIdx, headerText: columnHeaders(tableEl)[cIdx] || '' }
       putInner(block, inner)
+      const added = withFooterExclude(block, tableEl)
+      if (added > 0) toolbarNotice = `已自動排除表尾 ${added} 列（合計），右鍵可取消`
       addPick({ block })
       applyPickedMarks(tableEl)
       if (isSingleRowNestedTable(tableEl)) {
@@ -1469,6 +1650,41 @@ function handleMenuAction(action) {
       addPick({ block })
       applyPickedMarks(tableEl)
       updatePanel(panelEl, tableEl)
+    }
+    return
+  }
+
+  if (action === 'exclude' || action === 'include') {
+    const pickIdx = targetPickIndex
+    if (pickIdx !== undefined && pickIdx >= 0 && pickIdx < selectedList.length && cellInfo) {
+      const oldPick = selectedList[pickIdx]
+      if (oldPick && oldPick.block) {
+        const newBlock = { ...oldPick.block }
+        let currentExcludes = excludeOf(newBlock).map(item => ({ ...item }))
+        if (newBlock.axis === 'col') {
+          if (action === 'exclude') {
+            if (!currentExcludes.some(x => x.index === cellInfo.rIdx)) {
+              currentExcludes.push({ index: cellInfo.rIdx, header: cellInfo.row ? rowHeader(cellInfo.row) : '' })
+            }
+          } else {
+            currentExcludes = currentExcludes.filter(x => x.index !== cellInfo.rIdx)
+          }
+        } else if (newBlock.axis === 'row') {
+          if (action === 'exclude') {
+            if (!currentExcludes.some(x => x.index === cellInfo.cIdx)) {
+              currentExcludes.push({ index: cellInfo.cIdx, header: columnHeaders(tableEl)[cellInfo.cIdx] || '' })
+            }
+          } else {
+            currentExcludes = currentExcludes.filter(x => x.index !== cellInfo.cIdx)
+          }
+        }
+        delete newBlock.exclude
+        putExclude(newBlock, currentExcludes)
+        selectedList = selectedList.slice()
+        selectedList[pickIdx] = { ...oldPick, block: newBlock }
+        applyPickedMarks(tableEl)
+        updatePanel(panelEl, tableEl)
+      }
     }
     return
   }
@@ -1517,6 +1733,7 @@ function samePick(a, b) {
 
 // 加入一個值：去重與上限的判斷只有這一份，所有加選路徑都走它
 function addPick(pick) {
+  trimReady = false
   // 任何加選都讓復原快照失效（取代之後又加了東西，就沒有「上一步」可回了）
   clearUndoSnapshot()
   if (selectedList.some(p => samePick(p, pick))) return false
@@ -1531,6 +1748,7 @@ function addPick(pick) {
 
 // Shift 點擊：已經選過就取消，否則加入
 function togglePick(pick) {
+  trimReady = false
   clearUndoSnapshot()
   const at = selectedList.findIndex(p => samePick(p, pick))
   if (at >= 0) {
@@ -1559,6 +1777,21 @@ function posIndexOf(pos, count) {
   if (pos !== 'first' && pos !== 'last' && pos !== 'last-1') return null
   const idx = resolveByPosition(pos, count)
   return idx >= 0 ? idx : null
+}
+
+// preselect 帶回來的排除項以標題勾回：搬家跟著標題走、找不到就略過那一項；兩種都亮「位置已變」
+function relocateExcludes(block, headers, count, axis) {
+  const out = []
+  for (const item of excludeOf(block)) {
+    const loc = locateByHeader(headers, item, count, axis)
+    if (!loc.ok || typeof loc.index !== 'number' || loc.index < 0 || loc.index >= count) {
+      headerChangedNotice = true
+      continue
+    }
+    if (loc.index !== item.index) headerChangedNotice = true
+    out.push({ index: loc.index, header: headers[loc.index] || item.header })
+  }
+  return out
 }
 
 function applyPreselect(preselect, tableEl) {
@@ -1645,6 +1878,8 @@ function applyPreselect(preselect, tableEl) {
           }
           const block = { axis: 'col', index: bIdx, headerText: bHeader || colHeaders[bIdx] || '' }
           putInner(block, item.block.inner)
+          // 表尾不在這裡自動加：使用者之前取消過的排除不能復活
+          putExclude(block, relocateExcludes(item.block, rowHeaders, dataRows.length, 'row'))
           addPick({ block })
         }
       } else if (axis === 'row') {
@@ -1666,6 +1901,7 @@ function applyPreselect(preselect, tableEl) {
           }
           const block = { axis: 'row', index: bIdx, headerText: bHeader || rowHeader(dataRows[bIdx]) || '' }
           putInner(block, item.block.inner)
+          putExclude(block, relocateExcludes(item.block, colHeaders, colHeaders.length, 'col'))
           addPick({ block })
         }
       }
@@ -2015,6 +2251,24 @@ function onClick(event) {
     return
   }
 
+  // 3c. 每格各一個值之後的「去掉第一格／最後一格」：可連按，Ctrl+Z 反悔一步
+  const trimBtn = event.target && event.target.closest ? event.target.closest('[data-af-trim-head], [data-af-trim-tail]') : null
+  if (trimBtn) {
+    if (trimBtn.getAttribute('aria-disabled') === 'true' || selectedList.length <= 1) {
+      // 停用的鈕被點到不得靜默：說出為什麼不能再去掉
+      toolbarNotice = '只剩一個值了，不能再去掉'
+    } else {
+      const previous = takeUndoSnapshot(selectedList, pickedTableEl)
+      clearPickedMarks(document)
+      selectedList = trimBtn.hasAttribute('data-af-trim-head') ? selectedList.slice(1) : selectedList.slice(0, -1)
+      undoSnapshot = previous
+      limitReached = selectedList.length >= maxPicks
+      applyPickedMarks(pickedTableEl || currentTargetEl)
+    }
+    updatePanel(panelEl, currentTargetEl)
+    return
+  }
+
   // 4. 面板「移除最後一項」按鈕點擊
   const removeLastBtn = event.target && event.target.closest ? event.target.closest('[data-af-remove-last]') : null
   if (removeLastBtn) {
@@ -2169,6 +2423,7 @@ function pickKey(pick) {
  * 取代掉的那一格可以復原。最後一項不是單格（或清單是空的）就只切模式。
  */
 function upgradeLastPickTo(mode) {
+  trimReady = false
   if (mode !== 'col' && mode !== 'row') return false
   if (selectedList.length === 0) return false
   const last = selectedList[selectedList.length - 1]
@@ -2183,6 +2438,9 @@ function upgradeLastPickTo(mode) {
   const headerText = (axis === 'row' ? last.cell.row.header : last.cell.col.header) || ''
   const block = { axis, index, headerText }
   putInner(block, last.cell.inner)
+  // 單格升級成整欄也是「建立」整欄值：表尾合計照樣預設排除（整列不動）
+  const added = withFooterExclude(block, judgeEl)
+  if (added > 0) toolbarNotice = `已自動排除表尾 ${added} 列（合計），右鍵可取消`
   const upgraded = { block }
   const previous = takeUndoSnapshot(selectedList, pickedTableEl)
   if (selectedList.some(p => samePick(p, upgraded))) {
@@ -2209,6 +2467,7 @@ function clearUndoSnapshot() {
  * 讓 Ctrl+Z 退回原本的「移除最後一項」）
  */
 function undoReplace() {
+  trimReady = false
   if (!undoSnapshot) return false
   clearPickedMarks(document)
   selectedList = undoSnapshot.picks.slice()
@@ -2232,6 +2491,7 @@ function takeUndoSnapshot(picks, tableEl) {
 
 // 取代目前已選：點一下就是「只選這一個」
 function replaceSelection(candidate) {
+  trimReady = false
   // 空清單沒有東西可復原：第一次點格不能長出「復原」鈕與「已換成」提示
   const previous = takeUndoSnapshot(selectedList, pickedTableEl)
   clearPickedMarks(document)
@@ -2348,7 +2608,7 @@ export function enterPickMode(opts) {
   active = true
   currentPurpose = opts?.purpose || null
   currentTaskId = opts?.taskId !== undefined ? opts.taskId : undefined
-  maxPicks = (typeof opts?.maxPicks === 'number' && opts.maxPicks > 0) ? opts.maxPicks : 20
+  maxPicks = (typeof opts?.maxPicks === 'number' && opts.maxPicks > 0) ? opts.maxPicks : 100
   limitReached = false
   headerChangedNotice = false
   selectedList = []
@@ -2529,7 +2789,9 @@ export function exitPickMode(opts = {}) {
   deliberateTableEl = null
   currentHoverEl = null
   currentInner = null
-  maxPicks = 20
+  maxPicks = 100
+  // 「最近一次動作是每格各一個值」漏清的話，下一次選取一進來就亮著去頭去尾鈕
+  trimReady = false
   limitReached = false
   headerChangedNotice = false
   dragStart = null

@@ -75,6 +75,21 @@ test('點表頭選整欄也走同一條：tfoot 自動排除', async () => {
   assert.deepEqual(lastMsg(c).picks[0].block.exclude, [{ index: 3, header: '合計' }])
 })
 
+test('先點一格再按工具列「整欄」（單格升級成整欄）也走同一條：tfoot 自動排除', async () => {
+  const { c, pm, doc } = await setup()
+  enter(pm, doc)
+  hover(doc, 'c0-1')
+  doc.getElementById('c0-1').dispatchEvent(new globalThis.MouseEvent('click', { bubbles: true }))
+  const tool = doc.querySelector('[data-af-tool="col"]')
+  assert.ok(tool, '工具列要有整欄那一段')
+  tool.dispatchEvent(new globalThis.MouseEvent('click', { bubbles: true }))
+  assert.match(panelText(doc), /已自動排除表尾 1 列/)
+  confirm(doc)
+  const picks = lastMsg(c).picks
+  assert.equal(picks.length, 1, '那一格要被升級取代，不是加選')
+  assert.deepEqual(picks[0].block.exclude, [{ index: 3, header: '合計' }])
+})
+
 test('沒有 tfoot 的表：不帶 exclude 鍵、不提示', async () => {
   const { c, pm, doc } = await setup()
   enter(pm, doc, { table: 'plain' })
