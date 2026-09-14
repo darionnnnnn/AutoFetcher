@@ -298,7 +298,15 @@
 
 ### 過程中發現、規劃時沒寫到的事
 
-（實作中補）
+- **A 批寫測試時，fixture 監控頁的最後一列是 `colspan=4` 的格子、裡面包著 PublicIP／SLB 小表**。
+  同一條子路徑在那一格也解析得到 `203.69.51.90`，`parseNumber` 把它解析成 203.69，會靜默混進整欄聚合。
+  補一條規則：**有 `inner` 時只解析「起點就在這一欄」的格子**（`gridIndexOf(row, cell) === c`），被左邊格子的 `colspan` 涵蓋的視同解析不到。
+  沒有 `inner` 的路徑不受影響（仍讀展開後的 `table.cells`）。測試以整欄 `min` 釘住：少了這條會得 203.69 而不是 460。
+- **CSS 假表格的擷取端拿不到列元素**：`getDataRows` 對它回空陣列，B1 定案「子單位也適用假表格」照原規格一定 `not_found`。
+  改為有 `inner` 時列元素與選取端的 `resolveDataRows` 同源（`cssGridRowsOf`）。
+- A 批四個函式名由測試固定（`innerPathOf`、`resolveInner`、`gridIndexOf`、`cellAtGridIndex`），不再是暫定。
+- `inner` 為 `null` 也視同沒有 inner（原定案只寫缺省與空陣列）。
+- 現況基準：監控頁整欄 `min` 沒有 `inner` 時得 0（取自標題列的 `MR_IS_ANDR_CUST(0)`），是既有的髒值行為，本輪不動，只當守門基準。
 
 ## 併回前終檢
 
