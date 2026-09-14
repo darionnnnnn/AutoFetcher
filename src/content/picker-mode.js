@@ -5,7 +5,7 @@ import { MSG } from '../shared/messages.js'
 import { describe } from '../shared/selector.js'
 import { detectKind } from '../shared/block-detect.js'
 import { parseNumber, resolveByPosition, locateByHeader } from '../shared/extract.js'
-import { innerLabel } from '../shared/describe.js'
+import { withInnerLabel } from '../shared/describe.js'
 import {
   columnHeaders, rowHeader, innermostTable,
   // 「哪些列／格屬於這張表」的判準只有 shared/table.js 一份（AF-10 作業 D）：
@@ -14,7 +14,7 @@ import {
   tableOf, cellOf, isHeaderCell,
   cssGridRowsOf,
   gridIndexOf, cellAtGridIndex,
-  innerPathOf, resolveInner, hasInner, resolveInnerAt, putInner,
+  innerPathOf, resolveInner, hasInner, resolveInnerAt, putInner, gridStartsOf,
   tableRowsOf as getTableRows,
   rowCellsOf as getRowCells,
   isHeaderRowOf as isHeaderRow
@@ -305,8 +305,9 @@ function clearMarkedCells(doc) {
 function markCells(cell, dataRows, row, mode, cIdx, inner) {
   clearMarkedCells(document)
   if (mode === 'cell') {
-    const subEl = (cell && currentHoverEl) ? subUnitOf(cell, currentHoverEl) : null
-    const targetCell = subEl || cell
+    // 子單位以呼叫端算好的 inner 為準（與 pick 同一份），不在這裡用 hover 元素再判一次：
+    // 兩份輸入不同步時（Shift＋方向鍵移到下一格）會框整格、卻選了格內子元素
+    const targetCell = hasInner(inner) ? (row ? targetAtGrid(row, cIdx, inner) : null) : cell
     if (targetCell && !isHeaderCell(targetCell)) {
       targetCell.setAttribute('data-af-cell', '')
       targetCell.style.outline = `2px solid ${COLORS.warn}`
@@ -440,12 +441,8 @@ function getPickName(pick) {
   } else if (pick.block) {
     name = pick.block.headerText || (pick.block.axis === 'col' ? '整欄' : '整列')
   }
-  const inner = (pick.cell && pick.cell.inner) || (pick.block && pick.block.inner) || null
-  if (hasInner(inner)) {
-    const label = innerLabel(inner)
-    if (label) return `${name} · ${label}`
-  }
-  return name
+  // 名稱接格內標籤只有 describe.js 的 withInnerLabel 一份（與七個命名入口同源）
+  return withInnerLabel(name, (pick.cell && pick.cell.inner) || (pick.block && pick.block.inner))
 }
 
 // iframe 的 src 一律轉成絕對網址:background 拿它跟 frame 的 location.href 比對，
@@ -1433,8 +1430,8 @@ function handleMenuAction(action) {
         }
       } else {
         const rIdx = cellInfo ? cellInfo.rIdx : (rowIndex !== null ? rowIndex : 0)
-        const cols = columnHeaders(tableEl).length || getRowCells(dataRows[rIdx] || dataRows[0]).length
-        for (let c = 0; c < cols; c++) {
+        // 逐格的網格起點（不是 0..DOM 格數）：無表頭＋colspan 的列會重複選同一格、漏掉最後一欄
+        for (const c of dataRows[rIdx] ? gridStartsOf(dataRows[rIdx]) : []) {
           if (targetAtGrid(dataRows[rIdx], c, inner) !== null) {
             addPick(makeCellPick(rIdx, c, tableEl, dataRows, inner))
             if (limitReached) break
@@ -1795,6 +1792,8 @@ function onKeyDown(event) {
     selectedList = []
     limitReached = false
     pickedTableEl = null
+    // 全選的是整格：hover 時算出的子單位路徑要清掉，否則接著 Tab／Shift＋方向鍵會沿它框子元素
+    currentInner = null
     for (let r = 0; r < dataRows.length; r++) {
       const row = dataRows[r]
       const cells = getRowCells(row)
@@ -1833,13 +1832,14 @@ function onKeyDown(event) {
       if (dataRows.length > 0) {
         const curR = rowIndex !== null ? rowIndex : 0
         const curC = colIndex !== null ? colIndex : 0
-        const numCols = columnHeaders(currentTargetEl).length || getRowCells(dataRows[0]).length
+        // 最右能走到的是最後一格的網格起點（colspan 之後 DOM 格數小於網格寬）
+        const lastCol = Math.max(0, ...gridStartsOf(dataRows[curR] || dataRows[0]))
 
         addCellPick(curR, curC, dataRows, currentInner)
 
         let newR = curR
         let newC = curC
-        if (event.key === 'ArrowRight') newC = Math.min(numCols - 1, curC + 1)
+        if (event.key === 'ArrowRight') newC = Math.min(lastCol, curC + 1)
         else if (event.key === 'ArrowLeft') newC = Math.max(0, curC - 1)
         else if (event.key === 'ArrowDown') newR = Math.min(dataRows.length - 1, curR + 1)
         else if (event.key === 'ArrowUp') newR = Math.max(0, curR - 1)

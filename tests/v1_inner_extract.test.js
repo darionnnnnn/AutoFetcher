@@ -166,6 +166,7 @@ test('A 單格 inner 解析不到：not_found，訊息帶那一格現在的文�
   assert.equal(res.error, 'not_found')
   assert.ok(String(res.message).includes('找不到'), `訊息要說找不到：${res.message}`)
   assert.ok(String(res.message).includes('PORT:443'), `訊息要帶那一格現在的文字：${res.message}`)
+  assert.ok(String(res.message).includes('小表第 1 列第 2 格'), `訊息要說找的是哪個位置：${res.message}`)
 })
 
 test('A 單格 inner 解析不到、而那一格是空的：訊息仍以「找不到原本的位置」開頭', () => {
@@ -175,7 +176,7 @@ test('A 單格 inner 解析不到、而那一格是空的：訊息仍以「找�
     block: { cell: { row: { index: 7, header: '' }, col: { index: 0, header: '' }, inner: SMALL_TABLE_2ND } }
   })
   assert.equal(res.error, 'not_found')
-  assert.equal(res.message, '這一格裡找不到原本的位置；目前這一格是空的')
+  assert.equal(res.message, '這一格裡找不到原本的位置（小表第 1 列第 2 格）；目前這一格是空的')
 })
 
 test('A resolveInnerAt 是選取端與擷取端共用的唯一判定：起點不在這一欄的格子不算', async () => {
@@ -204,6 +205,7 @@ test('A 整欄 inner 一格都解析不到：not_found，訊息說幾格都找�
   assert.equal(res.ok, false, `不得退回整格文字加總成 6：${JSON.stringify(res)}`)
   assert.equal(res.error, 'not_found')
   assert.ok(String(res.message).includes('3 格'), `訊息要說 3 格都找不到：${res.message}`)
+  assert.ok(String(res.message).includes('小表第 1 列第 2 格'), `訊息要說找的是哪個位置：${res.message}`)
 })
 
 test('A inner 形狀不合法：not_found，不得靜默退回整格文字', () => {

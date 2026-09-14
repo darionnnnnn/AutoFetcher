@@ -490,10 +490,25 @@ try {
       await targetPage.mouse.move(c1.x, c1.y)
       await targetPage.mouse.click(c1.x, c1.y)
       const picked = await targetPage.evaluate(() => Array.from(document.querySelectorAll('[data-af-picked]')).map(el => el.id))
+      // 送出後拿選取端存的規格去擷取：選取端與擷取端要是同一格
+      await targetPage.keyboard.press('Enter')
+      const colspanExtract = await ext2.evaluate(async () => {
+        const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/*' })
+        const stored = await chrome.storage.session.get(`panel:${tabs[0].id}`)
+        const pick = stored[`panel:${tabs[0].id}`]?.ctx?.picks?.[0]
+        if (!pick?.cell) return { pick }
+        const res = await chrome.tabs.sendMessage(tabs[0].id, {
+          type: 'EXTRACT', locator: { css: '#t4', path: '', anchor: null, xpath: '' },
+          spec: { mode: 'block', block: { cell: pick.cell } }
+        })
+        return { pick, res }
+      })
       if (picked.length !== 1 || picked[0] !== 'c1') {
         errors.push(`AF-15:colspan 表點 c1,已選標記要落在 c1,實得 ${JSON.stringify(picked)}`)
+      } else if (colspanExtract.pick?.cell?.col?.index !== 2) {
+        errors.push(`AF-15:colspan 表點 c1 要存網格索引 2,實得 ${JSON.stringify(colspanExtract.pick)}`)
       } else {
-        console.log(`${browserName}:colspan 表點格的網格索引正常`)
+        console.log(`${browserName}:colspan 表點格的網格索引正常 (存 col.index=${colspanExtract.pick.cell.col.index})`)
       }
       await exitPick()
     }

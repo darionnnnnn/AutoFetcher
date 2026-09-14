@@ -280,6 +280,57 @@ test('B1 複合格整欄：兩列的 span 都標，送出後擷取端抓得到',
   pm.exitPickMode()
 })
 
+// ---------- CSS 假表格與 ARIA 表也適用子單位（規劃定案：判定通用於三種表） ----------
+
+const CSS_GRID = `<div id="g">
+  <div><span>甲</span><span id="g1"><b>MAX</b><i id="gi1">10</i></span></div>
+  <div><span>乙</span><span><b>MAX</b><i id="gi2">20</i></span></div>
+  <div><span>丙</span><span><b>MAX</b><i id="gi3">30</i></span></div>
+</div>`
+
+test('B1 CSS 假表格的複合格：子單位是帶文字的元素，整欄擷取抓得到同一批', async () => {
+  const { c, doc, pm, win } = await boot(CSS_GRID)
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.body })
+  // 純 CSS 假表格沒有格子選擇器可升級：指到子元素時目標跟著滑鼠走（既有行為），
+  // 要用 ↑ 走到容器，明確選定的鎖才會留住它——這正是鎖對假表格也要有效的理由
+  move(win, doc.getElementById('gi1'))
+  for (let i = 0; i < 3 && pm.currentTarget() !== doc.getElementById('g'); i++) key(doc, win, 'ArrowUp')
+  assert.equal(pm.currentTarget(), doc.getElementById('g'), '前置：↑ 到假表格容器')
+  move(win, doc.getElementById('gi1'))
+  assert.equal(pm.currentTarget(), doc.getElementById('g'), '鎖住之後指到子元素不得換目標')
+  assert.equal(doc.getElementById('gi1').hasAttribute('data-af-cell'), true, '子單位要被框')
+  assert.equal(doc.getElementById('g1').hasAttribute('data-af-cell'), false)
+  click(win, tool(doc, 'col'))
+  move(win, doc.getElementById('gi1'))
+  assert.equal(doc.getElementById('gi3').hasAttribute('data-af-cell'), true, '整欄要框到第 3 列的子單位')
+  key(doc, win, 'Enter')
+  const block = picked(c)[0].picks[0].block
+  assert.deepEqual(block.inner, [{ tag: 'i', index: 1 }])
+  const res = extractValue(doc.getElementById('g'), { mode: 'block', block: { ...block, aggregate: 'sum' } })
+  assert.equal(res.value, 60, `擷取端要抓到同一批子單位，實得 ${JSON.stringify(res)}`)
+  pm.exitPickMode()
+})
+
+const ARIA = `<div role="table" id="a">
+  <div role="row"><div role="cell">甲</div><div role="cell" id="a1"><b>MAX</b><i id="ai1">7</i></div></div>
+  <div role="row"><div role="cell">乙</div><div role="cell"><b>MAX</b><i id="ai2">8</i></div></div>
+</div>`
+
+test('B1 ARIA 表的複合格：子單位與擷取端一致', async () => {
+  const { c, doc, pm, win } = await boot(ARIA)
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('a') })
+  move(win, doc.getElementById('ai1'))
+  assert.equal(doc.getElementById('ai1').hasAttribute('data-af-cell'), true)
+  click(win, doc.getElementById('ai1'))
+  key(doc, win, 'Enter')
+  const cell = picked(c)[0].picks[0].cell
+  assert.deepEqual(cell.inner, [{ tag: 'i', index: 1 }])
+  assert.equal(cell.col.index, 1)
+  const res = extractValue(doc.getElementById('a'), { mode: 'block', block: { cell } })
+  assert.equal(res.value, 7, JSON.stringify(res))
+  pm.exitPickMode()
+})
+
 // ---------- colspan：選取端改用網格索引 ----------
 
 const COLSPAN = `<table id="cs"><thead><tr><th>A</th><th>B</th><th>C</th></tr></thead><tbody>

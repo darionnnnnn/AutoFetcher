@@ -1,6 +1,6 @@
 # AF-15 第 15 輪規劃：巢狀結構的格內子路徑（inner）
 
-> 狀態：實作完成，待換模型體檢（2026-09-14；A～D 已提交於 feature/AF-15）
+> 狀態：全案完成已併 dev（2026-09-14；Fable 5.1 體檢輪＋終檢）
 > 基準：dev@c5303b3（1936 綠，v0.13.0）
 > 來源：使用者回饋——監控頁「外層表每一列的某一格各包一張小表」時，無法選到「外層每一列 × 小表裡同一位置」這個整欄
 > 實作方式：agy（每階段一份規格檔；Claude 先寫測試、每段獨立重驗、突變測試）
@@ -44,13 +44,13 @@
 ## 已定案的待決（2026-09-14）
 
 1. 採用方案 A「格內子路徑 `inner`」；不做解析端展平（方案 B）、不做只限小表列欄的窄版（方案 C）。
-2. 子單位：外層格內有巢狀表就取**最內層格子**；沒有巢狀表就取**滑鼠下的元素本身**。子路徑的鍵盤伸縮本輪不做（BACKLOG）。
+2. ~~子單位：外層格內有巢狀表就取最內層格子；沒有巢狀表就取滑鼠下的元素本身。~~ **（B1 實作前收窄：子單位只在「複合格」才有，見批次 B1 定案與執行紀錄）** 子路徑的鍵盤伸縮本輪不做（BACKLOG）。
 3. 進入外層模式只靠面板提示句加 `↑`，右鍵選單不加項目。
 4. 整欄／整列聚合時，路徑解析不到的列算 `skipped`；全部解析不到才 `not_found`。
 5. `colspan` 索引不一致的既有 bug 本輪一併修。
 6. 實作用 agy。
 7. （複檢改版）`↑`／`↓` 選定的表要**鎖住**，滑鼠在它的內外層之間移動不換目標；規則與已選值的鎖合成同一份判定。
-8. （複檢改版）`innerLabel` **不進規格**：只在 `PICKED` 訊息的 pick 頂層帶一次，Picker 拿它當預設名稱；規格裡只有路徑，位置說明由路徑算出「小表第 r 列第 c 格」。
+8. （複檢改版）`innerLabel` **不進規格**：~~只在 `PICKED` 訊息的 pick 頂層帶一次，Picker 拿它當預設名稱~~ **（C 批前再收窄：訊息層也不帶，所有顯示處用純函式 `innerLabel(inner)` 算，見執行紀錄）**；規格裡只有路徑，位置說明由路徑算出「小表第 r 列第 c 格」。
 
 ## 批次 A：純函式層（`shared/table.js`、`shared/extract.js`）
 
@@ -177,7 +177,7 @@
   「這張小表只有 1 列，整欄只有 1 格；要跨外層每一列請按 ↑ 切到外層表」（`toolbarNotice`）。尖銳的使用者第一個會踩的就是「整欄選到 1 格」。
 - **範圍類加選帶哪個 `inner`**：`Shift` 矩形範圍、拖曳框選、右鍵「這一欄／這一列每格各一個值」以**錨點那一格的 `inner`**（`Shift` 是最後一個已選格、拖曳是 `mousedown` 那一格、右鍵是滑鼠所在格）套到範圍內每一格，解析不到的格**不建 pick**。
   **`Ctrl+A` 不帶 `inner`**（全選整格；「全選子單位」進 BACKLOG）。
-- **面板 chip**（`getPickName`）：有 `inner` 的值在「列 · 欄」後加「 · 」加 `innerLabel(inner)` 的字串（C 批的純函式；B2 先用「格內第 n 格」暫代，C 批換成共用函式——B2 的規格檔要明寫這一行之後會被 C 改掉，不要寫成第二份）。
+- **面板 chip**（`getPickName`）：有 `inner` 的值在「列 · 欄」後加「 · 」加 `innerLabel(inner)` 的字串~~（C 批的純函式；B2 先用「格內第 n 格」暫代）~~ **（實作時 `innerLabel` 提前到 B2；體檢改走 `withInnerLabel`，與七個入口同一份）**
 - **preselect 回勾**：帶 `inner` 的項目，列欄定位照舊（`locateByHeader`），再 `resolveInner`；解析不到就略過那一項並亮既有的「位置已變」提示。
 - **`exitPickMode`** 要重設本批新增的所有模組狀態。
 
@@ -203,7 +203,7 @@
 
 ### 現況與核對結果
 
-- 命名鏈：[picker.js:914](../src/ui/picker/picker.js:914) `singleCellName`、[picker.js:936](../src/ui/picker/picker.js:936) `defaultPickName`、[picker.js:1469](../src/ui/picker/picker.js:1469) `fieldNameText`、[main.js:70](../src/background/main.js:70) `defaultFieldName`；位置說明 [picker.js:1485](../src/ui/picker/picker.js:1485) `fieldWhereText`；白話句 [describe.js:129](../src/shared/describe.js:129) `describeTarget`。**六處**都是「列 · 欄」的組字。
+- 命名鏈：[picker.js:914](../src/ui/picker/picker.js:914) `singleCellName`、[picker.js:936](../src/ui/picker/picker.js:936) `defaultPickName`、[picker.js:1469](../src/ui/picker/picker.js:1469) `fieldNameText`、[main.js:70](../src/background/main.js:70) `defaultFieldName`；位置說明 [picker.js:1485](../src/ui/picker/picker.js:1485) `fieldWhereText`；白話句 [describe.js:129](../src/shared/describe.js:129) `describeTarget`。**六處**都是「列 · 欄」的組字。（**實作時確認是七個**：漏了一鍵命名「用欄標題」分支）
 - [main.js:36](../src/background/main.js:36) `pickSpecOf`：**逐欄挑**，`inner` 不列就丟（複檢發現 2）。
 - [picker.js:252](../src/ui/picker/picker.js:252) `buildSpec`：`item.cell = f.cell` 整個物件抄進規格——pick 頂層多帶的鍵不會進去，但 `cell` 裡多帶的會。
 - `sameSpec`/`stripPos`（重選時比對是不是同一個值）是全等比對，只比列欄。
@@ -212,7 +212,7 @@
 
 ### 定案
 
-- **`innerLabel` 不進規格**（複檢發現 3）。分工：
+- **`innerLabel` 不進規格**（複檢發現 3）。分工（**以下「PICKED 頂層帶 innerLabel」三條已於實作前推翻，實際做法：訊息、ctx、規格都不帶，七個入口一律 `withInnerLabel(base, inner)`**）：
   - `shared/describe.js` 匯出純函式 `innerLabel(inner)`：路徑最後一段是 `td`/`th` 且路徑裡有 `tr` → 「小表第 r 列第 c 格」（r 是最後一個 `tr` 的 `index`、c 是最後一段的 `index`）；否則「內層 <tag> n」（例如「內層 span」，n 大於 1 才顯示）。不需要 DOM，六個消費端都能用。
   - `PICKED` 訊息的 pick **頂層**可帶 `innerLabel`（選取端用 DOM 算：小表有錨點欄標題就是「小表 · <欄標題>」，否則同純函式）——它只活在訊息與面板 ctx，`pickSpecOf` 與 `buildSpec` 都**不抄**它。
   - 命名（`singleCellName` / `defaultPickName` / `defaultFieldName`）讀 pick 頂層的 `innerLabel`，沒有才退 `innerLabel(inner)`；說明與白話（`fieldNameText` / `fieldWhereText` / `describeTarget`）只讀規格，一律 `innerLabel(inner)`。六處組字都是「列 · 欄 · 格內標籤」，位置定位與純數值規則不變（標籤本身過 `isAnchorText`，純數值退回純函式結果）。
@@ -222,7 +222,7 @@
 - 診斷包 `page.table` 多帶 `innerProbe`：規格有 `inner` 時，對每一列解析同一條路徑的結果（`resolved: true|false` 與前 40 字），最多 20 列；沒有 `inner` 不帶這個鍵。
 - Picker 的「整欄的值不給選欄定位」等既有規則不變。
 
-### 改動
+### 改動（實際：`innerLabel` 已在 B2 做；`withInnerLabel` 收成一份；`pickSpecOf`、`applyPosToCell`、單值整欄組裝都要保留 `inner`）
 
 1. `shared/describe.js`：`innerLabel`、`describeTarget` 接第三段。
 2. `ui/picker/picker.js`：五個命名／說明函式接標籤；`sameSpec` 比 `inner`；`buildSpec` 帶 `inner`。
@@ -233,7 +233,7 @@
 ### 測試 / 驗收（Claude 先寫 `tests/v4_inner_naming.test.js`，執行端自驗）
 
 - `innerLabel`：小表路徑 → 「小表第 1 列第 2 格」；`[div 1, span 1]` → 「內層 span」；`[span 2]` → 「內層 span 2」。
-- 六個消費端對同一個帶 `inner` 的值產出同一段格內標籤（逐一斷言，**掃到的消費端數要等於 6**）。
+- ~~六個~~七個消費端對同一個帶 `inner` 的值產出同一段格內標籤（逐一斷言，**掃到的消費端數要等於 7**）。
 - 規格裡沒有 `innerLabel`：`buildSpec` 產出與 `pickSpecOf` 產出都 grep 不到這個鍵；PICKED 的 pick 頂層帶它時 Picker 的預設名稱用它。
 - `sameSpec`：同列欄、不同 `inner` → 不同值；重選保留 `pos` 的既有案不變。
 - **鏈結測試**（補進 `m2_chain` 或本檔）：PICKED（帶 `inner`）→ 面板 ctx → `buildSpec` → `extractValue` 抓到 `MAX:426`；repick 路徑 PICKED → `pickSpecOf` → `task.spec` 仍有 `inner`。
@@ -251,7 +251,7 @@
 
 ## 明確不做（本輪定案）
 
-- 解析端展平（方案 B）：小表列數不一時展不平、規則對使用者不可見、不涵蓋非表格巢狀。
+- 解析端展平（方案 B）：小表列數不一時展不平、規則對使用者不可見、不涵蓋非表格巢狀。（否決的替代方案，不進 BACKLOG）
 - 子路徑的鍵盤伸縮（在 `span` 與 `td` 之間切）：定案 2 只取兩種子單位。
 - 右鍵選單新增「改抓外層每一列的這個位置」：面板提示句加 `↑` 已足夠，八項選單太擠。
 - `gridIndexOf` 處理上一列 `rowspan` 佔位：需要整張表的網格；本輪只處理同一列的 `colspan`。
@@ -332,7 +332,7 @@
 
 ## 體檢交接
 
-- 全量測試：**2009 綠、0 紅**（基線 1936，淨增 73：v1 19、v2 20、v3 20、v4 14）。
+- 全量測試：實作輪 2009 綠；體檢輪後 **2020 綠、0 紅**（基線 1936）。
 - 煙霧：`./run_smoke.sh` Chrome for Testing 與 Edge **全部通過**。
 - 突變：A 5、B1 9、B2 11、C 14，共 39 發皆紅。
 - 版本：0.14.0（manifest 與 package.json 同步）。
@@ -342,6 +342,27 @@
   3. **C 批 agy 兩次無聲結束**的原因未查明；本輪由 Claude 實作，委派 skill 的失敗模式表可能要補一列。
   4. 本輪由三個模型接力：Fable 5.1 規劃與複檢、Opus 5 實作與驗收，體檢請換第三方模型。
 
+## 體檢輪修正（Fable 5.1，兩個 Opus low 代理掃 diff＋規劃逐條比對親做）
+
+規劃比對抓到 5 條（規劃寫了、實作沒做到）：
+1. 擷取端 `not_found` 訊息漏了格內標籤（規格檔漏抄 A 批定案）→ 三處訊息都帶「（小表第 1 列第 2 格）」；v1 補三條斷言。
+2. SPEC 漏「舊版擴充功能匯入帶 `inner` 的任務會忽略它」→ §7 補一句。
+3. 缺 `PICKED` → background → 面板 ctx 的鏈結測試 → `m2_chain` 補一條（含「訊息層不得帶 innerLabel」）。
+4. 煙霧 colspan 案只驗標記、沒驗擷取 → 送出後拿 ctx 裡的 pick 去 EXTRACT 並驗 `col.index=2`。
+5. B1 定案「子單位適用 ARIA 與假表格」零測試 → v2 補兩條；純 CSS 假表格指到子元素時目標會跟著滑鼠走（既有行為），要靠 `↑` 到容器讓明確選定的鎖留住它——鎖對假表格也有效這件事因此有了守門。
+
+代理獵 bug 6 條，全部親自核對屬實，都是本輪換網格索引帶進的退化（測試 `v5_checkup.test.js`）：
+6. 右鍵「這一列：每格各一個值」欄數上限用 DOM 格數 → 無表頭＋colspan 的列會重複選同一格、漏最後一欄。改逐格走 `gridStartsOf`（`table.js` 新增，每格一次的網格起點；擷取端整列、探測整列共三處共用）。
+7. `Shift`＋方向鍵最右欄同型 → 改用最後一格的網格起點。
+8. `markCells` 單格分支用 hover 元素再判一次子單位（第二份判定，與 pick 用的 `inner` 不同步）→ `Shift`＋→ 移到下一格時框整格、卻選了格內子元素。改以傳入的 `inner` 走 `targetAtGrid`。
+9. `Ctrl+A` 沒清 `currentInner` → 全選整格後 Tab 切整欄會沿殘留路徑框子元素。補清。
+10. 整列聚合帶 `inner` 逐網格欄走，被 colspan 涵蓋的欄計成 `skipped` 虛報（`colspan=4` 的列虛報 3，報表與紀錄看得到）→ 改逐格。
+11. 診斷包 `innerProbe` 在「欄用位置定位」時 `index` 是 `undefined`，每一列都報 `resolved:false`（正好是反向答案）→ 改標 `unprobed: 'pos'`、不探測。
+
+文件稽核 7 條：4 條是 PLAN 前半原定案沒標「已推翻」（定案 2、8、C 批三句、B2 chip 暫代）→ 補刪除線與註記；chip 名稱自己組字沒走 `withInnerLabel` → 改走同一份；「六個」入口殘留 → 註記為七；方案 B 註明不進 BACKLOG。
+
+結果：全套 **2020 綠**（體檢前 2009）、煙霧 Chrome／Edge 全過、突變 4 發皆紅（row-each 改回 DOM 格數、`markCells` 改回 hover 再判、`Ctrl+A` 不清、整列改回逐欄）。
+
 ## 併回前終檢
 
-（兩份獨立審查：程式碼、文件；結果記這裡）
+（合併後再掃，結果記這裡）

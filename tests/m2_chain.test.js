@@ -52,6 +52,23 @@ test('選好的多個值要一路傳到 Picker，不能在 background 掉光', a
   assert.equal(ctx.tabId, 7)
 })
 
+test('AF-15：pick 帶格內子路徑 inner 要原樣進到面板 ctx（background 不得逐欄重組丟掉它）', async () => {
+  const { c } = await freshBg()
+  const inner = [{ tag: 'table', index: 1 }, { tag: 'tbody', index: 1 }, { tag: 'tr', index: 1 }, { tag: 'td', index: 2 }]
+  await sendTo(c, {
+    type: 'PICKED', purpose: 'task', locator: { css: '#t' }, preview: 'MAX:462',
+    blockInfo: { kind: 'table', rows: 9, cols: 4 },
+    picks: [
+      { cell: { row: { index: 2, header: '10.231.1.31' }, col: { index: 2, header: '' }, inner } },
+      { block: { axis: 'col', index: 2, headerText: '', inner } }
+    ]
+  }, { tab: { id: 9, url: 'https://mon.test/p' } })
+  const ctx = (await chrome.storage.session.get('panel:9'))['panel:9'].ctx
+  assert.deepEqual(ctx.picks[0].cell.inner, inner, '儲存格的 inner 沒有到面板')
+  assert.deepEqual(ctx.picks[1].block.inner, inner, '整欄的 inner 沒有到面板')
+  assert.ok(!JSON.stringify(ctx.picks).includes('innerLabel'), '訊息層不得帶顯示標籤（規格全等比對會被它打斷）')
+})
+
 test('單選時照樣帶得出一個值', async () => {
   const { c } = await freshBg()
   await sendTo(c, {

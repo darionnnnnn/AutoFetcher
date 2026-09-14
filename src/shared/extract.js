@@ -1,9 +1,10 @@
 // AutoFetcher 數值擷取策略鏈與後處理
 import {
   parseTable, rowHeader, isAnchorText,
-  hasInner, resolveInnerAt, blockRowsOf
+  hasInner, resolveInnerAt, blockRowsOf, gridStartsOf
 } from './table.js'
 import { aggregateCells } from './aggregate.js'
+import { innerLabel } from './describe.js'
 
 const STRATEGY_ORDER = ['auto', 'regex', 'attr', 'child', 'label']
 
@@ -270,12 +271,12 @@ function extractCellFromTable(table, dataRows, cellSpec, specOpts = {}) {
   if (hasInner(cellSpec.inner)) {
     const resolved = resolveInnerCell(dataRows, targetRow, targetCol, cellSpec.inner)
     if (!resolved.ok) {
-      let message = '這一格裡找不到原本的位置'
+      // 說出找的是哪個位置（小表第 1 列第 2 格），使用者才對得回畫面
+      const where = `這一格裡找不到原本的位置（${innerLabel(cellSpec.inner) || '子路徑'}）`
+      let message = where
       if (resolved.cell) {
         const text = (resolved.cell.textContent || '').trim()
-        message = text
-          ? `這一格裡找不到原本的位置；目前這一格的文字是：${text.slice(0, 40)}`
-          : '這一格裡找不到原本的位置；目前這一格是空的'
+        message = text ? `${where}；目前這一格的文字是：${text.slice(0, 40)}` : `${where}；目前這一格是空的`
       }
       return { ok: false, error: 'not_found', message }
     }
@@ -361,8 +362,9 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
     }
 
     if (withInner) {
-      const colCount = (table.cells[targetIndex] || []).length
-      for (let c = 0; c < colCount; c++) {
+      // 逐「格」不逐「網格欄」：被 colspan 涵蓋的欄是同一格，逐欄走會把它計成解析不到、skipped 虛報
+      const rowEl = dataRows ? dataRows[targetIndex] : null
+      for (const c of rowEl ? gridStartsOf(rowEl) : []) {
         const resolved = resolveInnerCell(dataRows, targetIndex, c, block.inner)
         if (resolved.ok) {
           values.push(resolved.raw)
@@ -371,7 +373,7 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
         }
       }
       if (values.length === 0) {
-        return { ok: false, error: 'not_found', message: `這一列裡找不到原本的位置（${unresolved} 格都找不到）` }
+        return { ok: false, error: 'not_found', message: `這一列裡找不到原本的位置（${innerLabel(block.inner) || '子路徑'}；${unresolved} 格都找不到）` }
       }
     } else {
       values = table.cells[targetIndex]
@@ -396,7 +398,7 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
         }
       }
       if (values.length === 0) {
-        return { ok: false, error: 'not_found', message: `這一欄裡找不到原本的位置（${unresolved} 格都找不到）` }
+        return { ok: false, error: 'not_found', message: `這一欄裡找不到原本的位置（${innerLabel(block.inner) || '子路徑'}；${unresolved} 格都找不到）` }
       }
     } else {
       // 取值：每一列的第 targetIndex 格

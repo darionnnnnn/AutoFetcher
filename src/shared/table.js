@@ -242,6 +242,22 @@ export function resolveInnerAt(row, c, inner) {
 }
 
 /**
+ * 這一列每個格子的網格起點（每格一次）。整列逐格取值、整列每格各一個值、整列探測都走它：
+ * 用 0..網格寬 逐欄走的話，被 colspan 涵蓋的欄會把同一格算兩次（或計成解析不到）。
+ * @param {Element} row 列元素
+ * @returns {number[]}
+ */
+export function gridStartsOf(row) {
+  const starts = []
+  let col = 0
+  for (const c of rowCellsOf(row)) {
+    starts.push(col)
+    col += cellWidth(c)
+  }
+  return starts
+}
+
+/**
  * 只有子路徑是非空陣列時才在物件上放 `inner` 這個鍵（不放空陣列，舊形狀零變化）。
  * 選取模式建 pick、Picker 收集表單、background 重選逐欄挑，三處都走這一份。
  * @param {Object} target 要放鍵的 cell 或 block

@@ -4,7 +4,7 @@ import { describe, resolve } from '../shared/selector.js'
 import { extractValue, parseNumber } from '../shared/extract.js'
 import {
   parseTable, getDataRows, rowHeader, innermostTable,
-  hasInner, resolveInnerAt, cellAtGridIndex, blockRowsOf
+  hasInner, resolveInnerAt, gridStartsOf, blockRowsOf
 } from '../shared/table.js'
 import { enterPickMode, exitPickMode } from './picker-mode.js'
 
@@ -51,12 +51,22 @@ function innerProbeOf(el, source, spec) {
       const { target } = resolveInnerAt(row, c, inner)
       out.push({ resolved: Boolean(target), text: target ? (target.textContent || '').trim().slice(0, 40) : '' })
     }
+    const axisSpec = item.cell ? item.cell.col : item.block
+    // 欄用位置定位時沒有 index（每次擷取才算得出）：不探測、明講，不要逐列報 resolved:false 誤導
+    if (item.cell || item.block.axis !== 'row') {
+      if (typeof axisSpec?.index !== 'number') {
+        probes.push({ key: item.key, inner, rows: [], unprobed: 'pos' })
+        continue
+      }
+    }
     if (item.block && item.block.axis === 'row') {
       const row = rows[item.block.index]
-      for (let c = 0; row && cellAtGridIndex(row, c) && out.length < DIAG_ROWS_MAX; c++) probe(row, c)
+      for (const c of row ? gridStartsOf(row) : []) {
+        if (out.length >= DIAG_ROWS_MAX) break
+        probe(row, c)
+      }
     } else {
-      const c = item.cell ? item.cell.col?.index : item.block.index
-      for (let r = 0; r < rows.length && out.length < DIAG_ROWS_MAX; r++) probe(rows[r], c)
+      for (let r = 0; r < rows.length && out.length < DIAG_ROWS_MAX; r++) probe(rows[r], axisSpec.index)
     }
     probes.push({ key: item.key, inner, rows: out })
   }
