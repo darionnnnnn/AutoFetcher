@@ -148,6 +148,60 @@ function exclusionNote(block, unit, crossPos, withExclude) {
 }
 
 /**
+ * `describeTarget` 句中「略過／排除」那一段（含前面的「，」；沒有就是空字串）。
+ * 任務頁的模式欄只要這一段，也經它——不得另組一份判斷單位與位置定位的邏輯。
+ * @param {Object} target 與 `describeTarget` 同一種輸入
+ * @returns {string}
+ */
+export function exclusionOfTarget(target) {
+  const t = target || {}
+  if (t.mode !== 'block' || !t.block) return ''
+  const crossPos = t.block.axis === 'row' ? t.colPos : t.rowPos
+  if (typeof t.fieldCount === 'number' && t.fieldCount >= 2) return exclusionNote(t.block, '筆', crossPos, false)
+  if (t.cell) return ''
+  return exclusionNote(t.block, t.block.axis === 'row' ? '格' : '列', crossPos, true)
+}
+
+/**
+ * 只有略過設定的白話（Picker 儲存摘要用：略過是整個任務一份，存了就套到每個整欄整列的值）。
+ * @param {{head:number, tail:number}} skip
+ * @param {string} unit 列／格／筆
+ * @returns {string}
+ */
+export function skipNote(skip, unit) {
+  return exclusionNote({ skip }, unit, '', false)
+}
+
+/**
+ * 已存的任務 → `describeTarget` 的輸入（任務頁與 popup 共用；Picker 是從表單組，不走這裡）。
+ * 多值任務取第一個值（位置定位與略過是任務層級一份）。
+ * @param {Object} task
+ * @returns {Object}
+ */
+export function targetOfTask(task) {
+  const t = task || {}
+  const spec = t.spec || {}
+  const fields = Array.isArray(spec.fields) ? spec.fields : []
+  const first = fields.length > 0 ? fields[0] : spec.block
+  const out = { url: t.url || '', mode: fields.length > 0 ? 'block' : (t.mode || spec.mode || 'number') }
+  if (fields.length >= 2) out.fieldCount = fields.length
+  if (first && first.cell) {
+    out.cell = first.cell
+    out.rowPos = first.cell.row?.pos || ''
+    out.colPos = first.cell.col?.pos || ''
+  } else if (first) {
+    const block = first.block || first
+    if (block.axis) {
+      out.block = block
+      // 整欄的 pos 指列、整列的 pos 指欄
+      if (block.axis === 'row') out.colPos = block.pos || ''
+      else out.rowPos = block.pos || ''
+    }
+  }
+  return out
+}
+
+/**
  * 目標轉白話：「抓 www.twse.com.tw 的表格，取「115/09/07 · 成交金額」這一格」
  * @param {Object} target
  * @param {string} [target.url] 目標網址
@@ -176,9 +230,7 @@ export function describeTarget(target) {
   const posText = posNote.length > 0 ? `，${posNote.join('、')}` : ''
 
   if (typeof t.fieldCount === 'number' && t.fieldCount >= 2) {
-    const exText = t.block
-      ? exclusionNote(t.block, '筆', t.block.axis === 'row' ? t.colPos : t.rowPos, false)
-      : ''
+    const exText = exclusionOfTarget(t)
     return `${where}的表格，取 ${t.fieldCount} 個值${exText}${posText}${note}`
   }
 
@@ -193,9 +245,7 @@ export function describeTarget(target) {
   if (t.block) {
     const isRow = t.block.axis === 'row'
     const axis = isRow ? '整列' : '整欄'
-    const unit = isRow ? '格' : '列'
-    const crossPos = isRow ? t.colPos : t.rowPos
-    const exText = exclusionNote(t.block, unit, crossPos, true)
+    const exText = exclusionOfTarget(t)
     const header = withInnerLabel(t.block.headerText || '', t.block.inner)
     const agg = t.block.aggregate ? AGG_TEXT[t.block.aggregate] || '' : ''
     const aggText = agg ? `的${agg}` : ''
