@@ -174,6 +174,23 @@ test('C 多值存檔：每個值各自帶 inner', async () => {
   assert.equal('inner' in task.spec.fields[1].cell, false)
 })
 
+test('C 單值整欄存檔也帶 block.inner（單值整欄走另一條只挑三個欄位的組裝路徑）', async () => {
+  const { st, pk, doc } = await freshPicker()
+  pk.render({
+    locator: LOCATOR, url: 'https://mon.test/p', nameHint: '監控',
+    picks: [{ block: { axis: 'col', index: 2, headerText: '', inner: SMALL_TABLE_2ND } }]
+  })
+  doc.getElementById('dashboard-select').value = 'none'
+  await pk.handleSave()
+  await new Promise(r => setTimeout(r, 40))
+  const task = (await st.getTasks())[0]
+  assert.ok(task, '要存出任務')
+  assert.deepEqual(task.spec.block.inner, SMALL_TABLE_2ND, `實得 ${JSON.stringify(task.spec)}`)
+  const table = new JSDOM(`<!doctype html><body>${MONITOR}</body>`).window.document.querySelector('table')
+  const res = extractValue(table, { ...task.spec, block: { ...task.spec.block, aggregate: 'min' } })
+  assert.equal(res.value, 460, `整欄子路徑取 min，實得 ${JSON.stringify(res)}`)
+})
+
 // ---------- 重選（background）----------
 
 test('C 單值任務重選：pickSpecOf 逐欄挑也要挑到 inner；其他多帶的鍵照樣擋掉', async () => {
