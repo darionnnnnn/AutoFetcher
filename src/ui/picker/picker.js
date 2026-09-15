@@ -2282,6 +2282,129 @@ function blockCountsText(res) {
   return `（用了 ${u} 格、非數字 ${s} 格${blankPart}、略過與排除 ${e} 格）`
 }
 
+// 逐格處置文字對照表（八種 use，不含單位）
+const USE_TEXT = {
+  used: '採用',
+  nonnumeric: '非數字',
+  blank: '空白',
+  trimmed: '頭尾空白（已自動略過）',
+  skipHead: '略過開頭',
+  skipTail: '略過結尾',
+  excluded: '排除',
+  unresolved: '找不到子路徑'
+}
+
+// 畫出立即測試的「看抓到的格子」明細表（成功與失敗兩條路共用）
+function renderTestDetail(values, res) {
+  const detailEl = document.getElementById('test-detail')
+  if (!detailEl) return
+  const bodyEl = detailEl.querySelector('[data-test-detail-body]')
+  if (!bodyEl) return
+  bodyEl.textContent = ''
+
+  if (!res) {
+    detailEl.hidden = true
+    return
+  }
+
+  const sections = []
+  const isMulti = Array.isArray(values?.fields) && values.fields.length > 0
+  if (isMulti) {
+    for (const f of values.fields) {
+      const items = res.fields?.[f.key]?.items
+      if (Array.isArray(items) && items.length > 0) {
+        sections.push({
+          name: f.name,
+          axis: f.block?.axis,
+          items
+        })
+      }
+    }
+  } else {
+    const items = res.items
+    if (Array.isArray(items) && items.length > 0) {
+      sections.push({
+        axis: values?.block?.axis,
+        items
+      })
+    }
+  }
+
+  if (sections.length === 0) {
+    detailEl.hidden = true
+    return
+  }
+
+  let totalItems = 0
+  for (const sec of sections) {
+    totalItems += sec.items.length
+    const sectionEl = document.createElement('section')
+    sectionEl.setAttribute('data-detail-field', '')
+
+    if (isMulti) {
+      const nameEl = document.createElement('div')
+      nameEl.setAttribute('data-detail-name', '')
+      nameEl.textContent = sec.name || ''
+      sectionEl.appendChild(nameEl)
+    }
+
+    const table = document.createElement('table')
+    const thead = document.createElement('thead')
+    const headTr = document.createElement('tr')
+    const col2Text = sec.axis === 'row' ? '欄標題' : '列標題'
+    for (const title of ['#', col2Text, '內容', '數字', '處置']) {
+      const th = document.createElement('th')
+      th.textContent = title
+      headTr.appendChild(th)
+    }
+    thead.appendChild(headTr)
+    table.appendChild(thead)
+
+    const tbody = document.createElement('tbody')
+    for (const it of sec.items) {
+      const tr = document.createElement('tr')
+      if (it.use) {
+        tr.dataset.use = it.use
+      }
+
+      const tdIdx = document.createElement('td')
+      tdIdx.textContent = String(it.index + 1)
+      tr.appendChild(tdIdx)
+
+      const tdHeader = document.createElement('td')
+      tdHeader.textContent = (it.header !== undefined && it.header !== null) ? String(it.header) : ''
+      tr.appendChild(tdHeader)
+
+      const tdRaw = document.createElement('td')
+      const rawText = (it.raw !== undefined && it.raw !== null) ? String(it.raw) : ''
+      tdRaw.textContent = rawText
+      if (it.raw !== undefined && it.raw !== null) {
+        tdRaw.title = String(it.raw)
+      }
+      tr.appendChild(tdRaw)
+
+      const tdNum = document.createElement('td')
+      tdNum.textContent = (it.number !== undefined && it.number !== null) ? String(it.number) : ''
+      tr.appendChild(tdNum)
+
+      const tdUse = document.createElement('td')
+      tdUse.textContent = USE_TEXT[it.use] || (it.use ?? '')
+      tr.appendChild(tdUse)
+
+      tbody.appendChild(tr)
+    }
+    table.appendChild(tbody)
+    sectionEl.appendChild(table)
+    bodyEl.appendChild(sectionEl)
+  }
+
+  const summaryEl = detailEl.querySelector('summary')
+  if (summaryEl) {
+    summaryEl.textContent = `看抓到的格子（${totalItems} 格）`
+  }
+  detailEl.hidden = false
+}
+
 export async function handleTestNow() {
   const previewEl = document.getElementById('preview')
   const errorsEl = document.getElementById('errors')
@@ -2290,6 +2413,13 @@ export async function handleTestNow() {
   if (noteAtStart) {
     noteAtStart.textContent = ''
     delete noteAtStart.dataset.state
+  }
+  const detailAtStart = document.getElementById('test-detail')
+  if (detailAtStart) {
+    detailAtStart.hidden = true
+    detailAtStart.open = false
+    const bodyEl = detailAtStart.querySelector('[data-test-detail-body]')
+    if (bodyEl) bodyEl.textContent = ''
   }
   // 這一次的結果還沒出來，上一次的診斷先收起來
   setDiagAvailable(null)
@@ -2358,6 +2488,7 @@ export async function handleTestNow() {
         // 警告狀態只在這裡設；清除只有測試開始時那一份（不再各清一次）
         if (!values.fields && res.message) noteEl.dataset.state = 'warn'
       }
+      renderTestDetail(values, res)
     } else {
       // 有解法的訊息優先：'not_found' 只說了失敗，沒說使用者能怎麼辦
       const err = res?.message || res?.error || '找不到目標元素'
@@ -2372,6 +2503,7 @@ export async function handleTestNow() {
         const done = res.preActionTrace.filter(step => step.ok).length
         noteEl.textContent = `前置動作走到第 ${res.preActionTrace.length} 步（前 ${done} 步成功）`
       }
+      renderTestDetail(values, res)
     }
   } catch (e) {
     const err = e?.message || '找不到目標元素'

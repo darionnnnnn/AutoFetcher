@@ -185,6 +185,52 @@
     #preview[data-state="error"] { border-color: var(--danger); color: var(--danger); }
     #preview[data-state="warn"] { border-color: var(--warn); color: var(--warn); }
     #test-note[data-state="warn"] { color: var(--warn); }
+    #test-detail {
+      margin-top: var(--space-2);
+    }
+    #test-detail summary {
+      cursor: pointer;
+      font-size: var(--text-xs);
+      color: var(--text-muted);
+    }
+    [data-detail-name] {
+      font-weight: 600;
+      font-size: var(--text-xs);
+      margin-top: var(--space-2);
+      margin-bottom: var(--space-1);
+      color: var(--text);
+    }
+    [data-test-detail-body] {
+      max-height: 16rem;
+      overflow: auto;
+      margin-top: var(--space-1);
+    }
+    [data-test-detail-body] table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: var(--text-xs);
+    }
+    [data-test-detail-body] th,
+    [data-test-detail-body] td {
+      border: 1px solid var(--border);
+      padding: var(--space-1);
+      text-align: left;
+    }
+    [data-test-detail-body] td:nth-child(3) {
+      max-width: 8rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    [data-test-detail-body] tr[data-use] {
+      color: var(--text-muted);
+    }
+    [data-test-detail-body] tr[data-use="used"] {
+      color: var(--text);
+    }
+    [data-test-detail-body] tr[data-use="excluded"] {
+      color: var(--warn);
+    }
     #field-list { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; counter-reset: field-row; }
     [data-field-row] { display: flex; align-items: center; gap: 6px; counter-increment: field-row; }
     /* 序號用 CSS 計數器自己算：清單是 picker.js 動態產生的，
@@ -373,6 +419,10 @@
         <div id="preview"></div>
         <div id="errors" role="alert"></div>
         <div id="test-note" role="status"></div>
+        <details id="test-detail" hidden>
+          <summary></summary>
+          <div data-test-detail-body></div>
+        </details>
         <button type="button" id="export-diag" hidden>匯出診斷</button>
         <div id="export-diag-note" hidden>內含目標表格的 HTML 片段與頁面網址，請自行確認後再提供給他人。</div>
       </fieldset>
