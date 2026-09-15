@@ -347,10 +347,8 @@ function classifyUse(indexInItems, item, headBlankCount, tailBlankCount, totalCo
   if (tailBlankCount > 0 && indexInItems >= strippedEnd) {
     return 'trimmed'
   }
+  // 略過數超過剩餘長度時（那條失敗路徑）下面兩個判斷同樣成立：k < head 是 skipHead、其餘一定 ≥ strippedLength - tail
   const k = indexInItems - headBlankCount
-  if (head + tail >= strippedLength) {
-    return k < head ? 'skipHead' : 'skipTail'
-  }
   if (k < head) {
     return 'skipHead'
   }

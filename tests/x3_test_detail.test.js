@@ -210,6 +210,32 @@ test('下一次測試開始就收合：使用者上次展開過，新結果回�
   assert.equal(sections(doc).length, 1, '第二次不得把表疊在第一次後面')
 })
 
+test('換目標（render 再跑一次）：上一個目標的明細表要收掉，不能配著新目標的預覽留在畫面上（體檢補）', async () => {
+  const { c, pk, doc } = await fresh()
+  pk.render(ctxFor([colPick]))
+  c.__setRuntimeResponder(() => OK8)
+  await pk.handleTestNow()
+  $(doc, 'test-detail').open = true
+  assert.equal($(doc, 'test-detail').hidden, false, '前提：第一個目標測過、明細表展開著')
+  pk.render(ctxFor([rowPick]))
+  assert.equal($(doc, 'test-detail').hidden, true, '換了目標，舊表就是別張表的明細')
+  assert.equal($(doc, 'test-detail').open, false)
+  assert.equal(sections(doc).length, 0)
+})
+
+test('立即測試丟例外（連 background 都問不到）：上一次的明細表要在開始時就收掉，不能配著新錯誤留著（體檢補）', async () => {
+  const { c, pk, doc } = await fresh()
+  pk.render(ctxFor([colPick]))
+  c.__setRuntimeResponder(() => OK8)
+  await pk.handleTestNow()
+  assert.equal($(doc, 'test-detail').hidden, false, '前提：第一次有顯示')
+  c.__setRuntimeResponder(() => { throw new Error('Extension context invalidated') })
+  await pk.handleTestNow()
+  assert.equal($(doc, 'test-detail').hidden, true)
+  assert.equal(sections(doc).length, 0)
+  assert.ok($(doc, 'errors').textContent.includes('Extension context invalidated'))
+})
+
 // ---- 安全 ----
 
 test('格子文字是網頁上的任意字串：一律當文字，不得變成元素', async () => {

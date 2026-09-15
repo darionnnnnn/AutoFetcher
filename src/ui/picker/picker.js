@@ -563,6 +563,7 @@ export function render(ctx) {
   // 換了目標就不能留著上一個目標的診斷：按下去會匯出別一頁的網址與 HTML 片段
   // （與 AF-7 的 pickedTableEl、AF-9 的 undoSnapshot 同型的狀態殘留）
   setDiagAvailable(null)
+  resetTestDetail()
   const previewEl = document.getElementById('preview')
   if (previewEl) {
     // 比較要正規化成字串：preview 是文字、previewValue 是數字，直接比永遠不相等，
@@ -2294,18 +2295,24 @@ const USE_TEXT = {
   unresolved: '找不到子路徑'
 }
 
+// 明細表歸零：藏起、收合、清空。三個入口共用——測試開始、換目標重畫、畫表之前。
+// 換目標那一處不能漏：上一個目標的整欄明細留在畫面上、旁邊卻是新目標的預覽，
+// 與 AF-7 pickedTableEl、AF-9 undoSnapshot 同型的跨目標殘留
+function resetTestDetail() {
+  const detailEl = document.getElementById('test-detail')
+  if (!detailEl) return null
+  detailEl.hidden = true
+  detailEl.open = false
+  const bodyEl = detailEl.querySelector('[data-test-detail-body]')
+  if (bodyEl) bodyEl.textContent = ''
+  return bodyEl ? { detailEl, bodyEl } : null
+}
+
 // 畫出立即測試的「看抓到的格子」明細表（成功與失敗兩條路共用）
 function renderTestDetail(values, res) {
-  const detailEl = document.getElementById('test-detail')
-  if (!detailEl) return
-  const bodyEl = detailEl.querySelector('[data-test-detail-body]')
-  if (!bodyEl) return
-  bodyEl.textContent = ''
-
-  if (!res) {
-    detailEl.hidden = true
-    return
-  }
+  const slots = resetTestDetail()
+  if (!slots || !res) return
+  const { detailEl, bodyEl } = slots
 
   const sections = []
   const isMulti = Array.isArray(values?.fields) && values.fields.length > 0
@@ -2414,13 +2421,7 @@ export async function handleTestNow() {
     noteAtStart.textContent = ''
     delete noteAtStart.dataset.state
   }
-  const detailAtStart = document.getElementById('test-detail')
-  if (detailAtStart) {
-    detailAtStart.hidden = true
-    detailAtStart.open = false
-    const bodyEl = detailAtStart.querySelector('[data-test-detail-body]')
-    if (bodyEl) bodyEl.textContent = ''
-  }
+  resetTestDetail()
   // 這一次的結果還沒出來，上一次的診斷先收起來
   setDiagAvailable(null)
   const busy = setBusy('test-now', '測試中…')
