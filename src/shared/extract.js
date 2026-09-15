@@ -332,6 +332,69 @@ function extractCrossCell(table, block, specOpts, dataRows) {
   return { ...res, used: 1, skipped: 0, strategyUsed: 'block', partial: Boolean(table.partial) }
 }
 
+// 判定清單項目是否為空白格（ok === true 且 raw 為全空白字串）
+function isBlankItem(item) {
+  return item.ok === true && typeof item.raw === 'string' && /^\s*$/.test(item.raw)
+}
+
+// 判定清單項目處置（八態依優先順序判定）
+function classifyUse(indexInItems, item, headBlankCount, tailBlankCount, totalCount, head, tail, excludeIndicesToRemove) {
+  const strippedEnd = totalCount - tailBlankCount
+  const strippedLength = strippedEnd - headBlankCount
+  if (headBlankCount > 0 && indexInItems < headBlankCount) {
+    return 'trimmed'
+  }
+  if (tailBlankCount > 0 && indexInItems >= strippedEnd) {
+    return 'trimmed'
+  }
+  const k = indexInItems - headBlankCount
+  if (head + tail >= strippedLength) {
+    return k < head ? 'skipHead' : 'skipTail'
+  }
+  if (k < head) {
+    return 'skipHead'
+  }
+  if (k >= strippedLength - tail) {
+    return 'skipTail'
+  }
+  if (excludeIndicesToRemove && excludeIndicesToRemove.has(item.index)) {
+    return 'excluded'
+  }
+  if (!item.ok) {
+    return 'unresolved'
+  }
+  if (isBlankItem(item)) {
+    return 'blank'
+  }
+  if (parseNumber(item.raw) === null) {
+    return 'nonnumeric'
+  }
+  return 'used'
+}
+
+// 建立逐格處置明細陣列
+function buildBlockItems(items, isRow, rowHeaders, colHeaders, headBlankCount, tailBlankCount, head, tail, excludeIndicesToRemove) {
+  const totalCount = items.length
+  return items.map((it, i) => {
+    const use = classifyUse(i, it, headBlankCount, tailBlankCount, totalCount, head, tail, excludeIndicesToRemove)
+    const header = isRow
+      ? ((colHeaders && colHeaders[it.index]) || '')
+      : ((rowHeaders && rowHeaders[it.index]) || '')
+    const entry = {
+      index: it.index,
+      header,
+      use
+    }
+    if (it.ok) {
+      entry.raw = it.raw
+    }
+    if (use === 'used') {
+      entry.number = parseNumber(it.raw)
+    }
+    return entry
+  })
+}
+
 // 從已解析的表格中聚合欄或列
 function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
   const block = blockSpec || {}
@@ -347,9 +410,10 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
   const withInner = hasInner(block.inner)
   const isRow = block.axis === 'row'
 
+  let rowHeaders = null
   if (isRow) {
     // 列模式：欄與列同一套規則，列標題對得上照用、搬家跟著標題走（AF-8 修：原本只吃 index）
-    const rowHeaders = getTableRowHeaders(table.cells, dataRows || [])
+    rowHeaders = getTableRowHeaders(table.cells, dataRows || [])
     const rowLoc = locateByHeader(rowHeaders, {
       index: targetIndex,
       header: typeof block.headerText === 'string' ? block.headerText : ''
@@ -369,6 +433,7 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
     if (!colLoc.ok) return { ok: false, error: 'not_found', message: colLoc.message }
     targetIndex = colLoc.index
     status = colLoc.status
+    rowHeaders = getTableRowHeaders(table.cells, dataRows || [])
   }
 
   // 產生有序清單，每項記住另一軸索引與內容
@@ -424,19 +489,56 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
     return { ok: false, error: 'not_found' }
   }
 
-  // 先套 skip：讀出 head / tail
-  const { head, tail } = skipOf(block)
-  if (head + tail >= initialCount) {
-    const unit = isRow ? '格' : '列'
-    const subject = isRow ? '這一列' : '這一欄'
-    return {
-      ok: false,
-      error: 'not_found',
-      message: `略過開頭 ${head} ${unit}、結尾 ${tail} ${unit}後沒有剩下的格子（${subject}只有 ${initialCount} ${unit}）`
+  // 先套 skip：讀出 head / tail / blank
+  const { head, tail, blank } = skipOf(block)
+
+  let headBlankCount = 0
+  let tailBlankCount = 0
+  if (blank) {
+    while (headBlankCount < initialCount && isBlankItem(items[headBlankCount])) {
+      headBlankCount++
+    }
+    if (headBlankCount < initialCount) {
+      while (tailBlankCount < (initialCount - headBlankCount) && isBlankItem(items[initialCount - 1 - tailBlankCount])) {
+        tailBlankCount++
+      }
     }
   }
 
-  let remaining = items
+  const blankCount = headBlankCount + tailBlankCount
+  const strippedList = items.slice(headBlankCount, initialCount - tailBlankCount)
+  const excludeIndicesToRemove = new Set()
+  const buildItems = () => buildBlockItems(items, isRow, rowHeaders, table.headers, headBlankCount, tailBlankCount, head, tail, excludeIndicesToRemove)
+
+  // 剝完之後一格都不剩
+  if (blank && strippedList.length === 0) {
+    const message = isRow
+      ? `這一列的 ${initialCount} 格都是空白格`
+      : `這一欄的 ${initialCount} 列都是空白格`
+    return {
+      ok: false,
+      error: 'not_found',
+      message,
+      items: buildItems()
+    }
+  }
+
+  // 略過開頭／結尾後沒有剩
+  if (head + tail >= strippedList.length) {
+    const unit = isRow ? '格' : '列'
+    const subject = isRow ? '這一列' : '這一欄'
+    const message = blankCount > 0
+      ? `略過開頭 ${head} ${unit}、結尾 ${tail} ${unit}後沒有剩下的格子（${subject}去掉頭尾 ${blankCount} ${unit}空白後只有 ${strippedList.length} ${unit}）`
+      : `略過開頭 ${head} ${unit}、結尾 ${tail} ${unit}後沒有剩下的格子（${subject}只有 ${initialCount} ${unit}）`
+    return {
+      ok: false,
+      error: 'not_found',
+      message,
+      items: buildItems()
+    }
+  }
+
+  let remaining = strippedList
   if (head > 0 || tail > 0) {
     remaining = remaining.slice(head, remaining.length - tail)
   }
@@ -447,13 +549,12 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
   if (excludeList.length > 0) {
     const otherHeaders = isRow
       ? (table.headers || [])
-      : getTableRowHeaders(table.cells, dataRows || [])
+      : rowHeaders
     const otherCount = isRow
       ? (table.headers || []).length
       : table.cells.length
     const otherAxis = isRow ? 'col' : 'row'
 
-    const excludeIndicesToRemove = new Set()
     // 「找得到」＝定位成功，而且那個索引在排除前的完整清單裡。定位成功卻濾不到任何格子的兩種情形都算找不到：
     // 標題是空字串時 locateByHeader 直接回原索引、不檢查範圍（越界）；整列帶 inner 時清單只有每格的網格起點，
     // 排除項指到被 colspan 涵蓋的欄。算成找到的話，狀態 ok、什麼都沒排除，合計就默默被加進去
@@ -473,7 +574,7 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
     }
   }
 
-  const excluded = initialCount - remaining.length
+  const excluded = strippedList.length - remaining.length
 
   // 剩下的清單為空（因為 exclude 移光）
   if (remaining.length === 0) {
@@ -481,7 +582,8 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
       ok: false,
       error: 'not_found',
       // excluded 含 skip 移掉的：只寫「排除」會比使用者設的排除清單還大
-      message: `略過與排除共 ${excluded} ${isRow ? '格' : '列'}後沒有剩下的格子`
+      message: `略過與排除共 ${excluded} ${isRow ? '格' : '列'}後沒有剩下的格子`,
+      items: buildItems()
     }
   }
 
@@ -501,9 +603,9 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
       const message = isRow
         ? `這一列裡找不到原本的位置（${innerLabel(block.inner) || '子路徑'}；${unresolved} 格都找不到）`
         : `這一欄裡找不到原本的位置（${innerLabel(block.inner) || '子路徑'}；${unresolved} 格都找不到）`
-      return { ok: false, error: 'not_found', message }
+      return { ok: false, error: 'not_found', message, items: buildItems() }
     }
-    return { ok: false, error: 'not_found' }
+    return { ok: false, error: 'not_found', items: buildItems() }
   }
 
   const agg = aggregateCells(values, block.aggregate)
@@ -513,7 +615,8 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
     return {
       ok: false,
       error: 'parse_error',
-      raw
+      raw,
+      items: buildItems()
     }
   }
 
@@ -547,7 +650,9 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
     skipped: agg.skipped + unresolved,
     partial: Boolean(table.partial),
     ...(excluded > 0 ? { excluded } : {}),
-    ...(fallbackMessage !== undefined ? { message: fallbackMessage } : {})
+    ...(blankCount > 0 ? { blank: blankCount } : {}),
+    ...(fallbackMessage !== undefined ? { message: fallbackMessage } : {}),
+    items: buildItems()
   }
 }
 
@@ -607,15 +712,18 @@ export function extractValue(el, spec = {}) {
               used: res.used,
               skipped: res.skipped,
               ...(res.excluded !== undefined ? { excluded: res.excluded } : {}),
+              ...(res.blank !== undefined ? { blank: res.blank } : {}),
               ...(res.message !== undefined ? { message: res.message } : {}),
-              ...(res.label !== undefined ? { label: res.label } : {})
+              ...(res.label !== undefined ? { label: res.label } : {}),
+              ...(res.items !== undefined ? { items: res.items } : {})
             }
           } else {
             resultFields[key] = {
               ok: false,
               error: res.error,
               ...(res.raw !== undefined ? { raw: res.raw } : {}),
-              ...(res.message !== undefined ? { message: res.message } : {})
+              ...(res.message !== undefined ? { message: res.message } : {}),
+              ...(res.items !== undefined ? { items: res.items } : {})
             }
           }
         } else {

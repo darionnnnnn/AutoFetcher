@@ -268,29 +268,32 @@ export function putInner(target, inner) {
 }
 
 /**
- * 讀取 skip 設定的 head 與 tail。非物件或非整數一律視為 0。
+ * 讀取 skip 設定的 head、tail 與 blank。非物件或非整數一律視為 0。
  * @param {unknown} target block 物件或 skip 物件
- * @returns {{ head: number, tail: number }}
+ * @returns {{ head: number, tail: number, blank: boolean }}
  */
 export function skipOf(target) {
   const skip = (target && typeof target === 'object' && 'skip' in target)
     ? target.skip
     : target
-  if (!skip || typeof skip !== 'object') return { head: 0, tail: 0 }
+  if (!skip || typeof skip !== 'object') return { head: 0, tail: 0, blank: false }
   const head = Number.isInteger(skip.head) && skip.head >= 0 ? skip.head : 0
   const tail = Number.isInteger(skip.tail) && skip.tail >= 0 ? skip.tail : 0
-  return { head, tail }
+  const blank = skip.blank === true
+  return { head, tail, blank }
 }
 
 /**
- * 只有 head 或 tail 大於 0 時才在物件上放 `skip` 鍵。
+ * 只有 head 或 tail 大於 0，或 blank 為 true 時才在物件上放 `skip` 鍵。
  * @param {Object} target 要放鍵的 block 物件
  * @param {unknown} skip skip 設定
  */
 export function putSkip(target, skip) {
   const s = skipOf(skip)
-  if (s.head > 0 || s.tail > 0) {
-    target.skip = s
+  if (s.head > 0 || s.tail > 0 || s.blank === true) {
+    const out = { head: s.head, tail: s.tail }
+    if (s.blank === true) out.blank = true
+    target.skip = out
   }
 }
 
