@@ -798,7 +798,7 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
     `skip: { head, tail }`（略過開頭／結尾 N 筆，**任務層級一份**，Picker 收集時套到每個 block 值）與
     `exclude: [{ index, header }]`（使用者點選排除的**另一軸**項目：整欄的值存資料列索引與列標題、整列的值存網格欄索引與欄標題，**每個值各自一份**）。
     給的是「表格第一列是用 `td` 排的欄位名稱、最後一列是合計」：表頭列判準不放寬（見上面位置定位那段），改由使用者說哪幾筆不算。
-    - **怎樣算有**只有一份（`shared/table.js`）：`skipOf`／`putSkip`（`head`、`tail` 不是非負整數的一律當 0，兩個都 0 不放鍵）、
+    - **怎樣算有**只有一份（`shared/table.js`）：`skipOf`／`putSkip`（`head`、`tail` 不是非負整數的一律當 0，兩個都 0 而且沒開 `blank` 才不放鍵，見下面 `skip.blank` 段）、
       `excludeOf`／`putExclude`（只留 `index` 為非負整數的項目、每項只抄 `index` 與 `header`，空了不放鍵）。
       缺省、`null`、`{head:0,tail:0}`、空陣列都算沒有，舊規格的擷取結果一個位元都不變。
     - **頭尾空白自動略過 `skip.blank`**（AF-17）：`skip` 物件可帶 `blank: true`，**只認字面 `true`**（`'true'`、`1` 都是關）；`skipOf` 一律回 `{ head, tail, blank }`；`putSkip` 在 `head>0 || tail>0 || blank` 時放鍵，放的物件一律帶 `head`／`tail`，**`blank` 只在開著時才寫**（關著時形狀與 AF-16 一字不差）。設定併在 `skip` 裡，所以重選保留、`stripPos` 剝除、Picker 收集都沿用 `skip` 既有的五個搬運點，不另開鍵。
@@ -829,7 +829,7 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
       多值任務的逐值結果是擷取端白名單組出來的，成功那條抄 `blank` 與 `items`、失敗那條抄 `items`。
       **不走 dryRun 旗標、不走訊息欄位**：紀錄寫入本來就逐欄挑選（`fetcher.js` 單值與多值兩處），不會夾帶；`items` 與 `blank` **不得**加進那兩份白名單。
       **消費端**：紀錄的 `excluded` 與 `error`（`message` 寫進成功紀錄的 `error`，狀態仍是 `fallback`；燈號只看 `status`，不會當成失敗）、
-      歷史頁明細「略過與排除格數 (excluded)」與「非數字格數 (skipped)」、立即測試預覽「用了 U 格、非數字 S 格、略過與排除 E 格」、白話描述。
+      歷史頁明細「略過與排除格數 (excluded)」與「非數字格數 (skipped)」、立即測試預覽「用了 U 格、非數字 S 格、略過與排除 E 格」（AF-17：有剝掉頭尾空白時「非數字 S 格」後接「、空白 B 格」）與「看抓到的格子」明細表、白話描述。
       **口徑**：`skipped` 是解析不到（非數字）的格、`excluded` 含略過頭尾與點選排除兩種，標籤照口徑寫——只設略過的人不能看到「排除 1 格」。
     - **規格比對**：`pickSpecOf` 抄 `exclude`（經 `putExclude`）、不抄 `skip`；`sameSpec` 的 `stripPos` 同時剝掉 `block.exclude` 與 `block.skip`——
       排除清單不是值的身分，重選改了排除仍是同一個值、同一條序列。重選時 `exclude` **以這次選的為準**，`skip` 與 `aggregate` 一樣從舊任務保回來（新加的 block 值也套上）。

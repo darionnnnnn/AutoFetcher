@@ -166,6 +166,25 @@ test('多值：每個帶 items 的值一段、段首是值名稱、依值清單�
   assert.ok($(doc, 'test-detail').querySelector('summary').textContent.includes('5 格'))
 })
 
+test('多值整包失敗（表格本身解析不出來，沒有逐值結果）：明細表藏起來、不丟例外，錯誤照舊顯示（文件終檢補）', async () => {
+  const { c, pk, doc } = await fresh()
+  pk.render(ctxFor([colPick, rowPick]))
+  assert.equal(pk.getFormData().fields.length, 2, '前提：多值')
+  c.__setRuntimeResponder(() => OK8)
+  await pk.handleTestNow()
+  assert.equal($(doc, 'test-detail').hidden, true, '前提：OK8 是單值形狀，多值找不到逐值 items')
+  // 先讓明細表出現，再換成整包失敗，確認失敗那條路會把它收掉
+  const fields = pk.getFormData().fields
+  c.__setRuntimeResponder(() => ({ ok: true, fields: { [fields[0].key]: { ok: true, value: 1, raw: '1', status: 'ok', used: 1, skipped: 0, items: ITEMS8.slice(2, 3) } } }))
+  await pk.handleTestNow()
+  assert.equal($(doc, 'test-detail').hidden, false, '前提：多值成功時有顯示')
+  c.__setRuntimeResponder(() => ({ ok: false, error: 'not_found', message: '找不到表格' }))
+  await pk.handleTestNow()
+  assert.equal($(doc, 'test-detail').hidden, true)
+  assert.equal(sections(doc).length, 0)
+  assert.ok($(doc, 'errors').textContent.includes('找不到表格'))
+})
+
 // ---- 清空 ----
 
 test('下一次測試開始就清空：換成沒有 items 的結果時藏起來、內容清掉', async () => {

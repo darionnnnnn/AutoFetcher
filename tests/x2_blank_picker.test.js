@@ -160,9 +160,10 @@ test('換目標（render 再跑一次）：勾選框與略過數字欄位同一�
   setCheck(doc, 'skip-blank', false)
   setNum(doc, 'skip-tail', 1)
   pk.render(ctxFor([{ block: { axis: 'col', index: 2, headerText: 'TSWEB' } }]))
-  const tailKept = $(doc, 'skip-tail').value === '1'
-  const boxKept = $(doc, 'skip-blank').checked === false
-  assert.equal(boxKept, tailKept, `勾選框${boxKept ? '保留' : '重設'}、略過欄位${tailKept ? '保留' : '重設'}，兩者不能一個留一個丟`)
+  // 規劃定案：換目標時 render 重跑不重設它（與 #skip-head 同待遇）——使用者剛取消的勾不能被悄悄勾回去
+  assert.equal($(doc, 'skip-tail').value, '1', '前提：略過欄位保留')
+  assert.equal($(doc, 'skip-blank').checked, false, '勾選框也要保留使用者的選擇')
+  assert.deepEqual(blockOf(pk).skip, { head: 0, tail: 1 })
 })
 
 // ---- 白話描述不提空白 ----

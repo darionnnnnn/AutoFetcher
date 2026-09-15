@@ -351,3 +351,25 @@ test('多值：block 值帶 blank 與 items；失敗的 block 值也帶 items；
   assert.equal('items' in r.fields.cell, false)
   assert.equal('blank' in r.fields.cell, false)
 })
+
+// ---- 整列版的兩則訊息：單位是「格」、主詞是「這一列」（文件終檢補）----
+
+const rowOf = (cells) => extractValue(el(`<table><thead><tr><th>甲</th><th>乙</th><th>丙</th></tr></thead><tbody><tr>${
+  cells.map(c => `<td>${c}</td>`).join('')}</tr></tbody></table>`),
+{ mode: 'block', block: { axis: 'row', index: 0, headerText: '', aggregate: 'sum', skip: ON } })
+
+test('整列全部空白 → 訊息說「這一列的 N 格都是空白格」', () => {
+  const r = rowOf(['', ' ', '&nbsp;'])
+  assert.equal(r.ok, false)
+  assert.equal(r.message, '這一列的 3 格都是空白格')
+  assert.deepEqual(uses(r), ['trimmed', 'trimmed', 'trimmed'])
+  assert.deepEqual(r.items.map(it => it.header), ['甲', '乙', '丙'])
+})
+
+test('整列剝完空白後不夠略過 → 訊息單位是格', () => {
+  const r = extractValue(el(`<table><thead><tr><th>甲</th><th>乙</th><th>丙</th></tr></thead><tbody><tr><td></td><td>1</td><td></td></tr></tbody></table>`),
+    { mode: 'block', block: { axis: 'row', index: 0, headerText: '', aggregate: 'sum', skip: { head: 1, tail: 1, blank: true } } })
+  assert.equal(r.ok, false)
+  assert.equal(r.message, '略過開頭 1 格、結尾 1 格後沒有剩下的格子（這一列去掉頭尾 2 格空白後只有 1 格）')
+  assert.deepEqual(uses(r), ['trimmed', 'skipHead', 'trimmed'])
+})
