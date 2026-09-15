@@ -55,6 +55,16 @@
 - 預覽 `blockCountsText`：`blank > 0` 時在「非數字 S 格」後接「、空白 B 格」；為 0 時字串與現在一字不差。
 - 設定檔相容：匯出格式版本不變；0.15 以前匯入帶 `blank` 的任務會忽略它、空白格照舊計成 `skipped`，不另做遷移。
 
+#### 實作前核對補充（開工時普查後定案）
+
+- **`skip` 的儲存形狀**：`putSkip` 在 `head>0 || tail>0 || blank===true` 時放鍵；放的物件**一律帶 `head` 與 `tail`**（與 AF-16 相同），**`blank: true` 只在開著時才加**，關著時形狀與現在一字不差。既有測試全等比對的都是 `{head, tail}`（`w1:266-270`、`w2:123,141,153`），這樣它們不受影響。`skipOf` 一律回 `{ head, tail, blank }`，沒有測試全等比對它的回傳。
+- **`excluded` 的算法**改成「被 `skip` 與 `exclude` 移掉的筆數」，**不含 `trimmed`**；不能再沿用 `initialCount - remaining.length`，否則頭尾空白會被算進「略過與排除」。
+- **失敗回傳帶 `items` 的完整清單**：清單非空之後的**所有**失敗都帶，共五種：略過後沒有剩下、全部空白、全被排除、剩下的全部找不到子路徑、全部非數字（`parse_error`）。清單為空的既有失敗不帶。
+- **略過數超過剩餘時的處置標記**：在去掉頭尾空白後的清單裡，位置小於 `head` 的標 `skipHead`，其餘標 `skipTail`。
+- **普查確認不受影響**：沒有測試對整欄／整列結果整包全等比對（`v1:237-239` 比的是儲存格，不帶 `items`）；`describe.js` 與 background 重選只解構 `head`／`tail`，只設 `blank` 的規格不會被說成「略過」；background 單值（`fetcher.js:728-755`）與多值寫紀錄都是逐欄挑選。
+- **預設勾選帶來的既有測試預期變化**：`tests/w4_picker_skip.test.js` 的「兩欄都是 0 時規格不帶 skip 鍵」從真實表單讀值，預設勾選後規格會帶 `{head:0, tail:0, blank:true}`。這是本輪定案的預期變化，**委派端不得修改既有測試**，A-2 驗收時由 Claude 逐條確認後更新期望值並記入執行紀錄。`b7_picker_block:68` 與 `l3_batch_d:170` 直接傳入規格、不經表單，不受影響。
+- **Git Bash 查 agy 額度**：`/quota` 會被 Git Bash 的路徑轉換改寫成 `C:/Program Files/Git/quota`，agy 收到的是一般提示詞。要加 `MSYS_NO_PATHCONV=1`。
+
 ### 改動（階段）
 
 **A-1（`shared/table.js`、`shared/extract.js`；測試 `tests/x1_skip_blank.test.js`）**
@@ -69,7 +79,7 @@
 
 ### 測試／驗收（Claude 先寫，含突變）
 
-- `skipOf`：`{blank:true}`→true；`{blank:'true'}`、`{blank:1}`、缺省、`null`→false；`putSkip({}, {blank:true})` 放鍵且只有 `blank`；`putSkip({}, {head:0,tail:0,blank:false})` 不放鍵。
+- `skipOf`：`{blank:true}`→true；`{blank:'true'}`、`{blank:1}`、缺省、`null`→false；`putSkip({}, {blank:true})` 放鍵且形狀是 `{head:0, tail:0, blank:true}`；`putSkip({}, {head:1, blank:false})` 形狀是 `{head:1, tail:0}`、不帶 `blank` 鍵；`putSkip({}, {head:0,tail:0,blank:false})` 不放鍵。
 - 擷取：欄 `['', ' ', '10', '', '20', ' ']` 開著 → `used 2, skipped 1（中段空白）, blank 3`、value 30；關著 → `used 2, skipped 4`、無 `blank` 鍵，且與 dev@f01f27c 的結果 deep-equal（移除 `items` 後比）。
 - 開著＋`skip.head=1`：欄 `['', '標題', '1', '2']` → 略過的是「標題」不是空白列，value 3。**突變**：把剝空白挪到 `skip` 之後要紅。
 - 全空白 → `not_found` 與指定訊息；剝完不夠略過 → 訊息含「去掉頭尾 B 列空白後只有 N 列」；`blank=0` 時訊息與現在相同（用既有 w1 測試的字串比）。
@@ -86,6 +96,7 @@
 
 - `picker.js:2272 blockCountsText` 只給 used／skipped／excluded 三個數；擷取端的清單（`extract.js:377-410`）算完就丟。
 - dryRun 回傳是整包轉發：`content/main.js:111 handleExtract` 展開 `...extracted`、`fetcher.js:593` 展開 `...res`，多值在 `res.fields[key]`。正式抓取 `fetcher.js:622-650` 逐欄挑進紀錄，不會夾帶新鍵。`buildDebug` 只吃 `error`／`message`。
+- **實作前核對補充（開工時發現，規劃原本漏掉）**：整包轉發只對**單值**成立。多值任務的逐值結果在擷取端 `extract.js:576-630` 以**白名單**組出（成功抄 `used`／`skipped`／`excluded`／`message`／`label`，失敗只抄 `error`／`raw`／`message`）。不改這裡的話，多值的 `items` 與 `blank` 在擷取端就被丟掉，Picker 永遠收不到，而單值測試全綠。**A-1 必須在這份白名單的成功與失敗兩條都加上 `items`、成功那條加上 `blank`**，驗收以多值任務斷言兩鍵存在。
 - 頁面上的 `data-af-picked`／`data-af-excluded` 是「設定」的標示（`applyPickedMarks`），略過頭尾在頁面上看不出來。
 - `picker.html` 沒有表格樣式與 `<dialog>`；`ui.css` 只服務已被使用的類別（本輪樣式寫在 `picker.html` 自己的 `<style>`）。
 - 立即測試只開放新建任務（BACKLOG 既有項），明細表同樣只在新建時看得到；不擴大。
