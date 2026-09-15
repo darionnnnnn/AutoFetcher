@@ -19,7 +19,8 @@ function skipFromForm() {
   if (!row || row.hidden) return { head: 0, tail: 0 }
   const head = Number(document.getElementById('skip-head')?.value)
   const tail = Number(document.getElementById('skip-tail')?.value)
-  return skipOf({ head, tail })
+  const blank = document.getElementById('skip-blank')?.checked ?? false
+  return skipOf({ head, tail, blank })
 }
 
 // 整欄用「列」、整列用「格」、混著用「筆」：略過欄位的標籤與儲存摘要共用這一份
@@ -641,11 +642,13 @@ export function render(ctx) {
     }
     const skipSource = t.spec?.block?.skip
       || t.spec?.fields?.find(f => f.block?.skip)?.block?.skip
-    const { head, tail } = skipOf(skipSource)
+    const { head, tail, blank } = skipOf(skipSource)
     const headEl = document.getElementById('skip-head')
     if (headEl) headEl.value = String(head)
     const tailEl = document.getElementById('skip-tail')
     if (tailEl) tailEl.value = String(tail)
+    const blankEl = document.getElementById('skip-blank')
+    if (blankEl) blankEl.checked = blank
   } else {
     const nameEl = document.getElementById('name')
     if (nameEl && !nameEl.value.trim()) {
@@ -2274,8 +2277,9 @@ function blockCountsText(res) {
   const u = res.used
   const s = res.skipped ?? 0
   const e = res.excluded ?? 0
+  const blankPart = res.blank > 0 ? `、空白 ${res.blank} 格` : ''
   // skipped＝非數字、excluded＝略過頭尾＋點選排除（與歷史頁明細同一套口徑）
-  return `（用了 ${u} 格、非數字 ${s} 格、略過與排除 ${e} 格）`
+  return `（用了 ${u} 格、非數字 ${s} 格${blankPart}、略過與排除 ${e} 格）`
 }
 
 export async function handleTestNow() {
