@@ -82,7 +82,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 2117 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 2181 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -159,7 +159,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   `applyDefaultCardTypes` 曾在移除一個值、上下移、改定位時把使用者勾的卡片型別改回預設。
 - **延遲關窗前要確認 `globalThis.window` 還是自己那一個**:jsdom 測試共用全域 window,
   也可能關到別人的視窗。
-- **會跨表格殘留的狀態，在「換表清空」那一段也要一起清**:AF-7 是 `pickedTableEl`、AF-9 是復原快照 `undoSnapshot`,
+- **會跨表格殘留的狀態，在「換表清空」那一段也要一起清**:AF-7 是 `pickedTableEl`、AF-9 是復原快照 `undoSnapshot`、AF-17 是立即測試明細表 `#test-detail`(`render` 清了預覽與診斷卻漏了它),
   兩次都是「清單清了、旁邊那份索引沒清」,`Ctrl+Z` 或送出就把 A 表的索引配上 B 表的定位。
 - **蓋在頁面上、又接指標事件的東西要讓得開**:iframe 代理層曾貼在 z-index 最高的 overlay 底下,
   把站台疊在 iframe 上的下拉選單整個擋掉(站台收到 `mouseout` 就收合,使用者點不到選單項目)。
@@ -243,3 +243,5 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **排除項在頁面上找不到不得靜默**（AF-16）：不排除任何東西、狀態降 `fallback`、訊息寫進紀錄的 `error`。
   合計列改名之後靜默的話，就是默默加兩次。
 - **tfoot 預設排除只在「建立」整欄值的當下做一次**，preselect 帶回來的值不得再加（使用者取消過的不能復活）。
+- **頭尾空白自動略過是 `skip.blank`，不是另一個鍵**（AF-17）：一律經 `skipOf`／`putSkip`，只認字面 `true`、關著時不寫 `blank` 鍵。併在 `skip` 裡才能沿用既有五個搬運點——另開鍵就是第三次「每段自己都綠、規格裡就是沒有」。**新建預設勾、編輯照舊任務回填**，不得把預設套到舊任務。
+- **逐格明細 `items` 與 `blank` 只給立即測試預覽**（AF-17）：擷取端一律回傳，`fetcher` 單值與多值寫紀錄的兩份白名單**不得**抄它們（每筆紀錄夾帶整欄明細，storage 會長到 MB 級；`tests/x3_test_detail.test.js` 會擋）。處置分類只有 `extract.js` 一份，八態與結果的 `used`／`skipped`／`excluded`／`blank` 四條口徑必須對得上，改其中一邊要一起改。

@@ -648,3 +648,54 @@ test('多值任務的預設值名不得用純數值標題', async () => {
     assert.ok(!String(n).includes('4318'), `4318 明天就變了，不該變成值的名字，實得 ${n}`)
   }
 })
+
+// ---- AF-17：逐格處置明細從擷取端一路到 Picker 的明細表（三段各自綠，斷點在中間）----
+
+test('AF-17：擷取端算出的 items 經 background 試抓回傳到 Picker，明細表每一列的處置與擷取端一致', async () => {
+  resetChromeMock()
+  const c = installChromeMock()
+  globalThis.navigator = { onLine: true }
+  const st = await import('../src/shared/storage.js?t=' + Math.random())
+  await st.init()
+  const fe = await import('../src/background/fetcher.js?t=' + Math.random())
+  const { extractValue } = await import('../src/shared/extract.js')
+
+  // 產生端：用真的擷取函式算出 items（頭尾空白、非數字、合計排除各一）
+  const TABLE = `<table><thead><tr><th>主機</th><th>值</th></tr></thead><tbody>
+    <tr><td>a</td><td></td></tr><tr><td>b</td><td>10</td></tr><tr><td>c</td><td>—</td></tr>
+    <tr><td>d</td><td>20</td></tr><tr><td>合計</td><td>30</td></tr></tbody></table>`
+  const block = { axis: 'col', index: 1, headerText: '值', aggregate: 'sum', skip: { head: 0, tail: 0, blank: true }, exclude: [{ index: 4, header: '合計' }] }
+  const tableEl = new JSDOM(`<!doctype html><body>${TABLE}</body>`).window.document.body.firstElementChild
+  const produced = extractValue(tableEl, { mode: 'block', block })
+  assert.ok(Array.isArray(produced.items) && produced.items.length === 5, `前提：擷取端產出 5 格明細，實得 ${JSON.stringify(produced)}`)
+
+  // 中段：background 以試抓模式跑，content 回的就是上面那一份
+  const tab = await c.tabs.create({ url: 'https://real.test/x' })
+  c.__setTabState(tab.id, { status: 'complete' })
+  c.__setScriptResponder((opts) => (opts?.target?.allFrames === true
+    ? [{ frameId: 0, result: 'https://real.test/x' }]
+    : []))
+  c.__setTabResponder((tabId, msg) => (msg.type === 'EXTRACT' ? { ...produced, layer: 'css' } : { ok: true }))
+  const task = { id: '__preview', name: '鏈結', url: 'https://real.test/x', locator: { css: '#t' }, spec: { mode: 'block', block } }
+  const res = await fe.runTask(task, { dryRun: true, reason: 'manual', tabId: tab.id, ...FAST })
+  assert.deepEqual(res.items, produced.items, 'background 的試抓回傳不得丟掉 items')
+
+  // 消費端：Picker 拿到同一份回應，明細表逐列對得上
+  const PICKER_HTML = readFileSync(new URL('../src/ui/picker/picker.html', import.meta.url), 'utf8')
+  const jd = new JSDOM(PICKER_HTML, { url: 'chrome-extension://abc/ui/picker/picker.html' })
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  const pk = await import('../src/ui/picker/picker.js?t=' + Math.random())
+  pk.render({
+    locator: { css: '#t' }, url: 'https://real.test/x', tabId: tab.id,
+    blockInfo: { kind: 'table', rows: 5, cols: 2, headers: ['主機', '值'] },
+    picks: [{ block: { axis: 'col', index: 1, headerText: '值' } }]
+  })
+  c.__setRuntimeResponder((msg) => (msg?.type === 'TEST_TASK' ? res : undefined))
+  await pk.handleTestNow()
+  const doc = jd.window.document
+  assert.equal(doc.getElementById('test-detail').hidden, false)
+  const trs = [...doc.querySelectorAll('#test-detail tbody tr')]
+  assert.deepEqual(trs.map(tr => tr.dataset.use), produced.items.map(it => it.use))
+  assert.deepEqual(trs.map(tr => tr.querySelectorAll('td')[1].textContent), produced.items.map(it => it.header))
+})

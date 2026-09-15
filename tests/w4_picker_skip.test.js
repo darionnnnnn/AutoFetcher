@@ -61,6 +61,8 @@ test('兩個數字欄位存在、預設 0、有看得見的標籤', async () => 
 test('單值整欄：兩欄都是 0 時規格不帶 skip 鍵；填了就帶', async () => {
   const { pk, doc } = await fresh()
   pk.render(ctxFor([colPick()]))
+  // AF-17：新建時預設勾「自動略過頭尾空白」會寫 skip.blank；這條測的是頭尾數字，先取消勾選
+  $(doc, 'skip-blank').checked = false
   assert.equal('skip' in pk.buildSpec(pk.getFormData()).block, false)
   setNum(doc, 'skip-tail', 1)
   assert.deepEqual(pk.buildSpec(pk.getFormData()).block.skip, { head: 0, tail: 1 })
@@ -78,8 +80,9 @@ test('多值：skip 套到每個 block 值，儲存格值不帶；exclude 各自
   setNum(doc, 'skip-head', 1)
   const spec = pk.buildSpec(pk.getFormData())
   assert.equal(spec.fields.length, 3)
-  assert.deepEqual(spec.fields[0].block.skip, { head: 1, tail: 0 })
-  assert.deepEqual(spec.fields[1].block.skip, { head: 1, tail: 0 })
+  // AF-17：新建時預設勾「自動略過頭尾空白」，每個 block 值一併帶 blank
+  assert.deepEqual(spec.fields[0].block.skip, { head: 1, tail: 0, blank: true })
+  assert.deepEqual(spec.fields[1].block.skip, { head: 1, tail: 0, blank: true })
   assert.equal('skip' in spec.fields[2].cell, false, '儲存格沒有頭尾可略過')
   assert.deepEqual(spec.fields[0].block.exclude, [TOTAL])
   assert.equal('exclude' in spec.fields[1].block, false)
@@ -88,6 +91,8 @@ test('多值：skip 套到每個 block 值，儲存格值不帶；exclude 各自
 test('非整數或負數輸入當 0，不會寫出壞規格', async () => {
   const { pk, doc } = await fresh()
   pk.render(ctxFor([colPick()]))
+  // AF-17：這條測的是頭尾數字的判準，先取消預設勾選的「自動略過頭尾空白」
+  $(doc, 'skip-blank').checked = false
   setNum(doc, 'skip-head', -3)
   setNum(doc, 'skip-tail', '1.5')
   assert.equal('skip' in pk.buildSpec(pk.getFormData()).block, false)

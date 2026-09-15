@@ -239,6 +239,9 @@ test('A 守門：沒有 inner（缺省、null、空陣列）的擷取結果與�
   assert.deepEqual(extractValue(monitorTable(), cellSpec({ inner: [] })), cellBase)
 
   const colMin = extractValue(monitorTable(), { mode: 'block', block: { axis: 'col', index: VALUE_COL, headerText: '', aggregate: 'min' } })
+  // AF-17：整欄整列結果多帶逐格明細 items（預覽用、不進紀錄），其餘欄位仍須逐位元不變
+  assert.ok(Array.isArray(colMin.items) && colMin.items.length === 9, '明細要涵蓋這一欄的 9 格')
+  delete colMin.items
   assert.deepEqual(colMin, {
     ok: true, value: 0,
     raw: '[ IS(Android)客戶區 ]MR_IS_ANDR_CUST(0), PORT:443, 42MAX:462, 43MAX:460, 41MAX:460, 41MAX:462, 40MAX:460, 361040583, PublicIP:203.69.51.90SLB:10.231.80.75FQDN:NexusAnd.yuanta.com.tw',
