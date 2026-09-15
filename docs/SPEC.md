@@ -132,7 +132,7 @@
     這一格不在該值的排除清單 →「從整欄聚合排除這一列」／「從整列聚合排除這一欄」(`exclude`);
     已在 →「取消排除這一列」／「取消排除這一欄」(`include`)。改的是那個值的 `block.exclude`(§7),**產生新的 block 物件替換**,
     不原地改陣列元素(復原快照裡的舊清單要保持原樣)。**排除與取消排除也讓復原快照失效**:先去頭去尾再排除時,`Ctrl+Z` 若還原到快照,排除的改動會一起不見。**不用 `Ctrl` 點**:那是「加選這一格為獨立的值」,合計那一格單獨當一個值是合理需求。
-    **排除分支要在 `closeMenu()` 之前取出要改哪一個值**——`closeMenu` 會把 `menuTargetContext` 清成 null(AF-16 實作時踩過,右鍵排除永遠無效)。
+    要改哪一個值的判定在開選單當下就決定(記在選單情境裡),不在點選項目時重算。
   - **滑鼠停在儲存格上就進入該表格的表格模式**(`upgradeTarget`,唯一一份):目標升為那一格
     所屬的**最內層**表格,工具列三段隨即可用、`nameHint` 也算得出來。
     只對 `task` 與 `repick` 升級——前置動作與登入要點的是那個元素本身,不是它所在的表格。
@@ -814,11 +814,12 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
         標題是空字串時 `locateByHeader` 直接回原索引、不檢查範圍(索引越界);整列帶 `inner` 時清單只有每格的網格起點,排除項指到被 `colspan` 涵蓋的欄(AF-16 終檢)。
     - 結果多帶 `excluded`（被 `skip` 與 `exclude` 移掉的筆數，0 時不放鍵）；多值任務每個 block 值各自帶 `excluded` 與 `message`。
       **消費端**：紀錄的 `excluded` 與 `error`（`message` 寫進成功紀錄的 `error`，狀態仍是 `fallback`；燈號只看 `status`，不會當成失敗）、
-      歷史頁明細「排除格數 (excluded)」、立即測試預覽、白話描述。
+      歷史頁明細「略過與排除格數 (excluded)」與「非數字格數 (skipped)」、立即測試預覽「用了 U 格、非數字 S 格、略過與排除 E 格」、白話描述。
+      **口徑**：`skipped` 是解析不到（非數字）的格、`excluded` 含略過頭尾與點選排除兩種，標籤照口徑寫——只設略過的人不能看到「排除 1 格」。
     - **規格比對**：`pickSpecOf` 抄 `exclude`（經 `putExclude`）、不抄 `skip`；`sameSpec` 的 `stripPos` 同時剝掉 `block.exclude` 與 `block.skip`——
       排除清單不是值的身分，重選改了排除仍是同一個值、同一條序列。重選時 `exclude` **以這次選的為準**，`skip` 與 `aggregate` 一樣從舊任務保回來（新加的 block 值也套上）。
     - **白話描述**只在 `describe.js` 一份（`exclusionNote`；句中那一段由 `exclusionOfTarget` 產生，`describeTarget` 自己也經它）。
-      **任務頁與 popup 也看得到**：已存任務經 `targetOfTask` 轉成描述輸入，任務頁模式欄在原本的短字後接 `exclusionOfTarget`、`title` 放 `describeTarget` 完整句，popup 任務名稱的 `title` 放完整句。
+      **任務頁與 popup 也看得到**：已存任務經 `targetOfTask` 轉成描述輸入（多值取第一個**整欄整列**的值——略過只掛在 block 上，第一個值是儲存格時往後找），只給區塊任務（數值／文字任務的句子沒有新資訊），任務頁模式欄在原本的短字後接 `exclusionOfTarget`、`title` 放 `describeTarget` 完整句，popup 任務名稱的 `title` 放完整句。
       單位與位置規則：整欄單位「列」、整列「格」、多值「筆」（多值只說 skip）；
       該軸用位置定位時不說；沒有設定時句子與改動前一字不差。
     - **數字＋文字**：聚合只取數字是既有行為——`parseNumber` 取第一段數字片段（`MAX:427` → 427），純文字（`合計`、`—`）計入 `skipped`、
@@ -930,7 +931,7 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
   非整數或負數當 0(判準經 `table.js` 的 `skipOf`)。編輯既有任務時從 `spec.block.skip` 或第一個帶 `skip` 的值回填。
   單值整欄的逐欄組裝要帶上 pick 的 `exclude`(多值走展開,本來就留得住)。**換目標時 `render` 會再跑一次**:由 pick 建 `currentBlock` 不得把舊目標的 `exclude`、`inner`、`skip`、`pos` 併進來(新 pick 沒帶那個鍵就會殘留,排除列套到新表錯誤的列上)。
   值清單的 `[data-field-where]` 接「(排除 K 列)」／「(排除 K 格)」;位置定位下有排除清單時 `#pos-hint` 加一句「位置定位下排除不生效」;
-  「立即測試」對 block 值接「(用了 U 格、略過 S 格、排除 E 格)」,排除項找不到的訊息單值寫進 `#test-note`、多值接在該行的「⚠」之後。
+  「立即測試」對 block 值接「(用了 U 格、非數字 S 格、略過與排除 E 格)」,排除項找不到的訊息單值寫進 `#test-note`、多值接在該行的「⚠」之後。
   **排除項找不到時預覽是警告色**(`#preview` 與 `#test-note` 帶 `data-state="warn"`,樣式用 `--warn`):值抓得到,但合計可能被加進去了,
   不能跟成功一樣是綠色;下一次測試開始時清掉警告狀態。
   **整欄的值不給選「欄定位」、整列的不給選「列定位」**(那一軸是使用者自己點的,

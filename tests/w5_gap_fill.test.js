@@ -51,6 +51,15 @@ test('targetOfTask：多值取第一個值、帶值的數量，單位是「筆�
   assert.equal(exclusionOfTarget(target), '，略過結尾 1 筆')
 })
 
+test('targetOfTask：多值任務第一個值是儲存格、第二個是帶略過的整欄——略過說明不得消失', () => {
+  const t = multiTask()
+  t.spec.fields.unshift({ key: 'c', cell: { row: { index: 0, header: '10.0.0.1' }, col: { index: 1, header: '點金靈' } } })
+  t.fields.unshift({ key: 'c', name: '第一台' })
+  const target = targetOfTask(t)
+  assert.equal(target.fieldCount, 3)
+  assert.equal(exclusionOfTarget(target), '，略過結尾 1 筆')
+})
+
 test('targetOfTask：數值任務與儲存格任務沒有排除片段', () => {
   assert.equal(exclusionOfTarget(targetOfTask({ id: 'n', url: 'https://a.test', mode: 'number', spec: { strategy: 'auto' } })), '')
   assert.equal(exclusionOfTarget(targetOfTask(blockTask({ spec: { mode: 'block', block: { cell: { row: { index: 0, header: 'a' }, col: { index: 1, header: 'b' } } } } }))), '')
@@ -103,6 +112,9 @@ test('popup：任務名稱的 title 是抓什麼的白話句，含略過與排�
   const name = jd.window.document.querySelector('#task-list .task-name')
   assert.ok(name, '沒有任務列的話下面的斷言會真空成立')
   assert.match(name.title, /略過結尾 1 列、排除 1 列/)
+  // 與任務頁同一條守門：數值任務不設（句子沒有新資訊）
+  pp.render({ health: { level: 'green', redCount: 0, yellowCount: 0, summary: '一切正常' }, tasks: [{ id: 'n', name: '電費', url: 'https://a.test', mode: 'number', spec: { strategy: 'auto' }, schedule: { type: 'daily', times: ['09:00'] } }], lastValues: {}, nextRuns: {}, healthMap: {} })
+  assert.equal(jd.window.document.querySelector('#task-list .task-name').title, '')
 })
 
 // ---- Picker：儲存摘要與預覽警告 ----

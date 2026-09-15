@@ -1750,7 +1750,9 @@ function addPick(pick) {
     return false
   }
   selectedList.push(pick)
-  if (pick.block) footerNotice(footer)
+  // 只有整欄值會有表尾排除：候選值算好的待報數可能沒被消耗（點表頭只觸發「再點一次才取代」提示就早退），
+  // 整欄的每個建立入口都會重算它，整列值撿到殘留的就不得說（體檢探針抓到）
+  if (pick.block && pick.block.axis === 'col') footerNotice(footer)
   if (!pickedTableEl && currentTargetEl && isTableMode(currentTargetEl)) pickedTableEl = currentTargetEl
   return true
 }

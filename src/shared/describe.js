@@ -182,7 +182,8 @@ export function targetOfTask(task) {
   const t = task || {}
   const spec = t.spec || {}
   const fields = Array.isArray(spec.fields) ? spec.fields : []
-  const first = fields.length > 0 ? fields[0] : spec.block
+  // 多值取第一個值；略過是任務層級、只掛在整欄整列的值上，第一個值是儲存格時要往後找第一個 block（否則略過說明整段消失）
+  const first = fields.length > 0 ? (fields.find((f) => f && f.block) || fields[0]) : spec.block
   const out = { url: t.url || '', mode: fields.length > 0 ? 'block' : (t.mode || spec.mode || 'number') }
   if (fields.length >= 2) out.fieldCount = fields.length
   if (first && first.cell) {

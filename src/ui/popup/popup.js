@@ -35,8 +35,9 @@ function renderTaskRow(task, { lastValues, nextRuns, healthMap }) {
   const nameSpan = document.createElement('span')
   nameSpan.className = 'task-name'
   nameSpan.textContent = task.name || task.id || ''
-  // 抓什麼的白話（含略過／排除）與 Picker 摘要卡、任務頁同一份
-  nameSpan.title = describeTarget(targetOfTask(task))
+  // 抓什麼的白話（含略過／排除）與 Picker 摘要卡、任務頁同一份；與任務頁同一條守門：數值／文字任務的句子沒有新資訊
+  const target = targetOfTask(task)
+  if (target.mode === 'block') nameSpan.title = describeTarget(target)
   mainDiv.appendChild(nameSpan)
 
   const valueSpan = document.createElement('span')

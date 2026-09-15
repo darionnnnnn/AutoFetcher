@@ -1391,8 +1391,8 @@ function bindModeEvents() {
       el._summaryBound = true
     }
   }
-  // 略過一改，儲存摘要要跟著說（定位下拉改了會藏起略過欄位，也要重算）
-  for (const id of ['skip-head', 'skip-tail', 'row-pos', 'col-pos']) {
+  // 略過一改，儲存摘要要跟著說（定位下拉改了會經 updateFieldListState 重算，不另綁）
+  for (const id of ['skip-head', 'skip-tail']) {
     const el = document.getElementById(id)
     if (el && !el._saveSummaryBound) {
       el.addEventListener('change', () => updateSaveSummary())
@@ -2274,7 +2274,8 @@ function blockCountsText(res) {
   const u = res.used
   const s = res.skipped ?? 0
   const e = res.excluded ?? 0
-  return `（用了 ${u} 格、略過 ${s} 格、排除 ${e} 格）`
+  // skipped＝非數字、excluded＝略過頭尾＋點選排除（與歷史頁明細同一套口徑）
+  return `（用了 ${u} 格、非數字 ${s} 格、略過與排除 ${e} 格）`
 }
 
 export async function handleTestNow() {

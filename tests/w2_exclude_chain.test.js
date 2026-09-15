@@ -233,8 +233,8 @@ test('歷史頁明細要顯示排除格數', async () => {
   row.dispatchEvent(new jd.window.MouseEvent('click', { bubbles: true }))
   const detail = jd.window.document.querySelector('#record-table .detail-box')
   assert.ok(detail, '點列要展開明細')
-  assert.match(detail.textContent, /排除格數/)
-  assert.match(detail.textContent, /排除格數 \(excluded\)：?\s*1/)
+  assert.match(detail.textContent, /略過與排除格數 \(excluded\)：?\s*1/, 'excluded 含略過頭尾移掉的，只寫「排除」會讓只設略過的人看到排除 1 格')
+  assert.match(detail.textContent, /非數字格數 \(skipped\)/, 'skipped 是解析不到的格，不是略過頭尾')
 })
 
 // ---- 白話描述 ----

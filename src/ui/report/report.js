@@ -624,8 +624,9 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
       }
       if (record.strategyUsed === 'block') {
         detailItems.push(['聚合格數 (used)', record.used ?? '—'])
-        detailItems.push(['略過格數 (skipped)', record.skipped ?? 0])
-        detailItems.push(['排除格數 (excluded)', record.excluded ?? 0])
+        // skipped 是解析不到（非數字）的格；excluded 含略過頭尾與點選排除兩種——標籤照口徑寫，別讓只設略過的人看到「排除 1 格」
+        detailItems.push(['非數字格數 (skipped)', record.skipped ?? 0])
+        detailItems.push(['略過與排除格數 (excluded)', record.excluded ?? 0])
         if (record.partial === true) {
           detailItems.push(['只抓到部分 (partial)', '是（表格可能有未載入的列）'])
         }

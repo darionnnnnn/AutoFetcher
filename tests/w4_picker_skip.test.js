@@ -195,8 +195,8 @@ test('單值預覽多一行用了、略過、排除幾格；fallback 的找不�
   await pk.handleTestNow()
   const text = $(doc, 'preview').textContent + '\n' + $(doc, 'test-note').textContent + '\n' + $(doc, 'errors').textContent
   assert.match(text, /用了 3 格/)
-  assert.match(text, /略過 1 格/)
-  assert.match(text, /排除 1 格/)
+  assert.match(text, /非數字 1 格/)
+  assert.match(text, /略過與排除 1 格/)
   assert.match(text, /找不到（合計）/)
 })
 
@@ -213,7 +213,7 @@ test('多值預覽：block 值那一行也帶排除資訊', async () => {
   }))
   await pk.handleTestNow()
   const lines = $(doc, 'preview').textContent.split('\n')
-  assert.match(lines[0], /排除 1 格/)
+  assert.match(lines[0], /略過與排除 1 格/)
   assert.doesNotMatch(lines[1], /排除/)
 })
 

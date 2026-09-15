@@ -243,3 +243,23 @@
 - 任務頁模式欄的 `title` 一開始對所有任務都設，讓既有測試 `f3_tasks`「最後錯誤放 title」抓到的第一個 `[title]` 變成模式欄而紅。改成**只給區塊任務**設：數值／文字任務的完整句沒有新資訊，而且列上的 `title` 已經有人用。沒有改既有測試。
 
 **這次比對的教訓**：終檢的文件稽核只核對「SPEC 對程式碼」與「定案表對實作」，**各作業『定案的行為（契約）』裡沒進驗收條件的條目**（C2 後半、C4）兩份終檢都沒逐條比，正是 plan-before-dev 說的「規格寫了驗收沒寫＝零訊號」。規劃前提（A 描述句的呼叫端、C4 的既有樣式）也要在規劃時 grep 驗過，不能照印象寫。
+
+## 體檢輪修正（換模型：實作 Opus 5＋agy，體檢 Fable 5.1；subagent scan-low／opus low）
+
+| 哪裡 | 症狀 | 怎麼修 | 迴歸測試 |
+|---|---|---|---|
+| `picker-mode.js` `addPick` | 表尾待報數 `pendingFooterNotice` 跨路徑殘留：點表頭只觸發「再點一次才取代」提示（或 Ctrl 點取消已選整欄）都不消耗它，下一個右鍵加入的**整列**值誤報「已自動排除表尾」（Fable 親讀手改 commit 起疑、探針證實；代理獨立重現另一條路） | `addPick` 只在 `pick.block.axis === 'col'` 才說；整欄的每個建立入口都會重算待報數，所以早退分支另清一份是冗餘（單獨突變互相擋住，已拿掉） | w3「表尾待報數不得殘留」 |
+| `report.js` 明細、`picker.js` 預覽 | `excluded` 含略過頭尾移掉的（SPEC 定義如此），標籤卻寫「排除格數」；只設略過的人看到「排除 1 格」。`skipped`（解析不到）也叫「略過」，與 `skip` 撞名 | 標籤照口徑：「略過與排除格數 (excluded)」「非數字格數 (skipped)」；預覽同款 | w2 明細、w4 預覽兩處改斷言 |
+| `describe.js` `targetOfTask` | 多值任務第一個值是儲存格、第二個是帶略過的整欄時，`first` 取 `fields[0]`（cell）→ 略過說明整段消失 | 取第一個帶 `block` 的值，沒有才退回 `fields[0]` | w5「第一個值是儲存格」 |
+| `popup.js` | 任務名 `title` 對所有任務都設，與同一 commit 的 `tasks.js`「只給區塊任務」結論相反 | 比照 `tasks.js` 守門 | w5 popup 數值任務 `title` 為空 |
+| `picker.js` 事件綁定 | `row-pos`／`col-pos` 的 change 同時經 `updateFieldListState` 與另一條 listener 呼叫 `updateSaveSummary`（雙觸發，冪等） | 那條 listener 只綁 `skip-head`／`skip-tail` | 既有 w5 儲存摘要測試仍綠 |
+| `docs/SPEC.md:135`、`docs/BACKLOG.md:18` | SPEC 混進「AF-16 實作時踩過」過程敘事且與 CLAUDE.md 逐字重複；BACKLOG 寫 `extract.js` 一處實為兩處 | SPEC 只留行為契約；BACKLOG 數字改正 | — |
+| `.gemini-tasks/` | 殘留 AF-14／AF-15 六個規格檔（未追蹤） | 刪除 | — |
+
+代理列為可接受、Fable 判定不改：`fallback` 同時承載「標題搬家」與「排除項找不到」（黃燈語意相同）；成功紀錄的警告放 `error` 欄位（標籤「錯誤訊息」措辭不精確，無功能影響，改欄位名會動紀錄形狀）；col/row 對稱的重複區塊（已在 BACKLOG）；`enterPickMode` 未重設新狀態（它先呼叫 `exitPickMode`，帶 `clearOnly` 也全部重設，不成立）。
+
+整套 **2117 綠**（＋2：w3 殘留、w5 第一值儲存格）；煙霧 Chrome／Edge 全過。
+
+## 終檢輪
+
+規劃比對（契約逐條含子句）、體檢修正 commit 自身、文件稽核三項再掃一次：終檢無新發現。
