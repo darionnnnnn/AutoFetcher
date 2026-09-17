@@ -273,13 +273,13 @@
               </table>
             </div>
           </div>
-          <figcaption>整欄變藍框；最下面的合計列是虛線，代表不算進去。</figcaption>
+          <figcaption>整欄變藍框；虛線的合計列不算進去（表格原本就標成表尾合計的會自動排除，其他要自己排除）。</figcaption>
         </figure>
         <details data-help-more>
           <summary>遇到這些狀況</summary>
           <dl>
             <dt>「一個值」跟「每格」差在哪？</dt><dd>「一個值」把整欄加總（或平均、最大…，在面板選）成一個數字；「每格」是每一格各自一條紀錄，報表上是好幾條線。</dd>
-            <dt>合計列被算進去了？</dt><dd>在那一格按右鍵，選「<span class="ui" data-ui-label="content/picker-mode.js">從整欄聚合排除這一列</span>」。表格有表尾合計時會自動排除。</dd>
+            <dt>合計列被算進去了？</dt><dd>在那一格按右鍵，選「<span class="ui" data-ui-label="content/picker-mode.js">從整欄聚合排除這一列</span>」。只有網頁本來就把合計放在表尾區塊（tfoot）時才會自動排除；一般的「合計」列要自己排除一次。</dd>
             <dt>開頭或結尾有幾列不要？</dt><dd>面板「抓什麼」裡有「<span class="ui" data-ui-label="ui/picker/picker.html">略過開頭</span>」與「略過結尾」可以填列數。</dd>
             <dt>之後表格多了一列，會自動抓嗎？</dt><dd>「整欄→一個值」會（每次都算整欄）；「整欄→每格」不會，它記的是選取當下那幾格，新的那一列要重選。</dd>
           </dl>
@@ -342,7 +342,7 @@
           <summary>遇到這些狀況</summary>
           <dl>
             <dt>面板說「已改選外層表這一欄的同一個位置」</dt><dd>這是正常的：小表只有一列，所以自動幫你換成外層每一列。只要那一格就切回「單格」。</dd>
-            <dt>鍵盤 ↑／↓ 是做什麼的？</dt><dd>↑ 換到外面那一層表，↓ 回來。已經選了值時按 ↑，值會跟著換到外層（每一列都有同樣小表的時候）。</dd>
+            <dt>鍵盤 ↑／↓ 是做什麼的？</dt><dd>↑ 換到外面那一層表，↓ 回來。已經選了值時按 ↑，值會跟著換到外層（每一列都有同樣小表的時候）；值換到外層之後按 ↓ 不會回小表，要回去請先移除已選。</dd>
             <dt>面板說「已選的值留在原表」</dt><dd>外層不是每一列都有同樣的小表（多半是排版用的表格），值不會跟著換；這時點外層的格子是換表。</dd>
             <dt>重選既有任務時不能換到外層？</dt><dd>換過去之後歷史紀錄接不上，所以擋住了。要抓外層整欄請建立新任務。</dd>
           </dl>
@@ -450,7 +450,7 @@
           <dl>
             <dt>登入頁在另一個網域（例如用 Google 帳號登入）？</dt><dd>目前不支援，只支援同一個網站的登入表單。</dd>
             <dt>有驗證碼？</dt><dd>無法自動登入。請手動登入並保持登入狀態。</dd>
-            <dt>密碼安全嗎？</dt><dd>密碼加密後只存在這台電腦的瀏覽器裡，不會同步到別台，匯出設定也不會帶出去。</dd>
+            <dt>密碼安全嗎？</dt><dd>密碼加密後只存在這台電腦的瀏覽器裡，不會同步到別台。匯出設定預設不帶密碼；要帶到別台電腦，匯出時勾選「包含站台密碼」並設一組密語。</dd>
           </dl>
         </details>
       </section>
@@ -493,7 +493,7 @@
           <li>右鍵選「<span class="ui" data-ui-label="background/main.js">開啟 AutoFetcher 報表</span>」。</li>
           <li>「<span class="ui" data-ui-label="ui/report/report.html">儀表板</span>」放卡片，新任務預設會加一張。</li>
           <li>「<span class="ui" data-ui-label="ui/report/report.html">歷史紀錄</span>」查某一天或一段期間。</li>
-          <li>「<span class="ui" data-ui-label="ui/report/report.html">任務管理</span>」可以編輯、暫停、刪除任務。</li>
+          <li>「<span class="ui" data-ui-label="ui/report/report.html">任務管理</span>」可以編輯、停用、刪除任務。</li>
         </ol>
         <figure class="demo" data-help-figure>
           <div class="demo-row" aria-hidden="true">
@@ -505,7 +505,7 @@
           <summary>遇到這些狀況</summary>
           <dl>
             <dt>想調整卡片？</dt><dd>儀表板按「編輯版面」，可以拖曳、改大小，點卡片開設定。</dd>
-            <dt>要把資料帶走？</dt><dd>歷史紀錄可以匯出；設定頁可以匯出匯入全部任務（不含密碼）。</dd>
+            <dt>要把資料帶走？</dt><dd>歷史紀錄可以匯出；設定頁可以匯出匯入全部任務（密碼預設不帶，勾選並設密語才會帶出）。</dd>
             <dt>不想在右鍵看到「使用教學」？</dt><dd>在「<span class="ui" data-ui-label="ui/report/report.html">設定</span>」關掉；那裡也留著開啟教學的連結。</dd>
           </dl>
         </details>
