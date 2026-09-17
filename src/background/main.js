@@ -1,7 +1,8 @@
 // AutoFetcher MV3 Background Service Worker 入口總接線
 import {
   init as initStorage, getTask, saveTask, getRecordsByDate,
-  getPanelCtx, setPanelCtx, mergePanelCtx, clearPanelCtx
+  getPanelCtx, setPanelCtx, mergePanelCtx, clearPanelCtx,
+  getSettings, subscribe
 } from '../shared/storage.js'
 import { openPanel, closePanel } from '../shared/panel.js'
 import { MSG } from '../shared/messages.js'
@@ -262,8 +263,28 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+// 「使用教學」要不要顯示：缺省＝顯示，只有明確 false 才隱藏
+function helpMenuShown(settings) {
+  return settings?.showHelpMenu !== false
+}
+
+// 上次建立選單時採用的「使用教學」顯示值（null＝還沒建過）
+let helpMenuBuiltWith = null
+// 重建串行化：後一次等前一次 removeAll＋全部 create 完成才開始
+let menuQueue = Promise.resolve()
+
 // 建立右鍵選單項目
-export async function setupContextMenus() {
+export function setupContextMenus() {
+  menuQueue = menuQueue.then(buildContextMenus, buildContextMenus)
+  return menuQueue
+}
+
+async function buildContextMenus() {
+  let showHelp = true
+  try {
+    showHelp = helpMenuShown(await getSettings())
+  } catch {}
+  helpMenuBuiltWith = showHelp
   try {
     await chrome.contextMenus.removeAll()
     chrome.contextMenus.create({ id: 'af-root', title: 'AutoFetcher', contexts: ['all'] })
@@ -271,7 +292,18 @@ export async function setupContextMenus() {
     chrome.contextMenus.create({ id: 'af-pick-batch', parentId: 'af-root', title: '一次建立多個任務', contexts: ['all'] })
     chrome.contextMenus.create({ id: 'af-site-login', parentId: 'af-root', title: '設定此站台登入', contexts: ['all'] })
     chrome.contextMenus.create({ id: 'af-open-report', parentId: 'af-root', title: '開啟 AutoFetcher 報表', contexts: ['all'] })
+    if (showHelp) {
+      chrome.contextMenus.create({ id: 'af-open-help', parentId: 'af-root', title: '使用教學', contexts: ['all'] })
+    }
   } catch {}
+}
+
+// 設定變動（設定頁切換、匯入設定檔）時，「使用教學」的有效值變了才重建選單
+export function handleSettingsChanged(changes) {
+  if (!changes?.settings) return
+  const shown = helpMenuShown(changes.settings.newValue)
+  if (shown === helpMenuBuiltWith) return
+  setupContextMenus()
 }
 
 // 處理擴充功能安裝或更新事件
@@ -808,6 +840,11 @@ export async function handleContextMenu(info, tab) {
   try {
     if (!info) return
 
+    if (info.menuItemId === 'af-open-help') {
+      await chrome.tabs.create({ url: await chrome.runtime.getURL('ui/help/help.html') })
+      return
+    }
+
     if (info.menuItemId === 'af-open-report') {
       const url = typeof chrome.runtime?.getURL === 'function'
         ? await chrome.runtime.getURL('ui/report/report.html')
@@ -879,6 +916,7 @@ async function disablePanelGlobally() {
 }
 
 chrome.alarms.onAlarm.addListener(handleAlarm)
+subscribe(handleSettingsChanged, { keys: ['settings'] })
 chrome.runtime.onInstalled.addListener(handleInstalled)
 chrome.runtime.onStartup.addListener(handleStartup)
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

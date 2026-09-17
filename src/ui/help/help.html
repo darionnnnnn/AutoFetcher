@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoFetcher 使用教學</title>
+<link rel="stylesheet" href="../theme.css">
+<link rel="stylesheet" href="../ui.css">
+<style>
+  [hidden] { display: none !important; }
+  html { font-size: 16px; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-size: 1rem;
+    line-height: 1.7;
+  }
+  .help-shell {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: var(--space-5) var(--space-4) 96px;
+  }
+  .help-top { max-width: 72ch; margin-bottom: var(--space-5); }
+  .help-top h1 { font-size: 1.75rem; line-height: 1.3; margin: 0 0 var(--space-2); }
+  .help-top .lead { color: var(--text-muted); margin: 0; }
+
+  /* 三步開始 */
+  .quick { list-style: none; padding: 0; margin: var(--space-4) 0 0; display: grid; gap: var(--space-3); grid-template-columns: 1fr; counter-reset: quick; }
+  .quick li {
+    counter-increment: quick;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-3) var(--space-4);
+    display: grid;
+    grid-template-columns: 2.25rem 1fr;
+    gap: var(--space-3);
+    align-items: start;
+  }
+  .quick li::before {
+    content: counter(quick);
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 2.25rem; height: 2.25rem; border-radius: 50%;
+    background: var(--primary); color: var(--bg); font-weight: 700;
+  }
+  .quick strong { display: block; }
+  @media (min-width: 720px) { .quick { grid-template-columns: repeat(3, 1fr); } }
+
+  .news {
+    margin: var(--space-4) 0 0;
+    padding: var(--space-3) var(--space-4);
+    border-left: 4px solid var(--primary);
+    background: var(--primary-soft);
+    border-radius: var(--radius);
+  }
+  .news h2 { font-size: 1rem; margin: 0 0 var(--space-1); }
+  .news ul { margin: 0; padding-left: 1.25rem; }
+
+  /* 版面：寬螢幕左側目錄 */
+  .help-body { display: grid; grid-template-columns: 1fr; gap: var(--space-5); }
+  .toc { font-size: 0.95rem; }
+  .toc details { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-2) var(--space-3); }
+  .toc summary { cursor: pointer; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
+  .toc ol { margin: var(--space-2) 0 0; padding-left: 1.25rem; }
+  .toc a { color: var(--text); text-decoration: none; display: inline-block; padding: 4px 0; }
+  .toc a:hover { color: var(--primary); text-decoration: underline; }
+  .toc-wide { display: none; }
+  @media (min-width: 1024px) {
+    .help-body { grid-template-columns: 220px minmax(0, 1fr); }
+    .toc-narrow { display: none; }
+    .toc-wide { display: block; position: sticky; top: var(--space-4); align-self: start; }
+    .toc-wide h2 { font-size: 0.95rem; margin: 0 0 var(--space-2); color: var(--text-muted); }
+    .toc-wide ol { padding-left: 1.1rem; margin: 0; }
+  }
+
+  /* 章節 */
+  main { min-width: 0; }
+  .topic {
+    max-width: 72ch;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-4);
+    margin-bottom: var(--space-4);
+    scroll-margin-top: var(--space-4);
+  }
+  .topic h2 { font-size: 1.3rem; line-height: 1.35; margin: 0 0 var(--space-1); }
+  .topic .purpose { margin: 0 0 var(--space-3); color: var(--text-muted); }
+  .steps { list-style: none; margin: 0 0 var(--space-3); padding: 0; counter-reset: step; }
+  .steps li { counter-increment: step; position: relative; padding-left: 2.25rem; margin-bottom: var(--space-2); }
+  .steps li::before {
+    content: counter(step);
+    position: absolute; left: 0; top: 0.15rem;
+    width: 1.6rem; height: 1.6rem; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 0.85rem; font-weight: 700;
+    background: var(--primary-soft); color: var(--primary);
+  }
+  .ui {
+    display: inline-block;
+    padding: 0 6px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface-2);
+    font-size: 0.92em;
+    line-height: 1.5;
+    white-space: nowrap;
+  }
+  .topic details { border-top: 1px solid var(--border); padding-top: var(--space-2); }
+  .topic details summary { cursor: pointer; font-weight: 600; min-height: 44px; display: flex; align-items: center; color: var(--primary); }
+  .topic dl { margin: var(--space-2) 0 0; }
+  .topic dt { font-weight: 600; margin-top: var(--space-2); }
+  .topic dd { margin: 0; color: var(--text-muted); }
+
+  /* 示意圖（畫的是選取模式與面板的樣子，不是截圖） */
+  figure.demo {
+    margin: 0 0 var(--space-3);
+    padding: var(--space-3);
+    background: var(--surface-2);
+    border-radius: var(--radius);
+    overflow-x: auto;
+  }
+  figure.demo figcaption { font-size: 0.85rem; color: var(--text-muted); margin-top: var(--space-2); }
+  .demo-row { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: flex-start; }
+  .demo-table { border-collapse: separate; border-spacing: 0; font-size: 0.85rem; background: var(--surface); }
+  .demo-table th, .demo-table td { border: 1px solid var(--border); padding: 4px 10px; text-align: right; white-space: nowrap; }
+  .demo-table th { background: var(--surface-2); text-align: center; font-weight: 600; }
+  .demo-table td:first-child { text-align: left; }
+  .demo-table .is-hover { outline: 2px solid var(--warn); outline-offset: -2px; }
+  .demo-table .is-picked { outline: 2px solid var(--primary); outline-offset: -2px; background: var(--primary-soft); }
+  .demo-table .is-excluded { outline: 2px dashed var(--warn); outline-offset: -2px; color: var(--text-muted); }
+  .demo-table .inner { border-collapse: collapse; margin: 0 auto; }
+  .demo-table .inner td { border: 1px dashed var(--border); padding: 0 6px; }
+  .demo-toolbar { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; font-size: 0.8rem; background: var(--surface); }
+  .demo-toolbar span { padding: 3px 10px; border-right: 1px solid var(--border); }
+  .demo-toolbar span:last-child { border-right: 0; }
+  .demo-toolbar .on { background: var(--primary); color: var(--bg); }
+  .demo-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: var(--space-2) var(--space-3); font-size: 0.8rem; min-width: 200px; max-width: 280px; }
+  .demo-panel .line { color: var(--text-muted); }
+  .demo-chip { display: inline-block; border: 1px solid var(--border); border-radius: 999px; padding: 0 8px; margin: 2px 4px 2px 0; background: var(--surface-2); }
+  .demo-group { border-left: 3px solid var(--primary); padding-left: var(--space-2); margin: 4px 0; }
+  .demo-menu { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; font-size: 0.8rem; min-width: 190px; padding: 4px 0; }
+  .demo-menu div { padding: 3px 12px; }
+  .demo-menu .on { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+  .demo-menu .sep { border-top: 1px solid var(--border); margin: 4px 0; padding: 0; }
+  .demo-lamp { display: inline-flex; align-items: center; gap: 6px; margin-right: var(--space-3); font-size: 0.85rem; }
+  .demo-lamp i { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+  .lamp-ok { background: var(--ok); }
+  .lamp-warn { background: var(--warn); }
+  .lamp-bad { background: var(--danger); }
+  .lamp-off { background: var(--text-muted); }
+  .arrow { align-self: center; color: var(--text-muted); font-size: 1.1rem; }
+
+  .help-foot { max-width: 72ch; color: var(--text-muted); font-size: 0.9rem; margin-top: var(--space-5); }
+
+  @media (prefers-reduced-motion: no-preference) {
+    html { scroll-behavior: smooth; }
+  }
+</style>
+</head>
+<body>
+<div class="help-shell">
+  <header class="help-top">
+    <h1>AutoFetcher 使用教學</h1>
+    <p class="lead">在網頁上點選你要的數字，之後它會照時間自動去抓，結果都在報表裡。</p>
+
+    <ol class="quick" data-help-quick>
+      <li><div><strong>在網頁上按右鍵</strong>選「AutoFetcher」→「<span class="ui" data-ui-label="background/main.js">選取要抓的內容</span>」，點你要的數字。</div></li>
+      <li><div><strong>按「<span class="ui" data-ui-label="content/picker-mode.js">完成</span>」</strong>，旁邊的設定面板選好多久抓一次，按「<span class="ui" data-ui-label="ui/picker/picker.html">儲存</span>」。</div></li>
+      <li><div><strong>看結果</strong>：右鍵選「<span class="ui" data-ui-label="background/main.js">開啟 AutoFetcher 報表</span>」。</div></li>
+    </ol>
+
+    <section class="news" aria-labelledby="news-title">
+      <h2 id="news-title">這一版改了什麼</h2>
+      <ul>
+        <li>在表格上點一下是「加選」，再點一次是取消（不用再按 Ctrl）。</li>
+        <li>工具列多了「<span class="ui" data-ui-label="content/picker-mode.js">整欄→每格</span>」，一次選好一整欄。</li>
+        <li>右鍵多了「<span class="ui" data-ui-label="background/main.js">一次建立多個任務</span>」。</li>
+      </ul>
+    </section>
+  </header>
+
+  <div class="help-body">
+    <nav class="toc toc-narrow" aria-label="目錄（窄螢幕）">
+      <details>
+        <summary>目錄</summary>
+        <ol data-help-toc>
+          <li><a href="#one-number">抓一個數字</a></li>
+          <li><a href="#whole-column">抓一整欄</a></li>
+          <li><a href="#several-values">同一張表抓好幾個值</a></li>
+          <li><a href="#nested">表格裡面還有小表格</a></li>
+          <li><a href="#batch">一次建立好幾個任務</a></li>
+          <li><a href="#check">確認抓到了什麼</a></li>
+          <li><a href="#login">要登入才看得到</a></li>
+          <li><a href="#preaction">要先點一下才會出現</a></li>
+          <li><a href="#report">看報表與儀表板</a></li>
+          <li><a href="#badge">圖示燈號的意思</a></li>
+          <li><a href="#trouble">抓不到的時候</a></li>
+        </ol>
+      </details>
+    </nav>
+    <nav class="toc toc-wide" aria-label="目錄">
+      <h2>目錄</h2>
+      <ol data-help-toc>
+        <li><a href="#one-number">抓一個數字</a></li>
+        <li><a href="#whole-column">抓一整欄</a></li>
+        <li><a href="#several-values">同一張表抓好幾個值</a></li>
+        <li><a href="#nested">表格裡面還有小表格</a></li>
+        <li><a href="#batch">一次建立好幾個任務</a></li>
+        <li><a href="#check">確認抓到了什麼</a></li>
+        <li><a href="#login">要登入才看得到</a></li>
+        <li><a href="#preaction">要先點一下才會出現</a></li>
+        <li><a href="#report">看報表與儀表板</a></li>
+        <li><a href="#badge">圖示燈號的意思</a></li>
+        <li><a href="#trouble">抓不到的時候</a></li>
+      </ol>
+    </nav>
+
+    <main>
+      <!-- 1 -->
+      <section class="topic" id="one-number" data-help-section>
+        <h2>我想抓一個數字</h2>
+        <p class="purpose" data-help-purpose>例如匯率表裡「美金 × 即期買入」那一格。</p>
+        <ol class="steps" data-help-steps>
+          <li>在那一格上按右鍵，選「<span class="ui" data-ui-label="background/main.js">選取要抓的內容</span>」。</li>
+          <li>滑鼠移過去會出現橘框，點一下變藍框就是選好了。</li>
+          <li>按頁面右下角的「<span class="ui" data-ui-label="content/picker-mode.js">完成</span>」。</li>
+          <li>在右邊面板選多久抓一次，按「<span class="ui" data-ui-label="ui/picker/picker.html">儲存</span>」。</li>
+        </ol>
+        <figure class="demo" data-help-figure>
+          <div class="demo-row" aria-hidden="true">
+            <table class="demo-table">
+              <tr><th>幣別</th><th>即期買入</th><th>即期賣出</th></tr>
+              <tr><td>美金</td><td class="is-picked">31.52</td><td>31.62</td></tr>
+              <tr><td>日圓</td><td class="is-hover">0.2051</td><td>0.2101</td></tr>
+            </table>
+            <div class="demo-panel"><div>已選 1 個值</div><span class="demo-chip">美金 · 即期買入 ×</span><div class="line">好了按完成</div></div>
+          </div>
+          <figcaption>橘框＝滑鼠正停在這裡；藍框＝已經選好。</figcaption>
+        </figure>
+        <details data-help-more>
+          <summary>遇到這些狀況</summary>
+          <dl>
+            <dt>選錯了？</dt><dd>再點一次那一格就取消；或按面板上的「<span class="ui" data-ui-label="content/picker-mode.js">復原</span>」、Ctrl＋Z。</dd>
+            <dt>不是表格裡的數字（例如頁首的總量）？</dt><dd>一樣右鍵選取，點那個數字；整個元素的文字裡第一個數字就是抓到的值。</dd>
+            <dt>面板沒有出現？</dt><dd>舊版瀏覽器沒有側邊面板，會改開一個小視窗。</dd>
+          </dl>
+        </details>
+      </section>
+
+      <!-- 2 -->
+      <section class="topic" id="whole-column" data-help-section>
+        <h2>我想抓一整欄</h2>
+        <p class="purpose" data-help-purpose>先想好：要一個總數，還是每一格各自記錄。</p>
+        <ol class="steps" data-help-steps>
+          <li>右鍵進入選取，把滑鼠移到那一欄的任一格。</li>
+          <li>要一個總數：右上角工具列點「<span class="ui" data-ui-label="content/picker-mode.js">整欄→一個值</span>」。</li>
+          <li>要每格各一個值：點「<span class="ui" data-ui-label="content/picker-mode.js">整欄→每格</span>」。</li>
+          <li>點那一欄任一格，整欄變藍框，按「<span class="ui" data-ui-label="content/picker-mode.js">完成</span>」。</li>
+        </ol>
+        <figure class="demo" data-help-figure>
+          <div class="demo-row" aria-hidden="true">
+            <div>
+              <div class="demo-toolbar"><span>單格</span><span class="on">整欄→一個值</span><span>整欄→每格</span><span>整列→一個值</span></div>
+              <table class="demo-table" style="margin-top:8px">
+                <tr><th>主機</th><th>連線數</th></tr>
+                <tr><td>主機 A</td><td class="is-picked">42</td></tr>
+                <tr><td>主機 B</td><td class="is-picked">43</td></tr>
+                <tr><td>主機 C</td><td class="is-picked">41</td></tr>
+                <tr><td>合計</td><td class="is-excluded">126</td></tr>
+              </table>
+            </div>
+          </div>
+          <figcaption>整欄變藍框；最下面的合計列是虛線，代表不算進去。</figcaption>
+        </figure>
+        <details data-help-more>
+          <summary>遇到這些狀況</summary>
+          <dl>
+            <dt>「一個值」跟「每格」差在哪？</dt><dd>「一個值」把整欄加總（或平均、最大…，在面板選）成一個數字；「每格」是每一格各自一條紀錄，報表上是好幾條線。</dd>
+            <dt>合計列被算進去了？</dt><dd>在那一格按右鍵，選「<span class="ui" data-ui-label="content/picker-mode.js">從整欄聚合排除這一列</span>」。表格有表尾合計時會自動排除。</dd>
+            <dt>開頭或結尾有幾列不要？</dt><dd>面板「抓什麼」裡有「<span class="ui" data-ui-label="ui/picker/picker.html">略過開頭</span>」與「略過結尾」可以填列數。</dd>
+            <dt>之後表格多了一列，會自動抓嗎？</dt><dd>「整欄→一個值」會（每次都算整欄）；「整欄→每格」不會，它記的是選取當下那幾格，新的那一列要重選。</dd>
+          </dl>
+        </details>
+      </section>
+
+      <!-- 3 -->
+      <section class="topic" id="several-values" data-help-section>
+        <h2>我想在同一張表抓好幾個值</h2>
+        <p class="purpose" data-help-purpose>同一張表的幾格，存成同一個任務、一起抓。</p>
+        <ol class="steps" data-help-steps>
+          <li>右鍵進入選取。</li>
+          <li>一格一格點下去，點到的都會加進來。</li>
+          <li>點錯的那一格再點一次就取消。</li>
+          <li>按「<span class="ui" data-ui-label="content/picker-mode.js">完成</span>」，在面板幫每個值取名字。</li>
+        </ol>
+        <figure class="demo" data-help-figure>
+          <div class="demo-row" aria-hidden="true">
+            <table class="demo-table">
+              <tr><th>幣別</th><th>即期買入</th><th>即期賣出</th></tr>
+              <tr><td>美金</td><td class="is-picked">31.52</td><td class="is-picked">31.62</td></tr>
+              <tr><td>歐元</td><td class="is-picked">34.10</td><td>34.50</td></tr>
+            </table>
+            <div class="demo-panel"><div>已選 3 個值</div><span class="demo-chip">美金 · 即期買入 ×</span><span class="demo-chip">美金 · 即期賣出 ×</span><span class="demo-chip">歐元 · 即期買入 ×</span></div>
+          </div>
+          <figcaption>點幾格就選幾格，面板列出每一個。</figcaption>
+        </figure>
+        <details data-help-more>
+          <summary>遇到這些狀況</summary>
+          <dl>
+            <dt>想一次拉一大塊？</dt><dd>按住滑鼠拖曳框選，或先點一格再 Shift＋點另一格。</dd>
+            <dt>點到另一張表了？</dt><dd>一個任務只能抓同一張表。點另一張表會換成那張表（已選兩個以上時要再點一次確認），可以按「<span class="ui" data-ui-label="content/picker-mode.js">復原</span>」。要兩張表都抓，用「一次建立好幾個任務」。</dd>
+            <dt>鍵盤操作</dt><dd>Enter 完成、Esc 取消、Backspace 移除最後一個、Ctrl＋A 全選這張表、Tab 切換工具列。</dd>
+          </dl>
+        </details>
+      </section>
+
+      <!-- 4 -->
+      <section class="topic" id="nested" data-help-section>
+        <h2>表格裡面還有小表格</h2>
+        <p class="purpose" data-help-purpose>例如監控頁每一列的某一格裡，又包一張小表。</p>
+        <ol class="steps" data-help-steps>
+          <li>把滑鼠移到小表裡你要的那一格。</li>
+          <li>要每一列的這個位置：工具列選「<span class="ui" data-ui-label="content/picker-mode.js">整欄→每格</span>」或「<span class="ui" data-ui-label="content/picker-mode.js">整欄→一個值</span>」。</li>
+          <li>點那一格，外層每一列的同一個位置都會變藍框。</li>
+          <li>只要其中幾列：用單格模式一列一列點。</li>
+        </ol>
+        <figure class="demo" data-help-figure>
+          <div class="demo-row" aria-hidden="true">
+            <table class="demo-table">
+              <tr><th>主機</th><th>PORT:443</th><th>時間</th></tr>
+              <tr><td>10.231.1.31</td><td><table class="inner"><tr><td class="is-picked">42</td><td>MAX:462</td></tr></table></td><td>15:50</td></tr>
+              <tr><td>10.231.1.32</td><td><table class="inner"><tr><td class="is-picked">43</td><td>MAX:460</td></tr></table></td><td>15:50</td></tr>
+              <tr><td>10.231.1.33</td><td><table class="inner"><tr><td class="is-picked">41</td><td>MAX:460</td></tr></table></td><td>15:50</td></tr>
+            </table>
+          </div>
+          <figcaption>每一列小表的第一格都選到了，旁邊的 MAX 不會混進來。</figcaption>
+        </figure>
+        <details data-help-more>
+          <summary>遇到這些狀況</summary>
+          <dl>
+            <dt>面板說「已改選外層表這一欄的同一個位置」</dt><dd>這是正常的：小表只有一列，所以自動幫你換成外層每一列。只要那一格就切回「單格」。</dd>
+            <dt>鍵盤 ↑／↓ 是做什麼的？</dt><dd>↑ 換到外面那一層表，↓ 回來。已經選了值時按 ↑，值會跟著換到外層（每一列都有同樣小表的時候）。</dd>
+            <dt>面板說「已選的值留在原表」</dt><dd>外層不是每一列都有同樣的小表（多半是排版用的表格），值不會跟著換；這時點外層的格子是換表。</dd>
+            <dt>重選既有任務時不能換到外層？</dt><dd>換過去之後歷史紀錄接不上，所以擋住了。要抓外層整欄請建立新任務。</dd>
+          </dl>
+        </details>
+      </section>
+
+      <!-- 5 -->
+      <section class="topic" id="batch" data-help-section>
+        <h2>同一頁一次建立好幾個任務</h2>
+        <p class="purpose" data-help-purpose>同一頁有幾張表或幾個數字要抓，一次選好、一次存。</p>
+        <ol class="steps" data-help-steps>
+          <li>右鍵選「<span class="ui" data-ui-label="background/main.js">一次建立多個任務</span>」。</li>
+          <li>每張表點你要的格子，頁面上的數字直接點；不同的表會各自成為一個任務。</li>
+          <li>按「<span class="ui" data-ui-label="content/picker-mode.js">完成</span>」，在面板幫每個任務取名。</li>
+          <li>設定共用的抓取時間，按「<span class="ui" data-ui-label="ui/picker/picker.js">全部試抓</span>」看看。</li>
+          <li>沒問題就按「<span class="ui" data-ui-label="ui/picker/picker.js">全部儲存</span>」。</li>
+        </ol>
+        <figure class="demo" data-help-figure>
+          <div class="demo-row" aria-hidden="true">
+            <div class="demo-panel">
+              <div>已選 2 個任務、共 3 個值</div>
+              <div class="demo-group">任務 1：匯率（2 個值）<br><span class="demo-chip">美金 · 即期買入 ×</span><span class="demo-chip">歐元 · 即期買入 ×</span></div>
+              <div class="demo-group">任務 2：庫存（1 個值）<br><span class="demo-chip">數量 ×</span></div>
+            </div>
+            <span class="arrow">→</span>
+            <div class="demo-panel">
+              <div><strong>要建立的任務</strong></div>
+              <div>匯率　<span class="line">31.52、34.10</span></div>
+              <div>庫存　<span class="line">128</span></div>
+              <div class="line">多久抓一次：每天 09:30（共用）</div>
+            </div>
+          </div>
+          <figcaption>左邊是選取時的面板，右邊是存檔前的清單。</figcaption>
+        </figure>
+        <details data-help-more>
+          <summary>遇到這些狀況</summary>
+          <dl>
+            <dt>每個任務想要不同的設定？</dt><dd>多任務只能共用時間與去處。先全部存好，再到報表的「<span class="ui" data-ui-label="ui/report/report.html">任務管理</span>」一個一個編輯。</dd>
+            <dt>要先點選單才出現的頁面？</dt><dd>這種頁面需要「前置動作」，請用單一任務建立。</dd>
+            <dt>存到一半失敗？</dt><dd>面板會說存好了幾個、哪一個失敗；已存的會從清單拿掉，修好再按一次不會重複建立。</dd>
+            <dt>內嵌在頁面裡的框架？</dt><dd>一批只能在同一個框架裡選。框架裡的內容請另外開一批。</dd>
+            <dt>最多幾個？</dt><dd>一次最多 20 個任務。</dd>
+          </dl>
+        </details>
+      </section>
+
+      <!-- 6 -->
+      <section class="topic" id="check" data-help-section>
+        <h2>怎麼確認抓到了什麼</h2>
+        <p class="purpose" data-help-purpose>存檔前先試一次，看每一格有沒有算進去。</p>
+        <ol class="steps" data-help-steps>
+          <li>選完之後，在面板底部按「<span class="ui" data-ui-label="ui/picker/picker.html">立即測試</span>」。</li>
+          <li>面板會自動捲到「<span class="ui" data-ui-label="ui/picker/picker.html">先試抓看看</span>」，顯示抓到的值。</li>
+          <li>整欄或整列時，點「<span class="ui" data-ui-label="ui/picker/picker.js">查看抓到的</span>」看每一格。</li>
+          <li>表裡「採用」的才有算進去，其他會寫原因。</li>
+        </ol>
+        <figure class="demo" data-help-figure>
+          <div class="demo-row" aria-hidden="true">
+            <div class="demo-panel" style="max-width:340px">
+              <div><strong>126</strong>（用了 3 格、非數字 0 格、略過與排除 1 格）</div>
+              <table class="demo-table" style="margin-top:6px">
+                <tr><th>#</th><th>列標題</th><th>內容</th><th>處置</th></tr>
+                <tr><td>1</td><td>主機 A</td><td>42</td><td>採用</td></tr>
+                <tr><td>2</td><td>主機 B</td><td>43</td><td>採用</td></tr>
+                <tr><td>3</td><td>主機 C</td><td>41</td><td>採用</td></tr>
+                <tr><td>4</td><td>合計</td><td>126</td><td>排除</td></tr>
+              </table>
+            </div>
+          </div>
+          <figcaption>格數不多時會直接攤開這張表。</figcaption>
+        </figure>
+        <details data-help-more>
+          <summary>遇到這些狀況</summary>
+          <dl>
+            <dt>立即測試過了，排程卻失敗？</dt><dd>立即測試用的是你眼前這個分頁；排程會自己開新分頁。頁面要先點什麼才出現的，請加「前置動作」。</dd>
+            <dt>測試失敗，想請人幫忙看？</dt><dd>按「<span class="ui" data-ui-label="ui/picker/picker.html">匯出診斷</span>」存成檔案。檔案裡有那張表的內容與網址，給別人前先自己看一下。</dd>
+            <dt>編輯既有任務時沒有立即測試？</dt><dd>目前只有新建任務時有。</dd>
+          </dl>
+        </details>
+      </section>
+
+      <!-- 7 -->
+      <section class="topic" id="login" data-help-section>
+        <h2>要登入才看得到</h2>
+        <p class="purpose" data-help-purpose>讓它抓之前自己先登入。帳號密碼只存在這台電腦。</p>
+        <ol class="steps" data-help-steps>
+          <li>打開那個網站的登入頁，在頁面上按右鍵。</li>
+          <li>選「<span class="ui" data-ui-label="background/main.js">設定此站台登入</span>」。</li>
+          <li>填帳號密碼，帳號、密碼、登入鈕各按一次「<span class="ui" data-ui-label="ui/site/site.html">在頁面上選取</span>」。</li>
+          <li>按「<span class="ui" data-ui-label="ui/site/site.html">儲存</span>」。</li>
+        </ol>
+        <figure class="demo" data-help-figure>
+          <div class="demo-row" aria-hidden="true">
+            <div class="demo-panel">
+              <div><strong>站台登入設定</strong></div>
+              <div class="line">帳號　user01　<span class="demo-chip">在頁面上選取</span></div>
+              <div class="line">密碼　••••••　<span class="demo-chip">在頁面上選取</span></div>
+              <div class="line">登入鈕　<span class="demo-chip">在頁面上選取</span></div>
+            </div>
+          </div>
+          <figcaption>三個欄位各自到頁面上點一次。</figcaption>
+        </figure>
+        <details data-help-more>
+          <summary>遇到這些狀況</summary>
+          <dl>
+            <dt>登入頁在另一個網域（例如用 Google 帳號登入）？</dt><dd>目前不支援，只支援同一個網站的登入表單。</dd>
+            <dt>有驗證碼？</dt><dd>無法自動登入。請手動登入並保持登入狀態。</dd>
+            <dt>密碼安全嗎？</dt><dd>密碼加密後只存在這台電腦的瀏覽器裡，不會同步到別台，匯出設定也不會帶出去。</dd>
+          </dl>
+        </details>
+      </section>
+
+      <!-- 8 -->
+      <section class="topic" id="preaction" data-help-section>
+        <h2>要先點一下才會出現</h2>
+        <p class="purpose" data-help-purpose>例如要先點頁籤、關掉彈窗，數字才會出來。</p>
+        <ol class="steps" data-help-steps>
+          <li>先照平常把數字選好，打開面板。</li>
+          <li>展開「<span class="ui" data-ui-label="ui/picker/picker.html">進階設定</span>」，找到「<span class="ui" data-ui-label="ui/picker/picker.html">前置動作</span>」。</li>
+          <li>加一步「點擊元素」，按「<span class="ui" data-ui-label="ui/picker/picker.js">在頁面上選取</span>」點那個頁籤。</li>
+          <li>按「<span class="ui" data-ui-label="ui/picker/picker.html">立即測試</span>」確認，再儲存。</li>
+        </ol>
+        <figure class="demo" data-help-figure>
+          <div class="demo-row" aria-hidden="true">
+            <div class="demo-panel">
+              <div><strong>前置動作</strong></div>
+              <div class="line">1　點擊元素　「月報表」頁籤</div>
+              <div class="line">2　等元素出現　數字那一格</div>
+            </div>
+          </div>
+          <figcaption>抓取前照順序做完這幾步。</figcaption>
+        </figure>
+        <details data-help-more>
+          <summary>遇到這些狀況</summary>
+          <dl>
+            <dt>滑鼠移過去才出現的選單？</dt><dd>用三步：「移到元素上」→「等元素出現」→「點擊元素」。</dd>
+            <dt>只靠 CSS 滑過去展開的選單？</dt><dd>程式送的滑鼠動作不是真的游標，打不開這種選單。通常選單項目本來就在頁面裡，把「等元素出現」的「要看得見」取消、直接點它。</dd>
+            <dt>點了之後整個頁面換掉？</dt><dd>沒關係，它會等新頁面載入再抓。</dd>
+          </dl>
+        </details>
+      </section>
+
+      <!-- 9 -->
+      <section class="topic" id="report" data-help-section>
+        <h2>看報表與儀表板</h2>
+        <p class="purpose" data-help-purpose>每次抓到的值都存著，可以看趨勢、查過去任何一天。</p>
+        <ol class="steps" data-help-steps>
+          <li>右鍵選「<span class="ui" data-ui-label="background/main.js">開啟 AutoFetcher 報表</span>」。</li>
+          <li>「<span class="ui" data-ui-label="ui/report/report.html">儀表板</span>」放卡片，新任務預設會加一張。</li>
+          <li>「<span class="ui" data-ui-label="ui/report/report.html">歷史紀錄</span>」查某一天或一段期間。</li>
+          <li>「<span class="ui" data-ui-label="ui/report/report.html">任務管理</span>」可以編輯、暫停、刪除任務。</li>
+        </ol>
+        <figure class="demo" data-help-figure>
+          <div class="demo-row" aria-hidden="true">
+            <div class="demo-toolbar"><span class="on">儀表板</span><span>歷史紀錄</span><span>任務管理</span><span>設定</span></div>
+          </div>
+          <figcaption>報表頁上方的四個分頁。</figcaption>
+        </figure>
+        <details data-help-more>
+          <summary>遇到這些狀況</summary>
+          <dl>
+            <dt>想調整卡片？</dt><dd>儀表板按「編輯版面」，可以拖曳、改大小，點卡片開設定。</dd>
+            <dt>要把資料帶走？</dt><dd>歷史紀錄可以匯出；設定頁可以匯出匯入全部任務（不含密碼）。</dd>
+            <dt>不想在右鍵看到「使用教學」？</dt><dd>在「<span class="ui" data-ui-label="ui/report/report.html">設定</span>」關掉；那裡也留著開啟教學的連結。</dd>
+          </dl>
+        </details>
+      </section>
+
+      <!-- 10 -->
+      <section class="topic" id="badge" data-help-section>
+        <h2>圖示燈號的意思</h2>
+        <p class="purpose" data-help-purpose>瀏覽器工具列的圖示，一眼看出有沒有出問題。</p>
+        <ol class="steps" data-help-steps>
+          <li>沒有數字：全部正常。</li>
+          <li>黃色數字：抓到了，但有地方要留意。</li>
+          <li>紅色數字：有任務抓不到，點圖示看是哪一個。</li>
+          <li>灰色「II」：全部暫停中。</li>
+        </ol>
+        <figure class="demo" data-help-figure>
+          <div class="demo-row" aria-hidden="true">
+            <span class="demo-lamp"><i class="lamp-ok"></i>正常</span>
+            <span class="demo-lamp"><i class="lamp-warn"></i>注意</span>
+            <span class="demo-lamp"><i class="lamp-bad"></i>異常</span>
+            <span class="demo-lamp"><i class="lamp-off"></i>暫停</span>
+          </div>
+          <figcaption>數字是有狀況的任務數。</figcaption>
+        </figure>
+        <details data-help-more>
+          <summary>遇到這些狀況</summary>
+          <dl>
+            <dt>黃燈常見原因</dt><dd>找元素時用了備用方式、表格只讀到一部分、補抓的紀錄、或要排除的合計列找不到。</dd>
+            <dt>紅燈常見原因</dt><dd>網站改版找不到元素、登入失敗、數字解析不出來、連續失敗。</dd>
+            <dt>想全部先停下來？</dt><dd>點圖示按「<span class="ui" data-ui-label="ui/popup/popup.html">全部暫停 / 恢復</span>」。</dd>
+          </dl>
+        </details>
+      </section>
+
+      <!-- 11 -->
+      <section class="topic" id="trouble" data-help-section>
+        <h2>抓不到的時候</h2>
+        <p class="purpose" data-help-purpose>先試抓看原因，大部分都能在面板上直接修。</p>
+        <ol class="steps" data-help-steps>
+          <li>打開那個任務的網頁，確認數字還在。</li>
+          <li>到「<span class="ui" data-ui-label="ui/report/report.html">任務管理</span>」按重選，重新點一次那一格。</li>
+          <li>還是不行，建新任務時按「<span class="ui" data-ui-label="ui/picker/picker.html">立即測試</span>」，失敗就「<span class="ui" data-ui-label="ui/picker/picker.html">匯出診斷</span>」。</li>
+        </ol>
+        <figure class="demo" data-help-figure>
+          <div class="demo-row" aria-hidden="true">
+            <div class="demo-menu">
+              <div>AutoFetcher</div>
+              <div class="sep"></div>
+              <div>選取要抓的內容</div>
+              <div>一次建立多個任務</div>
+              <div>設定此站台登入</div>
+              <div>開啟 AutoFetcher 報表</div>
+              <div class="on">使用教學</div>
+            </div>
+          </div>
+          <figcaption>右鍵選單的五個項目。</figcaption>
+        </figure>
+        <details data-help-more>
+          <summary>做不到的事</summary>
+          <dl>
+            <dt>一個任務抓兩張不同的表</dt><dd>不行。一開始就用「一次建立多個任務」，每張表各一個任務。</dd>
+            <dt>多任務一次建立時，個別設定進階選項</dt><dd>不行。先存好，再到任務管理一個一個編輯。</dd>
+            <dt>畫在圖表裡的數字</dt><dd>抓不到（那是圖片，不是文字）。</dd>
+            <dt>Shadow DOM 裡的元素</dt><dd>選不到（常見於用 Web Components 做的網站）。</dd>
+            <dt>比 1 分鐘更頻繁地抓</dt><dd>目前最短 1 分鐘。</dd>
+          </dl>
+        </details>
+      </section>
+
+      <p class="help-foot">右鍵的「<span class="ui" data-ui-label="background/main.js">使用教學</span>」可以在報表的「設定」裡關掉；關掉之後，設定頁仍有開啟教學的連結。</p>
+    </main>
+  </div>
+</div>
+<script type="module" src="help.js"></script>
+</body>
+</html>

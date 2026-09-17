@@ -15,7 +15,7 @@ import { buildExport, download } from '../../shared/export.js'
 import { exportSettings, importSettings } from '../../shared/settings-io.js'
 import * as diag from '../../shared/diag.js'
 import { MSG } from '../../shared/messages.js'
-import { applyTheme } from './report.js'
+import { applyTheme } from '../theme-apply.js'
 
 // 重新繪製儲存用量區
 async function renderStorageStats() {
@@ -276,6 +276,17 @@ function setupPreferenceListeners(settings) {
         const val = themeEl.value
         await saveSettings({ theme: val })
         applyTheme(val)
+      })
+    }
+  }
+
+  const helpMenuEl = document.getElementById('pref-help-menu')
+  if (helpMenuEl) {
+    helpMenuEl.checked = settings.showHelpMenu !== false
+    if (!helpMenuEl._afBound) {
+      helpMenuEl._afBound = true
+      helpMenuEl.addEventListener('change', async () => {
+        await saveSettings({ showHelpMenu: helpMenuEl.checked })
       })
     }
   }

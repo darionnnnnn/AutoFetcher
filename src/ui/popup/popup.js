@@ -2,6 +2,7 @@
 import { getTasks, saveTask, getHealthMap, getMissedList, getLastValues } from '../../shared/storage.js'
 import { openPanel } from '../../shared/panel.js'
 import { MSG } from '../../shared/messages.js'
+import { applySavedTheme } from '../theme-apply.js'
 import { seriesIdOf } from '../../shared/series-index.js'
 import { computeHealth } from '../../background/health.js'
 import { describeSchedule, describeTarget, targetOfTask } from '../../shared/describe.js'
@@ -258,6 +259,7 @@ export function getState() {
 
 // 擴充功能環境下自動初始化
 if (typeof document !== 'undefined' && globalThis.chrome?.runtime?.id) {
+  applySavedTheme()
   (async () => {
     try {
       const tasks = await getTasks()

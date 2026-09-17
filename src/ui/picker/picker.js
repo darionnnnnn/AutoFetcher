@@ -1,5 +1,6 @@
 import { saveTask, getTask, getSettings, saveSettings, getPanelCtx, setPanelCtx, mergePanelCtx, subscribe
 } from '../../shared/storage.js'
+import { applySavedTheme } from '../theme-apply.js'
 import { DEFAULT_HOVER_HOLD_MS, DEFAULT_WAIT_TIMEOUT_MS } from '../../shared/preaction.js'
 import { MSG } from '../../shared/messages.js'
 import { getLayout, addCard } from '../../shared/layout-store.js'
@@ -2812,6 +2813,7 @@ export async function initFromQuery(search) {
 }
 
 if (typeof document !== 'undefined' && document.getElementById('save') && globalThis.chrome?.runtime?.id) {
+  applySavedTheme()
   document.getElementById('save')?.addEventListener('click', () => handleSave())
   document.getElementById('cancel')?.addEventListener('click', () => {
     // 面板沒有 window.close()：請 background 關它，順便把草稿清掉

@@ -9,6 +9,9 @@ import {
   subscribe
 } from '../../shared/storage.js'
 import { getLayout } from '../../shared/layout-store.js'
+import { applyTheme } from '../theme-apply.js'
+// 定義只留 theme-apply.js 一份；report.js 照舊對外提供（既有呼叫端與測試）
+export { applyTheme }
 import { buildSeries, pivot } from './series.js'
 import { lineChart } from './charts.js'
 import { buildTsv } from './cards.js'
@@ -85,15 +88,6 @@ function createTableRow(cells, isHeader = false, options = {}) {
 export function joinTaskNames(records = [], tasks = []) {
   const index = buildSeriesIndex(tasks)
   return records.map(r => ({ ...r, taskName: r.taskName ?? nameOf(index, r.taskId) }))
-}
-
-export function applyTheme(theme) {
-  if (typeof document === 'undefined' || !document.documentElement) return
-  if (theme === 'dark' || theme === 'light') {
-    document.documentElement.setAttribute('data-theme', theme)
-  } else {
-    document.documentElement.removeAttribute('data-theme')
-  }
 }
 
 export function getState() {
