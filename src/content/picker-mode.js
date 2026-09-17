@@ -463,6 +463,7 @@ function promotePicksToOuter(T) {
   setTarget(O)
   deliberateTableEl = O
   undoSnapshot = previous
+  if (batchMode) syncBatch()
   applyPickedMarks(O)
   return true
 }
@@ -499,6 +500,19 @@ function syncBatch() {
   const view = batchGroupsView()
   currentGroupIdx = view.findIndex(g => g.picks === selectedList)
   batchGroups = view.map(g => g.el ? g : { tableEl: g.tableEl, picks: g.picks.slice() })
+  // 同一張表只能是一組：小表那組升到外層之後，外層若本來就有一組要併進去，
+  // 否則會建出兩個定位相同的任務（AF-18 G-1 實作回報抓到）
+  const cur = currentGroupIdx >= 0 ? batchGroups[currentGroupIdx] : null
+  const dup = cur && !cur.el ? batchGroups.findIndex((g, i) => i !== currentGroupIdx && !g.el && g.tableEl === cur.tableEl) : -1
+  if (dup >= 0) {
+    const merged = batchGroups[dup].picks.slice()
+    for (const p of cur.picks) if (!merged.some(m => samePick(m, p))) merged.push(p)
+    batchGroups[dup] = { tableEl: cur.tableEl, picks: merged.slice() }
+    batchGroups.splice(currentGroupIdx, 1)
+    currentGroupIdx = dup > currentGroupIdx ? dup - 1 : dup
+    selectedList = merged
+    limitReached = selectedList.length >= maxPicks
+  }
 }
 
 function batchValueTotal(groups) {
@@ -589,6 +603,12 @@ function nonTableModeNotice() {
 
 // 批次模式點到非表格元素：整欄／整列模式照現有規則拒絕並說明，否則切換那一組
 function batchClickElement(el) {
+  // 點在頁面空白處（body）不是要抓整個頁面
+  if (!el || el === document.body || el === document.documentElement) {
+    toolbarNotice = '點在頁面空白處了：把滑鼠移到要抓的數字或表格上再點'
+    if (panelEl) updatePanel(panelEl, currentTargetEl)
+    return
+  }
   if (pickMode === 'col' || pickMode === 'colEach' || pickMode === 'row') {
     toolbarNotice = nonTableModeNotice()
     if (panelEl) updatePanel(panelEl, currentTargetEl)

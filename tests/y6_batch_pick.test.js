@@ -181,3 +181,32 @@ test('G1-9 監控頁批次模式：別列的小表先升到外層、併進同一
   assert.equal(msg.picks.length, 2)
   assert.ok(msg.picks.every(p => p.cell.inner?.length === 4))
 })
+
+test('G1-10 同一張外層表只能是一組：外層已有一組時，小表那組升上去要併進同一組（不得建出兩個定位相同的任務）', async () => {
+  const OTHER = '<table id="ot"><tbody><tr><td id="ot1">1</td><td>2</td></tr><tr><td>3</td><td>4</td></tr></tbody></table>'
+  const { c, doc, pm, win } = await boot(MONITOR + OTHER, BATCH)
+  const small1 = (id) => doc.getElementById(id).closest('tr').children[0]
+  const timeTd = (id) => doc.getElementById(id).closest('table').closest('td').parentElement.children[3]
+  pick(win, timeTd('his_31'))
+  pick(win, doc.getElementById('ot1'))
+  pick(win, small1('his_31'))
+  assert.match(panelText(doc), /已選 3 個任務/, '前置：外層、另一張表、小表各一組')
+  pick(win, small1('his_33'))
+  assert.match(panelText(doc), /已選 2 個任務、共 4 個值/, `小表那組升到外層後併進外層那組：${panelText(doc).slice(0, 160)}`)
+  key(doc, win, 'Enter')
+  const msg = picked(c)[0]
+  assert.equal(msg.batch?.length, 2)
+  const locs = msg.batch.map(b => resolve(doc, b.locator).el)
+  assert.equal(new Set(locs).size, 2, '兩組的定位不同')
+  const outer = msg.batch.find(b => resolve(doc, b.locator).el === doc.querySelector('table'))
+  assert.equal(outer?.picks.length, 3)
+})
+
+test('G1-11 批次模式點在頁面空白處（body）：不得把整個頁面加成一組，要說明', async () => {
+  const { doc, pm, win } = await boot(PAGE, BATCH)
+  pick(win, doc.getElementById('a1'))
+  fire(win, doc.body, 'mousemove')
+  fire(win, doc.body, 'click')
+  assert.match(panelText(doc), /已選 1 個任務、共 1 個值/)
+  assert.match(panelText(doc), /點在頁面空白處/)
+})
