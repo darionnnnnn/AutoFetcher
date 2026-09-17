@@ -3120,6 +3120,9 @@ async function handleBatchSave() {
     const { item, name } = entries[i]
     try {
       const values = collectBatchValues(item, name, shared)
+      // 收集會把畫面套回批次文字，進度要在它之後寫（與「全部試抓」同一套）
+      const saveBtn = document.getElementById('save')
+      if (saveBtn) saveBtn.textContent = `儲存中 ${i + 1}／${entries.length}…`
       const validation = validateForm(values)
       if (!validation.ok) {
         failure = { k: i + 1, name, message: Object.values(validation.errors).join('；') }

@@ -222,6 +222,28 @@ test('G3-4b 批次畫面改過的共用合成方式，每個任務都要照畫�
   globalThis.window.close = () => {}
 })
 
+test('G3-11 全部儲存進行中按鈕顯示「儲存中 k／N…」且不可連按（與全部試抓同一套回饋）', async () => {
+  const { c, pk, doc } = await freshPanel()
+  await pk.renderFromPanelCtx(batchCtx([payloadT2, payloadP]))
+  const seen = []
+  const realSet = chrome.storage.local.set.bind(chrome.storage.local)
+  chrome.storage.local.set = async (obj) => {
+    if (obj && 'tasks' in obj) {
+      const btn = doc.getElementById('save')
+      seen.push({ text: btn.textContent, disabled: btn.disabled })
+    }
+    return realSet(obj)
+  }
+  await pk.handleSave()
+  chrome.storage.local.set = realSet
+  assert.deepEqual(seen.map(x => x.text), ['儲存中 1／2…', '儲存中 2／2…'], `實得 ${JSON.stringify(seen)}`)
+  assert.ok(seen.every(x => x.disabled), '進行中不可連按')
+  // 全部成功時表單已換成回饋區，按鈕本來就不在了；還在的話就得是可按的
+  const after = doc.getElementById('save')
+  assert.ok(!after || after.disabled === false, '結束後按鈕還回來')
+  globalThis.window.close = () => {}
+})
+
 test('G3-5 第 2 個儲存失敗：說出存了幾個、誰失敗；已存的從清單移除，再按一次不重複建立；畫面仍是批次清單', async () => {
   const { c, st, pk, doc } = await freshPanel()
   await pk.renderFromPanelCtx(batchCtx([payloadT, payloadT2, payloadP]))
