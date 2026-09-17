@@ -180,6 +180,16 @@ test('E-8b 右鍵選單重建要串行化：兩次同時進來也不得重複建
   }
 })
 
+test('E-8c service worker 重啟後（還沒建過選單）第一次寫入不相干的設定：不得把整組右鍵選單拆掉重建', async () => {
+  const { c, st } = await freshBg()
+  await st.saveSettings({ pickerDefaults: { last: { scheduleType: 'daily' } } })
+  await sleep(150)
+  assert.equal(c.__calls.filter(x => x.api === 'contextMenus.removeAll').length, 0, '每存一個任務都會寫設定：不相干的變動不得重建選單')
+  await st.saveSettings({ showHelpMenu: false })
+  await sleep(150)
+  assert.equal(c.__calls.filter(x => x.api === 'contextMenus.removeAll').length, 1, '真的改到這個設定才重建')
+})
+
 test('E-9 設定頁：開關缺省是勾選；取消勾選寫入 false；旁邊固定有開啟教學的連結', async () => {
   resetChromeMock()
   installChromeMock()

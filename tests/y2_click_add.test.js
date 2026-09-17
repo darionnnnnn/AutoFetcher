@@ -202,3 +202,17 @@ test('B1-14 已選 A1、B2 時點「整欄→一個值」：B2 換成它那一�
   assert.match(panelText(doc), /換成「賣出」整欄，其他已選不變/)
   pm.exitPickMode()
 })
+
+test('體檢 B1-15 整欄已選後單格模式點同欄的格：加成獨立的值是允許的，但要說清楚（指令句說「點已選的可取消」）', async () => {
+  const { doc, pm, win } = await boot()
+  move(win, doc.getElementById('b1'))
+  click(win, tool(doc, 'col'))
+  pick(win, doc.getElementById('b1'))
+  click(win, tool(doc, 'cell'))
+  pick(win, doc.getElementById('c1'))
+  assert.deepEqual(keys(pm), ['col1', '2,1'])
+  assert.match(panelText(doc), /這一格已經算在「.*」裡；現在另外加成獨立的一個值（再點一次取消）/)
+  pick(win, doc.getElementById('c1'))
+  assert.deepEqual(keys(pm), ['col1'], '再點一次取消')
+  pm.exitPickMode()
+})

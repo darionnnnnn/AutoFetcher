@@ -296,8 +296,13 @@ test('G3-7 面板顯示 background 留下的說明（入口被擋時）；等待
 
 test('G3-8 單任務儲存回饋多一行提示多任務入口；批次儲存回饋沒有', async () => {
   const { pk, doc } = await freshPanel()
-  await pk.showSavedFeedback({ id: 't1', schedule: { type: 'daily', times: ['09:30'] } }, { closeDelayMs: 5, tabId: 9 })
+  await pk.showSavedFeedback({ id: 't1', schedule: { type: 'daily', times: ['09:30'] } }, { closeDelayMs: 5, tabId: 9, hint: true })
   assert.match(doc.getElementById('saved-feedback').textContent, /同一頁還要抓別的？下次在右鍵選「一次建立多個任務」/)
+  // 體檢：session 一寫成 saved 面板就會照 ctx 重畫回饋區——提示要跟著 ctx 走才留得住
+  const entry = (await chrome.storage.session.get('panel:9'))['panel:9']
+  assert.equal(entry.hint, true)
+  await pk.renderFromPanelCtx({ ...entry, retarget: 'force-redraw' })
+  assert.match(doc.getElementById('saved-feedback').textContent, /同一頁還要抓別的/, '重畫之後提示還在')
   globalThis.window.close = () => {}
   await sleep(15)
 })
@@ -370,4 +375,84 @@ test('G3-10 側邊面板裡按回饋區的「開啟報表」：開報表分頁�
   await sleep(10)
   assert.equal(api(c, 'tabs.create').length, 1, '開報表分頁')
   assert.equal(closed, 0, '側邊面板不得走 window.close')
+})
+
+// ---------- 換模型體檢補 ----------
+
+test('體檢-1 編輯既有任務／批次的回饋不提示多任務入口', async () => {
+  const { pk, doc } = await freshPanel()
+  await pk.showSavedFeedback({ id: 't1', schedule: { type: 'daily', times: ['09:30'] } }, { closeDelayMs: 5, tabId: 9 })
+  assert.doesNotMatch(doc.getElementById('saved-feedback').textContent, /同一頁還要抓別的/)
+  globalThis.window.close = () => {}
+  await sleep(15)
+})
+
+test('體檢-2 加卡片失敗：任務已存、排程照樣重建（順序回到存→重建排程→卡片），回饋區說出來且不自動關', async () => {
+  const { c, st, pk, doc } = await freshPanel()
+  await st.saveLayout?.({ dashboards: [{ id: 'd1', name: '主', cards: [] }] })
+  await pk.renderFromPanelCtx({ kind: 'new', ctx: payloadT2 })
+  const sel = doc.getElementById('dashboard-select')
+  if (![...sel.options].some(o => o.value !== 'none')) {
+    const o = doc.createElement('option'); o.value = 'd1'; o.textContent = '主'; sel.prepend(o)
+  }
+  sel.value = [...sel.options].find(o => o.value !== 'none').value
+  const box = doc.querySelector('#card-types input[type="checkbox"]')
+  box.checked = true
+  const realSet = chrome.storage.local.set.bind(chrome.storage.local)
+  chrome.storage.local.set = async (obj) => {
+    if (obj && 'layout' in obj) throw new Error('QUOTA_BYTES quota exceeded')
+    return realSet(obj)
+  }
+  await pk.handleSave()
+  chrome.storage.local.set = realSet
+  assert.equal((await st.getTasks()).length, 1, '任務存好了')
+  assert.equal(runtimeMsgs(c).filter(m => m?.type === 'REBUILD_ALARMS').length, 1, '卡片失敗不得讓排程不重建')
+  assert.match(doc.querySelector('[data-saved-warning]')?.textContent || '', /沒有加進儀表板/)
+  await sleep(1700)
+  assert.equal(runtimeMsgs(c).filter(m => m?.type === 'CLOSE_PANEL').length, 0)
+})
+
+test('體檢-3 草稿要存到排程的實際欄位與勾選群組：批次畫面改的間隔與星期，面板重載後還在', async () => {
+  const { pk, doc } = await freshPanel()
+  await pk.renderFromPanelCtx({
+    ...batchCtx([payloadT2, payloadP]),
+    draft: { 'schedule-type': 'interval', 'every-minutes': '30', weekdays: ['1', '3'], batchNames: { b1: '我改的' } }
+  })
+  assert.equal(doc.getElementById('schedule-type').value, 'interval')
+  assert.equal(doc.getElementById('every-minutes').value, '30', '使用者填的間隔不得回到預設 15')
+  const days = [...doc.querySelectorAll('#weekdays input[type="checkbox"]')].filter(cb => cb.checked).map(cb => cb.value)
+  assert.deepEqual(days, ['1', '3'])
+  assert.equal(nameOf(rows(doc)[0]).value, '我改的')
+  // 寫回那一側：抄下來的草稿要含排程的實際欄位與勾選群組（以前清單裡是六個不存在的 id）
+  const snap = pk.snapshotForm()
+  assert.equal(snap['every-minutes'], '30')
+  assert.deepEqual(snap.weekdays, ['1', '3'])
+  assert.ok(Array.isArray(snap.cardTypes))
+})
+
+test('體檢-4 被擋時留下的說明：批次移除一列之後要收掉，不得一直掛著', async () => {
+  const { st, pk, doc } = await freshPanel()
+  const ctx = { ...batchCtx([payloadT, payloadT2, payloadP]), notice: '多任務設定到一半，請先全部儲存或取消，再選單一任務' }
+  await st.setPanelCtx(9, ctx)
+  await pk.renderFromPanelCtx(ctx)
+  assert.equal(doc.getElementById('panel-notice').hidden, false, '前置：說明有顯示')
+  rows(doc)[1].querySelector('[data-batch-remove]').click()
+  await sleep(30)
+  const entry = (await chrome.storage.session.get('panel:9'))['panel:9']
+  assert.equal(entry.items.length, 2)
+  assert.ok(!entry.notice, `說明殘留：${entry.notice}`)
+})
+
+test('體檢-5 全部試抓進行中「全部儲存」不可按，結束後還回來（兩條流程共用同一份表單）', async () => {
+  const { c, pk, doc } = await freshPanel()
+  await pk.renderFromPanelCtx(batchCtx([payloadT2, payloadP]))
+  let saveDuring = null
+  c.__setRuntimeResponder((msg) => {
+    if (msg?.type !== 'TEST_TASK') return undefined
+    saveDuring = saveDuring ?? doc.getElementById('save').disabled
+    return { ok: true, value: 1, raw: '1', status: 'ok' }
+  })
+  await pk.handleTestNow()
+  assert.equal(saveDuring, true)
+  assert.equal(doc.getElementById('save').disabled, false)
 })

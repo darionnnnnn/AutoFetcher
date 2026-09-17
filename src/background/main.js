@@ -302,7 +302,10 @@ async function buildContextMenus() {
 export function handleSettingsChanged(changes) {
   if (!changes?.settings) return
   const shown = helpMenuShown(changes.settings.newValue)
-  if (shown === helpMenuBuiltWith) return
+  // service worker 重啟後還沒建過選單（null）：拿變動前的值當基準。不然第一次任何設定寫入
+  // （每存一個任務都會寫 pickerDefaults）都會把整組右鍵選單拆掉重建（體檢抓到）
+  const before = helpMenuBuiltWith ?? helpMenuShown(changes.settings.oldValue)
+  if (shown === before) return
   setupContextMenus()
 }
 

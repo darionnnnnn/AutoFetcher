@@ -52,9 +52,10 @@ test('三個頁面都改用 theme.css，不再自己宣告色彩變數', () => {
 
 test('報表載入時依 settings.theme 設定 data-theme', async () => {
   for (const [theme, want] of [['dark', 'dark'], ['light', 'light'], ['system', null]]) {
-    const { rp, doc } = await fresh({ theme })
-    assert.equal(typeof rp.applyTheme, 'function', 'report.js 要匯出 applyTheme')
-    rp.applyTheme(theme)
+    const { doc } = await fresh({ theme })
+    // applyTheme 的唯一一份在 ui/theme-apply.js（AF-18）；報表頁與其他頁都從那裡拿
+    const { applyTheme } = await import('../src/ui/theme-apply.js?t=' + Math.random())
+    applyTheme(theme)
     assert.equal(doc.documentElement.getAttribute('data-theme'), want, `theme=${theme}`)
   }
 })

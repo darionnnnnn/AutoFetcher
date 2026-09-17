@@ -190,7 +190,7 @@ test('G1-10 同一張外層表只能是一組：外層已有一組時，小表�
   pick(win, timeTd('his_31'))
   pick(win, doc.getElementById('ot1'))
   pick(win, small1('his_31'))
-  assert.match(panelText(doc), /已選 3 個任務/, '前置：外層、另一張表、小表各一組')
+  assert.match(panelText(doc), /已選 2 個任務、共 3 個值/, '外層已有一組：點它底下小表的格子＝回到那一組加一個帶路徑的值，不另開一組（體檢修正）')
   pick(win, small1('his_33'))
   assert.match(panelText(doc), /已選 2 個任務、共 4 個值/, `小表那組升到外層後併進外層那組：${panelText(doc).slice(0, 160)}`)
   key(doc, win, 'Enter')
@@ -250,5 +250,45 @@ test('G1-14 批次模式只剩元素組、滑鼠停在框架代理層上按 Ente
   assert.equal(msgs(c).filter(m => m?.type === 'DESCEND_FRAME').length, 0, '不得下鑽')
   assert.match(panelText(doc), /先完成這一批/)
   assert.equal(picked(c).length, 0, '也不得把這一批送出')
+  pm.exitPickMode()
+})
+
+test('G1-15 切過別的組之後再點另一列的小表：回到小表那一組並升到外層，不得一列一個任務（體檢）', async () => {
+  const OTHER = '<table id="ot"><tbody><tr><td id="ot1">1</td><td>2</td></tr><tr><td>3</td><td>4</td></tr></tbody></table>'
+  const { c, doc, pm, win } = await boot(MONITOR + OTHER, BATCH)
+  const small1 = (id) => doc.getElementById(id).closest('tr').children[0]
+  pick(win, small1('his_31'))
+  pick(win, doc.getElementById('ot1'))
+  pick(win, small1('his_32'))
+  assert.match(panelText(doc), /已選 2 個任務、共 3 個值/, panelText(doc).slice(0, 160))
+  key(doc, win, 'Enter')
+  const msg = picked(c)[0]
+  assert.equal(msg.batch.length, 2)
+  const outer = msg.batch.find(b => resolve(doc, b.locator).el === doc.querySelector('table'))
+  assert.equal(outer?.picks.length, 2)
+  assert.ok(outer.picks.every(p => p.cell.inner?.length === 4))
+})
+
+test('G1-16 批次模式滑鼠停在另一張表按 Shift＋方向鍵：值進那張表的組，不得混進目前這組（體檢）', async () => {
+  const { c, doc, pm, win } = await boot(PAGE, BATCH)
+  pick(win, doc.getElementById('a1'))
+  fire(win, doc.getElementById('y1'), 'mousemove')
+  key(doc, win, 'ArrowDown', { shiftKey: true })
+  key(doc, win, 'Enter')
+  const msg = picked(c)[0]
+  assert.equal(msg.batch?.length, 2, JSON.stringify(msg).slice(0, 200))
+  const t = msg.batch.find(b => resolve(doc, b.locator).el === doc.getElementById('t'))
+  assert.deepEqual(cellKeys(t.picks), ['0,1'], '甲組不得混進乙表的索引')
+})
+
+test('G1-17 在別張表上按右鍵：不得出現「排除」選項、也不得改到已選那一組的整欄值（體檢）', async () => {
+  const { doc, pm, win } = await boot(PAGE, BATCH)
+  fire(win, doc.getElementById('a1'), 'mousemove')
+  fire(win, doc.querySelector('[data-af-tool="col"]'), 'click')
+  pick(win, doc.getElementById('a1'))
+  assert.equal(pm.selectedPicks()[0]?.block?.index, 1, '前置：甲表買入整欄')
+  fire(win, doc.getElementById('y2'), 'mousemove')
+  fire(win, doc.getElementById('y2'), 'contextmenu')
+  assert.equal(doc.querySelector('[data-af-menu-item="exclude"]'), null)
   pm.exitPickMode()
 })

@@ -182,3 +182,16 @@ test('B2-12 前置動作用途：整欄→每格停用，點了要說原因', as
   assert.match(panelText(doc), /一次只選一個/)
   pm.exitPickMode()
 })
+
+test('體檢 B2-13 上限截斷之後再點同一欄：整組取消（不然再也點不掉）；提示的格數是實際選到的', async () => {
+  const { doc, pm, win } = await boot(MONITOR, { maxPicks: 3 })
+  toEach(doc, win, small1(doc))
+  fire(win, small1(doc), 'mousemove')
+  click(win, small1(doc))
+  assert.equal(pm.selectedCount(), 3, '前置：外層這一欄 6 格，被上限截到 3')
+  assert.match(panelText(doc), /同一個位置（3 格）/, `說的是選到的格數：${panelText(doc).slice(0, 120)}`)
+  fire(win, small1(doc), 'mousemove')
+  click(win, small1(doc))
+  assert.equal(pm.selectedCount(), 0)
+  pm.exitPickMode()
+})

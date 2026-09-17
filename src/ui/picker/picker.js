@@ -2100,7 +2100,14 @@ function taskFromForm(values, ctx) {
 async function saveTaskFromForm(values, ctx) {
   const task = taskFromForm(values, ctx)
   await saveTask(task)
+  return task
+}
 
+/**
+ * 新建任務依畫面上勾選的卡片型別加進儀表板（單任務與批次共用）。
+ * **與存任務分開、排在重建排程之後**：卡片寫不進去（配額、儀表板剛被刪）不得讓已存好的任務沒有排程（體檢抓到的退化）。
+ */
+async function addCardsForTask(task, ctx) {
   // 只有新建任務才處理加入儀表板卡片
   if (!ctx?.task) {
     const dashSelect = document.getElementById('dashboard-select')
@@ -2143,7 +2150,6 @@ async function saveTaskFromForm(values, ctx) {
       }
     }
   }
-  return task
 }
 
 // 新建任務存完記住這次的排程與去處（pickerDefaults.last；勾了固定就一併寫 pinned）
@@ -2190,6 +2196,7 @@ export async function handleSave() {
   // 否則使用者只看到永遠的「儲存中…」
   let savedTask = null
   let savedNextRun = null
+  let cardError = null
   try {
   const task = await saveTaskFromForm(values, currentCtx)
   savedTask = task
@@ -2207,6 +2214,8 @@ export async function handleSave() {
   if (!currentCtx?.task) {
     await rememberPickerDefaults(values)
   }
+  // 卡片排最後：任務與排程都好了，卡片失敗只是少一張卡，說出來就好
+  try { await addCardsForTask(task, currentCtx) } catch (e) { cardError = e?.message || String(e) }
 
   } catch (e) {
     if (errorsEl) errorsEl.textContent = `儲存失敗：${e?.message || e}`
@@ -2214,14 +2223,18 @@ export async function handleSave() {
   } finally {
     busySave()
   }
-  await showSavedFeedback(savedTask, { nextRunMs: savedNextRun })
+  await showSavedFeedback(savedTask, {
+    nextRunMs: savedNextRun,
+    hint: !currentCtx?.task,
+    ...(cardError ? { warning: `任務已經存好，但沒有加進儀表板：${cardError}。可以到報表的儀表板自己加。`, closeDelayMs: null } : {})
+  })
 }
 
 /**
  * 儲存成功之後不要無聲關窗：說出「存好了、下次什麼時候抓」，
  * 並給一條去看結果的路。1.5 秒後自動關，使用者也可以自己點。
  */
-export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs = 1500, tabId = panelTabId, count = null } = {}) {
+export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs = 1500, tabId = panelTabId, count = null, hint = false, warning = '' } = {}) {
   const form = document.getElementById('picker-form')
   if (!form || !task) return
   let when = ''
@@ -2234,21 +2247,16 @@ export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs =
   const text = when
     ? `${head}下次抓取：${when}`
     : `${head}${describeSchedule(task.schedule)}`
-  buildSavedFeedback(form, text)
-  // 單任務才提示多任務入口（批次的使用者已經知道了）
-  if (count === null) {
-    const hint = document.createElement('div')
-    hint.setAttribute('data-saved-hint', '')
-    hint.textContent = '同一頁還要抓別的？下次在右鍵選「一次建立多個任務」'
-    const box = document.getElementById('saved-feedback')
-    box?.insertBefore(hint, document.getElementById('saved-open-report'))
-  }
+  // 提示（新建的單任務才給）與警告都跟著 saved ctx 走：session 一寫面板就會照 ctx 重畫回饋區，
+  // 只 append 在 DOM 上的會被洗掉（體檢實測：提示行在側邊面板永遠看不到）
+  const saved = { kind: 'saved', text, ...(hint && count === null ? { hint: true } : {}), ...(warning ? { warning } : {}) }
+  buildSavedFeedback(form, saved)
 
   // 存好了就不再是「填到一半的表單」：草稿不得再寫回，session 收成 saved，
   // 關窗前使用者右鍵再選時 background 才會當成新的一輪，而不是換目標
   if (draftTimer) { clearTimeout(draftTimer); draftTimer = null }
   if (tabId !== null && tabId !== undefined) {
-    try { await setPanelCtx(tabId, { kind: 'saved', text }) } catch {}
+    try { await setPanelCtx(tabId, saved) } catch {}
   }
 
   // closeDelayMs 為 null：不自動關（回饋區有使用者一定要看的警告時）
@@ -2274,13 +2282,26 @@ export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs =
 /**
  * 回饋區（一行文字＋「開啟報表」）：儲存當下與面板在 saved 態重載共用這一份。
  */
-function buildSavedFeedback(form, text) {
+function buildSavedFeedback(form, saved) {
   const box = document.createElement('div')
   box.id = 'saved-feedback'
   box.setAttribute('role', 'status')
   const line = document.createElement('div')
-  line.textContent = text
+  line.textContent = saved?.text || '已儲存。'
   box.appendChild(line)
+  if (saved?.warning) {
+    const warn = document.createElement('div')
+    warn.setAttribute('data-saved-warning', '')
+    warn.setAttribute('role', 'alert')
+    warn.textContent = saved.warning
+    box.appendChild(warn)
+  }
+  if (saved?.hint) {
+    const hintEl = document.createElement('div')
+    hintEl.setAttribute('data-saved-hint', '')
+    hintEl.textContent = '同一頁還要抓別的？下次在右鍵選「一次建立多個任務」'
+    box.appendChild(hintEl)
+  }
 
   const openBtn = document.createElement('button')
   openBtn.type = 'button'
@@ -2693,7 +2714,7 @@ export async function renderFromPanelCtx(ctx, { reload = () => globalThis.locati
     // 名稱欄在表單外的頁首：沒有表單可存時一起藏起來
     const header = document.querySelector('[data-picker-header]')
     if (header) header.hidden = true
-    if (form) buildSavedFeedback(form, ctx.text || '已儲存。')
+    if (form) buildSavedFeedback(form, ctx)
     return { rendered: true }
   }
 
@@ -2741,19 +2762,25 @@ function applyRetarget(payload) {
 
 // 要跨「換目標」與「面板重載」保住的欄位（鍵一律是元素 id，restoreDraft 靠它還原）
 const DRAFT_FIELDS = [
-  'name', 'schedule-type', 'interval-value', 'interval-unit', 'daily-time',
-  'agg', 'row-pos', 'col-pos', 'dashboard-select', 'regex', 'multiplier', 'decimals'
+  'name', 'schedule-type', 'times', 'every-minutes', 'window-enabled', 'window-from', 'window-to',
+  'block-aggregate', 'row-pos', 'col-pos', 'dashboard-select', 'regex'
 ]
+// 沒有 id 的勾選群組（星期、卡片型別）以「容器選擇器 → 勾選的 value 陣列」存
+const DRAFT_GROUPS = { weekdays: '#weekdays input[type="checkbox"]', cardTypes: '#card-types input[type="checkbox"]' }
 
 /**
  * 把畫面上的表單值抄成 `{元素 id: 值}`。
  */
-function snapshotForm() {
+export function snapshotForm() {
   const out = {}
   for (const id of DRAFT_FIELDS) {
     const el = document.getElementById(id)
     if (!el) continue
     out[id] = el.type === 'checkbox' ? el.checked : el.value
+  }
+  for (const [key, sel] of Object.entries(DRAFT_GROUPS)) {
+    const boxes = Array.from(document.querySelectorAll(sel))
+    if (boxes.length > 0) out[key] = boxes.filter(cb => cb.checked).map(cb => cb.value)
   }
   return out
 }
@@ -2771,6 +2798,16 @@ function restoreDraft(draft, opts = {}) {
     if (el.type === 'checkbox') el.checked = Boolean(value)
     else if (value !== undefined && value !== null) el.value = String(value)
   }
+  for (const [key, sel] of Object.entries(DRAFT_GROUPS)) {
+    if (!Array.isArray(draft[key])) continue
+    for (const cb of document.querySelectorAll(sel)) cb.checked = draft[key].includes(cb.value)
+  }
+  // 排程欄位是連動的（類型切換顯示哪一組、時刻 chip、時段欄、預覽與摘要）：值貼回去之後畫面要跟上
+  syncScheduleFields()
+  syncWindowFields()
+  renderTimeChips()
+  updateSchedulePreview()
+  updateSetupSummary()
 }
 
 /**
@@ -2798,7 +2835,8 @@ function scheduleDraftSave() {
       const agg = document.getElementById('batch-aggregate')
       if (agg) draft['batch-aggregate'] = agg.value
     }
-    try { await mergePanelCtx(panelTabId, { draft }) } catch {}
+    // 使用者已經在動表單了：被擋時留下的說明一併收掉（沒有別的清除路徑，會一直掛著；體檢抓到）
+    try { await mergePanelCtx(panelTabId, { draft, notice: undefined }) } catch {}
   }, 300)
 }
 
@@ -3053,7 +3091,7 @@ function removeBatchItems(keys) {
   ;(async () => {
     try {
       const cur = await getPanelCtx(tabId)
-      if (cur?.kind === 'batch') await mergePanelCtx(tabId, { items })
+      if (cur?.kind === 'batch') await mergePanelCtx(tabId, { items, notice: undefined })
     } catch {}
   })()
 }
@@ -3109,13 +3147,16 @@ function batchEntries() {
 async function handleBatchSave() {
   const errorsEl = document.getElementById('errors')
   if (errorsEl) errorsEl.textContent = ''
-  const busy = setBusy('save', '儲存中…')
+  const busySave = setBusy('save', '儲存中…')
+  const busyTest = setBusy('test-now', '全部試抓')
+  const busy = () => { busySave(); busyTest() }
   const shared = snapshotShared()
   const entries = batchEntries()
   const saved = []
   let lastValues = null
   let failure = null
   let postError = null
+  const cardErrors = []
   for (let i = 0; i < entries.length; i++) {
     const { item, name } = entries[i]
     try {
@@ -3131,6 +3172,7 @@ async function handleBatchSave() {
       const task = await saveTaskFromForm(values, currentCtx)
       saved.push({ key: item.key, task })
       lastValues = values
+      try { await addCardsForTask(task, currentCtx) } catch (e) { cardErrors.push(`「${name}」${e?.message || e}`) }
     } catch (e) {
       failure = { k: i + 1, name, message: e?.message || String(e) }
       break
@@ -3172,17 +3214,13 @@ async function handleBatchSave() {
   if (saved.length === 0) return
   batchItems = null
   // 有後段錯誤時不自動關面板：這一句使用者一定要看得到
-  await showSavedFeedback(saved[0].task, { nextRunMs, count: saved.length, ...(postError ? { closeDelayMs: null } : {}) })
-  if (postError) {
-    const box = document.getElementById('saved-feedback')
-    if (box) {
-      const warn = document.createElement('div')
-      warn.setAttribute('data-saved-warning', '')
-      warn.setAttribute('role', 'alert')
-      warn.textContent = `任務已經存好，但排程重建沒有完成：${postError}。請到報表的「任務管理」確認下次抓取時間。`
-      box.appendChild(warn)
-    }
-  }
+  const warnings = []
+  if (postError) warnings.push(`任務已經存好，但排程重建沒有完成：${postError}。請到報表的「任務管理」確認下次抓取時間。`)
+  if (cardErrors.length > 0) warnings.push(`任務已經存好，但有卡片沒加進儀表板：${cardErrors.join('；')}。`)
+  await showSavedFeedback(saved[0].task, {
+    nextRunMs, count: saved.length,
+    ...(warnings.length > 0 ? { warning: warnings.join(' '), closeDelayMs: null } : {})
+  })
 }
 
 async function handleBatchTest() {
@@ -3191,6 +3229,9 @@ async function handleBatchTest() {
   const btn = document.getElementById('test-now')
   const prevText = btn?.textContent
   if (btn) btn.disabled = true
+  // 試抓與儲存共用同一份表單逐項 render：進行中互鎖，否則後跑完的那一個會把畫面蓋回去（體檢抓到）
+  const saveBtn = document.getElementById('save')
+  if (saveBtn) saveBtn.disabled = true
   const shared = snapshotShared()
   const entries = batchEntries()
   try {
@@ -3231,5 +3272,6 @@ async function handleBatchTest() {
       btn.textContent = prevText
       btn.disabled = false
     }
+    if (saveBtn) saveBtn.disabled = false
   }
 }

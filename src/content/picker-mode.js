@@ -467,6 +467,7 @@ function promotePicksToOuter(T) {
   setTarget(O)
   deliberateTableEl = O
   undoSnapshot = previous
+  batchHover.delete(T)
   if (batchMode) syncBatch()
   applyPickedMarks(O)
   return true
@@ -547,6 +548,24 @@ function batchFollowTarget(tableEl) {
   if (at >= 0) {
     loadBatchGroup(at)
     return true
+  }
+  // 點的是某一組的「同一張外層表」底下的另一張小表（或外層自己）：回到那一組並升到外層，
+  // 不得各開一組——切過別的組之後鎖表的 anchor 已經換人，觸發 2 不會自己發生（體檢抓到：監控頁會變成一列一個任務）
+  const O = outerTableOf(tableEl)
+  const kin = batchGroups.findIndex(g => !g.el && g.tableEl && (
+    (O && g.tableEl === O) ||
+    (isUpgradeableTable(g.tableEl) && (outerTableOf(g.tableEl) === tableEl || (O && outerTableOf(g.tableEl) === O)))))
+  if (kin >= 0) {
+    const kinTable = batchGroups[kin].tableEl
+    loadBatchGroup(kin)
+    const outer = kinTable === O || kinTable === tableEl ? kinTable : outerTableOf(kinTable)
+    if (kinTable === outer || promotePicksToOuter(kinTable)) {
+      if (currentTargetEl !== outer) setTarget(outer)
+      deliberateTableEl = outer
+      return true
+    }
+    // 換算不了（那一組有小表的整欄／整列值）：照舊各自成組
+    syncBatch()
   }
   if (batchGroups.length >= MAX_BATCH_GROUPS) {
     toolbarNotice = BATCH_LIMIT_NOTICE
@@ -1878,7 +1897,10 @@ function expandColEach(tableEl, cIdx, inner, targetEl, options = {}) {
   }
 
   const toggle = options.toggle !== false
-  if (toggle && resolved.picks.every(p => selectedList.some(s => samePick(s, p)))) {
+  const present = resolved.picks.filter(p => selectedList.some(s => samePick(s, p)))
+  // 全部已選＝整組取消；被上限截斷（補不進去了）而這一欄已有值時同樣算取消，否則再也點不掉
+  const full = selectedList.length >= maxPicks
+  if (toggle && present.length > 0 && (present.length === resolved.picks.length || full)) {
     const previous = takeUndoSnapshot(selectedList, pickedTableEl)
     clearUndoSnapshot()
     selectedList = selectedList.filter(s => !resolved.picks.some(p => samePick(s, p)))
@@ -1914,9 +1936,10 @@ function expandColEach(tableEl, cIdx, inner, targetEl, options = {}) {
   let n = 0
   for (const p of resolved.picks) {
     addPick(p)
-    n++
     if (limitReached) break
   }
+  // 說的是這一欄實際在清單裡的格數（去重、上限截斷的不算）
+  n = resolved.picks.filter(p => selectedList.some(s => samePick(s, p))).length
 
   if (resolved.isOuter) {
     toolbarNotice = promotedColNotice(n)
@@ -2188,7 +2211,9 @@ function openMenu(event) {
   const cellInfo = isTable ? resolveCell(target, tableEl) : null
   let matchedPickIndex = -1
   let matchedBlock = null
-  if (cellInfo && selectedList.length > 0) {
+  // 只有滑鼠下的表就是已選那張表時才比對：blockCoversCell 只比索引，
+  // 在 B 表上按右鍵會改到 A 表那一組的排除，而且錨定成 B 表的列標題（體檢抓到）
+  if (cellInfo && selectedList.length > 0 && tableEl === pickedTableEl) {
     for (let i = selectedList.length - 1; i >= 0; i--) {
       const pick = selectedList[i]
       if (pick.block && blockCoversCell(pick.block, cellInfo.rIdx, cellInfo.cIdx)) {
@@ -2493,7 +2518,12 @@ function togglePick(pick) {
     }
     return
   }
-  addPick(pick)
+  // 這一格已經算在某個整欄／整列值裡（本來就是藍框）：加成獨立的值是允許的（合計那一格單獨當一個值，AF-16），
+  // 但不得無聲——指令句說「點已選的可取消」，這一下卻是加選，要講清楚（體檢抓到）
+  const covering = pick.cell ? selectedList.find(p => p.block && blockCoversCell(p.block, pick.cell.row.index, pick.cell.col.index)) : null
+  if (addPick(pick) && covering) {
+    toolbarNotice = `這一格已經算在「${getPickName(covering)}」裡；現在另外加成獨立的一個值（再點一次取消）`
+  }
 }
 
 function addCellPick(r, c, dataRows, inner) {
@@ -2828,6 +2858,18 @@ function onKeyDown(event) {
         const curC = colIndex !== null ? colIndex : 0
         // 最右能走到的是最後一格的網格起點（colspan 之後 DOM 格數小於網格寬）
         const lastCol = Math.max(0, ...gridStartsOf(dataRows[curR] || dataRows[0]))
+
+        // 與點擊／拖曳／右鍵同一套守門（體檢抓到：這條路漏了，滑鼠停在另一張表時會把那張表的索引塞進已選的組）
+        if (promoteBeforeAddingInOuter() === 'blocked') return
+        if (!batchFollowTarget(currentTargetEl)) {
+          updatePanel(panelEl, currentTargetEl)
+          return
+        }
+        if (selectedList.length > 0 && pickedTableEl && currentTargetEl !== pickedTableEl) {
+          toolbarNotice = '一個任務只能抓同一張表格裡的值；要改抓另一張表，直接點那一格'
+          updatePanel(panelEl, currentTargetEl)
+          return
+        }
 
         addCellPick(curR, curC, dataRows, currentInner)
 
