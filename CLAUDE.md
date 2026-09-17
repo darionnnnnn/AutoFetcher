@@ -14,10 +14,12 @@ src/
 │                          health 燈號 / notify 通知唯一入口 / inject 注入唯一入口
 │                          frames 目標所在 iframe 的定位唯一入口
 ├── content/             ← 注入頁面:main.js 訊息路由/擷取/填登入/前置動作(hover/等/點/等待)
-│                          picker-mode.js 選取模式(高亮 overlay、↑↓、右上角工具列三段
-│                          「單格(預設)/整欄/整列」、可互動的已選 chip 面板、完成/取消鈕;
-│                          點一下選取、Ctrl 加選、Shift 拉範圍、雙擊送出)
+│                          picker-mode.js 選取模式(高亮 overlay、↑↓、右上角工具列四段
+│                          「單格(預設)/整欄→一個值/整欄→每格/整列→一個值」、可互動的已選 chip 面板、完成/取消鈕;
+│                          點一下加選／再點取消、Shift 拉範圍、雙擊送出;巢狀小表升到外層;批次模式的「組」)
 ├── ui/theme.css         ← **顏色的唯一來源**(亮/暗雙軌 + --chart-1~8 圖表調色盤)
+├── ui/theme-apply.js    ← **套用使用者主題設定的唯一一份**(`applyTheme`/`applySavedTheme`;Report、Picker、站台、popup、教學頁都用)
+├── ui/help/             ← 使用教學頁(help.html 文案由 Claude 寫;寫法契約見 SPEC §2〈使用教學頁〉)
 ├── ui/ui.css            ← 擴充功能頁的**共用元件樣式**(按鈕三級/卡片/表單/chip/sticky footer/
 │                          [hidden]/焦點/reduced-motion);只吃 theme.css 變數,零色碼。
 │                          picker 與 site 都載入它;report/popup 尚未沿用
@@ -77,12 +79,12 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 
 - 改任何行為 → `docs/SPEC.md`(現況規格,§編號會被程式碼註解引用,勿拆檔)
 - 想做但刻意沒做 → `docs/BACKLOG.md`(每項附觸發條件)
-- 本輪規劃 → `docs/AF-<N>-PLAN.md`;完工搬 `docs/archive/`(按需讀,勿全掃)。AF-1~AF-17 已歸檔。
+- 本輪規劃 → `docs/AF-<N>-PLAN.md`;完工搬 `docs/archive/`(按需讀,勿全掃)。AF-1~AF-17 已歸檔,AF-18 實作完成待體檢。
 
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 2181 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 2271 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -105,6 +107,9 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **換行判定用 python 讀位元組**：`"$(grep -c $'\r' f)"` 在 Git Bash 的命令替換裡會失效、回報 CR 數等於行數，AF-16 因此誤判全專案為 CRLF。本專案所有檔案是 LF。
 - **委派端中途無聲結束時先查語法**:AF-16 作業 B 的 agy exit 0、stdout 全空,留下半套實作且刪掉一個結尾大括號,
   整個 content script 載不起來、數十則既有測試連帶紅。驗收先跑 `node --check`,再看 diff 缺了哪些條目。
+- **改到操作語意或介面字串(工具列、按鈕、右鍵項目)要同步教學頁 `ui/help/help.html`**:`tests/y5_help_page.test.js` 的 `data-ui-label` 只擋「字串還在不在那個檔案」(子字串比對,註解裡有同一串也會過),擋不到語意變了(AF-18)。
+- **不寫分號的專案,新增一行呼叫時要看下一行是不是以 `(`／`[`／`` ` `` 開頭**:AF-18 在 popup 初始化區塊加 `applySavedTheme()`,下一行是 `(async () => {…})()`,
+  被接成 `applySavedTheme()(async …)`,jsdom 測不到(正式接線區塊不跑),真實瀏覽器煙霧才抓到。行首括號一律前置分號。
 - **「在 A 之後讀 B」的情境要看 A 會不會清掉 B**:右鍵選單的 `closeMenu()` 會把 `menuTargetContext` 清成 null,
   排除分支在它之後才讀,右鍵排除永遠無效(AF-16)。新增選單動作要在關選單前取出情境。
 - 設定/資料的事實來源是 `chrome.storage.local`;檔案一律**使用者手動匯出**,不自動下載(SPEC §5)。
@@ -187,6 +192,13 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   都是逐欄挑的,實測漏過一次——整條鏈每一段自己都綠,規格裡就是沒有 `inner`。
 - **`↑`／`↓` 選定的表要鎖,`mousemove` 的升級不得覆寫明確意圖**(AF-15):鎖的判定與「已選值的鎖」是同一份 `anchor`;
   保護「選了值之後」時要問「選之前」——只鎖已選的話,按 `↑` 切到外層表之後滑鼠一動就回內層,第一次點之前就走不到。
+- **巢狀小表的已選值升到外層只有一份**(AF-18):外層表 `outerTableOf`、可升級 `isUpgradeableTable`(同欄至少另一列有同型小表,擋版面表格)、
+  換算 `promotePicksToOuter`(全有或全無)、加值前的觸發 `promoteBeforeAddingInOuter`(點擊／雙擊／拖曳／右鍵共用)。**`repick` 不升級**(key 會重生)。
+  **`↑` 已選之後照樣離開這張表**,換不過去時鎖改認 `↑` 選定的外層表(`upgradeTarget` 的 anchor),否則 P1 會在版面表格上重現。
+- **點一下＝加選／再點取消**(AF-18 推翻 AF-8);**移除類動作都要存復原快照,`Ctrl+Z` 自己做的移除不存**(存了連按兩次互相抵銷);換表已選 ≥2 要再點一次確認。
+- **多任務的「組」**(AF-18):同一張表只能是一組(升到外層後要合併)、點 `body` 不成組、payload 只有 `buildPickPayload` 一份、恰好 1 組時訊息與非批次逐欄相同。
+  面板批次儲存一律走 `render → 收集 → saveTaskFromForm`(與單任務共用存檔核心),**逐一 render 會把合成方式洗回預設,收集前要貼回共用設定**。
+- **面板 `kind:'saved'`**(AF-18):存完當下就收成它;進選取的入口只經 `canStartPick`;同一份面板文件從 `saved` 進下一輪一律重載面板文件。
 - **選取模式的模組狀態要在 `exitPickMode` 全部重設**:漏一個(例如「已選屬於哪張表」)
   會讓同一頁的下一次選取沿用上一張表的 locator、配上新表的列欄索引送出,抓到的永遠是錯的值。
   只驗「DOM 元素被移除」的測試抓不到這種殘留,要驗「連續選兩次」的行為。
