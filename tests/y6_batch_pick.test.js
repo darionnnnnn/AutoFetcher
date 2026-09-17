@@ -237,3 +237,18 @@ test('G1-13 按掉「不是目前這組」的 chip 之後，接著加值不得�
   assert.ok(t && t2, JSON.stringify(msg).slice(0, 200))
   for (const p of t.picks) assert.ok(p.cell.col.index >= 1 && p.cell.col.index <= 2 && p.cell.row.header !== '甲' && p.cell.row.header !== '乙', `甲組混進乙表的值：${JSON.stringify(t.picks)}`)
 })
+
+test('G1-14 批次模式只剩元素組、滑鼠停在框架代理層上按 Enter：confirmPick 那一道守門也要擋（不得丟掉這一批）', async () => {
+  const PAGE_FRAME = `<div id="num">1,234</div><iframe id="fr" src="https://b.example/w.html"></iframe>`
+  const { c, doc, pm, win } = await boot(PAGE_FRAME, BATCH)
+  pick(win, doc.getElementById('num'))
+  assert.match(panelText(doc), /已選 1 個任務/, '前置：一個元素組')
+  const proxy = doc.querySelector('[data-af-frame-proxy]')
+  assert.ok(proxy, '前置：有代理層')
+  fire(win, proxy, 'mousemove')
+  key(doc, win, 'Enter')
+  assert.equal(msgs(c).filter(m => m?.type === 'DESCEND_FRAME').length, 0, '不得下鑽')
+  assert.match(panelText(doc), /先完成這一批/)
+  assert.equal(picked(c).length, 0, '也不得把這一批送出')
+  pm.exitPickMode()
+})

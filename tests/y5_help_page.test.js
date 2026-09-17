@@ -56,7 +56,12 @@ test('E-3 教學提到的按鈕與選單名稱，文字必須與程式裡的實�
     const path = new URL(file, SRC)
     assert.ok(existsSync(path), `標籤指到不存在的檔案：${file}`)
     const text = el.textContent.trim()
-    assert.ok(readFileSync(path, 'utf8').includes(text), `「${text}」不在 ${file} 裡（介面改名時要同步教學頁）`)
+    // 只比「檔案裡有這串字」會被註解蒙過去（終檢實測：把工具列標籤改名，註解裡還有同一串就照樣綠）。
+    // 改成要求它出現在字串字面值或 HTML 文字節點裡：引號／反引號開頭，或 >文字 這種節點。
+    const src = readFileSync(path, 'utf8')
+    const quoted = [`'${text}`, `"${text}`, '`' + text, `>${text}`]
+    assert.ok(quoted.some(q => src.includes(q)),
+      `「${text}」不在 ${file} 的字串或畫面文字裡（介面改名時要同步教學頁；只寫在註解不算）`)
   }
 })
 
@@ -150,6 +155,29 @@ test('E-8 任何途徑改到設定（設定頁、匯入），選單當場跟上�
   await io.importSettings(typeof exported === 'string' ? JSON.stringify(json) : json)
   await sleep(200)
   assert.ok(!menuIds(c).includes('af-open-help'), '匯入設定檔也要跟上')
+})
+
+test('E-8b 右鍵選單重建要串行化：兩次同時進來也不得重複建立或缺項（removeAll 變慢時才看得出來）', async () => {
+  const { c, bg } = await freshBg()
+  // mock 的 contextMenus 是同步的，兩次重建永遠不會交錯；把 removeAll 變成非同步才有交錯的機會
+  const real = chrome.contextMenus
+  const created = []
+  let removeAlls = 0
+  chrome.contextMenus = {
+    removeAll: async () => { removeAlls++; created.length = 0; await sleep(20) },
+    create: (o) => { created.push(o.id) },
+    onClicked: real.onClicked
+  }
+  try {
+    await Promise.all([bg.setupContextMenus(), bg.setupContextMenus(), bg.setupContextMenus()])
+    assert.equal(removeAlls, 3, '前置：三次重建都真的跑了')
+    assert.equal(new Set(created).size, created.length, `同一輪不得重複 id（真實 Chrome 會擋下重複的 create）：${created}`)
+    for (const id of ['af-root', 'af-pick', 'af-pick-batch', 'af-site-login', 'af-open-report', 'af-open-help']) {
+      assert.ok(created.includes(id), `最後的選單缺了 ${id}：${created}`)
+    }
+  } finally {
+    chrome.contextMenus = real
+  }
 })
 
 test('E-9 設定頁：開關缺省是勾選；取消勾選寫入 false；旁邊固定有開啟教學的連結', async () => {
