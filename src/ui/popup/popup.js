@@ -260,7 +260,8 @@ export function getState() {
 // 擴充功能環境下自動初始化
 if (typeof document !== 'undefined' && globalThis.chrome?.runtime?.id) {
   applySavedTheme()
-  (async () => {
+  // 行首是括號：前面一定要有分號，否則會被接成 applySavedTheme()(async …)（真實瀏覽器煙霧抓到）
+  ;(async () => {
     try {
       const tasks = await getTasks()
       // UI 一律經 shared/storage，不直接碰 chrome.storage

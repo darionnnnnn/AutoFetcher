@@ -20,7 +20,8 @@
     margin: 0 auto;
     padding: var(--space-5) var(--space-4) 96px;
   }
-  .help-top { max-width: 72ch; margin-bottom: var(--space-5); }
+  .help-top { margin-bottom: var(--space-5); }
+  .help-top .lead, .news { max-width: 72ch; }
   .help-top h1 { font-size: 1.75rem; line-height: 1.3; margin: 0 0 var(--space-2); }
   .help-top .lead { color: var(--text-muted); margin: 0; }
 
@@ -33,7 +34,7 @@
     border-radius: var(--radius-lg);
     padding: var(--space-3) var(--space-4);
     display: grid;
-    grid-template-columns: 2.25rem 1fr;
+    grid-template-columns: 2.25rem minmax(0, 1fr);
     gap: var(--space-3);
     align-items: start;
   }
@@ -43,8 +44,9 @@
     width: 2.25rem; height: 2.25rem; border-radius: 50%;
     background: var(--primary); color: var(--bg); font-weight: 700;
   }
-  .quick strong { display: block; }
-  @media (min-width: 720px) { .quick { grid-template-columns: repeat(3, 1fr); } }
+  .quick strong { display: block; margin-bottom: 2px; }
+  .quick .ui { white-space: normal; }
+  @media (min-width: 720px) { .quick { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 
   .news {
     margin: var(--space-4) 0 0;
@@ -165,9 +167,9 @@
     <p class="lead">在網頁上點選你要的數字，之後它會照時間自動去抓，結果都在報表裡。</p>
 
     <ol class="quick" data-help-quick>
-      <li><div><strong>在網頁上按右鍵</strong>選「AutoFetcher」→「<span class="ui" data-ui-label="background/main.js">選取要抓的內容</span>」，點你要的數字。</div></li>
-      <li><div><strong>按「<span class="ui" data-ui-label="content/picker-mode.js">完成</span>」</strong>，旁邊的設定面板選好多久抓一次，按「<span class="ui" data-ui-label="ui/picker/picker.html">儲存</span>」。</div></li>
-      <li><div><strong>看結果</strong>：右鍵選「<span class="ui" data-ui-label="background/main.js">開啟 AutoFetcher 報表</span>」。</div></li>
+      <li><div><strong>選你要的數字</strong>在網頁上按右鍵，選「AutoFetcher」→「<span class="ui" data-ui-label="background/main.js">選取要抓的內容</span>」，點那個數字。</div></li>
+      <li><div><strong>設定多久抓一次</strong>按「<span class="ui" data-ui-label="content/picker-mode.js">完成</span>」，在旁邊的面板選時間，按「<span class="ui" data-ui-label="ui/picker/picker.html">儲存</span>」。</div></li>
+      <li><div><strong>看結果</strong>右鍵選「<span class="ui" data-ui-label="background/main.js">開啟 AutoFetcher 報表</span>」。</div></li>
     </ol>
 
     <section class="news" aria-labelledby="news-title">

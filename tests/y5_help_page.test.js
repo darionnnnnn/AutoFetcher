@@ -195,6 +195,21 @@ test('E-10 applyTheme 全站只有一份；Picker、站台設定、popup、教�
   }
 })
 
+test('E-10b 套用主題那一行之後不得緊接以括號開頭的敘述（不寫分號的專案會被接成 applySavedTheme()(…)，真實瀏覽器才炸）', () => {
+  let scanned = 0
+  for (const f of ['ui/picker/picker.js', 'ui/site/site.js', 'ui/popup/popup.js', 'ui/help/help.js', 'ui/report/report.js']) {
+    const lines = readFileSync(new URL(f, SRC), 'utf8').split(/\r?\n/)
+    lines.forEach((line, i) => {
+      if (!/^\s*(await\s+)?applySavedTheme\(\)\s*$/.test(line)) return
+      scanned++
+      let j = i + 1
+      while (j < lines.length && /^\s*(\/\/.*)?$/.test(lines[j])) j++
+      assert.doesNotMatch(lines[j] || '', /^\s*[([`]/, `${f}:${i + 1} 下一個敘述以括號開頭`)
+    })
+  }
+  assert.ok(scanned >= 4, `前置：掃得到呼叫（${scanned}）`)
+})
+
 test('E-11 applySavedTheme：設定是 dark → <html data-theme="dark">；system → 不帶屬性；讀不到設定不拋錯', async () => {
   resetChromeMock()
   installChromeMock()
