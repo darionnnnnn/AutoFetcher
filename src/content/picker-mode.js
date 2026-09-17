@@ -1528,6 +1528,33 @@ function getBlockPreview(blockSpec, tableEl) {
   return `${label}整${axisName} ${n} 格`
 }
 
+// 整欄或整列前 3 格（解析得到、未被排除、文字非空）的文字，以「、」串接；多於 3 格加「…」，一格都沒有回空字串
+const BLOCK_SAMPLE_MAX = 3
+function getBlockSamples(blockSpec, tableEl) {
+  if (!tableEl || !blockSpec) return ''
+  const dataRows = resolveDataRows(tableEl)
+  const idx = (blockSpec.index !== null && blockSpec.index !== undefined) ? blockSpec.index : 0
+  const texts = []
+  const take = (el, rIdx, cIdx) => {
+    if (!el || isExcludedCell(blockSpec, rIdx, cIdx)) return
+    const text = (el.textContent || '').trim()
+    if (text) texts.push(text)
+  }
+  if (blockSpec.axis === 'row') {
+    const rowEl = dataRows[idx]
+    if (rowEl) {
+      for (const cell of getRowCells(rowEl)) {
+        const c = gridIndexOf(rowEl, cell)
+        take(targetAtGrid(rowEl, c, blockSpec.inner), idx, c)
+      }
+    }
+  } else {
+    dataRows.forEach((r, rIdx) => take(targetAtGrid(r, idx, blockSpec.inner), rIdx, idx))
+  }
+  if (texts.length === 0) return ''
+  return texts.slice(0, BLOCK_SAMPLE_MAX).join('、') + (texts.length > BLOCK_SAMPLE_MAX ? '…' : '')
+}
+
 // 解析整欄每格各一個值的清單（右鍵 col-each、工具列 colEach 與快捷路徑共用）
 function resolveColEachCells(tableEl, cIdx, inner, targetEl) {
   if (!tableEl || !isTableMode(tableEl)) return null
@@ -1801,6 +1828,8 @@ function confirmPick() {
     }
   } else if (picks.length === 1 && picks[0].block) {
     msg.preview = getBlockPreview(picks[0].block, currentTargetEl)
+    const samples = getBlockSamples(picks[0].block, currentTargetEl)
+    if (samples) msg.previewSamples = samples
   } else {
     msg.preview = (currentTargetEl.textContent || '').trim()
     const num = parseNumber(msg.preview)

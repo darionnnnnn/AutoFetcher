@@ -578,6 +578,10 @@ export function render(ctx) {
     } else {
       previewEl.textContent = ''
     }
+    // 整欄／整列的前幾格文字只接在畫面上，不進任務名稱（每天會變）
+    if (typeof ctx?.previewSamples === 'string' && ctx.previewSamples) {
+      previewEl.textContent += `：${ctx.previewSamples}`
+    }
   }
 
   const urlEl = document.getElementById('url')
@@ -2326,6 +2330,9 @@ function resetTestDetail() {
   return bodyEl ? { detailEl, bodyEl } : null
 }
 
+// 明細表總格數不超過這個數就測完自動展開（多值任務以各值格數加總）
+const DETAIL_AUTO_OPEN_MAX = 30
+
 // 畫出立即測試的「看抓到的格子」明細表（成功與失敗兩條路共用）
 function renderTestDetail(values, res) {
   const slots = resetTestDetail()
@@ -2425,9 +2432,21 @@ function renderTestDetail(values, res) {
 
   const summaryEl = detailEl.querySelector('summary')
   if (summaryEl) {
-    summaryEl.textContent = `看抓到的格子（${totalItems} 格）`
+    summaryEl.textContent = `查看抓到的 ${totalItems} 格`
   }
   detailEl.hidden = false
+  // 少量格數直接攤開；整欄很長時維持收合，不把面板撐爆
+  detailEl.open = totalItems <= DETAIL_AUTO_OPEN_MAX
+}
+
+// 立即測試結束後把「先試抓看看」區捲進可視範圍（按鈕在底部固定列，結果在畫面中段）
+function scrollPreviewIntoView() {
+  const section = document.getElementById('preview-section')
+  if (!section || typeof section.scrollIntoView !== 'function') return
+  const mm = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(prefers-reduced-motion: reduce)')
+    : null
+  section.scrollIntoView({ block: 'nearest', behavior: mm?.matches ? 'auto' : 'smooth' })
 }
 
 export async function handleTestNow() {
@@ -2531,6 +2550,7 @@ export async function handleTestNow() {
     setPreviewState('error')
   } finally {
     busy()
+    try { scrollPreviewIntoView() } catch {}
   }
 }
 

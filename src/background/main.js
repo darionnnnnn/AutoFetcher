@@ -529,6 +529,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         const payload = {
           locator: msg.locator,
           preview: msg.preview,
+          previewSamples: msg.previewSamples,
           previewValue: msg.previewValue,
           blockInfo: msg.blockInfo,
           tabId: sender?.tab?.id,

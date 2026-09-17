@@ -189,9 +189,17 @@
       margin-top: var(--space-2);
     }
     #test-detail summary {
+      display: block;
       cursor: pointer;
-      font-size: var(--text-xs);
-      color: var(--text-muted);
+      font-size: var(--text-sm);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: var(--space-1) var(--space-2);
+      background: var(--surface);
+    }
+    #test-detail summary:hover {
+      background: var(--hover);
     }
     [data-detail-name] {
       font-weight: 600;
