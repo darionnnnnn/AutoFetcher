@@ -108,15 +108,21 @@ test('B2 外層表為目標、滑鼠在子單位上：不得再說「會抓到�
 
 // ---------- 小表只有 1 列時點整欄 ----------
 
-test('B2 內層小表只有 1 列時點「整欄」：照做，但提示整欄只有 1 格、要跨外層每一列請按 ↑', async () => {
+// AF-18 改寫：監控頁的外層是「每一列重複同一種小表」，單列小表上要整欄＝自動改選外層這一欄（批次 A 觸發 1），
+// 不再要使用者自己知道去按 ↑。不可升級的版面表格維持原提示（y1 A11b）。
+test('B2 內層小表只有 1 列時整欄模式點格：改選外層這一欄的同一個位置，並說出發生了什麼', async () => {
   const { doc, pm, win } = await boot(MONITOR)
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.body })
   move(win, inner2(doc))
   click(win, tool(doc, 'col'))
   assert.equal(tool(doc, 'col').hasAttribute('data-af-active'), true, '模式照切，不擋')
+  move(win, inner2(doc))
+  click(win, inner2(doc))
+  const [p] = pm.selectedPicks()
+  assert.equal(p?.block?.index, 2, `外層第 3 欄（實得 ${JSON.stringify(pm.selectedPicks())}）`)
   const text = panelText(doc)
   assert.match(text, /只有 1 列/, `實得：${text.slice(0, 200)}`)
-  assert.match(text, /按 ↑/)
+  assert.match(text, /已改選外層表這一欄/)
   pm.exitPickMode()
 })
 
