@@ -181,7 +181,7 @@ const MULTI = `<table id="mo"><tbody>
   <tr><td>C</td><td><table id="m3"><tbody><tr><td>9</td><td>10</td></tr><tr><td>11</td><td>12</td></tr></tbody></table></td></tr>
 </tbody></table>`
 
-test('A9 反例：多列小表的整欄值 → ↑ 不換目標、說原因、清單不變（全有或全無）', async () => {
+test('A9 反例：多列小表的整欄值 → ↑ 照樣離開（AF-10 C-5），但值不升、說原因、清單不變（全有或全無）', async () => {
   const { doc, pm, win } = await boot(MULTI)
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.body })
   move(win, doc.getElementById('m1a'))
@@ -191,13 +191,13 @@ test('A9 反例：多列小表的整欄值 → ↑ 不換目標、說原因、�
   const before = JSON.stringify(pm.selectedPicks())
   assert.equal(pm.selectedPicks()[0]?.block?.axis, 'col', `前置：小表整欄值（${before}）`)
   key(doc, win, 'ArrowUp')
-  assert.equal(pm.currentTarget(), doc.getElementById('m1'), '換算不了就不換目標')
+  assert.equal(pm.currentTarget(), doc.getElementById('mo'), '↑ 是明確意圖，照樣到外層')
   assert.equal(JSON.stringify(pm.selectedPicks()), before, '清單不變')
   assert.match(panelText(doc), /換不到外層表/)
   pm.exitPickMode()
 })
 
-test('A10 反例：repick 用途不升級（值的 key 會重生、歷史接不上），↑ 與 Ctrl 點別列都要說原因', async () => {
+test('A10 反例：repick 用途不升級（值的 key 會重生、歷史接不上）；↑ 照樣離開但值不動，Ctrl 點別列被擋，都要說原因', async () => {
   const { doc, pm, win } = await boot(MONITOR)
   pm.enterPickMode({
     purpose: 'repick', taskId: 't1', initialTarget: smallOf(doc),
@@ -205,7 +205,8 @@ test('A10 反例：repick 用途不升級（值的 key 會重生、歷史接不�
   })
   assert.equal(pm.selectedCount(), 1, '前置：preselect 勾回 42')
   key(doc, win, 'ArrowUp')
-  assert.equal(pm.currentTarget(), smallOf(doc), 'repick 不換到外層')
+  assert.equal(pm.currentTarget(), outerOf(doc), '↑ 照樣到外層（AF-10 C-5）')
+  assert.equal(pm.selectedPicks()[0].cell.inner, undefined, '但值不升')
   assert.match(panelText(doc), /重選既有任務時不能換到外層表/)
   move(win, small1(doc, 'his_33'))
   click(win, small1(doc, 'his_33'), { ctrlKey: true })
@@ -230,6 +231,20 @@ const SIDE = `<table id="lay"><tbody><tr>
   <td><table id="ta"><tbody><tr><td id="ta1">1</td><td>2</td></tr><tr><td>3</td><td>4</td></tr></tbody></table></td>
   <td><table id="tb"><tbody><tr><td id="tb1">5</td><td>6</td></tr><tr><td>7</td><td>8</td></tr></tbody></table></td>
 </tr></tbody></table>`
+
+test('A11d 版面表格（不可升級）：已選後 ↑ 到外層，滑鼠一動仍留在外層、值不動（P1 對版面表同樣成立）', async () => {
+  const { doc, pm, win } = await boot(SIDE)
+  pm.enterPickMode({ purpose: 'task', initialTarget: doc.body })
+  move(win, doc.getElementById('ta1'))
+  click(win, doc.getElementById('ta1'))
+  key(doc, win, 'ArrowUp')
+  assert.equal(pm.currentTarget(), doc.getElementById('lay'), '前置：↑ 到版面表')
+  move(win, doc.getElementById('ta1'))
+  assert.equal(pm.currentTarget(), doc.getElementById('lay'), '滑鼠一動不得被拉回甲表')
+  assert.equal(pm.selectedPicks()[0].cell.inner, undefined)
+  assert.match(panelText(doc), /已選的值留在原表/)
+  pm.exitPickMode()
+})
 
 test('A11a 反例（並排版面表）：甲表已選 → 點乙表 → 走換表規則，不產生外層座標', async () => {
   const { doc, pm, win } = await boot(SIDE)
