@@ -62,20 +62,20 @@ test('F-1 點一格只選取，不送出', async () => {
   pm.exitPickMode()
 })
 
-test('F-1 再點另一格＝取代，清單仍只有一個', async () => {
+test('F-1 再點另一格＝加選（AF-18 推翻 AF-8 的取代語意）', async () => {
   const { doc, pm, win } = await boot()
   pick(win, doc.getElementById('a1'))
   pick(win, doc.getElementById('b2'))
-  assert.equal(chips(doc).length, 1, '點一下是取代不是加選')
-  assert.ok(/日圓 · 賣出/.test(panelText(doc)), `chip 要換成新那格，實得 ${JSON.stringify(panelText(doc))}`)
+  assert.equal(chips(doc).length, 2, '點一下是加選')
+  assert.ok(/日圓 · 賣出/.test(panelText(doc)), `chip 要有新那格，實得 ${JSON.stringify(panelText(doc))}`)
   pm.exitPickMode()
 })
 
-test('F-1 再點同一格維持已選，不移除', async () => {
+test('F-1 再點同一格＝取消（AF-18）', async () => {
   const { doc, pm, win } = await boot()
   pick(win, doc.getElementById('a1'))
   pick(win, doc.getElementById('a1'))
-  assert.equal(chips(doc).length, 1, '再點同一格不該把它移除')
+  assert.equal(chips(doc).length, 0, '再點已選的＝取消')
   pm.exitPickMode()
 })
 
@@ -297,7 +297,7 @@ test('F-8 Ctrl＋Z 移除最後一項；清單空時不攔', async () => {
 
 // ---------- F-9 preselect 取代要先確認 ----------
 
-test('F-9 帶 preselect 進來時，點一下不會直接洗掉多個已選', async () => {
+test('F-9 帶 preselect 進來時，點同表另一格是加選，不會洗掉多個已選（AF-18：確認只留給換表，見 y2 B1-5）', async () => {
   const preselect = [
     { cell: { row: { index: 0, header: '美金' }, col: { index: 1, header: '買入' } } },
     { cell: { row: { index: 1, header: '日圓' }, col: { index: 1, header: '買入' } } },
@@ -306,10 +306,7 @@ test('F-9 帶 preselect 進來時，點一下不會直接洗掉多個已選', as
   const { doc, pm, win } = await boot({ purpose: 'repick', taskId: 'x', preselect })
   assert.equal(chips(doc).length, 3, '先勾回三個')
   pick(win, doc.getElementById('a2'))
-  assert.equal(chips(doc).length, 3, '第一次點只提示，不取代')
-  assert.ok(/取代/.test(panelText(doc)), `面板要提示，實得 ${JSON.stringify(panelText(doc))}`)
-  pick(win, doc.getElementById('a2'))
-  assert.equal(chips(doc).length, 1, '再點一次才真的取代')
+  assert.equal(chips(doc).length, 4, '點一下是加選，原本三個都還在')
   pm.exitPickMode()
 })
 
