@@ -41,10 +41,10 @@ const chips = (doc) => Array.from(doc.querySelectorAll('[data-af-chip]'))
 
 // ---------- C-1 工具列 ----------
 
-test('C-1 工具列有單格／整欄／整列三段，預設是單格', async () => {
+test('C-1 工具列有單格／整欄→一個值／整欄→每格／整列→一個值四段，預設是單格（AF-18 工具列四段）', async () => {
   const { doc, pm } = await enter()
   const keys = tools(doc).map(el => el.getAttribute('data-af-tool'))
-  assert.deepEqual(keys, ['cell', 'col', 'row'], `實得 ${JSON.stringify(keys)}`)
+  assert.deepEqual(keys, ['cell', 'col', 'colEach', 'row'], `實得 ${JSON.stringify(keys)}`)
   const active = tools(doc).filter(el => el.hasAttribute('data-af-active')).map(el => el.getAttribute('data-af-tool'))
   assert.deepEqual(active, ['cell'], '預設值的單位是儲存格')
   pm.exitPickMode()
@@ -72,13 +72,15 @@ test('C-1 整列模式標整列', async () => {
 
 // ---------- C-2 切換不清空 ----------
 
-test('C-2 Tab 在三段之間循環', async () => {
+test('C-2 Tab 在四段之間循環（AF-18 工具列四段）', async () => {
   const { doc, pm, win } = await enter()
   move(win, doc.getElementById('a1'))
   const activeKey = () => tools(doc).find(el => el.hasAttribute('data-af-active'))?.getAttribute('data-af-tool')
   assert.equal(activeKey(), 'cell')
   key(doc, win, 'Tab')
   assert.equal(activeKey(), 'col')
+  key(doc, win, 'Tab')
+  assert.equal(activeKey(), 'colEach')
   key(doc, win, 'Tab')
   assert.equal(activeKey(), 'row')
   key(doc, win, 'Tab')
@@ -249,7 +251,7 @@ test('C-8 目標不是表格時工具列停用並說明', async () => {
   const pm = await import('../src/content/picker-mode.js?t=' + Math.random())
   const doc = jd.window.document
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('d') })
-  assert.equal(tools(doc).length, 3, '工具列仍在，只是停用')
+  assert.equal(tools(doc).length, 4, '工具列仍在，只是停用')
   for (const el of tools(doc)) {
     assert.equal(el.getAttribute('aria-disabled'), 'true', '非表格沒有欄列可選')
   }
@@ -263,7 +265,7 @@ test('C-8 離開選取模式時工具列與 chip 一起清乾淨', async () => {
   const { doc, pm, win } = await enter()
   move(win, doc.getElementById('a1'))
   click(win, doc.getElementById('a1'), { shiftKey: true })
-  assert.equal(tools(doc).length, 3, '離開前工具列在')
+  assert.equal(tools(doc).length, 4, '離開前工具列在')
   assert.equal(chips(doc).length, 1, '離開前 chip 在')
   pm.exitPickMode()
   assert.equal(tools(doc).length, 0)

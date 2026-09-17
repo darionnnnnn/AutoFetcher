@@ -33,6 +33,32 @@
       color: var(--text-muted);
       font-size: var(--text-sm, 13px);
     }
+    #panel-notice {
+      margin: 8px 12px 0;
+      padding: 6px 8px;
+      border-radius: 4px;
+      background: var(--surface-2, var(--surface));
+      color: var(--text);
+      font-size: var(--text-sm, 13px);
+    }
+    #batch-list { display: flex; flex-direction: column; gap: 6px; }
+    [data-batch-item] {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 2px 6px;
+      align-items: center;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+    }
+    [data-batch-where], [data-batch-result] {
+      grid-column: 1;
+      font-size: var(--text-xs, 12px);
+      color: var(--text-muted);
+      overflow-wrap: anywhere;
+    }
+    [data-batch-result] { font-family: var(--font-mono, monospace); }
+    [data-batch-remove] { grid-column: 2; grid-row: 1; }
+    #batch-note { font-size: var(--text-xs, 12px); color: var(--text-muted); }
     .settings-body {
       flex: 1;
       overflow-y: auto;
@@ -188,10 +214,20 @@
     #test-detail {
       margin-top: var(--space-2);
     }
+    [data-saved-warning] { color: var(--warn); margin: var(--space-2) 0; }
+    [data-saved-hint] { color: var(--text-muted); font-size: var(--text-xs); margin: var(--space-2) 0; }
     #test-detail summary {
+      display: block;
       cursor: pointer;
-      font-size: var(--text-xs);
-      color: var(--text-muted);
+      font-size: var(--text-sm);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: var(--space-1) var(--space-2);
+      background: var(--surface);
+    }
+    #test-detail summary:hover {
+      background: var(--hover);
     }
     [data-detail-name] {
       font-weight: 600;
@@ -371,8 +407,23 @@
     <button type="button" id="panel-cancel-pick">取消選取</button>
   </div>
   <div id="retarget-note" role="status" hidden></div>
+  <div id="panel-notice" role="status" hidden></div>
   <form id="picker-form" onsubmit="return false;">
     <div class="settings-body">
+      <fieldset id="batch-section" hidden>
+        <legend>要建立的任務</legend>
+        <div id="batch-list"></div>
+        <div id="batch-note">每個任務各自命名；多久抓一次與抓完放哪裡共用。要個別調整的，存完到任務頁按編輯。</div>
+        <label id="batch-aggregate-label" hidden>整欄／整列的合成方式
+          <select id="batch-aggregate">
+            <option value="max">最大值</option>
+            <option value="min">最小值</option>
+            <option value="avg">平均</option>
+            <option value="sum" selected>加總</option>
+            <option value="count">筆數</option>
+          </select>
+        </label>
+      </fieldset>
       <fieldset id="block-section" hidden>
         <legend>抓什麼</legend>
         <div id="block-summary" role="status"></div>

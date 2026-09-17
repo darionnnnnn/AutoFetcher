@@ -130,16 +130,17 @@ test('C10-3 清單是空的時候點整欄只切模式，不憑空生出一個�
   assert.equal(pm.currentAxis(), 'col')
 })
 
-test('C11-1 取代可以復原：Ctrl+Z 把被換掉的那一批找回來', async () => {
+test('C11-1 取消可以復原：Ctrl+Z 把被取消的那一格找回來（AF-18：點一下＝加選，再點＝取消）', async () => {
   const { doc, win, pm } = await enter()
   move(win, doc.getElementById('a1'))
   click(win, doc.getElementById('a1'))
   move(win, doc.getElementById('a2'))
-  click(win, doc.getElementById('a2')) // 點一下＝取代
-  assert.deepEqual(pm.selectedPicks().map(p => p.cell.col.index), [2])
+  click(win, doc.getElementById('a2'))
+  click(win, doc.getElementById('a2')) // 再點＝取消
+  assert.deepEqual(pm.selectedPicks().map(p => p.cell.col.index), [1])
 
   key(doc, win, 'z', { ctrlKey: true })
-  assert.deepEqual(pm.selectedPicks().map(p => p.cell.col.index), [1], '要還原成被換掉的那一格')
+  assert.deepEqual(pm.selectedPicks().map(p => p.cell.col.index), [1, 2], '要還原成取消之前')
 })
 
 test('C11-2 沒有可還原的取代時，Ctrl+Z 維持「移除最後一項」', async () => {
@@ -185,31 +186,32 @@ test('C11-3c 換表要留得住復原：Ctrl+Z 連目標一起回到上一張表
   move(win, doc.getElementById('a1'))
   click(win, doc.getElementById('a1'))
   move(win, doc.getElementById('a2'))
-  click(win, doc.getElementById('a2')) // 取代，快照＝第一張表的 a1
+  click(win, doc.getElementById('a2')) // 加選：第一張表兩個值
   move(win, doc.getElementById('y3'))
-  assert.equal(pm.selectedCount(), 1, '滑鼠路過另一張表不得清空')
-  click(win, doc.getElementById('y3')) // 換表：取代，快照＝第一張表那一批
+  assert.equal(pm.selectedCount(), 2, '滑鼠路過另一張表不得清空')
+  click(win, doc.getElementById('y3')) // 已選 ≥2：第一次只提示（AF-18）
+  assert.equal(pm.selectedCount(), 2, '誤點另一張表不得一次清光')
+  click(win, doc.getElementById('y3')) // 再點同一格才換表：取代，快照＝第一張表那一批
   assert.equal(pm.selectedCount(), 1)
   assert.equal(doc.getElementById('y3').hasAttribute('data-af-picked'), true)
 
   key(doc, win, 'z', { ctrlKey: true })
-  assert.equal(pm.selectedCount(), 1, '換表要能反悔')
+  assert.equal(pm.selectedCount(), 2, '換表要能反悔')
   assert.equal(doc.getElementById('a2').hasAttribute('data-af-picked'), true,
     '要回到上一張表的那一格')
   assert.equal(pm.currentTarget()?.id, 't',
     `目標要跟著回到舊表，否則舊索引會配上新表的定位，實得 ${pm.currentTarget()?.id}`)
 })
 
-test('C11-4 有可復原的取代時，面板上要有「復原」鈕；沒有就不顯示', async () => {
+test('C11-4 有可復原的動作時，面板上要有「復原」鈕；沒有就不顯示', async () => {
   const { doc, win } = await enter()
   const undo = doc.querySelector('[data-af-undo]')
   assert.ok(undo, '動作列要有復原鈕')
-  assert.equal(undo.hidden, true, '沒有取代過就不顯示')
+  assert.equal(undo.hidden, true, '沒有可復原的動作就不顯示')
 
   move(win, doc.getElementById('a1'))
   click(win, doc.getElementById('a1'))
-  move(win, doc.getElementById('a2'))
-  click(win, doc.getElementById('a2'))
+  click(win, doc.getElementById('a1')) // 再點＝取消，留得住復原
   assert.equal(doc.querySelector('[data-af-undo]').hidden, false)
   assert.match(panelText(doc), /復原/)
 })
@@ -220,9 +222,10 @@ test('C11-5 點「復原」鈕跟 Ctrl+Z 同一條路徑', async () => {
   click(win, doc.getElementById('a1'))
   move(win, doc.getElementById('a2'))
   click(win, doc.getElementById('a2'))
+  click(win, doc.getElementById('a2')) // 取消
   click(win, doc.querySelector('[data-af-undo]'))
 
-  assert.deepEqual(pm.selectedPicks().map(p => p.cell.col.index), [1])
+  assert.deepEqual(pm.selectedPicks().map(p => p.cell.col.index), [1, 2])
 })
 
 test('C12 動作列建一次：連續 hover 之後「完成」還是同一個節點', async () => {

@@ -59,14 +59,20 @@ function footerNotice(added) {
 }
 // 非表格元素被「點一下鎖定」後不再跟著滑鼠跑（檔案總管點一下選取的習慣）
 let lockedEl = null
-// 帶 preselect 進來的多個已選值，第一次「點一下取代」只提示、再點一次才真的換掉
-let preselectPristine = false, replaceConfirmPending = null
+// 換到另一張不相干表格時（已選 ≥2），第一次只提示、再點一次才真的換掉
+let replaceConfirmPending = null
 // 工具列被點到停用的那一段時要說原因（點不動卻沒訊息是最容易被當成壞掉的）
 let toolbarNotice = null
 // 這一格內含表格時的警語（面板唯一一份）
 const NESTED_CELL_NOTICE = '這一格內含表格，會抓到整串文字；要抓裡面某一格，把滑鼠移到那一格上（只會框那一格）'
-// 目標小表只有 1 列時點整欄的提示（三處共用同一句）
+// 已選的值換算不到外層表時的說明（↑、觸發 2、整欄→每格三處共用）
+const CANNOT_PROMOTE_NOTICE = '已選的值裡有小表的整欄或整列，換不到外層表；要抓外層每一列請先移除它'
+// 目標小表只有 1 列、外層不可升級時點整欄的提示（三處共用同一句）
 const SINGLE_ROW_NESTED_TABLE_NOTICE = '這張小表只有 1 列，整欄只有 1 格；要跨外層每一列請按 ↑ 切到外層表'
+// 單列小表上要整欄、已改選外層那一欄時的說明（AF-18 觸發 1 的四個入口共用）
+const promotedColNotice = (n) => `這張小表只有 1 列，已改選外層表這一欄的同一個位置（${n} 格）；只要這一格請切回單格`
+// repick 不升到外層的說明（↑、Ctrl 點外層、觸發 2 三處共用）
+const REPICK_NO_PROMOTE_NOTICE = '重選既有任務時不能換到外層表（歷史紀錄會接不上）；要抓外層整欄請建立新任務'
 // 上一次是否已經在說這句話：面板只在目標改變時重畫，
 // hover 換到（或離開）內含表格的格子時要補畫一次，但不能每次 mousemove 都重畫
 let nestedNoticeOn = false
@@ -88,6 +94,16 @@ let currentHoverEl = null
 // 當前 hover 格子的子路徑（標示與切換模式使用）
 let currentInner = null
 let originalUserSelect = '', dragStart = null, isDragging = false, suppressClick = false, menuTargetContext = null
+// 批次模式（右鍵「一次建立多個任務」）：每個不同的目標自成一組（＝將來一個任務）。
+// 目前這組的值仍放在 selectedList／pickedTableEl（既有判定照原樣運作），其餘的組存在 batchGroups；
+// currentGroupIdx 是目前這組在 batchGroups 的位置（還沒寫進去時為 -1）。
+// 表格組 { tableEl, picks }、元素組 { el }
+let batchMode = false, batchGroups = [], currentGroupIdx = -1
+// 各表最後一次 hover 的列欄（送出時非目前這張表的組要用它組 blockInfo，與非批次送出同一口徑）
+const batchHover = new Map()
+const MAX_BATCH_GROUPS = 20
+const BATCH_LIMIT_NOTICE = '一次最多建立 20 個任務；要再加請先完成這一批'
+const BATCH_FRAME_NOTICE = '進入框架會離開這一頁的選取；請先完成這一批，再對框架內的內容另開一批'
 
 // detectKind 會掃整棵子樹，而滑鼠每移動一格都要問一次，因此記住最後一次的結果
 let kindCacheEl = null, kindCache = null
@@ -113,10 +129,54 @@ function cellBelongsToTable(cell, tableEl) {
   return tableOf(cell) === tableEl
 }
 
-// 判定這張表是不是在另一張表的格子裡：是的話回外層表，否則 null
+// 判定這張表是不是在另一張表的格子裡：是的話回外層表 O，否則 null
 function outerTableOf(el) {
-  if (!el || !isTableMode(el) || !el.parentElement) return null
-  return tableOf(el.parentElement) || null
+  if (!el || el.tagName !== 'TABLE' || !el.parentElement) return null
+  const O = upgradeTarget(el.parentElement, { deliberate: true })
+  if (O && O.tagName === 'TABLE' && O !== el && O.contains(el)) {
+    return O
+  }
+  return null
+}
+
+const upgradeableCache = new Map()
+
+// 判定小表 T 是否可升級為外層表 O（同型、重複）
+function isUpgradeableTable(T) {
+  if (!T || T.tagName !== 'TABLE') return false
+  if (upgradeableCache.has(T)) return upgradeableCache.get(T)
+
+  let upgradeable = false
+  const O = outerTableOf(T)
+  if (O) {
+    const info = resolveCell(T, O)
+    if (info && info.rIdx !== null && info.cIdx !== null && info.cell) {
+      const R = info.rIdx
+      const C = info.cIdx
+      const dataRows = info.dataRows
+      const pathToT = innerPathOf(info.cell, T)
+      if (pathToT) {
+        const tRows = resolveDataRows(T)
+        const tFirstLen = tRows.length > 0 ? getRowCells(tRows[0]).length : 0
+        for (let r = 0; r < dataRows.length; r++) {
+          if (r === R) continue
+          const res = resolveInnerAt(dataRows[r], C, pathToT)
+          const x = res.target
+          if (x && x.tagName === 'TABLE') {
+            const xRows = resolveDataRows(x)
+            const xFirstLen = xRows.length > 0 ? getRowCells(xRows[0]).length : 0
+            if (xRows.length === tRows.length && xFirstLen === tFirstLen) {
+              upgradeable = true
+              break
+            }
+          }
+        }
+      }
+    }
+  }
+
+  upgradeableCache.set(T, upgradeable)
+  return upgradeable
 }
 
 // 目標小表是否只有 1 列
@@ -132,13 +192,20 @@ function upgradeTarget(el, opts = {}) {
   if (currentPurpose !== 'task' && currentPurpose !== 'repick') return el
   if (typeof el.closest !== 'function') return el
   let upgraded = null
-  const cell = el.closest(CELL_SELECTOR)
-  if (cell) upgraded = tableOf(cell)
+  if (isTableMode(el)) upgraded = el
+  if (!upgraded) {
+    const cell = el.closest(CELL_SELECTOR)
+    if (cell) upgraded = tableOf(cell)
+  }
   if (!upgraded) upgraded = tableOf(el)
   // 找不到任何表格＝滑鼠落在頁面的別處（往右上角工具列移動途中經過的段落、空白）。
   // 已經選了值或明確選定表格時不換目標：換掉的話工具列三段會立刻反灰、hover 標示被清掉，
   // 使用者根本走不到工具列去改「單格／整欄／整列」——這就是 P4 回饋的根因。
-  const anchor = (selectedList.length > 0 && pickedTableEl) ? pickedTableEl : deliberateTableEl
+  // 已選之後按 ↑ 明確切到外層、但值沒有升上去（不可升級、換算不了、repick）時，
+  // 鎖的是那張外層表：否則滑鼠一動又被拉回已選的小表，↑ 等於沒按（AF-18 P1）
+  const anchor = (selectedList.length > 0 && pickedTableEl)
+    ? ((deliberateTableEl && deliberateTableEl !== pickedTableEl && deliberateTableEl.contains(pickedTableEl)) ? deliberateTableEl : pickedTableEl)
+    : deliberateTableEl
   if (!upgraded) {
     if (!opts.deliberate && anchor) return anchor
     return el
@@ -146,6 +213,21 @@ function upgradeTarget(el, opts = {}) {
   // 擷取端（shared/table.js 的 parseTable / getDataRows）對純包裝的外層表會鑽到內層，
   // 選取端不跟著鑽的話，索引以外層算、值以內層取，會靜默抓到別一格（AF-10 作業 D）
   upgraded = innermostTable(upgraded)
+
+  // 觸發 2：已選在 T，滑鼠到 O 的別處（用途 task、T 可升級）
+  if (!opts.deliberate && anchor && selectedList.length > 0 && anchor === pickedTableEl &&
+      currentPurpose === 'task' && isUpgradeableTable(anchor)) {
+    const O = outerTableOf(anchor)
+    if (O) {
+      if (anchor.contains(el) || upgraded === anchor) {
+        return anchor
+      }
+      if (upgraded === O || (O.contains(upgraded) && !upgraded.contains(anchor) && !anchor.contains(upgraded))) {
+        return O
+      }
+    }
+  }
+
   // 已經選了值或明確選定表格就鎖在那張表（AF-10 作業 C）：
   // 巢狀內外層是「同一張表的事」，鎖回已選或選定那張（只擋一個方向的話，內層已選後
   // Ctrl 點外層格子會混進另一張表的索引，再用內層 locator 送出）；
@@ -316,6 +398,256 @@ function resolveHeaderTarget(target, tableEl) {
   return { axis: 'row', index: rIdx, headerText: rowHeader(row) }
 }
 
+// 計算外層表 O 在指定網格欄與子路徑下成功解析到的列數
+function countResolvedInnerInCol(O, cIdx, inner) {
+  const dataRows = resolveDataRows(O)
+  let count = 0
+  for (const row of dataRows) {
+    if (targetAtGrid(row, cIdx, inner) !== null) {
+      count++
+    }
+  }
+  return count
+}
+
+// 把目前整份已選清單換成外層表 O 的座標（只有一份）
+function promotePicksToOuter(T) {
+  const O = outerTableOf(T)
+  if (!O) return false
+  const info = resolveCell(T, O)
+  if (!info || info.rIdx === null || info.cIdx === null || !info.cell) return false
+  const R = info.rIdx
+  const C = info.cIdx
+  const oCell = info.cell
+  const oDataRows = info.dataRows
+  const oHeaders = columnHeaders(O)
+  const tDataRows = resolveDataRows(T)
+
+  const newPicks = []
+  for (const pick of selectedList) {
+    if (pick.cell) {
+      const r = pick.cell.row ? pick.cell.row.index : null
+      const c = pick.cell.col ? pick.cell.col.index : null
+      if (typeof r !== 'number' || typeof c !== 'number' || !tDataRows[r]) return false
+      const el = targetAtGrid(tDataRows[r], c, pick.cell.inner)
+      if (!el) return false
+      const inner = innerPathOf(oCell, el)
+      if (!inner) return false
+      const cell = {
+        row: { index: R, header: rowHeader(oDataRows[R]) },
+        col: { index: C, header: oHeaders[C] || '' }
+      }
+      putInner(cell, inner)
+      newPicks.push({ cell })
+    } else if (pick.block) {
+      if (pick.block.axis !== 'col' || tDataRows.length !== 1) return false
+      const c = pick.block.index
+      if (typeof c !== 'number') return false
+      const el = targetAtGrid(tDataRows[0], c, pick.block.inner)
+      if (!el) return false
+      const inner = innerPathOf(oCell, el)
+      if (!inner) return false
+      const block = {
+        axis: 'col',
+        index: C,
+        headerText: oHeaders[C] || ''
+      }
+      putInner(block, inner)
+      withFooterExclude(block, O)
+      newPicks.push({ block })
+    } else {
+      return false
+    }
+  }
+
+  const previous = takeUndoSnapshot(selectedList, T)
+  clearPickedMarks(document)
+  selectedList = newPicks
+  pickedTableEl = O
+  setTarget(O)
+  deliberateTableEl = O
+  undoSnapshot = previous
+  batchHover.delete(T)
+  if (batchMode) syncBatch()
+  applyPickedMarks(O)
+  return true
+}
+
+// 觸發 2（只有這一份）：已選在小表 T、目標是它可升級的外層 O 時，加值之前先把已選換到外層。
+// 回傳 'none'（不適用）／'promoted'（換好了，呼叫端照原語意加值）／'blocked'（換算不了，已說明原因，呼叫端不得加值）
+function promoteBeforeAddingInOuter() {
+  if (currentPurpose !== 'task' || selectedList.length === 0 || !pickedTableEl || currentTargetEl === pickedTableEl) return 'none'
+  if (!isUpgradeableTable(pickedTableEl) || outerTableOf(pickedTableEl) !== currentTargetEl) return 'none'
+  if (promotePicksToOuter(pickedTableEl)) return 'promoted'
+  toolbarNotice = CANNOT_PROMOTE_NOTICE
+  applyPickedMarks(pickedTableEl)
+  if (panelEl) updatePanel(panelEl, currentTargetEl)
+  return 'blocked'
+}
+
+// 批次模式所有的組（依建立順序），目前這組以 selectedList／pickedTableEl 的現況代入；值被移光的組不列出。
+// 不改動任何狀態（畫面與計數用）；回傳的目前這組其 picks 就是 selectedList 本身
+function batchGroupsView() {
+  if (!batchMode) return []
+  const live = (selectedList.length > 0 && pickedTableEl) ? { tableEl: pickedTableEl, picks: selectedList } : null
+  const out = []
+  batchGroups.forEach((g, i) => {
+    if (i !== currentGroupIdx) out.push(g)
+    else if (live) out.push(live)
+  })
+  if (currentGroupIdx < 0 && live) out.push(live)
+  return out
+}
+
+// 把目前這組的現況寫回 batchGroups（移光的組拿掉），之後 batchGroups 的序號就是畫面上的組序號
+function syncBatch() {
+  if (!batchMode) return
+  const view = batchGroupsView()
+  currentGroupIdx = view.findIndex(g => g.picks === selectedList)
+  batchGroups = view.map(g => g.el ? g : { tableEl: g.tableEl, picks: g.picks.slice() })
+  // 同一張表只能是一組：小表那組升到外層之後，外層若本來就有一組要併進去，
+  // 否則會建出兩個定位相同的任務（AF-18 G-1 實作回報抓到）
+  const cur = currentGroupIdx >= 0 ? batchGroups[currentGroupIdx] : null
+  const dup = cur && !cur.el ? batchGroups.findIndex((g, i) => i !== currentGroupIdx && !g.el && g.tableEl === cur.tableEl) : -1
+  if (dup >= 0) {
+    const merged = batchGroups[dup].picks.slice()
+    for (const p of cur.picks) if (!merged.some(m => samePick(m, p))) merged.push(p)
+    batchGroups[dup] = { tableEl: cur.tableEl, picks: merged.slice() }
+    batchGroups.splice(currentGroupIdx, 1)
+    currentGroupIdx = dup > currentGroupIdx ? dup - 1 : dup
+    selectedList = merged
+    limitReached = selectedList.length >= maxPicks
+  }
+}
+
+function batchValueTotal(groups) {
+  return groups.reduce((n, g) => n + (g.el ? 1 : g.picks.length), 0)
+}
+
+// 讓某一組成為目前這組（表格組才會；元素組沒有「目前」）
+function loadBatchGroup(i) {
+  const g = batchGroups[i]
+  if (!g || g.el) return
+  selectedList = g.picks.slice()
+  pickedTableEl = g.tableEl
+  currentGroupIdx = i
+  limitReached = selectedList.length >= maxPicks
+  trimReady = false
+  replaceConfirmPending = null
+}
+
+/**
+ * 批次模式的「換表」：目標表與目前這組的表不相干時，不取代、不要求確認，
+ * 改為切到那張表的組（沒有就開新的一組）。回傳 false 表示組數已滿、已說明，呼叫端不得加值。
+ * 非批次模式一律回 true（什麼都不做）。
+ */
+function batchFollowTarget(tableEl) {
+  if (!batchMode || !tableEl || !isTableMode(tableEl) || pickedTableEl === tableEl) return true
+  syncBatch()
+  const at = batchGroups.findIndex(g => g.tableEl === tableEl)
+  if (at >= 0) {
+    loadBatchGroup(at)
+    return true
+  }
+  // 點的是某一組的「同一張外層表」底下的另一張小表（或外層自己）：回到那一組並升到外層，
+  // 不得各開一組——切過別的組之後鎖表的 anchor 已經換人，觸發 2 不會自己發生（體檢抓到：監控頁會變成一列一個任務）
+  const O = outerTableOf(tableEl)
+  const kin = batchGroups.findIndex(g => !g.el && g.tableEl && (
+    (O && g.tableEl === O) ||
+    (isUpgradeableTable(g.tableEl) && (outerTableOf(g.tableEl) === tableEl || (O && outerTableOf(g.tableEl) === O)))))
+  if (kin >= 0) {
+    const kinTable = batchGroups[kin].tableEl
+    loadBatchGroup(kin)
+    const outer = kinTable === O || kinTable === tableEl ? kinTable : outerTableOf(kinTable)
+    if (kinTable === outer || promotePicksToOuter(kinTable)) {
+      if (currentTargetEl !== outer) setTarget(outer)
+      deliberateTableEl = outer
+      return true
+    }
+    // 換算不了（那一組有小表的整欄／整列值）：照舊各自成組
+    syncBatch()
+  }
+  if (batchGroups.length >= MAX_BATCH_GROUPS) {
+    toolbarNotice = BATCH_LIMIT_NOTICE
+    applyPickedMarks(pickedTableEl)
+    return false
+  }
+  selectedList = []
+  pickedTableEl = null
+  currentGroupIdx = -1
+  limitReached = false
+  trimReady = false
+  replaceConfirmPending = null
+  return true
+}
+
+// 整組移除（存復原快照）
+function removeBatchGroup(i) {
+  syncBatch()
+  if (i < 0 || i >= batchGroups.length) return
+  const previous = takeUndoSnapshot(selectedList, pickedTableEl)
+  if (i === currentGroupIdx) {
+    selectedList = []
+    pickedTableEl = null
+    limitReached = false
+    trimReady = false
+    currentGroupIdx = -1
+  } else if (i < currentGroupIdx) {
+    currentGroupIdx--
+  }
+  batchGroups.splice(i, 1)
+  undoSnapshot = previous
+  applyPickedMarks(pickedTableEl)
+  if (panelEl) updatePanel(panelEl, currentTargetEl)
+}
+
+// 非表格元素：已是某一組就移除那一組，否則新增一組
+function toggleElementGroup(el) {
+  syncBatch()
+  const at = batchGroups.findIndex(g => g.el === el)
+  if (at >= 0) {
+    removeBatchGroup(at)
+    return
+  }
+  if (batchGroups.length >= MAX_BATCH_GROUPS) {
+    toolbarNotice = BATCH_LIMIT_NOTICE
+  } else {
+    clearUndoSnapshot()
+    batchGroups.push({ el })
+  }
+  applyPickedMarks(pickedTableEl)
+  if (panelEl) updatePanel(panelEl, currentTargetEl)
+}
+
+// 整欄／整列模式點到非表格的說明（送出、點擊、批次三處共用）
+function nonTableModeNotice() {
+  return `${pickMode === 'row' ? '整列' : '整欄'}只能在表格上選，先把滑鼠移到表格；要抓這個元素請切回「單格」`
+}
+
+// 批次模式點到非表格元素：整欄／整列模式照現有規則拒絕並說明，否則切換那一組
+function batchClickElement(el) {
+  // 點在頁面空白處（body）不是要抓整個頁面
+  if (!el || el === document.body || el === document.documentElement) {
+    toolbarNotice = '點在頁面空白處了：把滑鼠移到要抓的數字或表格上再點'
+    if (panelEl) updatePanel(panelEl, currentTargetEl)
+    return
+  }
+  if (pickMode === 'col' || pickMode === 'colEach' || pickMode === 'row') {
+    toolbarNotice = nonTableModeNotice()
+    if (panelEl) updatePanel(panelEl, currentTargetEl)
+    return
+  }
+  toggleElementGroup(el)
+}
+
+// 批次模式已有組時不得鑽進框架（會丟掉這一批）；擋下時回 true
+function batchBlocksDescend() {
+  if (!batchMode || batchGroupsView().length === 0) return false
+  toolbarNotice = BATCH_FRAME_NOTICE
+  if (panelEl) updatePanel(panelEl, currentTargetEl)
+  return true
+}
+
 // 把滑鼠下的位置換算成「點下去會選到什麼」，點擊與雙擊共用同一份
 function candidateAt(target) {
   // 候選值只記待提示數：點下去可能是 Ctrl 取消、或與已選重複，那時不能說「已自動排除表尾」
@@ -330,6 +662,22 @@ function candidateAt(target) {
   const info = resolveCell(target, currentTargetEl)
   if (!info) return null
   if (pickMode === 'col') {
+    if (currentPurpose === 'task' && isSingleRowNestedTable(currentTargetEl) && isUpgradeableTable(currentTargetEl)) {
+      const O = outerTableOf(currentTargetEl)
+      if (O) {
+        const oInfo = resolveCell(currentTargetEl, O)
+        if (oInfo && oInfo.cell && oInfo.cIdx !== null) {
+          const C = oInfo.cIdx
+          const oCell = oInfo.cell
+          const subEl = info.subEl || info.cell || target
+          const fullInner = innerPathOf(oCell, subEl)
+          const block = { axis: 'col', index: C, headerText: columnHeaders(O)[C] || '' }
+          putInner(block, fullInner)
+          pendingFooterNotice = withFooterExclude(block, O)
+          return { block }
+        }
+      }
+    }
     const block = { axis: 'col', index: info.cIdx, headerText: columnHeaders(currentTargetEl)[info.cIdx] || '' }
     putInner(block, info.inner)
     pendingFooterNotice = withFooterExclude(block, currentTargetEl)
@@ -371,7 +719,7 @@ function markCells(cell, dataRows, row, mode, cIdx, inner) {
       targetCell.style.outline = `2px solid ${COLORS.warn}`
       targetCell.style.transition = markTransition()
     }
-  } else if (mode === 'col' && cIdx !== null && cIdx >= 0 && dataRows) {
+  } else if ((mode === 'col' || mode === 'colEach') && cIdx !== null && cIdx >= 0 && dataRows) {
     for (const dRow of dataRows) {
       const targetCell = targetAtGrid(dRow, cIdx, inner)
       if (targetCell && !isHeaderCell(targetCell)) {
@@ -440,12 +788,30 @@ function clearPickedMarks(doc) {
   }
 }
 
-// 重新在表格上貼回已選標記
+// 目前這組以外的組（批次模式）
+function otherBatchGroups() {
+  return batchGroupsView().filter(g => g.picks !== selectedList)
+}
+
+// 重新在表格上貼回已選標記（批次模式時每一組都畫）
 function applyPickedMarks(tableEl) {
   clearPickedMarks(document)
+  drawPicksOn(tableEl, selectedList)
+  if (!batchMode) return
+  for (const g of otherBatchGroups()) {
+    if (g.el) {
+      g.el.setAttribute('data-af-picked', '')
+      if (!g.el.hasAttribute('data-af-cell')) g.el.style.outline = `2px solid ${COLORS.primary}`
+    } else {
+      drawPicksOn(g.tableEl, g.picks)
+    }
+  }
+}
+
+function drawPicksOn(tableEl, picks) {
   if (!tableEl || !isTableMode(tableEl)) return
   const dataRows = resolveDataRows(tableEl)
-  for (const pick of selectedList) {
+  for (const pick of picks) {
     if (pick.cell) {
       const row = dataRows[pick.cell.row.index]
       if (row) {
@@ -488,7 +854,7 @@ function applyPickedMarks(tableEl) {
     }
   }
 
-  for (const pick of selectedList) {
+  for (const pick of picks) {
     if (pick.block) {
       const excludes = excludeOf(pick.block)
       if (pick.block.axis === 'col') {
@@ -711,7 +1077,7 @@ function updateToolbar() {
     if (!isTable) {
       disabled = true
     } else if (!isTask) {
-      if (key === 'col' || key === 'row') disabled = true
+      if (key === 'col' || key === 'colEach' || key === 'row') disabled = true
     }
 
     if (disabled) {
@@ -736,32 +1102,119 @@ function updateToolbar() {
   }
 }
 
-// 移除指定序號之已選項
+// 移除指定序號之已選項（留復原快照）
 function removePickAt(index) {
   trimReady = false
   if (index < 0 || index >= selectedList.length) return
+  const previous = takeUndoSnapshot(selectedList, pickedTableEl)
   clearUndoSnapshot()
   selectedList.splice(index, 1)
+  undoSnapshot = previous
   limitReached = false
   if (selectedList.length === 0) {
     pickedTableEl = null
+    applyPickedMarks(currentTargetEl)
+  } else {
+    applyPickedMarks(pickedTableEl)
   }
-  applyPickedMarks(currentTargetEl)
   updatePanel(panelEl, currentTargetEl)
 }
 
-// 移除最後一項已選項
-function removeLastPick() {
+// 移除最後一項已選項（Ctrl+Z 自身的移除不存快照，其他呼叫端存）
+function removeLastPick(saveSnapshot = true) {
   trimReady = false
   if (selectedList.length === 0) return
+  const previous = saveSnapshot ? takeUndoSnapshot(selectedList, pickedTableEl) : null
   clearUndoSnapshot()
   selectedList.pop()
+  if (previous) undoSnapshot = previous
   limitReached = false
   if (selectedList.length === 0) {
     pickedTableEl = null
+    applyPickedMarks(currentTargetEl)
+  } else {
+    applyPickedMarks(pickedTableEl)
   }
-  applyPickedMarks(currentTargetEl)
   updatePanel(panelEl, currentTargetEl)
+}
+
+// 已選值的 chip（× 移除那一個值）；批次模式各組共用同一份建法
+function buildPickChip(i, name) {
+  const chip = document.createElement('div')
+  chip.setAttribute('data-af-chip', String(i))
+  chip.style.display = 'inline-flex'
+  chip.style.alignItems = 'center'
+  chip.style.backgroundColor = COLORS.surface
+  chip.style.color = COLORS.text
+  chip.style.border = `1px solid ${COLORS.border}`
+  chip.style.borderRadius = '3px'
+  chip.style.padding = '2px 6px'
+  chip.style.fontSize = '12px'
+  chip.style.minHeight = '28px'
+  chip.style.transition = reduceMotion ? '' : 'background-color 150ms ease'
+
+  const nameSpan = document.createElement('span')
+  nameSpan.textContent = name
+  chip.appendChild(nameSpan)
+
+  const removeBtn = document.createElement('span')
+  removeBtn.setAttribute('data-af-chip-remove', '')
+  removeBtn.textContent = '×'
+  removeBtn.setAttribute('title', '移除')
+  removeBtn.style.marginLeft = '6px'
+  removeBtn.style.cursor = 'pointer'
+  removeBtn.style.fontWeight = 'bold'
+  chip.appendChild(removeBtn)
+  return chip
+}
+
+// 批次模式的已選清單：依組分段（每組一個 data-af-group 容器）
+function renderBatchGroups(panel, groups, el) {
+  groups.forEach((g, gi) => {
+    const box = document.createElement('div')
+    box.setAttribute('data-af-group', String(gi))
+    box.style.marginBottom = '6px'
+
+    const head = document.createElement('div')
+    head.style.display = 'flex'
+    head.style.alignItems = 'center'
+    head.style.gap = '6px'
+    head.style.fontWeight = 'bold'
+    const title = document.createElement('span')
+    const nameHint = g.el ? (g.el.textContent || '').trim().slice(0, 20) : (computeNameHint(g.tableEl) || '')
+    const n = g.el ? 1 : g.picks.length
+    title.textContent = `任務 ${gi + 1}：${nameHint}（${n} 個值）`
+    head.appendChild(title)
+    const removeGroup = document.createElement('span')
+    removeGroup.setAttribute('data-af-group-remove', '')
+    removeGroup.textContent = '×'
+    removeGroup.setAttribute('title', '移除這個任務')
+    removeGroup.style.cursor = 'pointer'
+    head.appendChild(removeGroup)
+    box.appendChild(head)
+
+    const listDiv = document.createElement('div')
+    listDiv.style.display = 'flex'
+    listDiv.style.flexWrap = 'wrap'
+    listDiv.style.gap = '4px'
+    if (g.el) {
+      listDiv.appendChild(buildPickChip(0, nameHint || '這個元素'))
+    } else {
+      g.picks.forEach((pick, i) => listDiv.appendChild(buildPickChip(i, getPickName(pick))))
+    }
+    box.appendChild(listDiv)
+    panel.appendChild(box)
+  })
+
+  const noticeLines = []
+  if (limitReached) noticeLines.push('（已達選取上限）')
+  if (headerChangedNotice) noticeLines.push('（位置已變）')
+  if (undoSnapshot) noticeLines.push('可按復原或 Ctrl／⌘＋Z 還原上一步')
+  if (cellWrapsTable(currentCellEl) && !currentInner) noticeLines.push(NESTED_CELL_NOTICE)
+  if (toolbarNotice) noticeLines.push(toolbarNotice)
+  noticeLines.push(instructionLine(el))
+  appendPanelText(panel, noticeLines)
+  updatePanelActions(el)
 }
 
 // 產生說明面板文字與已選清單
@@ -773,6 +1226,12 @@ function updatePanel(panel, el) {
     body.removeChild(body.firstChild)
   }
   panel = body
+
+  const groups = batchGroupsView()
+  if (groups.length > 0) {
+    renderBatchGroups(panel, groups, el)
+    return
+  }
 
   const countDiv = document.createElement('div')
   countDiv.setAttribute('data-af-count', '')
@@ -795,34 +1254,7 @@ function updatePanel(panel, el) {
     listDiv.style.marginBottom = '6px'
 
     for (let i = 0; i < selectedList.length; i++) {
-      const pick = selectedList[i]
-      const chip = document.createElement('div')
-      chip.setAttribute('data-af-chip', String(i))
-      chip.style.display = 'inline-flex'
-      chip.style.alignItems = 'center'
-      chip.style.backgroundColor = COLORS.surface
-      chip.style.color = COLORS.text
-      chip.style.border = `1px solid ${COLORS.border}`
-      chip.style.borderRadius = '3px'
-      chip.style.padding = '2px 6px'
-      chip.style.fontSize = '12px'
-      chip.style.minHeight = '28px'
-      chip.style.transition = reduceMotion ? '' : 'background-color 150ms ease'
-
-      const nameSpan = document.createElement('span')
-      nameSpan.textContent = getPickName(pick)
-      chip.appendChild(nameSpan)
-
-      const removeBtn = document.createElement('span')
-      removeBtn.setAttribute('data-af-chip-remove', '')
-      removeBtn.textContent = '\u00d7'
-      removeBtn.setAttribute('title', '移除')
-      removeBtn.style.marginLeft = '6px'
-      removeBtn.style.cursor = 'pointer'
-      removeBtn.style.fontWeight = 'bold'
-      chip.appendChild(removeBtn)
-
-      listDiv.appendChild(chip)
+      listDiv.appendChild(buildPickChip(i, getPickName(selectedList[i])))
     }
     panel.appendChild(listDiv)
 
@@ -851,12 +1283,12 @@ function updatePanel(panel, el) {
       noticeLines.push('（位置已變）')
     }
     if (replaceConfirmPending) {
-      noticeLines.push(`（再點一次會取代這 ${selectedList.length} 個已選值）`)
+      noticeLines.push(`再點一次才會換到這張表（會取代 ${selectedList.length} 個已選值）`)
     }
     if (undoSnapshot) {
       noticeLines.push(undoSnapshot.tableEl && pickedTableEl && undoSnapshot.tableEl !== pickedTableEl
         ? '已換到另一張表格（可按復原或 Ctrl／⌘＋Z 回上一張）'
-        : '已換成新的選取（可按復原或 Ctrl／⌘＋Z 還原）')
+        : '可按復原或 Ctrl／⌘＋Z 還原上一步')
     }
     if (cellWrapsTable(currentCellEl) && !currentInner) noticeLines.push(NESTED_CELL_NOTICE)
     if (toolbarNotice) noticeLines.push(toolbarNotice)
@@ -928,8 +1360,14 @@ function instructionLine(el) {
   if (currentPurpose === 'preaction' || (currentPurpose && currentPurpose.startsWith('login'))) {
     return '點一下要操作的那個元素就完成'
   }
+  if (batchMode) {
+    const groups = batchGroupsView()
+    return groups.length === 0
+      ? '點你要抓的內容；不同的表格或元素會各自成為一個任務'
+      : `已選 ${groups.length} 個任務、共 ${batchValueTotal(groups)} 個值，好了按完成（或雙擊、Enter）`
+  }
   if (selectedList.length > 0) {
-    return `已選 ${selectedList.length} 個值，再點可換、Ctrl／⌘ 點可加，好了按完成（或雙擊、Enter）`
+    return `已選 ${selectedList.length} 個值，再點其他格可加選、點已選的可取消，好了按完成（或雙擊、Enter）`
   }
   if (el && isTableMode(el)) {
     if (outerTableOf(el)) {
@@ -1026,7 +1464,7 @@ function styleActionButton(btn, primary) {
 function updatePanelActions(el) {
   if (!panelDoneEl) return
   const done = panelDoneEl
-  const n = selectedList.length
+  const n = selectedCount()
   done.removeAttribute('aria-disabled')
   if (n > 0) {
     done.textContent = `完成（${n} 個值）`
@@ -1175,6 +1613,7 @@ function handleTableMouseMove(target) {
     currentCellEl = cell
     currentInner = null
     rowIndex = null; colIndex = null; cellIndex = null
+    rememberBatchHover()
     const dataRows = resolveDataRows(currentTargetEl)
     clearMarkedCells(document)
     if (head.axis === 'col') {
@@ -1182,7 +1621,11 @@ function handleTableMouseMove(target) {
     } else {
       markCells(null, dataRows, dataRows[head.index], 'row', null, null)
     }
-    applyPickedMarks(currentTargetEl)
+    if (selectedList.length > 0 && pickedTableEl) {
+      applyPickedMarks(pickedTableEl)
+    } else {
+      applyPickedMarks(currentTargetEl)
+    }
     syncNestedNotice()
     return
   }
@@ -1193,8 +1636,15 @@ function handleTableMouseMove(target) {
     currentCellEl = null
     currentInner = null
     currentHoverEl = null
+    // 列欄索引也要放掉：只清格子的話，切到整欄／整列時 markCells 會拿舊索引畫回一整欄（AF-18 體檢 p5 B3 補強抓到）
+    rowIndex = null; colIndex = null; cellIndex = null; currentRowEl = null
+    rememberBatchHover()
     clearMarkedCells(document)
-    applyPickedMarks(currentTargetEl)
+    if (selectedList.length > 0 && pickedTableEl) {
+      applyPickedMarks(pickedTableEl)
+    } else {
+      applyPickedMarks(currentTargetEl)
+    }
     syncNestedNotice()
     return
   }
@@ -1206,9 +1656,51 @@ function handleTableMouseMove(target) {
   cellIndex = pickMode === 'row' ? rowIndex : colIndex
   currentDataRows = info.dataRows
   currentRowEl = info.row
+  rememberBatchHover()
+  if ((pickMode === 'col' || pickMode === 'colEach') && currentPurpose === 'task' &&
+      isSingleRowNestedTable(currentTargetEl) && isUpgradeableTable(currentTargetEl)) {
+    const O = outerTableOf(currentTargetEl)
+    if (O) {
+      const oInfo = resolveCell(currentTargetEl, O)
+      if (oInfo && oInfo.cell && oInfo.cIdx !== null) {
+        const C = oInfo.cIdx
+        const oCell = oInfo.cell
+        const subEl = info.subEl || info.cell || target
+        const fullInner = innerPathOf(oCell, subEl)
+        clearMarkedCells(document)
+        markCells(null, oInfo.dataRows, null, 'col', C, fullInner)
+        if (selectedList.length > 0 && pickedTableEl) {
+          applyPickedMarks(pickedTableEl)
+        } else {
+          applyPickedMarks(currentTargetEl)
+        }
+        syncNestedNotice()
+        return
+      }
+    }
+  }
   markCells(currentCellEl, info.dataRows, info.row, pickMode, colIndex, currentInner)
-  applyPickedMarks(currentTargetEl)
+  if (selectedList.length > 0 && pickedTableEl) {
+    applyPickedMarks(pickedTableEl)
+  } else {
+    applyPickedMarks(currentTargetEl)
+  }
   syncNestedNotice()
+}
+
+// 批次模式：記下這張表最後一次 hover 的列欄（滑鼠移到別張表後 setTarget 會把它們清掉）
+function rememberBatchHover() {
+  if (!batchMode || !currentTargetEl) return
+  batchHover.set(currentTargetEl, { rowIndex, colIndex, rowEl: currentRowEl })
+}
+
+// 組 payload 用的 blockInfo 位置：目前目標就是這張表時讀現況，否則讀它最後一次 hover 的記錄
+function blockHintFor(tableEl) {
+  if (tableEl === currentTargetEl) return { index: currentCellIndex(), headerText: getHeaderText() }
+  const h = batchHover.get(tableEl)
+  if (!h) return { index: null, headerText: '' }
+  if (pickMode === 'row') return { index: h.rowIndex, headerText: h.rowEl ? rowHeader(h.rowEl) : '' }
+  return { index: h.colIndex, headerText: h.colIndex === null ? '' : (columnHeaders(tableEl)[h.colIndex] || '') }
 }
 
 // hover 的格子是否內含表格且無子單位，改變時才重畫面板（每次 mousemove 都重畫會把按鈕從指尖換掉）
@@ -1315,8 +1807,236 @@ function getBlockPreview(blockSpec, tableEl) {
   return `${label}整${axisName} ${n} 格`
 }
 
+// 整欄或整列前 3 格（解析得到、未被排除、文字非空）的文字，以「、」串接；多於 3 格加「…」，一格都沒有回空字串
+const BLOCK_SAMPLE_MAX = 3
+function getBlockSamples(blockSpec, tableEl) {
+  if (!tableEl || !blockSpec) return ''
+  const dataRows = resolveDataRows(tableEl)
+  const idx = (blockSpec.index !== null && blockSpec.index !== undefined) ? blockSpec.index : 0
+  const texts = []
+  const take = (el, rIdx, cIdx) => {
+    if (!el || isExcludedCell(blockSpec, rIdx, cIdx)) return
+    const text = (el.textContent || '').trim()
+    if (text) texts.push(text)
+  }
+  if (blockSpec.axis === 'row') {
+    const rowEl = dataRows[idx]
+    if (rowEl) {
+      for (const cell of getRowCells(rowEl)) {
+        const c = gridIndexOf(rowEl, cell)
+        take(targetAtGrid(rowEl, c, blockSpec.inner), idx, c)
+      }
+    }
+  } else {
+    dataRows.forEach((r, rIdx) => take(targetAtGrid(r, idx, blockSpec.inner), rIdx, idx))
+  }
+  if (texts.length === 0) return ''
+  return texts.slice(0, BLOCK_SAMPLE_MAX).join('、') + (texts.length > BLOCK_SAMPLE_MAX ? '…' : '')
+}
+
+// 解析整欄每格各一個值的清單（右鍵 col-each、工具列 colEach 與快捷路徑共用）
+function resolveColEachCells(tableEl, cIdx, inner, targetEl) {
+  if (!tableEl || !isTableMode(tableEl)) return null
+  if (currentPurpose === 'task' && isSingleRowNestedTable(tableEl) && isUpgradeableTable(tableEl)) {
+    const O = outerTableOf(tableEl)
+    if (O) {
+      const oInfo = resolveCell(tableEl, O)
+      if (oInfo && oInfo.cell && oInfo.cIdx !== null) {
+        const C = oInfo.cIdx
+        const oCell = oInfo.cell
+        let actualTarget = targetEl
+        if (!actualTarget) {
+          const dRows = resolveDataRows(tableEl)
+          const cEl = dRows[0] ? cellAtGridIndex(dRows[0], cIdx) : null
+          actualTarget = (cEl && hasInner(inner)) ? (resolveInner(cEl, inner) || cEl) : (cEl || oCell)
+        }
+        const fullInner = innerPathOf(oCell, actualTarget)
+        const oRows = resolveDataRows(O)
+        const picks = []
+        for (let r = 0; r < oRows.length; r++) {
+          if (targetAtGrid(oRows[r], C, fullInner) !== null) {
+            picks.push(makeCellPick(r, C, O, oRows, fullInner))
+          }
+        }
+        return {
+          tableEl: O,
+          origTableEl: tableEl,
+          isOuter: true,
+          cIdx: C,
+          inner: fullInner,
+          picks
+        }
+      }
+    }
+  }
+  const dataRows = resolveDataRows(tableEl)
+  const picks = []
+  for (let r = 0; r < dataRows.length; r++) {
+    if (targetAtGrid(dataRows[r], cIdx, inner) !== null) {
+      picks.push(makeCellPick(r, cIdx, tableEl, dataRows, inner))
+    }
+  }
+  return {
+    tableEl,
+    origTableEl: tableEl,
+    isOuter: false,
+    cIdx,
+    inner,
+    picks
+  }
+}
+
+// 展開整欄每格各一個值（右鍵 col-each、工具列 colEach 與快捷路徑共用）
+function expandColEach(tableEl, cIdx, inner, targetEl, options = {}) {
+  const resolved = resolveColEachCells(tableEl, cIdx, inner, targetEl)
+  if (!resolved) return false
+  if (resolved.picks.length === 0) {
+    toolbarNotice = '這一欄在目前的頁面上取不到格子'
+    if (panelEl) updatePanel(panelEl, currentTargetEl)
+    return false
+  }
+
+  const toggle = options.toggle !== false
+  const present = resolved.picks.filter(p => selectedList.some(s => samePick(s, p)))
+  // 全部已選＝整組取消；被上限截斷（補不進去了）而這一欄已有值時同樣算取消，否則再也點不掉
+  const full = selectedList.length >= maxPicks
+  if (toggle && present.length > 0 && (present.length === resolved.picks.length || full)) {
+    const previous = takeUndoSnapshot(selectedList, pickedTableEl)
+    clearUndoSnapshot()
+    selectedList = selectedList.filter(s => !resolved.picks.some(p => samePick(s, p)))
+    undoSnapshot = previous
+    limitReached = false
+    trimReady = false
+    if (selectedList.length === 0) {
+      pickedTableEl = null
+      applyPickedMarks(currentTargetEl)
+    } else {
+      applyPickedMarks(pickedTableEl)
+    }
+    if (panelEl) updatePanel(panelEl, currentTargetEl)
+    return true
+  }
+
+  if (resolved.isOuter) {
+    // 升不上去就不得往下加：清單會混著小表的索引，卻配上外層表的定位
+    if (selectedList.length > 0 && pickedTableEl === resolved.origTableEl && !promotePicksToOuter(resolved.origTableEl)) {
+      toolbarNotice = CANNOT_PROMOTE_NOTICE
+      if (panelEl) updatePanel(panelEl, currentTargetEl)
+      return false
+    }
+    pickedTableEl = resolved.tableEl
+    setTarget(resolved.tableEl)
+    deliberateTableEl = resolved.tableEl
+  } else {
+    if (isSingleRowNestedTable(resolved.tableEl)) {
+      toolbarNotice = SINGLE_ROW_NESTED_TABLE_NOTICE
+    }
+  }
+
+  let n = 0
+  for (const p of resolved.picks) {
+    addPick(p)
+    if (limitReached) break
+  }
+  // 說的是這一欄實際在清單裡的格數（去重、上限截斷的不算）
+  n = resolved.picks.filter(p => selectedList.some(s => samePick(s, p))).length
+
+  if (resolved.isOuter) {
+    toolbarNotice = promotedColNotice(n)
+  }
+
+  if (options.replaceSnapshot) {
+    undoSnapshot = options.replaceSnapshot
+  }
+  trimReady = true
+  applyPickedMarks(pickedTableEl || resolved.tableEl)
+  if (panelEl) updatePanel(panelEl, pickedTableEl || resolved.tableEl)
+  return true
+}
+
+/**
+ * 給一個目標與它的值清單，組出 PICKED 的任務欄位（type／purpose／taskId 以外的全部）。
+ * 單任務與批次都經這一份。
+ * @param {Element} targetEl 目標（表格或元素）
+ * @param {Array} picks 值清單
+ * @param {{index: number|null, headerText: string}|null} hint 表格目標的 blockInfo 位置
+ */
+function buildPickPayload(targetEl, picks, hint) {
+  const isTable = isTableMode(targetEl)
+  const blockInfo = { ...kindOf(targetEl) }
+  if (isTable) {
+    blockInfo.axis = pickMode === 'row' ? 'row' : 'col'
+    blockInfo.index = hint ? hint.index : null
+    blockInfo.headerText = hint ? hint.headerText : ''
+  } else {
+    delete blockInfo.axis
+    delete blockInfo.index
+  }
+
+  const payload = {
+    locator: describe(targetEl),
+    blockInfo,
+    picks
+  }
+
+  if (isTable) {
+    const nameHint = computeNameHint(targetEl)
+    if (nameHint) payload.nameHint = nameHint
+  }
+
+  if (!isTable) {
+    payload.preview = (targetEl.textContent || '').trim()
+    payload.previewValue = parseNumber(payload.preview)
+  } else if (picks.length > 1) {
+    const firstText = picks[0].cell
+      ? getCellText(picks[0].cell, targetEl)
+      : (picks[0].block ? getBlockPreview(picks[0].block, targetEl) : (targetEl.textContent || '').trim())
+    payload.preview = `${firstText}（共 ${picks.length} 個值）`
+  } else if (picks.length === 1 && picks[0].cell) {
+    const cellText = getCellText(picks[0].cell, targetEl)
+    payload.preview = cellText
+    const num = parseNumber(cellText)
+    if (num !== null) {
+      payload.previewValue = num
+    }
+  } else if (picks.length === 1 && picks[0].block) {
+    payload.preview = getBlockPreview(picks[0].block, targetEl)
+    const samples = getBlockSamples(picks[0].block, targetEl)
+    if (samples) payload.previewSamples = samples
+  } else {
+    payload.preview = (targetEl.textContent || '').trim()
+    const num = parseNumber(payload.preview)
+    if (num !== null) {
+      payload.previewValue = num
+    }
+  }
+  return payload
+}
+
 // 送出確認訊息並離開
 function confirmPick() {
+  if (batchMode) {
+    syncBatch()
+    if (batchGroups.length > 0 && iframeOf(currentTargetEl)) {
+      batchBlocksDescend()
+      return
+    }
+    // 恰好一組而且就是目前這組：走下面的單任務流程，送出與非批次模式逐欄相同
+    const onlyLive = batchGroups.length === 1 && currentGroupIdx === 0
+    if (batchGroups.length > 0 && !onlyLive) {
+      const payloads = batchGroups.map(g => g.el
+        ? buildPickPayload(g.el, [{ locator: describe(g.el) }], null)
+        : buildPickPayload(g.tableEl, g.picks.slice(), blockHintFor(g.tableEl)))
+      const msg = batchGroups.length === 1
+        ? { type: MSG.PICKED, purpose: currentPurpose, ...payloads[0] }
+        : { type: MSG.PICKED, purpose: currentPurpose, batch: payloads }
+      if (currentTaskId !== undefined) msg.taskId = currentTaskId
+      applyPickedMarks(pickedTableEl)
+      chrome.runtime.sendMessage(msg)
+      exitPickMode({ hold: currentPurpose })
+      return
+    }
+  }
   // 已選了值就以那張表格為準：滑鼠可能正停在表格外的一段文字上
   if (selectedList.length > 0 && pickedTableEl && currentTargetEl !== pickedTableEl) {
     setTarget(pickedTableEl)
@@ -1326,9 +2046,9 @@ function confirmPick() {
   // 整欄／整列模式卻沒有任何已選、目標又不是表格：送出去的會是「整個元素」，
   // 使用者以為自己選的是一整欄。停下來說原因，不要把他選的模式靜靜丟掉（AF-10 作業 C）
   if (isMultiPickPurpose() && selectedList.length === 0 &&
-      (pickMode === 'col' || pickMode === 'row') && !isTableMode(currentTargetEl) &&
+      (pickMode === 'col' || pickMode === 'colEach' || pickMode === 'row') && !isTableMode(currentTargetEl) &&
       !iframeOf(currentTargetEl)) {
-    toolbarNotice = `${pickMode === 'row' ? '整列' : '整欄'}只能在表格上選，先把滑鼠移到表格；要抓這個元素請切回「單格」`
+    toolbarNotice = nonTableModeNotice()
     if (panelEl) updatePanel(panelEl, currentTargetEl)
     return
   }
@@ -1337,6 +2057,7 @@ function confirmPick() {
   const descendTarget = iframeOf(currentTargetEl)
   if (descendTarget) {
     const msg = { type: MSG.DESCEND_FRAME, purpose: currentPurpose, src: frameSrcOf(descendTarget) }
+    if (batchMode) msg.batch = true
     if (currentTaskId !== undefined) msg.taskId = currentTaskId
     if (pendingPreselect) msg.preselect = pendingPreselect
     chrome.runtime.sendMessage(msg)
@@ -1377,15 +2098,49 @@ function confirmPick() {
         }
         putInner(block, currentInner)
         picks = [{ block }]
-      } else {
-        const block = {
-          axis: 'col',
-          index: colIndex !== null ? colIndex : (currentCellIndex() !== null ? currentCellIndex() : 0),
-          headerText: colIndex !== null ? (columnHeaders(currentTargetEl)[colIndex] || '') : getHeaderText()
+      } else if (pickMode === 'colEach') {
+        const resolved = resolveColEachCells(
+          currentTargetEl,
+          colIndex !== null ? colIndex : (currentCellIndex() !== null ? currentCellIndex() : 0),
+          currentInner,
+          currentHoverEl || currentCellEl || currentTargetEl
+        )
+        picks = resolved ? resolved.picks : []
+        if (resolved?.isOuter) {
+          currentTargetEl = resolved.tableEl
         }
-        putInner(block, currentInner)
-        withFooterExclude(block, currentTargetEl)
-        picks = [{ block }]
+      } else {
+        if (currentPurpose === 'task' && isSingleRowNestedTable(currentTargetEl) && isUpgradeableTable(currentTargetEl)) {
+          const O = outerTableOf(currentTargetEl)
+          if (O) {
+            const oInfo = resolveCell(currentTargetEl, O)
+            if (oInfo && oInfo.cell && oInfo.cIdx !== null) {
+              const C = oInfo.cIdx
+              const oCell = oInfo.cell
+              const targetEl = currentHoverEl || currentCellEl || currentTargetEl
+              const fullInner = innerPathOf(oCell, targetEl)
+              const block = {
+                axis: 'col',
+                index: C,
+                headerText: columnHeaders(O)[C] || ''
+              }
+              putInner(block, fullInner)
+              withFooterExclude(block, O)
+              picks = [{ block }]
+              currentTargetEl = O
+            }
+          }
+        }
+        if (picks.length === 0) {
+          const block = {
+            axis: 'col',
+            index: colIndex !== null ? colIndex : (currentCellIndex() !== null ? currentCellIndex() : 0),
+            headerText: colIndex !== null ? (columnHeaders(currentTargetEl)[colIndex] || '') : getHeaderText()
+          }
+          putInner(block, currentInner)
+          withFooterExclude(block, currentTargetEl)
+          picks = [{ block }]
+        }
       }
     } else {
       picks = [{ locator: describe(currentTargetEl) }]
@@ -1397,54 +2152,12 @@ function confirmPick() {
     picks = picks.slice(0, 1)
   }
 
-  const blockInfo = { ...kindOf(currentTargetEl) }
-  if (isTableMode(currentTargetEl)) {
-    blockInfo.axis = pickMode === 'row' ? 'row' : 'col'
-    blockInfo.index = currentCellIndex()
-    blockInfo.headerText = getHeaderText()
-  } else {
-    delete blockInfo.axis
-    delete blockInfo.index
-  }
-
   const msg = {
     type: MSG.PICKED,
     purpose: currentPurpose,
-    locator: describe(currentTargetEl),
-    blockInfo,
-    picks
-  }
-
-  if (isTableMode(currentTargetEl)) {
-    const nameHint = computeNameHint(currentTargetEl)
-    if (nameHint) msg.nameHint = nameHint
+    ...buildPickPayload(currentTargetEl, picks, { index: currentCellIndex(), headerText: getHeaderText() })
   }
   if (currentTaskId !== undefined) msg.taskId = currentTaskId
-
-  if (!isTableMode(currentTargetEl)) {
-    msg.preview = (currentTargetEl.textContent || '').trim()
-    msg.previewValue = parseNumber(msg.preview)
-  } else if (picks.length > 1) {
-    const firstText = picks[0].cell
-      ? getCellText(picks[0].cell, currentTargetEl)
-      : (picks[0].block ? getBlockPreview(picks[0].block, currentTargetEl) : (currentTargetEl.textContent || '').trim())
-    msg.preview = `${firstText}（共 ${picks.length} 個值）`
-  } else if (picks.length === 1 && picks[0].cell) {
-    const cellText = getCellText(picks[0].cell, currentTargetEl)
-    msg.preview = cellText
-    const num = parseNumber(cellText)
-    if (num !== null) {
-      msg.previewValue = num
-    }
-  } else if (picks.length === 1 && picks[0].block) {
-    msg.preview = getBlockPreview(picks[0].block, currentTargetEl)
-  } else {
-    msg.preview = (currentTargetEl.textContent || '').trim()
-    const num = parseNumber(msg.preview)
-    if (num !== null) {
-      msg.previewValue = num
-    }
-  }
 
   chrome.runtime.sendMessage(msg)
   // 設定面板就開在旁邊，使用者要看得到自己剛剛選的是哪一格；
@@ -1498,7 +2211,9 @@ function openMenu(event) {
   const cellInfo = isTable ? resolveCell(target, tableEl) : null
   let matchedPickIndex = -1
   let matchedBlock = null
-  if (cellInfo && selectedList.length > 0) {
+  // 只有滑鼠下的表就是已選那張表時才比對：blockCoversCell 只比索引，
+  // 在 B 表上按右鍵會改到 A 表那一組的排除，而且錨定成 B 表的列標題（體檢抓到）
+  if (cellInfo && selectedList.length > 0 && tableEl === pickedTableEl) {
     for (let i = selectedList.length - 1; i >= 0; i--) {
       const pick = selectedList[i]
       if (pick.block && blockCoversCell(pick.block, cellInfo.rIdx, cellInfo.cIdx)) {
@@ -1584,6 +2299,14 @@ function handleMenuAction(action) {
     return
   }
 
+  if (['cell', 'col-each', 'col', 'row-each', 'row'].includes(action)) {
+    if (promoteBeforeAddingInOuter() === 'blocked') return
+    if (!batchFollowTarget(tableEl)) {
+      updatePanel(panelEl, currentTargetEl)
+      return
+    }
+  }
+
   if (action === 'cell') {
     if (tableEl && isTableMode(tableEl)) {
       const info = cellInfo || (rowIndex !== null && colIndex !== null ? { rIdx: rowIndex, cIdx: colIndex, dataRows: resolveDataRows(tableEl) } : null)
@@ -1600,17 +2323,10 @@ function handleMenuAction(action) {
     if (tableEl && isTableMode(tableEl)) {
       const dataRows = resolveDataRows(tableEl)
       if (action === 'col-each') {
-        // 一整欄的每一格各是一個值（各幣別的買入），與「整欄加總成一個值」是兩件事
         const cIdx = cellInfo ? cellInfo.cIdx : (colIndex !== null ? colIndex : 0)
-        for (let r = 0; r < dataRows.length; r++) {
-          if (targetAtGrid(dataRows[r], cIdx, inner) !== null) {
-            addPick(makeCellPick(r, cIdx, tableEl, dataRows, inner))
-            if (limitReached) break
-          }
-        }
-        if (isSingleRowNestedTable(tableEl)) {
-          toolbarNotice = SINGLE_ROW_NESTED_TABLE_NOTICE
-        }
+        const targetEl = (cellInfo && (cellInfo.subEl || cellInfo.cell)) || menuTargetContext?.target
+        expandColEach(tableEl, cIdx, inner, targetEl, { toggle: false })
+        return
       } else {
         const rIdx = cellInfo ? cellInfo.rIdx : (rowIndex !== null ? rowIndex : 0)
         // 逐格的網格起點（不是 0..DOM 格數）：無表頭＋colspan 的列會重複選同一格、漏掉最後一欄
@@ -1630,6 +2346,33 @@ function handleMenuAction(action) {
 
   if (action === 'col') {
     if (tableEl && isTableMode(tableEl)) {
+      if (currentPurpose === 'task' && isSingleRowNestedTable(tableEl) && isUpgradeableTable(tableEl)) {
+        if (selectedList.length > 0 && pickedTableEl === tableEl) {
+          promotePicksToOuter(tableEl)
+        }
+        const O = outerTableOf(tableEl)
+        if (O) {
+          const oInfo = resolveCell(tableEl, O)
+          if (oInfo && oInfo.cell && oInfo.cIdx !== null) {
+            const C = oInfo.cIdx
+            const oCell = oInfo.cell
+            const targetEl = (cellInfo && (cellInfo.subEl || cellInfo.cell)) || oInfo.cell
+            const fullInner = innerPathOf(oCell, targetEl)
+            const block = { axis: 'col', index: C, headerText: columnHeaders(O)[C] || '' }
+            putInner(block, fullInner)
+            pendingFooterNotice = withFooterExclude(block, O)
+            addPick({ block })
+            pickedTableEl = O
+            setTarget(O)
+            deliberateTableEl = O
+            const n = countResolvedInnerInCol(O, C, fullInner)
+            toolbarNotice = promotedColNotice(n)
+            applyPickedMarks(O)
+            updatePanel(panelEl, O)
+            return
+          }
+        }
+      }
       const cIdx = cellInfo ? cellInfo.cIdx : (colIndex !== null ? colIndex : (currentCellIndex() !== null ? currentCellIndex() : 0))
       const block = { axis: 'col', index: cIdx, headerText: columnHeaders(tableEl)[cIdx] || '' }
       putInner(block, inner)
@@ -1757,17 +2500,30 @@ function addPick(pick) {
   return true
 }
 
-// Shift 點擊：已經選過就取消，否則加入
+// 點擊：已經選過就取消（存復原快照），否則加入
 function togglePick(pick) {
   trimReady = false
-  clearUndoSnapshot()
   const at = selectedList.findIndex(p => samePick(p, pick))
   if (at >= 0) {
+    const previous = takeUndoSnapshot(selectedList, pickedTableEl)
+    clearUndoSnapshot()
     selectedList.splice(at, 1)
+    undoSnapshot = previous
     limitReached = false
+    if (selectedList.length === 0) {
+      pickedTableEl = null
+      applyPickedMarks(currentTargetEl)
+    } else {
+      applyPickedMarks(pickedTableEl)
+    }
     return
   }
-  addPick(pick)
+  // 這一格已經算在某個整欄／整列值裡（本來就是藍框）：加成獨立的值是允許的（合計那一格單獨當一個值，AF-16），
+  // 但不得無聲——指令句說「點已選的可取消」，這一下卻是加選，要講清楚（體檢抓到）
+  const covering = pick.cell ? selectedList.find(p => p.block && blockCoversCell(p.block, pick.cell.row.index, pick.cell.col.index)) : null
+  if (addPick(pick) && covering) {
+    toolbarNotice = `這一格已經算在「${getPickName(covering)}」裡；現在另外加成獨立的一個值（再點一次取消）`
+  }
 }
 
 function addCellPick(r, c, dataRows, inner) {
@@ -2024,17 +2780,34 @@ function onKeyDown(event) {
     if (!currentTargetEl) return
     event.preventDefault()
     // 還沒選就按 Enter：把滑鼠停著的那一個選起來再送（鍵盤使用者不必先點一下）
-    if (selectedList.length === 0 && isTableMode(currentTargetEl) && (currentHoverEl || currentCellEl)) {
-      const candidate = candidateAt(currentHoverEl || currentCellEl)
-      if (candidate) addPick(candidate)
+    // 批次模式已有組時不補選（Enter 是「完成這一批」，不是再加一組）
+    if (selectedCount() === 0 && isTableMode(currentTargetEl) && (currentHoverEl || currentCellEl)) {
+      if (pickMode === 'colEach') {
+        const cIdx = colIndex !== null ? colIndex : 0
+        const resolved = resolveColEachCells(currentTargetEl, cIdx, currentInner, currentHoverEl || currentCellEl)
+        if (resolved) {
+          for (const p of resolved.picks) {
+            addPick(p)
+            if (limitReached) break
+          }
+        }
+      } else {
+        const candidate = candidateAt(currentHoverEl || currentCellEl)
+        if (candidate) addPick(candidate)
+      }
     }
     confirmPick()
   } else if ((event.ctrlKey || event.metaKey) && (event.key === 'a' || event.key === 'A')) {
-    // Ctrl／⌘＋A：全選這張表的資料格
+    // Ctrl／⌘＋A：全選這張表的資料格（取代整批，留復原快照）
     if (!isMultiPickPurpose() || !currentTargetEl || !isTableMode(currentTargetEl)) return
     event.preventDefault()
     const dataRows = resolveDataRows(currentTargetEl)
     if (dataRows.length === 0) return
+    if (!batchFollowTarget(currentTargetEl)) {
+      updatePanel(panelEl, currentTargetEl)
+      return
+    }
+    const previous = takeUndoSnapshot(selectedList, pickedTableEl)
     clearPickedMarks(document)
     selectedList = []
     limitReached = false
@@ -2056,9 +2829,13 @@ function onKeyDown(event) {
       }
       if (limitReached) break
     }
-    preselectPristine = false
+    undoSnapshot = previous
     replaceConfirmPending = null
-    applyPickedMarks(currentTargetEl)
+    if (selectedList.length > 0 && pickedTableEl) {
+      applyPickedMarks(pickedTableEl)
+    } else {
+      applyPickedMarks(currentTargetEl)
+    }
     updatePanel(panelEl, currentTargetEl)
   } else if ((event.ctrlKey || event.metaKey) && (event.key === 'z' || event.key === 'Z')) {
     // Ctrl／⌘＋Z：**先還原上一次取代**（那是最容易誤觸、損失最大的動作），
@@ -2071,7 +2848,7 @@ function onKeyDown(event) {
     }
     if (selectedList.length === 0) return
     event.preventDefault()
-    removeLastPick()
+    removeLastPick(false)
   } else if (event.shiftKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
     if (currentTargetEl && isTableMode(currentTargetEl) && isMultiPickPurpose()) {
       event.preventDefault()
@@ -2081,6 +2858,18 @@ function onKeyDown(event) {
         const curC = colIndex !== null ? colIndex : 0
         // 最右能走到的是最後一格的網格起點（colspan 之後 DOM 格數小於網格寬）
         const lastCol = Math.max(0, ...gridStartsOf(dataRows[curR] || dataRows[0]))
+
+        // 與點擊／拖曳／右鍵同一套守門（體檢抓到：這條路漏了，滑鼠停在另一張表時會把那張表的索引塞進已選的組）
+        if (promoteBeforeAddingInOuter() === 'blocked') return
+        if (!batchFollowTarget(currentTargetEl)) {
+          updatePanel(panelEl, currentTargetEl)
+          return
+        }
+        if (selectedList.length > 0 && pickedTableEl && currentTargetEl !== pickedTableEl) {
+          toolbarNotice = '一個任務只能抓同一張表格裡的值；要改抓另一張表，直接點那一格'
+          updatePanel(panelEl, currentTargetEl)
+          return
+        }
 
         addCellPick(curR, curC, dataRows, currentInner)
 
@@ -2098,7 +2887,11 @@ function onKeyDown(event) {
         currentCellEl = currentRowEl ? cellAtGridIndex(currentRowEl, colIndex) : null
 
         addCellPick(newR, newC, dataRows, currentInner)
-        applyPickedMarks(currentTargetEl)
+        if (selectedList.length > 0 && pickedTableEl) {
+          applyPickedMarks(pickedTableEl)
+        } else {
+          applyPickedMarks(currentTargetEl)
+        }
         markCells(currentCellEl, dataRows, currentRowEl, pickMode, colIndex, currentInner)
         updatePanel(panelEl, currentTargetEl)
       }
@@ -2106,6 +2899,32 @@ function onKeyDown(event) {
   } else if (event.key === 'ArrowUp') {
     event.preventDefault()
     if (!currentTargetEl || currentTargetEl === document.body) return
+    const lastHover = currentHoverEl
+
+    // 觸發 3：已選非空時按 ↑（只在 pickedTableEl 是 T、而且 T 有 O 時套用；其他情況 ↑ 行為完全不變）
+    if (selectedList.length > 0 && pickedTableEl) {
+      const T = pickedTableEl
+      const O = outerTableOf(T)
+      if (O) {
+        // 值升不上去時 ↑ 照樣離開這張表（AF-10 C-5：↑ 是明確意圖，不被鎖表擋住），
+        // 只是說清楚已選的值還留在小表：接著點外層的格子是換表（留得住復原），不是加選
+        if (currentPurpose === 'repick') {
+          toolbarNotice = REPICK_NO_PROMOTE_NOTICE
+        } else if (currentPurpose === 'task' && !isUpgradeableTable(T)) {
+          toolbarNotice = '外層不是每一列重複同一種小表的表格，已選的值留在原表；點外層的格子會換表'
+        } else if (currentPurpose === 'task' && !promotePicksToOuter(T)) {
+          toolbarNotice = CANNOT_PROMOTE_NOTICE
+        } else if (currentPurpose === 'task') {
+          backStack.push(T)
+          if (isTableMode(currentTargetEl) && lastHover && currentTargetEl.contains(lastHover)) {
+            handleTableMouseMove(lastHover)
+          }
+          if (panelEl) updatePanel(panelEl, currentTargetEl)
+          return
+        }
+      }
+    }
+
     // 指在代理層時往上要走 iframe 的父層；代理層自己的父層是我們的 overlay
     const anchor = frameOfProxy(currentTargetEl) || currentTargetEl
     if (anchor.parentElement) {
@@ -2119,11 +2938,22 @@ function onKeyDown(event) {
         deliberateTableEl = null
       }
       relockAfterMove()
+      if (isTableMode(currentTargetEl) && lastHover && currentTargetEl.contains(lastHover)) {
+        handleTableMouseMove(lastHover)
+      }
     }
   } else if (event.key === 'ArrowDown') {
     event.preventDefault()
     if (backStack.length > 0) {
-      const nextTarget = backStack.pop()
+      const nextTarget = backStack[backStack.length - 1]
+      if (selectedList.length > 0 && pickedTableEl && pickedTableEl === currentTargetEl &&
+          nextTarget && currentTargetEl.contains(nextTarget)) {
+        toolbarNotice = '已選的值在外層表；要回小表請先移除已選'
+        if (panelEl) updatePanel(panelEl, currentTargetEl)
+        return
+      }
+      const lastHover = currentHoverEl
+      backStack.pop()
       setTarget(nextTarget)
       if (isTableMode(nextTarget)) {
         deliberateTableEl = nextTarget
@@ -2131,11 +2961,14 @@ function onKeyDown(event) {
         deliberateTableEl = null
       }
       relockAfterMove()
+      if (isTableMode(currentTargetEl) && lastHover && currentTargetEl.contains(lastHover)) {
+        handleTableMouseMove(lastHover)
+      }
     }
   } else if (event.key === 'Tab') {
     if (currentTargetEl && isTableMode(currentTargetEl)) {
       event.preventDefault()
-      const modes = ['cell', 'col', 'row']
+      const modes = ['cell', 'col', 'colEach', 'row']
       const availableModes = isMultiPickPurpose() ? modes : ['cell']
       if (availableModes.length > 1) {
         const curIdx = availableModes.indexOf(pickMode)
@@ -2144,7 +2977,11 @@ function onKeyDown(event) {
         cellIndex = pickMode === 'row' ? rowIndex : colIndex
         updateToolbar()
         markCells(currentCellEl, currentDataRows, currentRowEl, pickMode, colIndex, currentInner)
-        applyPickedMarks(currentTargetEl)
+        if (selectedList.length > 0 && pickedTableEl) {
+          applyPickedMarks(pickedTableEl)
+        } else {
+          applyPickedMarks(currentTargetEl)
+        }
         updatePanel(panelEl, currentTargetEl)
       }
     }
@@ -2203,18 +3040,20 @@ function onClick(event) {
         if (panelEl) updatePanel(panelEl, currentTargetEl)
         return
       }
-      const onTable = Boolean(currentTargetEl && isTableMode(currentTargetEl))
-      if (!onTable) {
-        // 停用的真正原因是「這裡不是表格」，與用途無關；
-        // 說成「一次只選一個」會跟面板上一行的「非表格：抓整個元素」自相矛盾
-        if (isMultiPickPurpose() && (mode === 'col' || mode === 'row')) {
-          pendingMode = mode
-          toolbarNotice = `先把滑鼠移到表格上，會自動切成${mode === 'row' ? '整列' : '整欄'}`
-        } else {
-          toolbarNotice = '先把滑鼠移到表格上'
-        }
-      } else {
+      if (!isMultiPickPurpose()) {
         toolbarNotice = '這個用途一次只選一個元素'
+      } else {
+        const onTable = Boolean(currentTargetEl && isTableMode(currentTargetEl))
+        if (!onTable) {
+          // 停用的真正原因是「這裡不是表格」，與用途無關；
+          // 說成「一次只選一個」會跟面板上一行的「非表格：抓整個元素」自相矛盾
+          if (mode === 'col' || mode === 'colEach' || mode === 'row') {
+            pendingMode = mode
+            toolbarNotice = `先把滑鼠移到表格上，會自動切成${mode === 'row' ? '整列' : '整欄'}`
+          } else {
+            toolbarNotice = '先把滑鼠移到表格上'
+          }
+        }
       }
       if (panelEl) updatePanel(panelEl, currentTargetEl)
       return
@@ -2222,20 +3061,38 @@ function onClick(event) {
     // 焦點不留在工具列上：留著的話之後的 Enter／Space 會再按一次同一顆
     if (typeof toolBtn.blur === 'function') toolBtn.blur()
     const mode = toolBtn.getAttribute('data-af-tool')
-    if (mode && (mode === 'cell' || mode === 'col' || mode === 'row')) {
+    if (mode && (mode === 'cell' || mode === 'col' || mode === 'colEach' || mode === 'row')) {
       pickMode = mode
       cellIndex = pickMode === 'row' ? rowIndex : colIndex
       toolbarNotice = null
       pendingMode = null
-      // 已選的最後一項是單一儲存格時，切整欄／整列＝把那一格升級成整欄／整列
-      upgradeLastPickTo(mode)
+      if (mode === 'colEach') {
+        if (selectedList.length > 0 && selectedList[selectedList.length - 1].cell) {
+          const last = selectedList[selectedList.length - 1]
+          const table = pickedTableEl || currentTargetEl
+          if (table && isTableMode(table)) {
+            const previous = takeUndoSnapshot(selectedList, pickedTableEl)
+            selectedList = selectedList.slice(0, -1)
+            expandColEach(table, last.cell.col.index, last.cell.inner || null, null, { replaceSnapshot: previous, toggle: false })
+          }
+        }
+      } else {
+        // 已選的最後一項是單一儲存格時，切整欄／整列＝把那一格升級成整欄／整列
+        upgradeLastPickTo(mode)
+      }
       updateToolbar()
       if (currentTargetEl && isTableMode(currentTargetEl)) {
         markCells(currentCellEl, currentDataRows, currentRowEl, pickMode, colIndex, currentInner)
-        applyPickedMarks(currentTargetEl)
+        if (selectedList.length > 0 && pickedTableEl) {
+          applyPickedMarks(pickedTableEl)
+        } else {
+          applyPickedMarks(currentTargetEl)
+        }
       }
       if (mode === 'col' && isSingleRowNestedTable(currentTargetEl)) {
-        toolbarNotice = SINGLE_ROW_NESTED_TABLE_NOTICE
+        if (!toolbarNotice && !(currentPurpose === 'task' && isUpgradeableTable(currentTargetEl))) {
+          toolbarNotice = SINGLE_ROW_NESTED_TABLE_NOTICE
+        }
       }
       if (panelEl) updatePanel(panelEl, currentTargetEl)
     }
@@ -2248,10 +3105,31 @@ function onClick(event) {
     const chipEl = chipRemoveBtn.closest('[data-af-chip]')
     if (chipEl) {
       const idx = parseInt(chipEl.getAttribute('data-af-chip'), 10)
-      if (!isNaN(idx)) {
+      const groupEl = chipEl.closest('[data-af-group]')
+      if (!isNaN(idx) && groupEl) {
+        // 批次模式：× 移除的是那一組的那個值（元素組只有一個值＝整組）
+        const gi = parseInt(groupEl.getAttribute('data-af-group'), 10)
+        syncBatch()
+        const g = batchGroups[gi]
+        if (g && g.el) {
+          removeBatchGroup(gi)
+        } else if (g) {
+          if (gi !== currentGroupIdx) loadBatchGroup(gi)
+          removePickAt(idx)
+        }
+      } else if (!isNaN(idx)) {
         removePickAt(idx)
       }
     }
+    return
+  }
+
+  // 3a. 批次模式的整組移除鈕
+  const groupRemoveBtn = event.target && event.target.closest ? event.target.closest('[data-af-group-remove]') : null
+  if (groupRemoveBtn) {
+    const groupEl = groupRemoveBtn.closest('[data-af-group]')
+    const gi = groupEl ? parseInt(groupEl.getAttribute('data-af-group'), 10) : NaN
+    if (!isNaN(gi)) removeBatchGroup(gi)
     return
   }
 
@@ -2320,60 +3198,164 @@ function onClick(event) {
   // 往下落會走到第 8 段直接送出，等於點外層一下就把內層的已選送走了
   if (isTableMode(currentTargetEl) && isMultiPickPurpose() &&
       !currentTargetEl.contains(event.target) && !frameOfProxy(event.target)) {
+    // 批次模式：已選的表鎖住了 hover，但點到非表格元素就是要把它加成（或移除）一組
+    if (batchMode) {
+      const el = upgradeTarget(event.target, { deliberate: true })
+      if (el && !isTableMode(el) && !iframeOf(el)) {
+        batchClickElement(el)
+        return
+      }
+    }
+    const additive = event.ctrlKey || event.metaKey
+    if (additive && pickedTableEl && currentPurpose === 'repick') {
+      const o = outerTableOf(pickedTableEl)
+      if (o && o.contains(event.target)) {
+        toolbarNotice = REPICK_NO_PROMOTE_NOTICE
+        applyPickedMarks(pickedTableEl)
+        if (panelEl) updatePanel(panelEl, currentTargetEl)
+        return
+      }
+    }
     return
   }
 
   // 6. 表格內的點擊：選取，不送出（送出走雙擊、Enter 或「完成」鈕）
   if (isTableMode(currentTargetEl) && currentTargetEl.contains(event.target)) {
+    // 觸發 2：目標是 O 時點擊（一般點、Ctrl 點、Shift 點）——先換算
+    const promoted = promoteBeforeAddingInOuter()
+    if (promoted === 'blocked') return
+    const justPromoted = promoted === 'promoted'
+
+    // 觸發 1：單列小表上整欄模式點格（已選在 T 的先換算；換算不了就維持現況行為）
+    if (pickMode === 'col' && currentPurpose === 'task' &&
+        isSingleRowNestedTable(currentTargetEl) && isUpgradeableTable(currentTargetEl)) {
+      if (selectedList.length > 0 && pickedTableEl === currentTargetEl) {
+        promotePicksToOuter(currentTargetEl)
+      }
+    }
+
     handleTableMouseMove(event.target)
-    const candidate = candidateAt(event.target)
-    if (candidate) {
-      // 一次只選一個的用途（前置動作、登入）：維持點一下就送出
-      if (!isMultiPickPurpose()) {
+
+    // 一次只選一個的用途（前置動作、登入）：維持點一下就送出
+    if (!isMultiPickPurpose()) {
+      const candidate = candidateAt(event.target)
+      if (candidate) {
         if (!addPick(candidate)) {
-          applyPickedMarks(currentTargetEl)
+          if (selectedList.length > 0 && pickedTableEl) {
+            applyPickedMarks(pickedTableEl)
+          } else {
+            applyPickedMarks(currentTargetEl)
+          }
           updatePanel(panelEl, currentTargetEl)
           return
         }
         confirmPick()
         return
       }
+      return
+    }
 
-      const additive = event.ctrlKey || event.metaKey
-      // 跨表加選擋下來：兩張表的列欄索引配不到同一個 locator，
-      // 混在一起送出去的規格永遠抓到錯的值（要換表就直接點，那是取代且留得住復原）
-      if (additive && pickedTableEl && currentTargetEl !== pickedTableEl &&
-          !pickedTableEl.contains(currentTargetEl) && !currentTargetEl.contains(pickedTableEl)) {
-        toolbarNotice = '一個任務只能抓同一張表格裡的值；要改抓另一張表，直接點那一格'
+    const additive = event.ctrlKey || event.metaKey
+
+    // 批次模式的換表：切到那張表的組（沒有就開新的一組），再照原本語意處理這一下
+    if (!batchFollowTarget(currentTargetEl)) {
+      updatePanel(panelEl, currentTargetEl)
+      return
+    }
+
+    // 換表判定：已選的值屬於另一張不相干的表格
+    if (selectedList.length > 0 && pickedTableEl && currentTargetEl !== pickedTableEl) {
+      if (additive) {
+        const o = outerTableOf(pickedTableEl)
+        if (currentPurpose === 'repick' && o && (currentTargetEl === o || o.contains(currentTargetEl))) {
+          toolbarNotice = REPICK_NO_PROMOTE_NOTICE
+        } else {
+          toolbarNotice = '一個任務只能抓同一張表格裡的值；要改抓另一張表，直接點那一格'
+        }
         applyPickedMarks(pickedTableEl)
         updatePanel(panelEl, currentTargetEl)
         return
       }
-      if (additive) {
-        // Ctrl／⌘ 點：加選或取消這一個（檔案總管的複選習慣）
-        togglePick(candidate)
-        preselectPristine = false
-        replaceConfirmPending = null
-      } else if (event.shiftKey && lastCellPick() && candidate.cell) {
-        // Shift 點：從上一個已選的格子拉出矩形範圍
-        addRange(lastCellPick(), candidate.cell)
-        preselectPristine = false
-        replaceConfirmPending = null
-      } else {
-        // 點一下：選取並取代目前已選。
-        // 帶著多個 preselect 進來時（編輯既有任務重選）先提示一次，免得一個誤點清光整批
+
+      // 一般點走 replaceSelection
+      const candidate = candidateAt(event.target)
+      if (candidate) {
         const key = pickKey(candidate)
-        if (preselectPristine && selectedList.length >= 2 && replaceConfirmPending !== key) {
+        if (selectedList.length >= 2 && replaceConfirmPending !== key) {
           replaceConfirmPending = key
-          applyPickedMarks(currentTargetEl)
+          applyPickedMarks(pickedTableEl)
           updatePanel(panelEl, currentTargetEl)
           return
         }
-        replaceSelection(candidate)
-        preselectPristine = false
         replaceConfirmPending = null
+        replaceSelection(candidate)
+        applyPickedMarks(pickedTableEl || currentTargetEl)
+        updatePanel(panelEl, currentTargetEl)
+        return
       }
-      applyPickedMarks(currentTargetEl)
+      return
+    }
+
+    // 同一張表格內的點擊：
+    if (pickMode === 'colEach') {
+      const head = resolveHeaderTarget(event.target, currentTargetEl)
+      let cIdx = null, inner = null, targetEl = event.target
+      if (head && head.axis === 'col') {
+        cIdx = head.index
+        inner = null
+      } else {
+        const info = resolveCell(event.target, currentTargetEl)
+        if (info) {
+          cIdx = info.cIdx
+          inner = info.inner || null
+          targetEl = info.subEl || info.cell || event.target
+        }
+      }
+      if (cIdx !== null) {
+        replaceConfirmPending = null
+        expandColEach(currentTargetEl, cIdx, inner, targetEl, { toggle: true })
+        return
+      }
+      return
+    }
+
+    const candidate = candidateAt(event.target)
+    if (candidate) {
+      const singleColTrigger = Boolean(pickMode === 'col' && currentPurpose === 'task' &&
+        isSingleRowNestedTable(currentTargetEl) && isUpgradeableTable(currentTargetEl))
+      let colO = null
+      if (singleColTrigger) {
+        colO = outerTableOf(currentTargetEl)
+      }
+
+      const snapToPreserve = (justPromoted ? undoSnapshot : null)
+      replaceConfirmPending = null
+
+      if (event.shiftKey && lastCellPick() && candidate.cell) {
+        // Shift 點：從上一個已選的格子拉出矩形範圍
+        addRange(lastCellPick(), candidate.cell)
+      } else {
+        // 無修飾鍵或 Ctrl／⌘ 點：togglePick（沒選過就加、選過就取消）
+        togglePick(candidate)
+      }
+
+      if (snapToPreserve) {
+        undoSnapshot = snapToPreserve
+      }
+
+      if (singleColTrigger && colO && candidate.block) {
+        pickedTableEl = colO
+        setTarget(colO)
+        deliberateTableEl = colO
+        const n = countResolvedInnerInCol(colO, candidate.block.index, candidate.block.inner)
+        toolbarNotice = promotedColNotice(n)
+      }
+
+      if (selectedList.length > 0 && pickedTableEl) {
+        applyPickedMarks(pickedTableEl)
+      } else {
+        applyPickedMarks(currentTargetEl)
+      }
       updatePanel(panelEl, currentTargetEl)
       return
     }
@@ -2388,9 +3370,14 @@ function onClick(event) {
   if (isMultiPickPurpose() && !isTableMode(currentTargetEl) && !iframeOf(currentTargetEl)) {
     // 使用者選的是「整欄／整列」，這裡卻不是表格：鎖定它、之後送出整個元素，
     // 等於把他選的模式靜靜丟掉（工具列還亮著整欄）。說出來，不要照做。
-    if (pickMode === 'col' || pickMode === 'row') {
-      toolbarNotice = `${pickMode === 'row' ? '整列' : '整欄'}只能在表格上選，先把滑鼠移到表格；要抓這個元素請切回「單格」`
+    if (pickMode === 'col' || pickMode === 'colEach' || pickMode === 'row') {
+      toolbarNotice = nonTableModeNotice()
       updatePanel(panelEl, currentTargetEl)
+      return
+    }
+    // 批次模式不使用鎖定：點一下＝加成一組／再點＝移除那一組
+    if (batchMode) {
+      batchClickElement(currentTargetEl)
       return
     }
     if (lockedEl) {
@@ -2404,6 +3391,8 @@ function onClick(event) {
   }
 
   // 8. iframe 代理層與一次一個的用途：點一下就送出（鑽進框架是導覽，不是選取）
+  // 批次模式已有組時點到框架：不下鑽、也不送出，說明原因
+  if (iframeOf(event.target) && batchBlocksDescend()) return
   confirmPick()
 }
 
@@ -2442,16 +3431,46 @@ function upgradeLastPickTo(mode) {
   const judgeEl = pickedTableEl || currentTargetEl
   if (!judgeEl || !isTableMode(judgeEl)) return false
 
+  // 觸發 1：單列小表上要整欄（已選在 T 的先換算；換算不了就維持現況行為）
+  if (mode === 'col' && currentPurpose === 'task' &&
+      isSingleRowNestedTable(judgeEl) && isUpgradeableTable(judgeEl)) {
+    if (promotePicksToOuter(judgeEl)) {
+      const O = outerTableOf(judgeEl)
+      const lastPromoted = selectedList[selectedList.length - 1]
+      const index = lastPromoted.cell.col.index
+      const headerText = lastPromoted.cell.col.header || ''
+      const block = { axis: 'col', index, headerText }
+      putInner(block, lastPromoted.cell.inner)
+      footerNotice(withFooterExclude(block, O))
+      const upgraded = { block }
+      const previous = undoSnapshot
+      if (selectedList.some(p => samePick(p, upgraded))) {
+        selectedList = selectedList.slice(0, -1)
+      } else {
+        selectedList = selectedList.slice(0, -1).concat([upgraded])
+      }
+      undoSnapshot = previous
+      limitReached = selectedList.length >= maxPicks
+      const n = countResolvedInnerInCol(O, index, block.inner)
+      toolbarNotice = promotedColNotice(n)
+      clearPickedMarks(document)
+      applyPickedMarks(O)
+      return true
+    }
+  }
+
+  const originalName = getPickName(last)
   const axis = mode === 'row' ? 'row' : 'col'
   // 判定來源要與工具列一致：工具列以「已選那張表」判定可不可用，
   // 這裡卻看 hover 目標的話，會出現「按鈕亮著、按下去卻沒反應」
   const index = axis === 'row' ? last.cell.row.index : last.cell.col.index
   const headerText = (axis === 'row' ? last.cell.row.header : last.cell.col.header) || ''
+  const title = headerText || (axis === 'row' ? `第 ${index + 1} 列` : `第 ${index + 1} 欄`)
   const block = { axis, index, headerText }
   putInner(block, last.cell.inner)
   // 單格升級成整欄也是「建立」整欄值：表尾合計照樣預設排除（整列不動）
   // 升級不經 addPick（是取代最後一項），直接說
-  footerNotice(withFooterExclude(block, judgeEl))
+  const added = withFooterExclude(block, judgeEl)
   const upgraded = { block }
   const previous = takeUndoSnapshot(selectedList, pickedTableEl)
   if (selectedList.some(p => samePick(p, upgraded))) {
@@ -2463,6 +3482,8 @@ function upgradeLastPickTo(mode) {
   // 取代前留一步反悔：復原快照只活到下一個動作為止
   undoSnapshot = previous
   limitReached = selectedList.length >= maxPicks
+  const upNotice = `已把「${originalName}」換成「${title}」${axis === 'row' ? '整列' : '整欄'}，其他已選不變（可復原）`
+  toolbarNotice = added > 0 ? `${upNotice}\n已自動排除表尾 ${added} 列（合計），右鍵可取消` : upNotice
   clearPickedMarks(document)
   applyPickedMarks(judgeEl)
   return true
@@ -2485,18 +3506,41 @@ function undoReplace() {
   // 快照裡的那一批索引屬於快照當時那張表：還原時目標與 pickedTableEl 要一起回去，
   // 只還原清單的話，接下來就是「舊表的索引配上新表的定位」——AF-7 同型缺陷
   const backTo = undoSnapshot.tableEl
+  const batchBack = undoSnapshot.batchGroups ? undoSnapshot : null
   undoSnapshot = null
   limitReached = selectedList.length >= maxPicks
+  if (batchBack) {
+    batchGroups = batchBack.batchGroups.map(g => g.el ? g : { tableEl: g.tableEl, picks: g.picks.slice() })
+    currentGroupIdx = batchBack.currentGroupIdx
+    if (!backTo || selectedList.length === 0) pickedTableEl = null
+  }
   if (backTo) {
     pickedTableEl = backTo
     setTarget(backTo)
   }
-  if (currentTargetEl && isTableMode(currentTargetEl)) applyPickedMarks(currentTargetEl)
+  if (selectedList.length > 0 && pickedTableEl) {
+    applyPickedMarks(pickedTableEl)
+  } else if (currentTargetEl && isTableMode(currentTargetEl)) {
+    applyPickedMarks(currentTargetEl)
+  } else if (batchBack) {
+    applyPickedMarks(null)
+  }
   return true
 }
 
 // 存一份可還原的快照（連同這批索引屬於哪一張表）
 function takeUndoSnapshot(picks, tableEl) {
+  // 批次模式：快照涵蓋所有組與目前是哪一組（只存目前這組的話，整組移除復原不回來）
+  if (batchMode) {
+    syncBatch()
+    if (batchGroups.length === 0) return null
+    return {
+      picks: (picks || []).slice(),
+      tableEl: tableEl || pickedTableEl || null,
+      batchGroups: batchGroups.map(g => g.el ? g : { tableEl: g.tableEl, picks: g.picks.slice() }),
+      currentGroupIdx
+    }
+  }
   return picks && picks.length > 0 ? { picks: picks.slice(), tableEl: tableEl || pickedTableEl || null } : null
 }
 
@@ -2546,10 +3590,30 @@ function onDblClick(event) {
   if (overlayEl && overlayEl.contains(event.target) && !frameOfProxy(event.target)) return
   if (!currentTargetEl) return
 
-  // 還沒選任何值就直接雙擊：把滑鼠下的那一個選起來再送
-  if (selectedList.length === 0 && isTableMode(currentTargetEl) && currentTargetEl.contains(event.target)) {
+  // 批次模式雙擊非表格元素也是結果式：click、click 會加再移除那一組，雙擊結束時它一定要是一組（AF-18 終檢）
+  if (batchMode) {
+    const onTable = isTableMode(currentTargetEl) && currentTargetEl.contains(event.target)
+    const el = onTable ? null : (isTableMode(currentTargetEl) ? upgradeTarget(event.target, { deliberate: true }) : currentTargetEl)
+    if (el && !isTableMode(el) && !iframeOf(el) && el !== document.body && el !== document.documentElement) {
+      syncBatch()
+      if (!batchGroups.some(g => g.el === el)) toggleElementGroup(el)
+      confirmPick()
+      return
+    }
+  }
+
+  if (currentTargetEl.contains(event.target) && promoteBeforeAddingInOuter() === 'blocked') return
+
+  // 雙擊結果式：在目標表格內時，確保雙擊那個候選值在清單裡（不在就 addPick；在就不動）
+  if (isTableMode(currentTargetEl) && currentTargetEl.contains(event.target)) {
+    if (!batchFollowTarget(currentTargetEl)) {
+      updatePanel(panelEl, currentTargetEl)
+      return
+    }
     const candidate = candidateAt(event.target)
-    if (candidate) addPick(candidate)
+    if (candidate && !selectedList.some(p => samePick(p, candidate))) {
+      addPick(candidate)
+    }
   }
   confirmPick()
 }
@@ -2583,6 +3647,20 @@ function onMouseUp(event) {
   if (!active) return
   if (!dragStart) return
   if (isDragging && currentTargetEl && isTableMode(currentTargetEl)) {
+    const promoted = promoteBeforeAddingInOuter()
+    if (promoted === 'blocked') {
+      dragStart = null
+      isDragging = false
+      return
+    }
+    const justPromoted = promoted === 'promoted'
+    if (!batchFollowTarget(currentTargetEl)) {
+      dragStart = null
+      isDragging = false
+      updatePanel(panelEl, currentTargetEl)
+      return
+    }
+
     const endInfo = resolveCell(event.target, currentTargetEl)
     const endR = endInfo ? endInfo.rIdx : dragStart.rIdx
     const endC = endInfo ? endInfo.cIdx : dragStart.cIdx
@@ -2591,14 +3669,21 @@ function onMouseUp(event) {
     const minC = Math.min(dragStart.cIdx, endC)
     const maxC = Math.max(dragStart.cIdx, endC)
 
+    const snapToPreserve = (justPromoted ? undoSnapshot : null)
     addCellRange(currentTargetEl, minR, maxR, minC, maxC, dragStart.inner)
+    if (snapToPreserve) {
+      undoSnapshot = snapToPreserve
+    }
 
     suppressClick = true
     setTimeout(() => { suppressClick = false }, 0)
     lastDragEndAt = Date.now()
-    preselectPristine = false
     replaceConfirmPending = null
-    applyPickedMarks(currentTargetEl)
+    if (selectedList.length > 0 && pickedTableEl) {
+      applyPickedMarks(pickedTableEl)
+    } else {
+      applyPickedMarks(currentTargetEl)
+    }
     updatePanel(panelEl, currentTargetEl)
   }
   dragStart = null
@@ -2619,6 +3704,8 @@ export function enterPickMode(opts) {
   active = true
   currentPurpose = opts?.purpose || null
   currentTaskId = opts?.taskId !== undefined ? opts.taskId : undefined
+  // 批次只對建立新任務有意義（重選、前置動作、登入一次就是一個目標）
+  batchMode = opts?.batch === true && currentPurpose === 'task'
   maxPicks = (typeof opts?.maxPicks === 'number' && opts.maxPicks > 0) ? opts.maxPicks : 100
   limitReached = false
   headerChangedNotice = false
@@ -2630,7 +3717,6 @@ export function enterPickMode(opts) {
   backStack = []
   lockedEl = null
   replaceConfirmPending = null
-  preselectPristine = false
   lastDragEndAt = 0
   currentHint = opts?.hint || null
   // 下鑽之後要把原本要勾回的值一起帶過去
@@ -2655,11 +3741,11 @@ export function enterPickMode(opts) {
   highlightEl.style.boxSizing = 'border-box'; highlightEl.style.pointerEvents = 'none'; highlightEl.style.zIndex = '2147483647'
   overlayEl.appendChild(highlightEl)
 
-  // 建立工具列（三段相連，作用中段用主色底）
+  // 建立工具列（四段相連，作用中段用主色底）
   toolbarEl = document.createElement('div')
   toolbarEl.setAttribute('data-af-toolbar', '')
   toolbarEl.style.position = 'fixed'; toolbarEl.style.right = '16px'; toolbarEl.style.top = '16px'
-  toolbarEl.style.display = 'flex'; toolbarEl.style.gap = '0'; toolbarEl.style.pointerEvents = 'auto'
+  toolbarEl.style.display = 'flex'; toolbarEl.style.flexWrap = 'wrap'; toolbarEl.style.maxWidth = 'calc(100vw - 32px)'; toolbarEl.style.gap = '0'; toolbarEl.style.pointerEvents = 'auto'
   toolbarEl.style.zIndex = '2147483647'
   toolbarEl.style.backgroundColor = COLORS.surface
   toolbarEl.style.border = `1px solid ${COLORS.border}`
@@ -2668,9 +3754,10 @@ export function enterPickMode(opts) {
   toolbarEl.style.overflow = 'hidden'
 
   const toolsDef = [
-    { key: 'cell', label: '單格' },
-    { key: 'col', label: '整欄' },
-    { key: 'row', label: '整列' }
+    { key: 'cell', label: '單格', title: '只選這一格' },
+    { key: 'col', label: '整欄→一個值', title: '整欄合成一個數字（加總、平均…）' },
+    { key: 'colEach', label: '整欄→每格', title: '這一欄每一格各自是一個值' },
+    { key: 'row', label: '整列→一個值', title: '整列合成一個數字' }
   ]
 
   for (const def of toolsDef) {
@@ -2678,6 +3765,7 @@ export function enterPickMode(opts) {
     btn.type = 'button'
     btn.setAttribute('data-af-tool', def.key)
     btn.textContent = def.label
+    if (def.title) btn.setAttribute('title', def.title)
     btn.style.padding = '4px 10px'
     btn.style.fontSize = '12px'
     btn.style.borderRadius = '0'
@@ -2714,9 +3802,11 @@ export function enterPickMode(opts) {
 
   if (opts?.preselect && currentTargetEl && isTableMode(currentTargetEl)) {
     applyPreselect(opts.preselect, currentTargetEl)
-    // 勾回來的值還沒被使用者動過：這時「點一下取代」要先問一次，不然一個誤點就清光整批
-    preselectPristine = selectedList.length >= 2
-    applyPickedMarks(currentTargetEl)
+    if (selectedList.length > 0 && pickedTableEl) {
+      applyPickedMarks(pickedTableEl)
+    } else {
+      applyPickedMarks(currentTargetEl)
+    }
     updatePanel(panelEl, currentTargetEl)
   }
 
@@ -2812,7 +3902,6 @@ export function exitPickMode(opts = {}) {
   // 這幾個漏清會讓下一次選取還鎖在上一個元素、或還停在「再點一次才取代」的半途
   lockedEl = null
   replaceConfirmPending = null
-  preselectPristine = false
   lastDragEndAt = 0
   // AF-9 新增的狀態：漏清會讓下一次選取沿用上一次的復原快照、提示與面板位置
   undoSnapshot = null
@@ -2830,12 +3919,18 @@ export function exitPickMode(opts = {}) {
   pendingPreselect = null
   kindCacheEl = null
   kindCache = null
+  upgradeableCache.clear()
+  // 批次模式的組：漏清會讓下一輪帶著上一輪的任務送出
+  batchMode = false
+  batchGroups = []
+  currentGroupIdx = -1
+  batchHover.clear()
 }
 
 export function isActive() { return active }
 export function currentTarget() { return currentTargetEl }
 export function currentAxis() { return (!currentTargetEl || !isTableMode(currentTargetEl)) ? null : (pickMode === 'row' ? 'row' : 'col') }
 export function currentCellIndex() { return (!currentTargetEl || !isTableMode(currentTargetEl)) ? null : cellIndex }
-export function selectedCount() { return selectedList.length }
+export function selectedCount() { return batchMode ? batchValueTotal(batchGroupsView()) : selectedList.length }
 // 唯讀複本：外部（含測試）要看已選了什麼，不得直接改動內部陣列
 export function selectedPicks() { return selectedList.slice() }

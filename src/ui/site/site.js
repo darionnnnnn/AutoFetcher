@@ -2,6 +2,7 @@
 import { getSite, saveSite, getPanelCtx } from '../../shared/storage.js'
 import { encryptSecret } from '../../shared/crypto.js'
 import { MSG } from '../../shared/messages.js'
+import { applySavedTheme } from '../theme-apply.js'
 
 let currentOrigin = ''
 let currentTabId = null
@@ -242,6 +243,7 @@ export async function handleSave({ closeDelayMs = 1500 } = {}) {
 }
 
 if (typeof document !== 'undefined' && document.getElementById('site-save') && globalThis.chrome?.runtime?.id) {
+  applySavedTheme()
   // 面板文件在切換分頁後會被重載，而且載入當下解析得到的分頁可能是舊的：
   // 每次轉為可見都重畫一次（自癒）
   if (globalThis.chrome?.sidePanel) {

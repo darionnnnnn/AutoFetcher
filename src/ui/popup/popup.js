@@ -2,6 +2,7 @@
 import { getTasks, saveTask, getHealthMap, getMissedList, getLastValues } from '../../shared/storage.js'
 import { openPanel } from '../../shared/panel.js'
 import { MSG } from '../../shared/messages.js'
+import { applySavedTheme } from '../theme-apply.js'
 import { seriesIdOf } from '../../shared/series-index.js'
 import { computeHealth } from '../../background/health.js'
 import { describeSchedule, describeTarget, targetOfTask } from '../../shared/describe.js'
@@ -258,7 +259,9 @@ export function getState() {
 
 // 擴充功能環境下自動初始化
 if (typeof document !== 'undefined' && globalThis.chrome?.runtime?.id) {
-  (async () => {
+  applySavedTheme()
+  // 行首是括號：前面一定要有分號，否則會被接成 applySavedTheme()(async …)（真實瀏覽器煙霧抓到）
+  ;(async () => {
     try {
       const tasks = await getTasks()
       // UI 一律經 shared/storage，不直接碰 chrome.storage

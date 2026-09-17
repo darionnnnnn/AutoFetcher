@@ -135,15 +135,20 @@ test('表尾提示只在真的加進清單時說：Ctrl 點取消已選的整欄
   assert.doesNotMatch(panelText(doc), /已自動排除表尾/, '這一下是取消，沒有建立任何整欄值')
 })
 
-test('表尾待報數不得殘留：點表頭只觸發「再點一次才取代」提示後，右鍵加整列值不得說「已自動排除表尾」', async () => {
+// AF-18：點一下改成加選，「再點一次才取代」只剩換表，原本的前提改用「已達上限點表頭」重現：候選值算出待報數、卻沒有加進清單
+test('表尾待報數不得殘留：已達上限時點表頭（候選值沒加進去），騰出空間後右鍵加整列值不得說「已自動排除表尾」', async () => {
   const { pm, doc } = await setup()
-  enter(pm, doc, { purpose: 'repick', preselect: [
+  enter(pm, doc, { purpose: 'repick', maxPicks: 2, preselect: [
     { cell: { row: { index: 0, header: '10.0.0.1' }, col: { index: 1, header: '點金靈' } } },
     { cell: { row: { index: 1, header: '10.0.0.2' }, col: { index: 1, header: '點金靈' } } }] })
   hover(doc, 'h1')
   doc.getElementById('h1').dispatchEvent(new globalThis.MouseEvent('click', { bubbles: true }))
-  assert.doesNotMatch(panelText(doc), /已自動排除表尾/, '前提：這一下只提示、沒加值')
+  assert.equal(pm.selectedCount(), 2, '前提：已達上限，整欄沒有加進去')
+  assert.doesNotMatch(panelText(doc), /已自動排除表尾/, '前提：這一下沒加值')
+  doc.dispatchEvent(new globalThis.KeyboardEvent('keydown', { key: 'Backspace', bubbles: true }))
+  assert.equal(pm.selectedCount(), 1, '前提：騰出一個位置')
   menu(doc, 'c0-2', 'row')
+  assert.equal(pm.selectedCount(), 2, '前提：整列值加進去了（否則下一句斷言是真空的）')
   assert.doesNotMatch(panelText(doc), /已自動排除表尾/, '整列值沒有表尾，候選值留下的待報數被撿走了')
 })
 

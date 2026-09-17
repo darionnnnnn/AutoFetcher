@@ -1,7 +1,8 @@
 // AutoFetcher MV3 Background Service Worker 入口總接線
 import {
   init as initStorage, getTask, saveTask, getRecordsByDate,
-  getPanelCtx, setPanelCtx, mergePanelCtx, clearPanelCtx
+  getPanelCtx, setPanelCtx, mergePanelCtx, clearPanelCtx,
+  getSettings, subscribe
 } from '../shared/storage.js'
 import { openPanel, closePanel } from '../shared/panel.js'
 import { MSG } from '../shared/messages.js'
@@ -262,15 +263,50 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+// 「使用教學」要不要顯示：缺省＝顯示，只有明確 false 才隱藏
+function helpMenuShown(settings) {
+  return settings?.showHelpMenu !== false
+}
+
+// 上次建立選單時採用的「使用教學」顯示值（null＝還沒建過）
+let helpMenuBuiltWith = null
+// 重建串行化：後一次等前一次 removeAll＋全部 create 完成才開始
+let menuQueue = Promise.resolve()
+
 // 建立右鍵選單項目
-export async function setupContextMenus() {
+export function setupContextMenus() {
+  menuQueue = menuQueue.then(buildContextMenus, buildContextMenus)
+  return menuQueue
+}
+
+async function buildContextMenus() {
+  let showHelp = true
+  try {
+    showHelp = helpMenuShown(await getSettings())
+  } catch {}
+  helpMenuBuiltWith = showHelp
   try {
     await chrome.contextMenus.removeAll()
     chrome.contextMenus.create({ id: 'af-root', title: 'AutoFetcher', contexts: ['all'] })
     chrome.contextMenus.create({ id: 'af-pick', parentId: 'af-root', title: '選取要抓的內容', contexts: ['all'] })
+    chrome.contextMenus.create({ id: 'af-pick-batch', parentId: 'af-root', title: '一次建立多個任務', contexts: ['all'] })
     chrome.contextMenus.create({ id: 'af-site-login', parentId: 'af-root', title: '設定此站台登入', contexts: ['all'] })
     chrome.contextMenus.create({ id: 'af-open-report', parentId: 'af-root', title: '開啟 AutoFetcher 報表', contexts: ['all'] })
+    if (showHelp) {
+      chrome.contextMenus.create({ id: 'af-open-help', parentId: 'af-root', title: '使用教學', contexts: ['all'] })
+    }
   } catch {}
+}
+
+// 設定變動（設定頁切換、匯入設定檔）時，「使用教學」的有效值變了才重建選單
+export function handleSettingsChanged(changes) {
+  if (!changes?.settings) return
+  const shown = helpMenuShown(changes.settings.newValue)
+  // service worker 重啟後還沒建過選單（null）：拿變動前的值當基準。不然第一次任何設定寫入
+  // （每存一個任務都會寫 pickerDefaults）都會把整組右鍵選單拆掉重建（體檢抓到）
+  const before = helpMenuBuiltWith ?? helpMenuShown(changes.settings.oldValue)
+  if (shown === before) return
+  setupContextMenus()
 }
 
 // 處理擴充功能安裝或更新事件
@@ -393,6 +429,24 @@ function frameIdentityOf(sender) {
   return { frameId: sender.frameId, frameUrl: sender.url }
 }
 
+// 選取結果 → 面板要的 payload（逐欄挑，補上分頁與框架身分）；單任務與批次每一組共用這一份
+function taskPayloadOf(src, sender) {
+  const payload = {
+    locator: src?.locator,
+    preview: src?.preview,
+    previewSamples: src?.previewSamples,
+    previewValue: src?.previewValue,
+    blockInfo: src?.blockInfo,
+    tabId: sender?.tab?.id,
+    url: sender?.tab?.url,
+    nameHint: src?.nameHint,
+    // 使用者一次挑的那幾個值；漏掉這一個欄位，多值任務就會退化成單值
+    picks: src?.picks
+  }
+  Object.assign(payload, frameIdentityOf(sender))
+  return payload
+}
+
 /**
  * 訊息處理。
  * @param {object} msg 訊息本身——**訊息裡的欄位一律只當資料看**，不得拿來改執行方式。
@@ -401,6 +455,42 @@ function frameIdentityOf(sender) {
  *   正式接線只傳 `(msg, sender)`，所以網頁或任何送得出 runtime 訊息的來源都影響不到。
  *   測試要縮短等待就從這裡傳，形狀比照 `handleAlarm(alarm, testOpts)`。
  */
+/**
+ * ctx 能不能寫成等待態：沒有面板、已在等待、站台設定，或剛存完（saved）才可以；
+ * 表單填到一半（new／edit）不動，選完才認得出是換目標。右鍵與 ENTER_PICK 共用這一份。
+ */
+function canStartPick(ctx) {
+  return !ctx || ctx.kind === 'waiting' || ctx.kind === 'site' || ctx.kind === 'saved'
+}
+
+/**
+ * 進選取模式之前的唯一判定（右鍵兩項與 ENTER_PICK 訊息共用；AF-18 終檢收成一份）：
+ * 回傳 { start: true }（寫等待態再進）、{ start: false }（單任務換目標：不動 ctx 直接進），
+ * 或 { blocked: '說明句' }（不進選取，把這句寫進面板的 notice）。
+ * 單任務與多任務互不插隊：多任務清單還沒存時不開單任務；表單或清單填到一半時不開多任務。
+ */
+function pickEntryOf(ctx, batch) {
+  if (canStartPick(ctx)) return { start: true }
+  if (batch) {
+    return { blocked: ctx.kind === 'batch'
+      ? '多任務清單還沒存，請先全部儲存或取消，再開始新的多任務'
+      : '有一個任務設定到一半，請先儲存或取消，再開始多任務' }
+  }
+  if (ctx.kind === 'batch') return { blocked: '多任務設定到一半，請先全部儲存或取消，再選單一任務' }
+  return { start: false }
+}
+
+// 依 pickEntryOf 的結果處理面板 ctx；回傳 false＝被擋（已留說明），呼叫端不得進選取模式
+async function applyPickEntry(tabId, batch) {
+  const entry = pickEntryOf(await getPanelCtx(tabId), batch)
+  if (entry.blocked) {
+    await mergePanelCtx(tabId, { notice: entry.blocked })
+    return false
+  }
+  if (entry.start) await setPanelCtx(tabId, batch ? { kind: 'waiting', purpose: 'task', batch: true } : { kind: 'waiting', purpose: 'task' })
+  return true
+}
+
 export async function handleMessage(msg, sender, runOpts = {}) {
   try {
     if (!msg || typeof msg !== 'object') return undefined
@@ -518,19 +608,14 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       }
 
       if (msg.purpose === 'task') {
-        const payload = {
-          locator: msg.locator,
-          preview: msg.preview,
-          previewValue: msg.previewValue,
-          blockInfo: msg.blockInfo,
-          tabId: sender?.tab?.id,
-          url: sender?.tab?.url,
-          nameHint: msg.nameHint,
-          // 使用者一次挑的那幾個值；漏掉這一個欄位，多值任務就會退化成單值
-          picks: msg.picks
-        }
-        Object.assign(payload, frameIdentityOf(sender))
         const tabId = sender?.tab?.id
+        // 批次（一次建立多個任務）：每一組補上與單任務相同的欄位，另給穩定鍵；不帶舊草稿、不算換目標
+        if (Array.isArray(msg.batch)) {
+          const items = msg.batch.map((one, i) => ({ key: `b${i + 1}`, ...taskPayloadOf(one, sender) }))
+          await setPanelCtx(tabId, { kind: 'batch', items })
+          return { ok: true }
+        }
+        const payload = taskPayloadOf(msg, sender)
         // 面板已經開著、使用者也填了一半的表單時，**只換目標**：
         // 名稱、排程、儀表板、進階設定全部留著（右鍵重選一個目標不該把表單清空）
         const existing = await getPanelCtx(tabId)
@@ -543,7 +628,10 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         await mergePanelCtx(tabId, {
           kind: 'new',
           ctx: payload,
-          retarget: Boolean(keepDraft && existing.ctx)
+          retarget: Boolean(keepDraft && existing.ctx),
+          // 淺層合併：被擋時留下的說明與等待態的多任務旗標不得跟到新表單上（AF-18 終檢）
+          notice: undefined,
+          batch: undefined
         })
         return { ok: true }
       }
@@ -576,6 +664,8 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         taskId: msg.taskId,
         preselect: msg.preselect
       }
+      // 鑽進 iframe 之後仍是同一輪批次選取
+      if (msg.batch === true) enter.batch = true
       // 選取當下沒有目標的 locator 可以驗證，所以只用網址比對；
       // 不是唯一命中就退回原本那一層，硬猜會鑽錯 iframe
       const matched = matchFrameByUrl(await listFrames(tabId), msg.src)
@@ -594,15 +684,12 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         const frameId = msg.frameId ?? 0
         // popup 的「選取要抓的內容」走這裡：面板已由 popup 自己開好，
         // 但沒有表單時要先顯示等待態（同右鍵入口），否則面板是一張空白表單
-        if (msg.purpose === 'task') {
-          const current = await getPanelCtx(msg.tabId)
-          if (!current || current.kind === 'waiting' || current.kind === 'site') {
-            await setPanelCtx(msg.tabId, { kind: 'waiting', purpose: 'task' })
-          }
-        }
+        const batch = msg.batch === true
+        // popup 送完就關視窗：被擋時一定要把說明留在面板上，不能只回 ok:false（靜默無事）
+        if (msg.purpose === 'task' && !(await applyPickEntry(msg.tabId, batch))) return { ok: false }
         await injectContent(msg.tabId, { frameId })
         const known = msg.taskId ? await getTask(msg.taskId) : null
-        await chrome.tabs.sendMessage(msg.tabId, {
+        const enter = {
           type: MSG.ENTER_PICK,
           purpose: msg.purpose,
           taskId: msg.taskId,
@@ -610,7 +697,9 @@ export async function handleMessage(msg, sender, runOpts = {}) {
           // 要靠任務自己的 locator 才找得到目標，也才勾得回既有的值
           locator: msg.locator || known?.locator,
           preselect: msg.preselect || preselectOf(known)
-        }, { frameId })
+        }
+        if (batch) enter.batch = true
+        await chrome.tabs.sendMessage(msg.tabId, enter, { frameId })
         return { ok: true }
       }
 
@@ -778,6 +867,11 @@ export async function handleContextMenu(info, tab) {
   try {
     if (!info) return
 
+    if (info.menuItemId === 'af-open-help') {
+      await chrome.tabs.create({ url: await chrome.runtime.getURL('ui/help/help.html') })
+      return
+    }
+
     if (info.menuItemId === 'af-open-report') {
       const url = typeof chrome.runtime?.getURL === 'function'
         ? await chrome.runtime.getURL('ui/report/report.html')
@@ -810,12 +904,20 @@ export async function handleContextMenu(info, tab) {
       await openPanel(tab.id, 'picker', `tabId=${tab.id}`)
       // 面板已經有表單（使用者填到一半又回頁面按右鍵）就不動 ctx：
       // 蓋成等待態會把草稿一起洗掉，選完也認不出這是「換目標」
-      const current = await getPanelCtx(tab.id)
-      if (!current || current.kind === 'waiting' || current.kind === 'site') {
-        await setPanelCtx(tab.id, { kind: 'waiting', purpose: 'task' })
-      }
+      if (!(await applyPickEntry(tab.id, false))) return
       await injectContent(tab.id, { frameId })
       await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'task' }, { frameId })
+      return
+    }
+
+    if (info.menuItemId === 'af-pick-batch') {
+      if (!tab?.id) return
+      const frameId = info.frameId ?? 0
+      // 手勢規則同 af-pick：`open` 必須是第一個 await
+      await openPanel(tab.id, 'picker', `tabId=${tab.id}`)
+      if (!(await applyPickEntry(tab.id, true))) return
+      await injectContent(tab.id, { frameId })
+      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'task', batch: true }, { frameId })
       return
     }
   } catch {}
@@ -829,6 +931,7 @@ async function disablePanelGlobally() {
 }
 
 chrome.alarms.onAlarm.addListener(handleAlarm)
+subscribe(handleSettingsChanged, { keys: ['settings'] })
 chrome.runtime.onInstalled.addListener(handleInstalled)
 chrome.runtime.onStartup.addListener(handleStartup)
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

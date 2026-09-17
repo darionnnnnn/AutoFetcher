@@ -105,9 +105,12 @@ test('B3 滑鼠離開儲存格後切換模式，不得把標示畫回舊的那�
   assert.equal(doc.querySelectorAll('[data-af-cell]').length, 1)
   // 移到表格本身（格子之間的縫隙）
   fire(win, doc.getElementById('t'), 'mousemove')
-  key(doc, win, 'Tab')
-  key(doc, win, 'Tab')
-  key(doc, win, 'Tab')
+  // 四段（AF-18）：按一圈回到單格，途中每一段都不得把標示畫回舊的那一格
+  for (let i = 0; i < 4; i++) {
+    key(doc, win, 'Tab')
+    const during = [...doc.querySelectorAll('[data-af-cell]')].map(el => el.id)
+    assert.deepEqual(during, [], `第 ${i + 1} 次 Tab 後標示在 ${JSON.stringify(during)}`)
+  }
   const marked = [...doc.querySelectorAll('[data-af-cell]')].map(el => el.id)
   assert.deepEqual(marked, [], `滑鼠已經不在任何一格上，實得標示在 ${JSON.stringify(marked)}`)
   pm.exitPickMode()

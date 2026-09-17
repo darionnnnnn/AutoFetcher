@@ -599,6 +599,19 @@ export function subscribe(handler, opts = {}) {
       if (typeof onChanged.removeListener === 'function') onChanged.removeListener(onSession)
     }
   }
+  // 指定 keys：只看 local 這幾個鍵的變動、不防抖、把 changes 交給呼叫端
+  // （background 要監看 settings，它不在 NOTIFY_KEYS 裡，也不該讓 UI 跟著重畫）
+  if (Array.isArray(opts.keys)) {
+    const onKeys = (changes, areaName) => {
+      if (areaName !== 'local' || !changes) return
+      if (!opts.keys.some(k => Object.prototype.hasOwnProperty.call(changes, k))) return
+      handler(changes)
+    }
+    onChanged.addListener(onKeys)
+    return () => {
+      if (typeof onChanged.removeListener === 'function') onChanged.removeListener(onKeys)
+    }
+  }
   if (!isListening) {
     onChanged.addListener((changes, areaName) => {
       if (areaName !== 'local') return

@@ -50,7 +50,7 @@ try {
   //    所有檢查一律從擴充功能頁面做(頁面同樣有完整的 chrome API)。
 
   // 2. 三個 UI 頁面都打得開,而且沒有 console 錯誤
-  for (const page of ['ui/report/report.html', 'ui/popup/popup.html', 'ui/picker/picker.html', 'ui/site/site.html']) {
+  for (const page of ['ui/report/report.html', 'ui/popup/popup.html', 'ui/picker/picker.html', 'ui/site/site.html', 'ui/help/help.html']) {
     const p = await browser.newPage()
     const pageErrors = []
     p.on('console', m => { if (m.type() === 'error') pageErrors.push(m.text()) })
@@ -287,6 +287,38 @@ try {
     errors.push(`通知發不出去(圖示載不到?):${injectResult.notifyError}`)
   } else {
     console.log(`${browserName}:通知送出正常`)
+  }
+
+  // 5k. AF-18:立即測試的明細表在真的面板頁面上畫得出來、少量格數自動展開(P3:jsdom 全綠不代表使用者看得到)
+  {
+    const tabId = await ext2.evaluate(async () => (await chrome.tabs.query({ url: 'http://127.0.0.1:48123/*' }))[0].id)
+    await ext2.evaluate(async (tabId) => {
+      await chrome.storage.session.set({ ['panel:' + tabId]: { kind: 'new', ctx: {
+        locator: { css: '#t', path: '', anchor: null, xpath: '' }, url: 'http://127.0.0.1:48123/', tabId, nameHint: '煙霧',
+        preview: '「數量」整欄 2 格', blockInfo: { kind: 'table', rows: 2, cols: 2, axis: 'col', index: 1, headerText: '數量' },
+        picks: [{ block: { axis: 'col', index: 1, headerText: '數量' } }]
+      } } })
+    }, tabId)
+    const panel = await browser.newPage()
+    const panelErrors = []
+    panel.on('pageerror', e => panelErrors.push(String(e)))
+    await panel.goto(`chrome-extension://${extId}/ui/picker/picker.html?tabId=${tabId}`, { waitUntil: 'domcontentloaded' })
+    await panel.waitForFunction(() => document.getElementById('name')?.value === '煙霧', { timeout: 10000 }).catch(() => {})
+    await panel.evaluate(() => document.getElementById('test-now').click())
+    await panel.waitForFunction(() => !document.getElementById('test-detail')?.hidden, { timeout: 30000 }).catch(() => {})
+    const detail = await panel.evaluate(() => {
+      const d = document.getElementById('test-detail')
+      return { hidden: d?.hidden, open: d?.open, rows: d?.querySelectorAll('tbody tr').length,
+        summary: d?.querySelector('summary')?.textContent, preview: document.getElementById('preview')?.textContent }
+    })
+    for (const e of panelErrors) errors.push(`面板頁錯誤:${e}`)
+    if (detail.hidden !== false || detail.open !== true || detail.rows !== 2 || !/查看抓到的 2 格/.test(detail.summary || '')) {
+      errors.push(`立即測試明細表沒有如預期出現:${JSON.stringify(detail)}`)
+    } else {
+      console.log(`${browserName}:立即測試明細表正常 (${detail.summary}, ${detail.preview})`)
+    }
+    await ext2.evaluate(async (tabId) => { await chrome.storage.session.remove('panel:' + tabId) }, tabId)
+    await panel.close()
   }
 
   // 5c. 區塊聚合:對 fixture 的表格取「數量」欄加總（10 + 32 = 42）

@@ -90,7 +90,7 @@ test('單值成功：一段表格、欄名依整欄、每一列帶處置與五�
   await pk.handleTestNow()
   const d = $(doc, 'test-detail')
   assert.equal(d.hidden, false)
-  assert.equal(d.open, false, '預設收合，不擠掉下面的排程區')
+  assert.equal(d.open, true, '9 格 ≤30 自動展開（AF-18 批次C）')
   assert.ok(d.querySelector('summary').textContent.includes('9 格'), d.querySelector('summary').textContent)
   const ss = sections(doc)
   assert.equal(ss.length, 1)
@@ -206,7 +206,7 @@ test('下一次測試開始就收合：使用者上次展開過，新結果回�
   await pk.handleTestNow()
   $(doc, 'test-detail').open = true
   await pk.handleTestNow()
-  assert.equal($(doc, 'test-detail').open, false)
+  assert.equal($(doc, 'test-detail').open, true, '9 格 ≤30：新結果依門檻重新決定展開（AF-18 批次C）')
   assert.equal(sections(doc).length, 1, '第二次不得把表疊在第一次後面')
 })
 

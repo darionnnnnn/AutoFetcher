@@ -9,6 +9,7 @@ import {
   subscribe
 } from '../../shared/storage.js'
 import { getLayout } from '../../shared/layout-store.js'
+import { applyTheme } from '../theme-apply.js'
 import { buildSeries, pivot } from './series.js'
 import { lineChart } from './charts.js'
 import { buildTsv } from './cards.js'
@@ -85,15 +86,6 @@ function createTableRow(cells, isHeader = false, options = {}) {
 export function joinTaskNames(records = [], tasks = []) {
   const index = buildSeriesIndex(tasks)
   return records.map(r => ({ ...r, taskName: r.taskName ?? nameOf(index, r.taskId) }))
-}
-
-export function applyTheme(theme) {
-  if (typeof document === 'undefined' || !document.documentElement) return
-  if (theme === 'dark' || theme === 'light') {
-    document.documentElement.setAttribute('data-theme', theme)
-  } else {
-    document.documentElement.removeAttribute('data-theme')
-  }
 }
 
 export function getState() {
