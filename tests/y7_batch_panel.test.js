@@ -207,7 +207,7 @@ test('G3-4 全部儲存：每個任務的規格＝同一份選取結果走單任
   globalThis.window.close = () => {}
 })
 
-test('G3-4b 批次畫面改過的共用合成方式與卡片型別，每個任務都要照畫面上的值存（逐一 render 不得把它們洗回預設）', async () => {
+test('G3-4b 批次畫面改過的共用合成方式，每個任務都要照畫面上的值存（逐一 render 不得把它洗回預設）', async () => {
   const { st, pk, doc } = await freshPanel()
   await pk.renderFromPanelCtx(batchCtx([payloadT2, payloadT]))
   const agg = doc.getElementById('batch-aggregate')
@@ -278,4 +278,74 @@ test('G3-8 單任務儲存回饋多一行提示多任務入口；批次儲存回
   assert.match(doc.getElementById('saved-feedback').textContent, /同一頁還要抓別的？下次在右鍵選「一次建立多個任務」/)
   globalThis.window.close = () => {}
   await sleep(15)
+})
+
+// ---------- AF-18 終檢補 ----------
+
+test('G2-5 popup（ENTER_PICK 訊息）在多任務清單未存時被擋：不得靜默，說明要留在面板；多任務旗標遇到填一半的表單同樣擋', async () => {
+  const { c, st, bg } = await freshBg()
+  const tab = await c.tabs.create({ url: URL_ })
+  await st.setPanelCtx(tab.id, batchCtx([payloadT, payloadT2]))
+  const r = await bg.handleMessage({ type: 'ENTER_PICK', purpose: 'task', tabId: tab.id, frameId: 0 }, {})
+  assert.equal(r?.ok, false)
+  let entry = await sessionOf(tab.id)
+  assert.equal(entry.kind, 'batch')
+  assert.match(String(entry.notice || ''), /多任務設定到一半/)
+  assert.equal(api(c, 'tabs.sendMessage').filter(x => x.args[1]?.type === 'ENTER_PICK').length, 0)
+
+  await st.setPanelCtx(tab.id, { kind: 'new', ctx: payloadT, draft: { name: '填到一半' } })
+  const r2 = await bg.handleMessage({ type: 'ENTER_PICK', purpose: 'task', batch: true, tabId: tab.id, frameId: 0 }, {})
+  assert.equal(r2?.ok, false)
+  entry = await sessionOf(tab.id)
+  assert.equal(entry.kind, 'new')
+  assert.equal(entry.draft?.name, '填到一半')
+  assert.match(String(entry.notice || ''), /有一個任務設定到一半/)
+
+  await st.setPanelCtx(tab.id, batchCtx([payloadT]))
+  await bg.handleContextMenu({ menuItemId: 'af-pick-batch', frameId: 0 }, tab)
+  assert.match(String((await sessionOf(tab.id)).notice || ''), /多任務清單還沒存/, '清單未存時再按多任務入口，說明句要對到實際狀況')
+})
+
+test('G2-6 被擋留下的說明不得殘留到之後的新表單；等待態的多任務旗標也不得跟過去', async () => {
+  const { c, st, bg } = await freshBg()
+  const tab = await c.tabs.create({ url: URL_ })
+  await st.setPanelCtx(tab.id, { kind: 'new', ctx: payloadT })
+  await bg.handleContextMenu({ menuItemId: 'af-pick-batch', frameId: 0 }, tab)
+  assert.ok((await sessionOf(tab.id)).notice, '前置：被擋留下說明')
+  await bg.handleContextMenu({ menuItemId: 'af-pick', frameId: 0 }, tab)
+  await bg.handleMessage({ type: 'PICKED', purpose: 'task', ...payloadT2 }, { tab: { id: tab.id, url: URL_ } })
+  const entry = await sessionOf(tab.id)
+  assert.equal(entry.kind, 'new')
+  assert.ok(!entry.notice, `說明殘留：${entry.notice}`)
+  assert.ok(!entry.batch)
+})
+
+test('G3-9 全部存好之後排程重建才失敗：不得把清單當失敗清空關面板；回饋區要說出來而且不自動關', async () => {
+  const { c, st, pk, doc } = await freshPanel()
+  await pk.renderFromPanelCtx(batchCtx([payloadT2, payloadP]))
+  c.__setRuntimeResponder((msg) => {
+    if (msg?.type === 'REBUILD_ALARMS') throw new Error('service worker 沒有回應')
+    return undefined
+  })
+  await pk.handleSave()
+  assert.equal((await st.getTasks()).length, 2, '任務都存好了')
+  const box = doc.getElementById('saved-feedback')
+  assert.ok(box, '要有回饋區（不是錯誤清單）')
+  assert.match(box.textContent, /已儲存 2 個任務/)
+  assert.match(box.querySelector('[data-saved-warning]')?.textContent || '', /排程重建沒有完成：service worker 沒有回應/)
+  await sleep(1700)
+  assert.equal(runtimeMsgs(c).filter(m => m?.type === 'CLOSE_PANEL').length, 0, '有警告時不自動關面板')
+})
+
+test('G3-10 側邊面板裡按回饋區的「開啟報表」：開報表分頁並走關面板的收尾（面板沒有 window.close）', async () => {
+  const { c, pk, doc } = await freshPanel()
+  await pk.showSavedFeedback({ id: 't1', schedule: { type: 'daily', times: ['09:30'] } }, { closeDelayMs: null, tabId: 9 })
+  const panelTabUnknown = !runtimeMsgs(c).some(m => m?.type === 'CLOSE_PANEL')
+  assert.ok(panelTabUnknown, '前置：還沒關')
+  let closed = 0
+  globalThis.window.close = () => { closed++ }
+  doc.getElementById('saved-open-report').click()
+  await sleep(10)
+  assert.equal(api(c, 'tabs.create').length, 1, '開報表分頁')
+  assert.equal(closed, 0, '側邊面板不得走 window.close')
 })

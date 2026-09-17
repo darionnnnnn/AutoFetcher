@@ -210,3 +210,30 @@ test('G1-11 批次模式點在頁面空白處（body）：不得把整個頁面�
   assert.match(panelText(doc), /已選 1 個任務、共 1 個值/)
   assert.match(panelText(doc), /點在頁面空白處/)
 })
+
+test('G1-12 批次模式雙擊非表格元素：瀏覽器是 click、click、dblclick，送出時那個元素一定是一組', async () => {
+  const { c, doc, pm, win } = await boot(PAGE, BATCH)
+  pick(win, doc.getElementById('a1'))
+  const el = doc.getElementById('plain')
+  fire(win, el, 'mousemove'); fire(win, el, 'click'); fire(win, el, 'click'); fire(win, el, 'dblclick')
+  const msg = picked(c)[0]
+  assert.ok(msg, '有送出')
+  assert.equal(msg.batch?.length, 2, `雙擊的元素要在清單裡：${JSON.stringify(msg).slice(0, 200)}`)
+  assert.ok(msg.batch.some(b => resolve(doc, b.locator).el === el))
+})
+
+test('G1-13 按掉「不是目前這組」的 chip 之後，接著加值不得把別張表的索引寫進那一組', async () => {
+  const { c, doc, pm, win } = await boot(PAGE, BATCH)
+  pick(win, doc.getElementById('a1'))
+  pick(win, doc.getElementById('b1'))
+  pick(win, doc.getElementById('y1'))
+  fire(win, doc.querySelector('[data-af-group="0"] [data-af-chip="1"] [data-af-chip-remove]'), 'click')
+  assert.match(panelText(doc), /已選 2 個任務、共 2 個值/, '前置：甲組剩 a1')
+  key(doc, win, 'ArrowRight', { shiftKey: true })
+  key(doc, win, 'Enter')
+  const msg = picked(c)[0]
+  const t = msg.batch.find(b => resolve(doc, b.locator).el === doc.getElementById('t'))
+  const t2 = msg.batch.find(b => resolve(doc, b.locator).el === doc.getElementById('t2'))
+  assert.ok(t && t2, JSON.stringify(msg).slice(0, 200))
+  for (const p of t.picks) assert.ok(p.cell.col.index >= 1 && p.cell.col.index <= 2 && p.cell.row.header !== '甲' && p.cell.row.header !== '乙', `甲組混進乙表的值：${JSON.stringify(t.picks)}`)
+})

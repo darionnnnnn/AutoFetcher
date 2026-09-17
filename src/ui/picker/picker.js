@@ -2251,7 +2251,8 @@ export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs =
     try { await setPanelCtx(tabId, { kind: 'saved', text }) } catch {}
   }
 
-  if (typeof setTimeout === 'function') {
+  // closeDelayMs 為 null：不自動關（回饋區有使用者一定要看的警告時）
+  if (closeDelayMs !== null && typeof setTimeout === 'function') {
     // 記住是「哪一個視窗」：延遲期間全域的 window 可能已經換人，
     // 關掉別人的視窗比不關還糟
     const myWindow = typeof window !== 'undefined' ? window : null
@@ -2293,7 +2294,9 @@ function buildSavedFeedback(form, text) {
         : 'ui/report/report.html'
       chrome.tabs.create({ url })
     } catch {}
-    if (typeof window !== 'undefined' && window.close) window.close()
+    // 側邊面板沒有 window.close()：走與取消鈕同一條收尾（AF-18 終檢；以前按了面板不會關、session 也沒清）
+    if (globalThis.chrome?.sidePanel) finishPanelSession()
+    else if (typeof window !== 'undefined' && window.close) window.close()
   })
   box.appendChild(openBtn)
 
@@ -3112,6 +3115,7 @@ async function handleBatchSave() {
   const saved = []
   let lastValues = null
   let failure = null
+  let postError = null
   for (let i = 0; i < entries.length; i++) {
     const { item, name } = entries[i]
     try {
@@ -3149,7 +3153,9 @@ async function handleBatchSave() {
     }
     if (!failure && lastValues) await rememberPickerDefaults(lastValues)
   } catch (e) {
-    if (!failure) failure = { k: saved.length + 1, name: '', message: e?.message || String(e) }
+    // 任務都已經存好、之後的排程重建或記預設值才失敗：不是某一項存檔失敗——
+    // 當成失敗會把清單全部移除、清單變空就關面板，錯誤訊息寫在一個看不到的面板上（AF-18 終檢）
+    if (!failure) postError = e?.message || String(e)
   }
 
   if (failure) {
@@ -3162,7 +3168,18 @@ async function handleBatchSave() {
   busy()
   if (saved.length === 0) return
   batchItems = null
-  await showSavedFeedback(saved[0].task, { nextRunMs, count: saved.length })
+  // 有後段錯誤時不自動關面板：這一句使用者一定要看得到
+  await showSavedFeedback(saved[0].task, { nextRunMs, count: saved.length, ...(postError ? { closeDelayMs: null } : {}) })
+  if (postError) {
+    const box = document.getElementById('saved-feedback')
+    if (box) {
+      const warn = document.createElement('div')
+      warn.setAttribute('data-saved-warning', '')
+      warn.setAttribute('role', 'alert')
+      warn.textContent = `任務已經存好，但排程重建沒有完成：${postError}。請到報表的「任務管理」確認下次抓取時間。`
+      box.appendChild(warn)
+    }
+  }
 }
 
 async function handleBatchTest() {

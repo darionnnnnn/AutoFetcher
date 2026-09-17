@@ -65,10 +65,14 @@ let replaceConfirmPending = null
 let toolbarNotice = null
 // 這一格內含表格時的警語（面板唯一一份）
 const NESTED_CELL_NOTICE = '這一格內含表格，會抓到整串文字；要抓裡面某一格，把滑鼠移到那一格上（只會框那一格）'
-// 目標小表只有 1 列時點整欄的提示（三處共用同一句）
 // 已選的值換算不到外層表時的說明（↑、觸發 2、整欄→每格三處共用）
 const CANNOT_PROMOTE_NOTICE = '已選的值裡有小表的整欄或整列，換不到外層表；要抓外層每一列請先移除它'
+// 目標小表只有 1 列、外層不可升級時點整欄的提示（三處共用同一句）
 const SINGLE_ROW_NESTED_TABLE_NOTICE = '這張小表只有 1 列，整欄只有 1 格；要跨外層每一列請按 ↑ 切到外層表'
+// 單列小表上要整欄、已改選外層那一欄時的說明（AF-18 觸發 1 的四個入口共用）
+const promotedColNotice = (n) => `這張小表只有 1 列，已改選外層表這一欄的同一個位置（${n} 格）；只要這一格請切回單格`
+// repick 不升到外層的說明（↑、Ctrl 點外層、觸發 2 三處共用）
+const REPICK_NO_PROMOTE_NOTICE = '重選既有任務時不能換到外層表（歷史紀錄會接不上）；要抓外層整欄請建立新任務'
 // 上一次是否已經在說這句話：面板只在目標改變時重畫，
 // hover 換到（或離開）內含表格的格子時要補畫一次，但不能每次 mousemove 都重畫
 let nestedNoticeOn = false
@@ -1915,7 +1919,7 @@ function expandColEach(tableEl, cIdx, inner, targetEl, options = {}) {
   }
 
   if (resolved.isOuter) {
-    toolbarNotice = `這張小表只有 1 列，已改選外層表這一欄的同一個位置（${n} 格）；只要這一格請切回單格`
+    toolbarNotice = promotedColNotice(n)
   }
 
   if (options.replaceSnapshot) {
@@ -2337,7 +2341,7 @@ function handleMenuAction(action) {
             setTarget(O)
             deliberateTableEl = O
             const n = countResolvedInnerInCol(O, C, fullInner)
-            toolbarNotice = `這張小表只有 1 列，已改選外層表這一欄的同一個位置（${n} 格）；只要這一格請切回單格`
+            toolbarNotice = promotedColNotice(n)
             applyPickedMarks(O)
             updatePanel(panelEl, O)
             return
@@ -2863,7 +2867,7 @@ function onKeyDown(event) {
         // 值升不上去時 ↑ 照樣離開這張表（AF-10 C-5：↑ 是明確意圖，不被鎖表擋住），
         // 只是說清楚已選的值還留在小表：接著點外層的格子是換表（留得住復原），不是加選
         if (currentPurpose === 'repick') {
-          toolbarNotice = '重選既有任務時不能換到外層表（歷史紀錄會接不上）；要抓外層整欄請建立新任務'
+          toolbarNotice = REPICK_NO_PROMOTE_NOTICE
         } else if (currentPurpose === 'task' && !isUpgradeableTable(T)) {
           toolbarNotice = '外層不是每一列重複同一種小表的表格，已選的值留在原表；點外層的格子會換表'
         } else if (currentPurpose === 'task' && !promotePicksToOuter(T)) {
@@ -3164,7 +3168,7 @@ function onClick(event) {
     if (additive && pickedTableEl && currentPurpose === 'repick') {
       const o = outerTableOf(pickedTableEl)
       if (o && o.contains(event.target)) {
-        toolbarNotice = '重選既有任務時不能換到外層表（歷史紀錄會接不上）；要抓外層整欄請建立新任務'
+        toolbarNotice = REPICK_NO_PROMOTE_NOTICE
         applyPickedMarks(pickedTableEl)
         if (panelEl) updatePanel(panelEl, currentTargetEl)
         return
@@ -3222,7 +3226,7 @@ function onClick(event) {
       if (additive) {
         const o = outerTableOf(pickedTableEl)
         if (currentPurpose === 'repick' && o && (currentTargetEl === o || o.contains(currentTargetEl))) {
-          toolbarNotice = '重選既有任務時不能換到外層表（歷史紀錄會接不上）；要抓外層整欄請建立新任務'
+          toolbarNotice = REPICK_NO_PROMOTE_NOTICE
         } else {
           toolbarNotice = '一個任務只能抓同一張表格裡的值；要改抓另一張表，直接點那一格'
         }
@@ -3302,7 +3306,7 @@ function onClick(event) {
         setTarget(colO)
         deliberateTableEl = colO
         const n = countResolvedInnerInCol(colO, candidate.block.index, candidate.block.inner)
-        toolbarNotice = `這張小表只有 1 列，已改選外層表這一欄的同一個位置（${n} 格）；只要這一格請切回單格`
+        toolbarNotice = promotedColNotice(n)
       }
 
       if (selectedList.length > 0 && pickedTableEl) {
@@ -3406,7 +3410,7 @@ function upgradeLastPickTo(mode) {
       undoSnapshot = previous
       limitReached = selectedList.length >= maxPicks
       const n = countResolvedInnerInCol(O, index, block.inner)
-      toolbarNotice = `這張小表只有 1 列，已改選外層表這一欄的同一個位置（${n} 格）；只要這一格請切回單格`
+      toolbarNotice = promotedColNotice(n)
       clearPickedMarks(document)
       applyPickedMarks(O)
       return true
@@ -3543,6 +3547,18 @@ function onDblClick(event) {
   // overlay 自己的元素（工具列、面板、chip）雙擊不送出；代理層是例外，它就是要被點的
   if (overlayEl && overlayEl.contains(event.target) && !frameOfProxy(event.target)) return
   if (!currentTargetEl) return
+
+  // 批次模式雙擊非表格元素也是結果式：click、click 會加再移除那一組，雙擊結束時它一定要是一組（AF-18 終檢）
+  if (batchMode) {
+    const onTable = isTableMode(currentTargetEl) && currentTargetEl.contains(event.target)
+    const el = onTable ? null : (isTableMode(currentTargetEl) ? upgradeTarget(event.target, { deliberate: true }) : currentTargetEl)
+    if (el && !isTableMode(el) && !iframeOf(el) && el !== document.body && el !== document.documentElement) {
+      syncBatch()
+      if (!batchGroups.some(g => g.el === el)) toggleElementGroup(el)
+      confirmPick()
+      return
+    }
+  }
 
   if (currentTargetEl.contains(event.target) && promoteBeforeAddingInOuter() === 'blocked') return
 

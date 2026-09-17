@@ -460,6 +460,34 @@ function canStartPick(ctx) {
   return !ctx || ctx.kind === 'waiting' || ctx.kind === 'site' || ctx.kind === 'saved'
 }
 
+/**
+ * 進選取模式之前的唯一判定（右鍵兩項與 ENTER_PICK 訊息共用；AF-18 終檢收成一份）：
+ * 回傳 { start: true }（寫等待態再進）、{ start: false }（單任務換目標：不動 ctx 直接進），
+ * 或 { blocked: '說明句' }（不進選取，把這句寫進面板的 notice）。
+ * 單任務與多任務互不插隊：多任務清單還沒存時不開單任務；表單或清單填到一半時不開多任務。
+ */
+function pickEntryOf(ctx, batch) {
+  if (canStartPick(ctx)) return { start: true }
+  if (batch) {
+    return { blocked: ctx.kind === 'batch'
+      ? '多任務清單還沒存，請先全部儲存或取消，再開始新的多任務'
+      : '有一個任務設定到一半，請先儲存或取消，再開始多任務' }
+  }
+  if (ctx.kind === 'batch') return { blocked: '多任務設定到一半，請先全部儲存或取消，再選單一任務' }
+  return { start: false }
+}
+
+// 依 pickEntryOf 的結果處理面板 ctx；回傳 false＝被擋（已留說明），呼叫端不得進選取模式
+async function applyPickEntry(tabId, batch) {
+  const entry = pickEntryOf(await getPanelCtx(tabId), batch)
+  if (entry.blocked) {
+    await mergePanelCtx(tabId, { notice: entry.blocked })
+    return false
+  }
+  if (entry.start) await setPanelCtx(tabId, batch ? { kind: 'waiting', purpose: 'task', batch: true } : { kind: 'waiting', purpose: 'task' })
+  return true
+}
+
 export async function handleMessage(msg, sender, runOpts = {}) {
   try {
     if (!msg || typeof msg !== 'object') return undefined
@@ -597,7 +625,10 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         await mergePanelCtx(tabId, {
           kind: 'new',
           ctx: payload,
-          retarget: Boolean(keepDraft && existing.ctx)
+          retarget: Boolean(keepDraft && existing.ctx),
+          // 淺層合併：被擋時留下的說明與等待態的多任務旗標不得跟到新表單上（AF-18 終檢）
+          notice: undefined,
+          batch: undefined
         })
         return { ok: true }
       }
@@ -651,15 +682,8 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         // popup 的「選取要抓的內容」走這裡：面板已由 popup 自己開好，
         // 但沒有表單時要先顯示等待態（同右鍵入口），否則面板是一張空白表單
         const batch = msg.batch === true
-        if (msg.purpose === 'task') {
-          const current = await getPanelCtx(msg.tabId)
-          if (canStartPick(current)) {
-            await setPanelCtx(msg.tabId, batch ? { kind: 'waiting', purpose: 'task', batch: true } : { kind: 'waiting', purpose: 'task' })
-          } else if (current.kind === 'batch') {
-            // 多任務清單還沒存完不開始新一輪（能不能開始仍只看 canStartPick；右鍵同理）
-            return { ok: false }
-          }
-        }
+        // popup 送完就關視窗：被擋時一定要把說明留在面板上，不能只回 ok:false（靜默無事）
+        if (msg.purpose === 'task' && !(await applyPickEntry(msg.tabId, batch))) return { ok: false }
         await injectContent(msg.tabId, { frameId })
         const known = msg.taskId ? await getTask(msg.taskId) : null
         const enter = {
@@ -877,13 +901,7 @@ export async function handleContextMenu(info, tab) {
       await openPanel(tab.id, 'picker', `tabId=${tab.id}`)
       // 面板已經有表單（使用者填到一半又回頁面按右鍵）就不動 ctx：
       // 蓋成等待態會把草稿一起洗掉，選完也認不出這是「換目標」
-      const current = await getPanelCtx(tab.id)
-      if (canStartPick(current)) {
-        await setPanelCtx(tab.id, { kind: 'waiting', purpose: 'task' })
-      } else if (current.kind === 'batch') {
-        await mergePanelCtx(tab.id, { notice: '多任務設定到一半，請先全部儲存或取消，再選單一任務' })
-        return
-      }
+      if (!(await applyPickEntry(tab.id, false))) return
       await injectContent(tab.id, { frameId })
       await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'task' }, { frameId })
       return
@@ -894,13 +912,7 @@ export async function handleContextMenu(info, tab) {
       const frameId = info.frameId ?? 0
       // 手勢規則同 af-pick：`open` 必須是第一個 await
       await openPanel(tab.id, 'picker', `tabId=${tab.id}`)
-      const current = await getPanelCtx(tab.id)
-      if (!canStartPick(current)) {
-        // 表單或多任務清單填到一半：不動 ctx 與草稿、不進選取模式，只留一句說明給面板
-        await mergePanelCtx(tab.id, { notice: '有一個任務設定到一半，請先儲存或取消，再開始多任務' })
-        return
-      }
-      await setPanelCtx(tab.id, { kind: 'waiting', purpose: 'task', batch: true })
+      if (!(await applyPickEntry(tab.id, true))) return
       await injectContent(tab.id, { frameId })
       await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'task', batch: true }, { frameId })
       return
