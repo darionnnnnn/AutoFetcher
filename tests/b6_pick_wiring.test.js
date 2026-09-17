@@ -30,12 +30,13 @@ const sentToTab = (c, type) => c.__calls
 
 // ---- 右鍵選單 ----
 
-test('右鍵選單只有三項,而且沒有「抓取此區塊」', async () => {
+test('右鍵子項依序列出,而且沒有「抓取此區塊」（AF-18 加「一次建立多個任務」與「使用教學」）', async () => {
   const { c, bg } = await fresh()
   await bg.setupContextMenus()
   const created = c.__calls.filter(x => x.api === 'contextMenus.create').map(x => x.args[0])
   const children = created.filter(m => m.parentId === 'af-root')
-  assert.equal(children.length, 3, `子項應為三項,實得 ${children.map(m => m.title).join(' / ')}`)
+  assert.deepEqual(children.map(m => m.id).filter(id => id !== 'af-open-help'),
+    ['af-pick', 'af-pick-batch', 'af-site-login', 'af-open-report'], `實得 ${children.map(m => m.title).join(' / ')}`)
   assert.equal(created.some(m => m.id === 'af-capture-block'), false, '區塊由選取模式自動判定,不再獨立一項')
   assert.ok(created.some(m => m.id === 'af-pick'), '必須有「選取要抓的內容」')
   assert.ok(created.some(m => m.id === 'af-site-login'), '必須有「設定此站台登入」')

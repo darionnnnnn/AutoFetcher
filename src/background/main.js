@@ -268,6 +268,7 @@ export async function setupContextMenus() {
     await chrome.contextMenus.removeAll()
     chrome.contextMenus.create({ id: 'af-root', title: 'AutoFetcher', contexts: ['all'] })
     chrome.contextMenus.create({ id: 'af-pick', parentId: 'af-root', title: '選取要抓的內容', contexts: ['all'] })
+    chrome.contextMenus.create({ id: 'af-pick-batch', parentId: 'af-root', title: '一次建立多個任務', contexts: ['all'] })
     chrome.contextMenus.create({ id: 'af-site-login', parentId: 'af-root', title: '設定此站台登入', contexts: ['all'] })
     chrome.contextMenus.create({ id: 'af-open-report', parentId: 'af-root', title: '開啟 AutoFetcher 報表', contexts: ['all'] })
   } catch {}
@@ -391,6 +392,24 @@ export async function handleAlarm(alarm, testOpts = {}) {
 function frameIdentityOf(sender) {
   if (sender?.frameId === undefined || sender.frameId === 0) return {}
   return { frameId: sender.frameId, frameUrl: sender.url }
+}
+
+// 選取結果 → 面板要的 payload（逐欄挑，補上分頁與框架身分）；單任務與批次每一組共用這一份
+function taskPayloadOf(src, sender) {
+  const payload = {
+    locator: src?.locator,
+    preview: src?.preview,
+    previewSamples: src?.previewSamples,
+    previewValue: src?.previewValue,
+    blockInfo: src?.blockInfo,
+    tabId: sender?.tab?.id,
+    url: sender?.tab?.url,
+    nameHint: src?.nameHint,
+    // 使用者一次挑的那幾個值；漏掉這一個欄位，多值任務就會退化成單值
+    picks: src?.picks
+  }
+  Object.assign(payload, frameIdentityOf(sender))
+  return payload
 }
 
 /**
@@ -526,20 +545,14 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       }
 
       if (msg.purpose === 'task') {
-        const payload = {
-          locator: msg.locator,
-          preview: msg.preview,
-          previewSamples: msg.previewSamples,
-          previewValue: msg.previewValue,
-          blockInfo: msg.blockInfo,
-          tabId: sender?.tab?.id,
-          url: sender?.tab?.url,
-          nameHint: msg.nameHint,
-          // 使用者一次挑的那幾個值；漏掉這一個欄位，多值任務就會退化成單值
-          picks: msg.picks
-        }
-        Object.assign(payload, frameIdentityOf(sender))
         const tabId = sender?.tab?.id
+        // 批次（一次建立多個任務）：每一組補上與單任務相同的欄位，另給穩定鍵；不帶舊草稿、不算換目標
+        if (Array.isArray(msg.batch)) {
+          const items = msg.batch.map((one, i) => ({ key: `b${i + 1}`, ...taskPayloadOf(one, sender) }))
+          await setPanelCtx(tabId, { kind: 'batch', items })
+          return { ok: true }
+        }
+        const payload = taskPayloadOf(msg, sender)
         // 面板已經開著、使用者也填了一半的表單時，**只換目標**：
         // 名稱、排程、儀表板、進階設定全部留著（右鍵重選一個目標不該把表單清空）
         const existing = await getPanelCtx(tabId)
@@ -585,6 +598,8 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         taskId: msg.taskId,
         preselect: msg.preselect
       }
+      // 鑽進 iframe 之後仍是同一輪批次選取
+      if (msg.batch === true) enter.batch = true
       // 選取當下沒有目標的 locator 可以驗證，所以只用網址比對；
       // 不是唯一命中就退回原本那一層，硬猜會鑽錯 iframe
       const matched = matchFrameByUrl(await listFrames(tabId), msg.src)
@@ -603,15 +618,19 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         const frameId = msg.frameId ?? 0
         // popup 的「選取要抓的內容」走這裡：面板已由 popup 自己開好，
         // 但沒有表單時要先顯示等待態（同右鍵入口），否則面板是一張空白表單
+        const batch = msg.batch === true
         if (msg.purpose === 'task') {
           const current = await getPanelCtx(msg.tabId)
           if (canStartPick(current)) {
-            await setPanelCtx(msg.tabId, { kind: 'waiting', purpose: 'task' })
+            await setPanelCtx(msg.tabId, batch ? { kind: 'waiting', purpose: 'task', batch: true } : { kind: 'waiting', purpose: 'task' })
+          } else if (current.kind === 'batch') {
+            // 多任務清單還沒存完不開始新一輪（能不能開始仍只看 canStartPick；右鍵同理）
+            return { ok: false }
           }
         }
         await injectContent(msg.tabId, { frameId })
         const known = msg.taskId ? await getTask(msg.taskId) : null
-        await chrome.tabs.sendMessage(msg.tabId, {
+        const enter = {
           type: MSG.ENTER_PICK,
           purpose: msg.purpose,
           taskId: msg.taskId,
@@ -619,7 +638,9 @@ export async function handleMessage(msg, sender, runOpts = {}) {
           // 要靠任務自己的 locator 才找得到目標，也才勾得回既有的值
           locator: msg.locator || known?.locator,
           preselect: msg.preselect || preselectOf(known)
-        }, { frameId })
+        }
+        if (batch) enter.batch = true
+        await chrome.tabs.sendMessage(msg.tabId, enter, { frameId })
         return { ok: true }
       }
 
@@ -822,9 +843,29 @@ export async function handleContextMenu(info, tab) {
       const current = await getPanelCtx(tab.id)
       if (canStartPick(current)) {
         await setPanelCtx(tab.id, { kind: 'waiting', purpose: 'task' })
+      } else if (current.kind === 'batch') {
+        await mergePanelCtx(tab.id, { notice: '多任務設定到一半，請先全部儲存或取消，再選單一任務' })
+        return
       }
       await injectContent(tab.id, { frameId })
       await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'task' }, { frameId })
+      return
+    }
+
+    if (info.menuItemId === 'af-pick-batch') {
+      if (!tab?.id) return
+      const frameId = info.frameId ?? 0
+      // 手勢規則同 af-pick：`open` 必須是第一個 await
+      await openPanel(tab.id, 'picker', `tabId=${tab.id}`)
+      const current = await getPanelCtx(tab.id)
+      if (!canStartPick(current)) {
+        // 表單或多任務清單填到一半：不動 ctx 與草稿、不進選取模式，只留一句說明給面板
+        await mergePanelCtx(tab.id, { notice: '有一個任務設定到一半，請先儲存或取消，再開始多任務' })
+        return
+      }
+      await setPanelCtx(tab.id, { kind: 'waiting', purpose: 'task', batch: true })
+      await injectContent(tab.id, { frameId })
+      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'task', batch: true }, { frameId })
       return
     }
   } catch {}
