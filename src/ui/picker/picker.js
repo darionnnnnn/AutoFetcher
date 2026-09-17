@@ -1,4 +1,4 @@
-import { saveTask, getTask, getSettings, saveSettings, getPanelCtx, mergePanelCtx, subscribe
+import { saveTask, getTask, getSettings, saveSettings, getPanelCtx, setPanelCtx, mergePanelCtx, subscribe
 } from '../../shared/storage.js'
 import { DEFAULT_HOVER_HOLD_MS, DEFAULT_WAIT_TIMEOUT_MS } from '../../shared/preaction.js'
 import { MSG } from '../../shared/messages.js'
@@ -2180,7 +2180,7 @@ export async function handleSave() {
  * 儲存成功之後不要無聲關窗：說出「存好了、下次什麼時候抓」，
  * 並給一條去看結果的路。1.5 秒後自動關，使用者也可以自己點。
  */
-export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs = 1500 } = {}) {
+export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs = 1500, tabId = panelTabId } = {}) {
   const form = document.getElementById('picker-form')
   if (!form || !task) return
   let when = ''
@@ -2188,15 +2188,47 @@ export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs =
     const d = new Date(nextRunMs)
     when = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
   }
+  // 問不到實際 alarm 就退回白話句，不要讓這裡空著
+  const text = when
+    ? `已儲存。下次抓取：${when}`
+    : `已儲存。${describeSchedule(task.schedule)}`
+  buildSavedFeedback(form, text)
 
+  // 存好了就不再是「填到一半的表單」：草稿不得再寫回，session 收成 saved，
+  // 關窗前使用者右鍵再選時 background 才會當成新的一輪，而不是換目標
+  if (draftTimer) { clearTimeout(draftTimer); draftTimer = null }
+  if (tabId !== null && tabId !== undefined) {
+    try { await setPanelCtx(tabId, { kind: 'saved', text }) } catch {}
+  }
+
+  if (typeof setTimeout === 'function') {
+    // 記住是「哪一個視窗」：延遲期間全域的 window 可能已經換人，
+    // 關掉別人的視窗比不關還糟
+    const myWindow = typeof window !== 'undefined' ? window : null
+    setTimeout(async () => {
+      // 面板沒有 window.close()：請 background 關它，並清掉草稿——
+      // 不清的話下一個新任務會被這一個的名稱與排程灌進去
+      if (globalThis.chrome?.sidePanel) {
+        // 到期前使用者已經開始下一輪（session 不再是 saved）：不得連面板一起關掉
+        let current = null
+        try { current = await getPanelCtx(tabId) } catch {}
+        if (current?.kind === 'saved') finishPanelSession(tabId)
+        return
+      }
+      if (myWindow && globalThis.window === myWindow && myWindow.close) myWindow.close()
+    }, closeDelayMs)
+  }
+}
+
+/**
+ * 回饋區（一行文字＋「開啟報表」）：儲存當下與面板在 saved 態重載共用這一份。
+ */
+function buildSavedFeedback(form, text) {
   const box = document.createElement('div')
   box.id = 'saved-feedback'
   box.setAttribute('role', 'status')
   const line = document.createElement('div')
-  // 問不到實際 alarm 就退回白話句，不要讓這裡空著
-  line.textContent = when
-    ? `已儲存。下次抓取：${when}`
-    : `已儲存。${describeSchedule(task.schedule)}`
+  line.textContent = text
   box.appendChild(line)
 
   const openBtn = document.createElement('button')
@@ -2216,20 +2248,6 @@ export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs =
   box.appendChild(openBtn)
 
   form.replaceChildren(box)
-  if (typeof setTimeout === 'function') {
-    // 記住是「哪一個視窗」：延遲期間全域的 window 可能已經換人，
-    // 關掉別人的視窗比不關還糟
-    const myWindow = typeof window !== 'undefined' ? window : null
-    setTimeout(() => {
-      // 面板沒有 window.close()：請 background 關它，並清掉草稿——
-      // 不清的話下一個新任務會被這一個的名稱與排程灌進去
-      if (globalThis.chrome?.sidePanel) {
-        finishPanelSession()
-        return
-      }
-      if (myWindow && globalThis.window === myWindow && myWindow.close) myWindow.close()
-    }, closeDelayMs)
-  }
 }
 
 // 上一次「立即測試」失敗時 background 給的診斷包。**只存在記憶體**：
@@ -2574,7 +2592,20 @@ export async function renderFromPanelCtx(ctx) {
   if (form) form.hidden = kind === 'waiting'
   const footer = document.querySelector('.settings-footer') || document.getElementById('picker-actions')
   if (footer) footer.hidden = kind === 'waiting'
+  if (kind !== 'saved') {
+    const header = document.querySelector('[data-picker-header]')
+    if (header) header.hidden = false
+  }
   if (kind === 'waiting' || !ctx) return { rendered: true }
+
+  // 剛存完、面板文件被重載：畫回同一個回饋區（表單已經不存在，不得露出空表單）
+  if (kind === 'saved') {
+    // 名稱欄在表單外的頁首：沒有表單可存時一起藏起來
+    const header = document.querySelector('[data-picker-header]')
+    if (header) header.hidden = true
+    if (form) buildSavedFeedback(form, ctx.text || '已儲存。')
+    return { rendered: true }
+  }
 
   if (kind === 'edit' && ctx.taskId) {
     const task = await getTask(ctx.taskId)
@@ -2659,10 +2690,10 @@ function restoreDraft(draft, opts = {}) {
  * 存檔或取消後的收尾：清掉草稿並請 background 關面板。
  * 不清草稿的話，下一個新任務會被上一個的名稱與排程灌進去。
  */
-async function finishPanelSession() {
-  if (panelTabId === null) return
+async function finishPanelSession(tabId = panelTabId) {
+  if (tabId === null || tabId === undefined) return
   if (draftTimer) { clearTimeout(draftTimer); draftTimer = null }
-  try { await chrome.runtime.sendMessage({ type: MSG.CLOSE_PANEL, tabId: panelTabId }) } catch {}
+  try { await chrome.runtime.sendMessage({ type: MSG.CLOSE_PANEL, tabId }) } catch {}
 }
 
 function scheduleDraftSave() {

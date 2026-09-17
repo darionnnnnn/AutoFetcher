@@ -401,6 +401,14 @@ function frameIdentityOf(sender) {
  *   正式接線只傳 `(msg, sender)`，所以網頁或任何送得出 runtime 訊息的來源都影響不到。
  *   測試要縮短等待就從這裡傳，形狀比照 `handleAlarm(alarm, testOpts)`。
  */
+/**
+ * ctx 能不能寫成等待態：沒有面板、已在等待、站台設定，或剛存完（saved）才可以；
+ * 表單填到一半（new／edit）不動，選完才認得出是換目標。右鍵與 ENTER_PICK 共用這一份。
+ */
+function canStartPick(ctx) {
+  return !ctx || ctx.kind === 'waiting' || ctx.kind === 'site' || ctx.kind === 'saved'
+}
+
 export async function handleMessage(msg, sender, runOpts = {}) {
   try {
     if (!msg || typeof msg !== 'object') return undefined
@@ -596,7 +604,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         // 但沒有表單時要先顯示等待態（同右鍵入口），否則面板是一張空白表單
         if (msg.purpose === 'task') {
           const current = await getPanelCtx(msg.tabId)
-          if (!current || current.kind === 'waiting' || current.kind === 'site') {
+          if (canStartPick(current)) {
             await setPanelCtx(msg.tabId, { kind: 'waiting', purpose: 'task' })
           }
         }
@@ -811,7 +819,7 @@ export async function handleContextMenu(info, tab) {
       // 面板已經有表單（使用者填到一半又回頁面按右鍵）就不動 ctx：
       // 蓋成等待態會把草稿一起洗掉，選完也認不出這是「換目標」
       const current = await getPanelCtx(tab.id)
-      if (!current || current.kind === 'waiting' || current.kind === 'site') {
+      if (canStartPick(current)) {
         await setPanelCtx(tab.id, { kind: 'waiting', purpose: 'task' })
       }
       await injectContent(tab.id, { frameId })
