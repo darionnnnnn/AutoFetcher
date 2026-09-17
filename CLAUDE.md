@@ -79,12 +79,12 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 
 - 改任何行為 → `docs/SPEC.md`(現況規格,§編號會被程式碼註解引用,勿拆檔)
 - 想做但刻意沒做 → `docs/BACKLOG.md`(每項附觸發條件)
-- 本輪規劃 → `docs/AF-<N>-PLAN.md`;完工搬 `docs/archive/`(按需讀,勿全掃)。AF-1~AF-17 已歸檔,AF-18 實作完成待體檢。
+- 本輪規劃 → `docs/AF-<N>-PLAN.md`;完工搬 `docs/archive/`(按需讀,勿全掃)。AF-1~AF-18 已歸檔。
 
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 2280 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 2291 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -110,6 +110,10 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **改到操作語意或介面字串(工具列、按鈕、右鍵項目)要同步教學頁 `ui/help/help.html`**:`tests/y5_help_page.test.js` 的 `data-ui-label` 只擋「字串還在不在那個檔案」(子字串比對,註解裡有同一串也會過),擋不到語意變了(AF-18)。
 - **不寫分號的專案,新增一行呼叫時要看下一行是不是以 `(`／`[`／`` ` `` 開頭**:AF-18 在 popup 初始化區塊加 `applySavedTheme()`,下一行是 `(async () => {…})()`,
   被接成 `applySavedTheme()(async …)`,jsdom 測不到(正式接線區塊不跑),真實瀏覽器煙霧才抓到。行首括號一律前置分號。
+- **寫進 session 會觸發面板照 ctx 重畫**(AF-18):只 append 在 DOM 上的東西(儲存回饋的提示行)下一瞬間就被洗掉,而且不帶 `panelTabId` 的測試看不到——要留的內容放進 ctx。
+- **新增一條「加值路徑」要過同一套守門**(AF-18 體檢):升到外層 → 批次換組 → 目標不是已選那張表就拒絕。`Shift`＋方向鍵與右鍵排除各漏過一次,結果是 A 表的組混進 B 表的索引。
+- **存任務與加卡片分開、卡片排在重建排程之後**(AF-18 體檢):抽共用核心時把卡片綁進存檔,卡片寫不進去就讓已存的任務沒有排程。
+- **突變腳本的 `replace(old, new, 1)` 換的是第一個命中**:同一串字在檔案裡出現兩次(`SHARED_IDS` 與 `DRAFT_FIELDS`)時會打錯位置、誤判成「測試沒守到」;`old` 要寫到唯一。
 - **「在 A 之後讀 B」的情境要看 A 會不會清掉 B**:右鍵選單的 `closeMenu()` 會把 `menuTargetContext` 清成 null,
   排除分支在它之後才讀,右鍵排除永遠無效(AF-16)。新增選單動作要在關選單前取出情境。
 - 設定/資料的事實來源是 `chrome.storage.local`;檔案一律**使用者手動匯出**,不自動下載(SPEC §5)。
