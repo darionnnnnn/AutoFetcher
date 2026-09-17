@@ -45,8 +45,13 @@ test('C-1 總格數 ≤30：測完自動展開；summary 文字是「查看抓�
 test('C-2 總格數 31：維持收合（整欄很長時不把面板撐爆）；多值以各值格數加總判斷', async () => {
   const { c, pk, doc } = await fresh()
   pk.render(ctxFor([colPick]))
-  c.__setRuntimeResponder(() => okWith(31))
+  c.__setRuntimeResponder(() => okWith(3))
   await pk.handleTestNow()
+  assert.equal($(doc, 'test-detail').open, true, '前置：上一次是展開的')
+  let openDuring = null
+  c.__setRuntimeResponder(() => { openDuring = $(doc, 'test-detail').open; return okWith(31) })
+  await pk.handleTestNow()
+  assert.equal(openDuring, false, '下一次測試一開始就收合（不能配著新測試留著舊的明細）')
   assert.equal($(doc, 'test-detail').open, false)
 
   const { c: c2, pk: pk2, doc: doc2 } = await fresh()
