@@ -2577,9 +2577,15 @@ async function resolvePanelTab() {
 /**
  * 依 session 裡的 ctx 決定要顯示哪一個畫面。
  */
-export async function renderFromPanelCtx(ctx) {
+export async function renderFromPanelCtx(ctx, { reload = () => globalThis.location?.reload?.() } = {}) {
   const sig = ctx ? JSON.stringify({ kind: ctx.kind, ctx: ctx.ctx, taskId: ctx.taskId, retarget: ctx.retarget }) : 'null'
   if (sig === lastPanelSig) return { rendered: false }
+  // 剛存完、表單已被回饋區換掉，使用者又開始下一輪（等待態／新表單）：表單節點與綁在上面的監聽都不在了，
+  // 在這份文件上 render 會畫不出來——重載面板文件，重載後照 session 畫（AF-18 批次 D 實作回報抓到）
+  if (ctx && ctx.kind !== 'saved' && document.getElementById('saved-feedback')) {
+    reload()
+    return { rendered: false, reloading: true }
+  }
   // 面板文件剛載入（還沒畫過）時，retarget 沒有「現有的表單」可以保留，
   // 要走完整路徑再把草稿貼回來，不然切分頁回來草稿就丟了
   const freshDocument = lastPanelSig === null

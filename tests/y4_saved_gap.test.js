@@ -71,6 +71,22 @@ test('D-3 面板文件在 saved 態被重載：畫得出回饋區，不得是空
   assert.ok(!name || name.closest('[hidden]'), '不得露出一張空表單')
 })
 
+test('D-3b 同一份面板文件：存完之後進入下一輪（等待態或新表單）要重載面板文件，不得在被換掉的表單上重畫', async () => {
+  const { pk, doc } = await freshPanel()
+  await pk.showSavedFeedback(TASK, { closeDelayMs: 30, tabId: 7 })
+  assert.ok(doc.getElementById('saved-feedback'), '前置：表單已換成回饋區')
+  let reloads = 0
+  const r = await pk.renderFromPanelCtx({ kind: 'waiting', purpose: 'task' }, { reload: () => { reloads++ } })
+  assert.equal(reloads, 1)
+  assert.equal(r?.reloading, true)
+
+  const fresh = await freshPanel()
+  let again = 0
+  await fresh.pk.renderFromPanelCtx({ kind: 'new', ctx: CTX }, { reload: () => { again++ } })
+  assert.equal(again, 0, '一般的畫面切換不得重載（切分頁回來會一直閃）')
+  assert.equal(fresh.doc.getElementById('name').value, '新目標')
+})
+
 test('D-4 右鍵與 ENTER_PICK（popup、面板）在 saved 態都寫等待態', async () => {
   const { c, st, bg } = await freshBg()
   const tab = await c.tabs.create({ url: 'https://a.test/p' })
