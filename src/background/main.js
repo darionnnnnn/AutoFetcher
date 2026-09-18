@@ -447,6 +447,7 @@ function canStartPick(ctx) {
  */
 function pickEntryOf(ctx, batch) {
   if (canStartPick(ctx)) return { start: true }
+  if (ctx?.kind === 'bulk') return { blocked: '有一批任務的排程改到一半，請先套用或取消，再開始選取' }
   if (batch) {
     return { blocked: ctx.kind === 'batch'
       ? '多任務清單還沒存，請先全部儲存或取消，再開始新的多任務'

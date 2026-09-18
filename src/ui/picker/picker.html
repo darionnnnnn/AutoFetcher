@@ -59,6 +59,8 @@
     [data-batch-result] { font-family: var(--font-mono, monospace); }
     [data-batch-remove] { grid-column: 2; grid-row: 1; }
     #batch-note { font-size: var(--text-xs, 12px); color: var(--text-muted); }
+    #bulk-list { display: flex; flex-direction: column; gap: 6px; }
+    #bulk-note { font-size: var(--text-xs, 12px); color: var(--text-muted); }
     .settings-body {
       flex: 1;
       overflow-y: auto;
@@ -428,6 +430,11 @@
             <option value="count">筆數</option>
           </select>
         </label>
+      </fieldset>
+      <fieldset id="bulk-section" hidden>
+        <legend>要修改的任務</legend>
+        <div id="bulk-list"></div>
+        <div id="bulk-note"></div>
       </fieldset>
       <fieldset id="block-section" hidden>
         <legend>抓什麼</legend>

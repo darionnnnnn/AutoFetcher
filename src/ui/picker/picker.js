@@ -1,4 +1,4 @@
-import { saveTask, getTask, getSettings, saveSettings, getPanelCtx, setPanelCtx, mergePanelCtx, subscribe, deleteLastValues
+import { saveTask, getTask, getTasks, saveTasks, getSettings, saveSettings, getPanelCtx, setPanelCtx, mergePanelCtx, subscribe, deleteLastValues
 } from '../../shared/storage.js'
 import { applySavedTheme } from '../theme-apply.js'
 import { DEFAULT_HOVER_HOLD_MS, DEFAULT_WAIT_TIMEOUT_MS } from '../../shared/preaction.js'
@@ -18,6 +18,10 @@ const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
 // 批次畫面（AF-18 G-3）的模組狀態：放在檔頭，面板啟動流程（檔尾的正式接線）不論先後都讀得到
 let batchItems = null
 let batchViewOn = false
+// 整批改排程（AF-19 作業 C）的模組狀態
+let bulkTaskIds = null
+let bulkCount = 0
+let bulkViewOn = false
 const WAITING_TEXT = {
   single: { title: '正在頁面上選取…', desc: '把滑鼠移到要抓的內容上，點一下選取；好了按頁面右下角的「完成」。' },
   batch: {
@@ -252,12 +256,9 @@ function posFromSpec(spec) {
   return { rowPos: '', colPos: '' }
 }
 
-export function validateForm(values) {
+// 驗證排程設定欄位是否合法
+export function validateSchedule(values) {
   const errors = {}
-
-  if (!values.name || typeof values.name !== 'string' || values.name.trim() === '') {
-    errors.name = '名稱不可空白'
-  }
 
   if (values.scheduleType === 'daily') {
     if (!Array.isArray(values.times) || values.times.length === 0 || !values.times.every(t => typeof t === 'string' && TIME_RE.test(t))) {
@@ -273,6 +274,32 @@ export function validateForm(values) {
     }
   }
 
+  // 時段只有 interval 用得到;daily 時該欄位是隱藏的,殘值不可擋住存檔
+  const hasFrom = values.scheduleType === 'interval' && typeof values.windowFrom === 'string' && values.windowFrom.trim() !== ''
+  const hasTo = values.scheduleType === 'interval' && typeof values.windowTo === 'string' && values.windowTo.trim() !== ''
+  if ((hasFrom && !hasTo) || (!hasFrom && hasTo)) {
+    errors.window = '時段起訖必須同時填寫或同時空白'
+  } else if (hasFrom && hasTo) {
+    if (!TIME_RE.test(values.windowFrom.trim()) || !TIME_RE.test(values.windowTo.trim())) {
+      errors.window = '時段格式錯誤'
+    }
+  }
+
+  return Object.keys(errors).length > 0 ? { ok: false, errors } : { ok: true }
+}
+
+export function validateForm(values) {
+  const errors = {}
+
+  if (!values.name || typeof values.name !== 'string' || values.name.trim() === '') {
+    errors.name = '名稱不可空白'
+  }
+
+  const schedRes = validateSchedule(values)
+  if (!schedRes.ok) {
+    Object.assign(errors, schedRes.errors)
+  }
+
   if (values.strategy === 'regex') {
     if (!values.regex || typeof values.regex !== 'string' || values.regex.trim() === '') {
       errors.regex = '正規表達式為必填'
@@ -282,17 +309,6 @@ export function validateForm(values) {
       } catch {
         errors.regex = '正規表達式語法不正確'
       }
-    }
-  }
-
-  // 時段只有 interval 用得到;daily 時該欄位是隱藏的,殘值不可擋住存檔
-  const hasFrom = values.scheduleType === 'interval' && typeof values.windowFrom === 'string' && values.windowFrom.trim() !== ''
-  const hasTo = values.scheduleType === 'interval' && typeof values.windowTo === 'string' && values.windowTo.trim() !== ''
-  if ((hasFrom && !hasTo) || (!hasFrom && hasTo)) {
-    errors.window = '時段起訖必須同時填寫或同時空白'
-  } else if (hasFrom && hasTo) {
-    if (!TIME_RE.test(values.windowFrom.trim()) || !TIME_RE.test(values.windowTo.trim())) {
-      errors.window = '時段格式錯誤'
     }
   }
 
@@ -585,6 +601,27 @@ function setPreviewState(state) {
   }
 }
 
+// 將排程物件的值填入排程相關表單欄位
+function fillSchedule(schedule) {
+  if (!schedule) return
+  if (schedule.type) document.getElementById('schedule-type').value = schedule.type
+  if (schedule.times) document.getElementById('times').value = schedule.times.join(', ')
+  if (schedule.everyMinutes !== undefined) document.getElementById('every-minutes').value = schedule.everyMinutes
+  if (schedule.weekdays) {
+    const wds = new Set(schedule.weekdays)
+    document.querySelectorAll('#weekdays input[type="checkbox"]').forEach(cb => {
+      cb.checked = wds.has(Number(cb.value))
+    })
+  }
+  if (schedule.window) {
+    if (schedule.window.from) document.getElementById('window-from').value = schedule.window.from
+    if (schedule.window.to) document.getElementById('window-to').value = schedule.window.to
+    // 既有任務有時段就要把開關勾起來，否則欄位藏著、使用者以為沒設定
+    const winCb = document.getElementById('window-enabled')
+    if (winCb) winCb.checked = true
+  }
+}
+
 export function render(ctx) {
   currentCtx = ctx || {}
   // 位置定位要最先決定：預設名稱會用到它，而且同一個視窗可能 render 第二次
@@ -652,22 +689,7 @@ export function render(ctx) {
         : ''
     }
     if (t.spec?.regex !== undefined) document.getElementById('regex').value = t.spec.regex
-    if (t.schedule?.type) document.getElementById('schedule-type').value = t.schedule.type
-    if (t.schedule?.times) document.getElementById('times').value = t.schedule.times.join(', ')
-    if (t.schedule?.everyMinutes !== undefined) document.getElementById('every-minutes').value = t.schedule.everyMinutes
-    if (t.schedule?.weekdays) {
-      const wds = new Set(t.schedule.weekdays)
-      document.querySelectorAll('#weekdays input[type="checkbox"]').forEach(cb => {
-        cb.checked = wds.has(Number(cb.value))
-      })
-    }
-    if (t.schedule?.window) {
-      if (t.schedule.window.from) document.getElementById('window-from').value = t.schedule.window.from
-      if (t.schedule.window.to) document.getElementById('window-to').value = t.schedule.window.to
-      // 既有任務有時段就要把開關勾起來，否則欄位藏著、使用者以為沒設定
-      const winCb = document.getElementById('window-enabled')
-      if (winCb) winCb.checked = true
-    }
+    fillSchedule(t.schedule)
     if (t.spec?.block) {
       if (t.spec.block.cell) {
         currentBlock = { cell: t.spec.block.cell }
@@ -2227,6 +2249,7 @@ async function rememberPickerDefaults(values) {
 
 export async function handleSave() {
   if (batchItems) return handleBatchSave()
+  if (bulkTaskIds) return handleBulkSave()
   const errorsEl = document.getElementById('errors')
   if (errorsEl) errorsEl.textContent = ''
   const busySave = setBusy('save', '儲存中…')
@@ -2302,7 +2325,7 @@ export async function handleSave() {
  * 儲存成功之後不要無聲關窗：說出「存好了、下次什麼時候抓」，
  * 並給一條去看結果的路。1.5 秒後自動關，使用者也可以自己點。
  */
-export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs = 1500, tabId = panelTabId, count = null, hint = false, warning = '', note = '' } = {}) {
+export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs = 1500, tabId = panelTabId, count = null, hint = false, warning = '', note = '', text = null } = {}) {
   const form = document.getElementById('picker-form')
   if (!form || !task) return
   let when = ''
@@ -2314,12 +2337,14 @@ export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs =
   const head = count !== null ? `已儲存 ${count} 個任務。` : '已儲存。'
   // 停用中的任務不會抓，說「下次抓取」是誤導（以前存檔會把它復活，所以那句話碰巧是真的）
   const paused = count === null && task.enabled === false
-  const text = paused
-    ? `${head}此任務目前停用，不會排程；到任務頁啟用後才會抓。`
-    : (when ? `${head}下次抓取：${when}` : `${head}${describeSchedule(task.schedule)}`)
+  const finalText = (text !== null && text !== undefined)
+    ? text
+    : (paused
+      ? `${head}此任務目前停用，不會排程；到任務頁啟用後才會抓。`
+      : (when ? `${head}下次抓取：${when}` : `${head}${describeSchedule(task.schedule)}`))
   // 提示（新建的單任務才給）與警告都跟著 saved ctx 走：session 一寫面板就會照 ctx 重畫回饋區，
   // 只 append 在 DOM 上的會被洗掉（體檢實測：提示行在側邊面板永遠看不到）
-  const saved = { kind: 'saved', text, ...(hint && count === null ? { hint: true } : {}), ...(warning ? { warning } : {}), ...(note ? { note } : {}) }
+  const saved = { kind: 'saved', text: finalText, ...(hint && count === null ? { hint: true } : {}), ...(warning ? { warning } : {}), ...(note ? { note } : {}) }
   buildSavedFeedback(form, saved)
 
   // 存好了就不再是「填到一半的表單」：草稿不得再寫回，session 收成 saved，
@@ -2396,6 +2421,12 @@ function buildSavedFeedback(form, saved) {
     else if (typeof window !== 'undefined' && window.close) window.close()
   })
   box.appendChild(openBtn)
+
+  const errorsEl = form.querySelector('#errors') || document.getElementById('errors')
+  if (errorsEl) {
+    errorsEl.textContent = ''
+    box.appendChild(errorsEl)
+  }
 
   form.replaceChildren(box)
 }
@@ -2752,7 +2783,7 @@ export async function renderFromPanelCtx(ctx, { reload = () => globalThis.locati
     noticeEl.hidden = !notice
     noticeEl.textContent = notice
   }
-  const sig = ctx ? JSON.stringify({ kind: ctx.kind, ctx: ctx.ctx, taskId: ctx.taskId, retarget: ctx.retarget, batch: ctx.batch }) : 'null'
+  const sig = ctx ? JSON.stringify({ kind: ctx.kind, ctx: ctx.ctx, taskId: ctx.taskId, retarget: ctx.retarget, batch: ctx.batch, taskIds: ctx.taskIds }) : 'null'
   if (sig === lastPanelSig) return { rendered: false }
   // 剛存完、表單已被回饋區換掉，使用者又開始下一輪（等待態／新表單）：表單節點與綁在上面的監聽都不在了，
   // 在這份文件上 render 會畫不出來——重載面板文件，重載後照 session 畫（AF-18 批次 D 實作回報抓到）
@@ -2777,8 +2808,14 @@ export async function renderFromPanelCtx(ctx, { reload = () => globalThis.locati
     if (header) header.hidden = false
   }
   if (kind !== 'batch') setBatchView(false)
+  if (kind !== 'bulk') setBulkView(false)
   if (kind === 'waiting') setWaitingText(ctx.batch === true)
   if (kind === 'waiting' || !ctx) return { rendered: true }
+
+  if (kind === 'bulk' && Array.isArray(ctx.taskIds)) {
+    await renderBulk(ctx)
+    return { rendered: true }
+  }
 
   if (kind === 'batch' && Array.isArray(ctx.items)) {
     await renderBatch(ctx)
@@ -3415,3 +3452,194 @@ async function handleBatchTest() {
     if (saveBtn) saveBtn.disabled = false
   }
 }
+
+// ---- 整批改排程（AF-19 作業 C）----
+
+// 切換整批改排程檢視模式
+function setBulkView(on) {
+  if (!on && !bulkViewOn) return
+  bulkViewOn = on
+  if (!on) {
+    bulkTaskIds = null
+    bulkCount = 0
+  }
+  const show = (id, visible) => {
+    const el = document.getElementById(id)
+    if (el) el.hidden = !visible
+  }
+  show('bulk-section', on)
+  show('schedule-section', true)
+  if (on) {
+    show('block-section', false)
+    show('preview-section', false)
+    show('add-to-dashboard', false)
+    show('advanced-section', false)
+    show('repick-target', false)
+    show('test-now', false)
+    show('batch-section', false)
+  } else {
+    show('add-to-dashboard', true)
+    show('preview-section', true)
+    show('advanced-section', true)
+    show('repick-target', true)
+    show('test-now', true)
+  }
+  const header = document.querySelector('[data-picker-header]')
+  if (header) header.hidden = on
+  const pinLabel = document.getElementById('pin-defaults')?.closest('label')
+  if (pinLabel) pinLabel.hidden = on
+  const save = document.getElementById('save')
+  if (save) {
+    save.textContent = on ? `套用到 ${bulkCount} 個任務` : '儲存'
+    save.hidden = false
+  }
+  const errorsEl = document.getElementById('errors')
+  const host = on ? document.getElementById('bulk-section') : document.getElementById('preview-section')
+  if (errorsEl && host && errorsEl.parentNode !== host) {
+    if (on) host.appendChild(errorsEl)
+    else document.getElementById('preview')?.after(errorsEl)
+  }
+}
+
+// 正規化排程物件以利比較多個任務的排程是否相同
+function normalizeSchedule(s) {
+  if (!s) return null
+  const type = s.type || 'daily'
+  const weekdays = Array.isArray(s.weekdays) ? Array.from(new Set(s.weekdays.map(Number))).sort((a, b) => a - b) : []
+  if (type === 'daily') {
+    const times = Array.isArray(s.times) ? Array.from(new Set(s.times)).sort() : []
+    return { type, times, weekdays }
+  }
+  const res = {
+    type: 'interval',
+    everyMinutes: s.everyMinutes,
+    weekdays
+  }
+  const hasWindow = s.window && typeof s.window.from === 'string' && s.window.from.trim() !== '' &&
+    typeof s.window.to === 'string' && s.window.to.trim() !== ''
+  if (hasWindow) {
+    res.window = { from: s.window.from.trim(), to: s.window.to.trim() }
+  }
+  return res
+}
+
+// 繪製整批改排程檢視
+async function renderBulk(ctx) {
+  const allTasks = await getTasks()
+  const idSet = new Set(ctx.taskIds)
+  const found = allTasks.filter(t => idSet.has(t.id))
+  bulkTaskIds = ctx.taskIds.slice()
+  bulkCount = found.length
+
+  if (found.length === 0) {
+    setBulkView(true)
+    const list = document.getElementById('bulk-list')
+    if (list) list.textContent = '找不到要修改的任務（可能已經被刪掉了）。'
+    const save = document.getElementById('save')
+    if (save) save.hidden = true
+    return
+  }
+
+  setBulkView(true)
+  const list = document.getElementById('bulk-list')
+  if (list) {
+    list.replaceChildren()
+    for (const t of found) {
+      const item = document.createElement('div')
+      item.textContent = t.name
+      list.appendChild(item)
+    }
+  }
+
+  const titleEl = document.getElementById('picker-title')
+  if (titleEl) {
+    titleEl.textContent = found.length === 1
+      ? `修改「${found[0].name}」的排程`
+      : `整批修改 ${found.length} 個任務的排程`
+  }
+
+  const norm0 = JSON.stringify(normalizeSchedule(found[0].schedule))
+  const allSame = found.every(t => JSON.stringify(normalizeSchedule(t.schedule)) === norm0)
+  const noteEl = document.getElementById('bulk-note')
+  fillSchedule(found[0].schedule)
+  if (allSame) {
+    if (noteEl) noteEl.textContent = `這 ${found.length} 個任務目前的排程相同。`
+  } else {
+    if (noteEl) noteEl.textContent = `所選任務的排程不同，目前顯示的是「${found[0].name}」的；套用後 ${found.length} 個任務都會改成下面的設定。`
+  }
+
+  syncScheduleFields()
+  syncWindowFields()
+  renderTimeChips()
+  updateSchedulePreview()
+
+  restoreDraft(ctx.draft)
+  setBulkView(true)
+}
+
+// 整批改排程存檔
+async function handleBulkSave() {
+  const errorsEl = document.getElementById('errors')
+  if (errorsEl) errorsEl.textContent = ''
+  const busySave = setBusy('save', '套用中…')
+
+  const values = getFormData()
+  const validation = validateSchedule(values)
+  if (!validation.ok) {
+    if (errorsEl) errorsEl.textContent = Object.values(validation.errors).join('\n')
+    busySave()
+    return
+  }
+
+  const schedule = buildSchedule(values)
+  try {
+    const allTasks = await getTasks()
+    const idSet = new Set(bulkTaskIds)
+    const live = allTasks.filter(t => idSet.has(t.id))
+    const missing = bulkTaskIds.length - live.length
+    if (live.length === 0) {
+      if (errorsEl) errorsEl.textContent = '這些任務都已經不存在了。'
+      busySave()
+      return
+    }
+
+    const updated = live.map(t => ({ ...t, schedule }))
+    await saveTasks(updated)
+
+    let nextRunMs = null
+    const enabledTasks = live.filter(t => t.enabled !== false)
+    if (globalThis.chrome?.runtime?.sendMessage) {
+      try {
+        await chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS })
+        if (enabledTasks.length > 0) {
+          const runs = await chrome.runtime.sendMessage({ type: MSG.GET_NEXT_RUNS })
+          for (const t of enabledTasks) {
+            const r = runs?.nextRuns?.[t.id]
+            if (typeof r === 'number' && (nextRunMs === null || r < nextRunMs)) nextRunMs = r
+          }
+        }
+      } catch {}
+    }
+
+    let text
+    if (enabledTasks.length === 0) {
+      text = `已更新 ${live.length} 個任務的排程。所選任務都停用中，不會排程；到任務頁啟用後才會抓。`
+    } else if (nextRunMs !== null) {
+      const d = new Date(nextRunMs)
+      const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+      text = `已更新 ${live.length} 個任務的排程。下次抓取：${hhmm}`
+    } else {
+      text = `已更新 ${live.length} 個任務的排程。${describeSchedule(schedule)}`
+    }
+    if (missing > 0) {
+      text += `（${missing} 個已不存在）`
+    }
+
+    bulkTaskIds = null
+    await showSavedFeedback(live[0], { text })
+  } catch (e) {
+    if (errorsEl) errorsEl.textContent = `套用失敗：${e?.message || e}`
+    busySave()
+  }
+}
+
