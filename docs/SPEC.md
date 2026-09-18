@@ -589,6 +589,13 @@
 - **編輯時移除了值**:見 §5〈值被移除時的序列〉;回饋多一行「移除了 N 個值；它們的歷史紀錄會保留到保留天數到期。」(`saved` ctx 的 `note`)。
 - **進階設定**(策略、正規表達式、生效時段、告警條件、前置動作)收在 `<details id="advanced-section">`,
   預設收合;編輯既有任務且其中有非預設值時自動展開。所有欄位 id 不變,只是換了外層容器。
+- **一次建立多個任務的畫面共用一份前置動作**(AF-20):批次畫面展開進階區、標題改成「前置動作(套用到每一個任務)」,
+  區內只露出 `#preaction-section`,其餘直接子元素標 `data-batch-hidden` 藏起來,離開批次只還原帶這個標記的(`#legacy-strategy-note` 本來就可能是藏著的)。
+  前置動作跟排程欄位一樣走共用設定:`snapshotShared` 抄下(「畫面 → 資料」只有 `preActionsFromForm` 一份,`getFormData` 也用它)、
+  每項 `render` 完由 `pasteShared` 以 `addPreActionRow` 重建;沒有前置動作時不寫 `preActions` 鍵(同單任務)。
+  **進入批次畫面(`renderBatch`)先清空前置動作列**:同一份面板文件可能剛編輯過有前置動作的任務,不清就會被套到每一個新任務;
+  不在 `setBatchView` 清(收集時每一項都會呼叫它)。批次裡任何一項有 `frameUrl` 且還沒有前置動作列時顯示同一個框架提示(提示句只有 `frameHintText` 一份)。
+  前置動作**不進草稿**:面板文件重載(切去別的分頁再回來)後前置動作列會消失,與單任務相同(見 BACKLOG)。
 - 編輯用了已移除策略(`attr`/`child`/`label`)的舊任務時,表單顯示一行說明(`#legacy-strategy-note`):
   設定原樣保留,改選其他策略才會換掉。
 - 「立即測試」與正式抓取共用同一份規格組裝 `buildSpec(values)`,不得各組一份
@@ -618,7 +625,7 @@
 
 **目標在 iframe 內時另存 `task.frame = { url }`**(選取當下那個 frame 的 `location.href`);
 目標在最上層時**不存這個欄位**(舊任務零遷移,沒有這個鍵就等於最上層)。
-`frameId` 每次載入都不同、**存不得**——排程到點是開新分頁,所以要重新定位。
+`frameId` 每次載入都不同、**存不得**——排程到點是另外開一份頁面(專用視窗,§4),所以要重新定位。
 定位只有一份實作:`background/frames.js` 的 `locateFrame`,三層,**第一個「唯一」命中為準**:
 
 1. 網址完全相同
@@ -713,11 +720,13 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
 | alarm 觸發不準或重複 | 可能晚 0~60 秒、極少數重複觸發;補抓與正常觸發撞在同一槽 | **執行帳本** `runs[taskId][slot] = status`:同一 `slot` 只執行一次,重複觸發直接略過(冪等) |
 | 電腦睡眠 | alarm 在喚醒時才響,可能已晚數小時 | 觸發時算 `late = now - slot`;補抓的紀錄標 `late`,超過容忍範圍的槽進錯過清單交使用者決定(§4 補抓;`lateTolerance` 見 BACKLOG) |
 | 看門狗 | 上述任一環節漏掉,沒有人發現 | 固定 alarm `__watchdog` 每 15 分鐘:①確認每個啟用任務的 alarms 存在,缺就重建;②確認 `__sitecheck`(每日站台檢查)還在,不在才補建;③以帳本比對「上次檢查以來應有的槽」,缺的補進錯過清單;④清理超過 3 分鐘的中途 run(`startedAt` 存的是 ISO 字串);⑤記錄一筆心跳 |
-| 沒有任何視窗 | macOS 上 Chrome 可在無視窗狀態執行,`tabs.create` 失敗 | 抓取前 `windows.getAll()` 為空時 `windows.create({state:"minimized"})`,用完關閉 |
-| 背景分頁被 Chrome 丟棄(discard)/ 省電模式 | 分頁存在但內容被卸載,注入失敗 | `tabs.get` 檢查 `discarded`,是則 `tabs.reload` 再等 `complete`;自開的分頁設 `autoDiscardable:false` |
+| 沒有任何視窗 | macOS 上 Chrome 可在無視窗狀態執行,`tabs.create` 失敗 | 預設本來就開專用視窗;設定成「背景分頁」時,沒有任何視窗就改走專用視窗(`fetch-tab.js`) |
+| 抓取視窗沒被關掉 | service worker 在抓取途中被回收,記憶體裡的佇列跟著消失,沒有人關那個視窗 | 入口把自己建的視窗／分頁登記在 `storage.session.fetchTabs`(每筆帶這次 service worker 的 `boot`,**建立當下、最小化之前**就登記);看門狗每輪關掉 `boot` 不是自己的那些。**只看登記表**,不得用網址或標題猜哪個視窗是自己的。不用 inflight 判定:同站台兩個任務交接的空檔 inflight 是空的,會關到正要被沿用的視窗 |
+| 抓取途中瀏覽器被關閉 | 下次啟動「繼續上次的工作階段」可能把專用視窗還原回來 | **不處理**:`storage.session` 已清空、視窗 id 也換了,認不出來;發生機率低,使用者手動關掉即可 |
+| 背景頁面被 Chrome 丟棄(discard)/ 省電模式 | 分頁存在但內容被卸載,注入失敗 | `tabs.get` 檢查 `discarded`,是則 `tabs.reload` 再等 `complete`(只有 `waitTabReady` 一份);自開的分頁設 `autoDiscardable:false` |
 | 頁面永遠不到 `complete` | 有些頁長連線不結束 | 載入等待上限 30 秒,到時仍嘗試注入擷取;擷取本身逾時 15 秒(**計時器在擷取結束時清掉**,不清的話每抓一次都把 service worker 多吊 15 秒不能閒置) |
 | 離線 / 網路錯誤 | 抓到錯誤頁 | `navigator.onLine` 為 false 直接排 10 分鐘後重試;找不到目標元素走重試(2 分鐘、10 分鐘,共兩次;HTTP 錯誤頁的判定見 BACKLOG) |
-| 同時多任務 | 同站台互相干擾、開太多分頁 | 同站台嚴格串行並共用同一個分頁(全域並行佇列見 BACKLOG) |
+| 同時多任務 | 同站台互相干擾、開太多分頁 | 同站台嚴格串行並共用同一個分頁(佇列 `enqueueForOrigin` 在 `fetch-tab.js`,每日站台檢查也進同一條;全域並行佇列見 BACKLOG) |
 | 時鐘/時區變更 | 排程槽算錯 | 看門狗每次比較 `Intl.DateTimeFormat().resolvedOptions().timeZone`,變了就 `rebuildAlarms()` |
 
 - **診斷紀錄**:環形緩衝 500 筆(`storage.local.diag`),記 alarm 觸發、run 狀態轉移、看門狗結果、錯誤;Report 設定頁「排程健康」區顯示:
@@ -737,31 +746,54 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
 - 每日一次的**站台健康檢查**(`background/sitecheck.js`,`__sitecheck` alarm,
   時間取 `settings.siteCheckTime`,預設 08:00):對每個**啟用中**的站台開分頁走一次登入流程,
   結果寫 `health['site:<origin>']`,失敗即通知,提早發現密碼過期、驗證碼新增。
-  用完的分頁一定關掉。與每日排程一樣用 `when` 重算,不用 `periodInMinutes`。
+  **與抓取走同一條同站台佇列與同一個抓取頁面**(AF-20):登入檢查會填表單、按送出,與同站台抓取同時進行會互相踩到登入狀態。
+  每次都重新載入登入頁,結束後把頁面標成「被動過」,排在後面的抓取會先重載。與每日排程一樣用 `when` 重算,不用 `periodInMinutes`。
 - 預檢通過但正式抓取仍失敗 → 走 §4 重試;預檢與正式抓取共用同一段流程碼,只差「是否寫紀錄」旗標。
 - interval 任務(每 N 分鐘)不做每槽預檢(太頻繁),只吃每日站台健康檢查與正式失敗回報。
-- 預檢用的分頁與正式抓取相同規則(背景、用完關閉);預檢失敗不重試,交給燈號與通知。
-- 到點流程:background 開背景分頁(`active:false`)載入目標 URL → 等 `complete` + 額外等待(預設 3 秒,任務可調)
-  → 若偵測到登入頁(§6)則先登入 → 注入 content script 擷取 → 寫入紀錄 → 關閉分頁。
-- 若使用者已開著同 URL 的分頁,優先直接在該分頁擷取,不另開。
+- 預檢用的分頁與正式抓取相同規則(專用視窗、用完關閉);預檢失敗不重試,交給燈號與通知。
+- 到點流程:background 經**抓取頁面的唯一入口 `background/fetch-tab.js`**(`acquireFetchTab`)取得頁面 → 等 `complete` + 額外等待(預設 3 秒,任務可調)
+  → 若偵測到登入頁(§6)則先登入 → 注入 content script → 前置動作 → 擷取 → 寫入紀錄 → 同站台佇列清空時關閉(`releaseFetchTab`)。
+- **抓取頁面開在哪裡**(設定 `fetchTabMode`,設定頁「排程抓取的頁面開在」):
+  - `window`(預設):擴充功能自己的**專用視窗**,使用者的分頁列完全不動。建立方式照下面的探針事實,**只有這一種組合可用**:
+    先 `windows.create({ url, focused:false, width:1280, height:800 })`、**立刻登記**(§4.1)、再 `windows.update({ state:'minimized' })`。
+    建視窗失敗就退回 `tab` 並寫診斷 `fetch_window_fallback`;最小化失敗照樣用那個視窗(不得再開退路分頁,否則視窗沒人關)。
+  - `tab`:目前視窗的背景分頁(`tabs.create({ url, active:false })`)。給覺得視窗閃一下很干擾的人;沒有任何視窗時改走 `window`。
+  - 兩種都**不沿用使用者開著的分頁**(AF-20 推翻舊規則「已開著同 URL 的分頁優先直接擷取」):那樣會在使用者眼前注入、點按鈕、捲動、甚至填登入並送出,
+    而且那一頁可能幾小時沒刷新,每次抓到的都是同一個舊值。只沿用本入口自己開的頁面;「是不是同一頁」一律 `sameOriginPath`。
+  - 立即測試(`TEST_TASK` 帶 `tabId`)仍用使用者眼前的分頁(那是使用者正在設定的畫面);網址核對不過就改走專用視窗。
+- **專用視窗的探針事實**(AF-20,Chrome for Testing 152 / Windows 11,已拿掉 puppeteer 預設的關閉節流旗標——帶著它們量到的可見性與計時器全都不可信):
+
+  | 做法 | 焦點 | 結果 |
+  |---|---|---|
+  | `windows.create({ state:'minimized' })` | 不搶 | 頁面 viewport **0×0**(RWD 站台會切成手機版、虛擬捲動表格渲染 0 列);之後改尺寸、重載、導覽都救不回來 |
+  | `state:'minimized'` ＋ `focused:false` | 不搶 | **靜默變成一般視窗**,沒有最小化 |
+  | `state:'minimized'` ＋ `type:'popup'` | **搶焦點** | — |
+  | 先不聚焦帶尺寸建立,再最小化 | 不搶,零 `onFocusChanged` | viewport 保住;頁面 `hidden`、計時器節流,與背景分頁完全相同 |
+  | 已最小化的視窗裡再 `tabs.create` | 不搶 | 新分頁 viewport **0×0** → 同佇列的下一個任務一律在同一個分頁**導覽**(`tabs.update({url})`) |
+  | 畫面外座標 `left:-2000` | — | API 直接拒絕(至少 50% 要在可見範圍) |
+
+  量不到的:建立到最小化之間(約 100~300 毫秒)肉眼看不看得到;Edge 未實測(本機 puppeteer 啟動不了 Edge)。
 - 補抓:Chrome 未開時錯過的排程,啟動時整理成「錯過清單」(任務、應抓時間),以 `notifications`
   按鈕「立即補抓 / 略過」詢問使用者,Report 頁同時顯示橫幅可逐筆勾選;補抓的紀錄標 `status: "late"`。
   錯過清單只把最近 7 天內的槽算進去;既有項目不會自動過期(見 BACKLOG)。
 - 重試:`not_found` 或逾時 → 2 分鐘後、10 分鐘後各重試一次(共兩次),仍失敗才寫失敗紀錄並發通知。
   `login_failed` 與 `parse_error` **不重試**(重試幾次結果都一樣)。
-- 同一時刻多任務同站台 → 串行,共用分頁。
+- 同一時刻多任務同站台 → 串行,共用分頁。**沿用前依前置動作決定要不要重載**(AF-20):上一個任務跑過前置動作(**中途失敗也算**,頁面可能已被改動)、
+  或這個任務自己有前置動作 → 先重載(網址完全相同 `tabs.reload`,否則導覽到任務網址);兩者皆否且是同一頁 → 直接沿用。
+  開關型按鈕第二次按會收回去,所以不能讓後一個任務按在前一個任務按過的頁面上。每日站台檢查之後一律視為被動過。
 - 前景 vs 背景:`chrome.tabs.create({active:false})` 開的分頁 JS 照常執行,但 `document.visibilityState` 為 `hidden`,
   IntersectionObserver 式的 lazy-load、依可見性才啟動的圖表/輪詢**可能不觸發**。
   策略:預設背景;content script 擷取前先 `scrollIntoView` 目標;若同一任務連續 2 次 `not_found`,
-  任務頁顯示提示與一鍵切換,任務可設 `foreground: true`(抓取時切到該分頁,結束後把焦點還給原本那個分頁)。
+  任務頁顯示提示與一鍵切換,任務可設 `foreground: true`:在使用者**最後聚焦的一般視窗**(`windows.getLastFocused`)開一個作用中的新分頁抓,
+  結束後把那個視窗原本的作用分頁切回來、關掉自己的分頁(`openForegroundTab`)。同樣不沿用使用者既有的分頁,也不搶作業系統層級的視窗焦點。
   成功抓到值一次就把提示清掉。
 - **目標在 iframe 內時,Picker 會提示可能要加前置動作**(`#frame-hint`,`role="status"`):
   新任務、`ctx.frameUrl` 存在、又還沒有任何前置動作時才顯示,並把「進階設定」展開
   (藏在收合區裡等於沒提示)。「加入點擊步驟」= 新增一列 `click` 並立刻進入選取模式
   (`frameId: 0`,要點的按鈕常在最上層);「不需要」收起。編輯既有任務不提示。
   **「立即測試」成功且目標在框架內、又沒有前置動作時**,`#test-note`(`role="status"`,不是紅色的
-  `#errors`)補一句「這次測試在目前分頁執行;排程會開新分頁」——測試是在使用者眼前那個
-  已經開著 iframe 的分頁跑的,排程卻是開新分頁,成功不代表排程會成功。
+  `#errors`)補一句「這次測試在目前分頁執行;排程會自己另外開一份頁面」——測試是在使用者眼前那個
+  已經開著 iframe 的分頁跑的,排程卻是另外開一份頁面,成功不代表排程會成功。
 - **送出中要有回饋**:「立即測試」與「儲存」按下後停用並改字(測試中…／儲存中…),
   結果回來(或驗證失敗)才還原,不得連按。
 - 抓取前可選的**前置動作**(`task.preActions`,依序執行,任一失敗即停止並走錯誤路徑),四種:
@@ -1466,7 +1498,8 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
 
 | Edge 機制 | 影響 | 對策 |
 |---|---|---|
-| 睡眠索引標籤(Sleeping Tabs,預設 2 小時,可設 5 分鐘) | 背景分頁被卸載比 Chrome 積極 | 自開分頁 `autoDiscardable:false`;既有分頁若 `discarded` 先 reload(§4.1 已涵蓋) |
+| 睡眠索引標籤(Sleeping Tabs,預設 2 小時,可設 5 分鐘) | 背景分頁被卸載比 Chrome 積極 | 自開分頁 `autoDiscardable:false`;沿用的頁面若 `discarded` 先 reload(§4.1 已涵蓋) |
+| 最小化視窗的頁面行為 | AF-20 的專用抓取視窗只在 Chrome 實測過;Edge 對最小化視窗的節流與可見性未驗證(本機 puppeteer 啟動不了 Edge) | 設定頁可改回「目前視窗的背景分頁」(`fetchTabMode:'tab'`) |
 | 效率模式(Efficiency mode) | 背景 JS 節流更重 | 載入等待上限與擷取逾時已放寬;預檢(§4.2)會提早暴露問題 |
 | 啟動加速(Startup boost)/ 關閉視窗後仍在背景執行 | 無視窗狀態更常見 | §4.1「沒有任何視窗」對策 |
 | `edge://extensions` 載入未封裝 | 路徑不同 | README 兩個瀏覽器的安裝步驟都寫 |

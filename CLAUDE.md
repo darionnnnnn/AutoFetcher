@@ -13,6 +13,7 @@ src/
 │                          precheck 預檢 / sitecheck 每日站台檢查 / missed 補抓 / watchdog 看門狗
 │                          health 燈號 / notify 通知唯一入口 / inject 注入唯一入口
 │                          frames 目標所在 iframe 的定位唯一入口
+│                          fetch-tab 抓取頁面(專用視窗／分頁)與同站台佇列的唯一入口
 ├── content/             ← 注入頁面:main.js 訊息路由/擷取/填登入/前置動作(hover/等/點/等待)
 │                          picker-mode.js 選取模式(高亮 overlay、↑↓、右上角工具列四段
 │                          「單格(預設)/整欄→一個值/整欄→每格/整列→一個值」、可互動的已選 chip 面板、完成/取消鈕;
@@ -73,6 +74,14 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   只能取 `windows.getCurrent().id`,在 `visibilitychange` 轉為可見時問 background(`RESOLVE_PANEL_TAB`)。
 - **`held` 標示(送出後留在頁面上的藍框)有兩個出口**:面板關閉(`EXIT_PICK`)與下一輪同用途的 `ENTER_PICK`;
   按用途分群(`data-af-held`),取消／`Esc` 只清自己那一群。
+- **抓取頁面只有 `background/fetch-tab.js` 開**(AF-20):排程、預檢、補抓、手動抓取、每日站台檢查都經 `enqueueForOrigin` → `acquireFetchTab`,
+  佇列清空才 `releaseFetchTab`;前景抓取經 `openForegroundTab`;等載入(含 `discarded` 重載)只有 `waitTabReady`。
+  **不沿用使用者開著的分頁**(只有立即測試帶 `tabId` 例外),「是不是同一頁」只用 `sameOriginPath`,抓取路徑不得 `tabs.query({url})`(`z8` 的 D15 會擋)。
+  **專用視窗只有一種建法**:先 `windows.create({ url, focused:false, width, height })`、立刻登記、再 `windows.update({ state:'minimized' })`。
+  直接 `state:'minimized'` 建的頁面 viewport 是 0×0;`minimized`＋`focused:false` 會靜默變一般視窗;`popup` 搶焦點;已最小化的視窗裡再開的分頁也是 0×0(探針事實表在 SPEC §4)。
+  自建的視窗／分頁登記在 `storage.session.fetchTabs`(帶 `boot`),孤兒只看登記表判定,不得用網址猜。
+- **量頁面可見性、計時器節流一類的探針要拿掉 puppeteer 的預設旗標**(AF-20):它預設帶 `--disable-background-timer-throttling` 等三個,
+  帶著跑的第一輪探針把背景頁面量成 visible、計時器照跑,結論完全相反。`ignoreDefaultArgs` 列出那三個再量。
 - **health 一律經 `background/health.js` 的 `setTaskHealth` 寫**(fetcher / precheck / sitecheck 三個呼叫端);
   抓取結果 → 狀態的算法只有 `fetcher.js` 的 `healthFromRecords` 那一份。
 
@@ -80,12 +89,12 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 
 - 改任何行為 → `docs/SPEC.md`(現況規格,§編號會被程式碼註解引用,勿拆檔)
 - 想做但刻意沒做 → `docs/BACKLOG.md`(每項附觸發條件)
-- 本輪規劃 → `docs/AF-<N>-PLAN.md`;完工搬 `docs/archive/`(按需讀,勿全掃)。AF-1~AF-19 已歸檔。
+- 本輪規劃 → `docs/AF-<N>-PLAN.md`;完工搬 `docs/archive/`(按需讀,勿全掃)。AF-1~AF-19 已歸檔(AF-20 規劃在 `docs/AF-20-PLAN.md`)。
 
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 2445 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 2503 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -158,7 +167,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **不要用 `periodInMinutes` 做任務排程**(daily 與 interval 都不行,一律每次觸發後重算對齊的 `when`,
   理由與規則見 SPEC §4);`__watchdog` 自己那個固定 alarm 是唯一例外。
 - 不要在帳本之外直接呼叫 `runTask`(同一排程槽會重複抓;冪等靠 `runs[taskId][slot]`,SPEC §4.1)。
-- 不要假設抓取時目標分頁已開啟(排程到點由 background 自己開分頁,SPEC §4)。
+- 不要假設抓取時目標分頁已開啟(排程到點由 background 經 `fetch-tab.js` 自己開頁面,SPEC §4)。
 - **不要在 background 用動態 `import()`**(MV3 service worker 規格禁止,會在真實瀏覽器才炸;一律靜態匯入)。
 - **不要在 background 直接呼叫 `chrome.notifications.create`**:一律走 `background/notify.js`
   (唯一入口、統一圖示、遵守通知偏好)。`iconUrl` 必須是 `chrome.runtime.getURL()` 的絕對網址。

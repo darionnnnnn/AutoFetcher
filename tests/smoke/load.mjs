@@ -682,6 +682,62 @@ try {
     console.log(`${browserName}:前置動作換子框架後仍抓得到值 (${childRec.value})`)
   }
 
+  // 5h. AF-20:排程抓取在專用視窗進行,不碰使用者開著的同網址分頁,抓完不留任何視窗或分頁。
+  //     判定「沒碰」:content script 載入時會在隔離環境設 __afContentLoaded,使用者那一頁不得有它。
+  const userPage = await browser.newPage()
+  await userPage.goto('http://127.0.0.1:48123/?user=1', { waitUntil: 'load' })
+  const af20 = await ext2.evaluate(async () => {
+    const count = async () => {
+      const wins = await chrome.windows.getAll({ populate: true })
+      return { wins: wins.length, tabs: wins.reduce((n, w) => n + (w.tabs?.length || 0), 0) }
+    }
+    const [userTab] = await chrome.tabs.query({ url: 'http://127.0.0.1:48123/?user=1' })
+    const before = await count()
+    const t = {
+      id: 'af20bg', name: 'AF-20 背景', url: 'http://127.0.0.1:48123/', mode: 'number', enabled: true,
+      locator: { css: '#v', path: '', anchor: null, xpath: '' }, spec: { strategy: 'auto' }, extraDelaySec: 0,
+      schedule: { type: 'daily', times: ['09:00'], weekdays: [0, 1, 2, 3, 4, 5, 6] }
+    }
+    await chrome.storage.local.set({ tasks: [t] })
+    let res, sendErr = null
+    let sawWindow = false
+    const onCreated = (w) => { sawWindow = sawWindow || w.state === 'minimized' || w.type === 'normal' }
+    chrome.windows.onCreated.addListener(onCreated)
+    try {
+      res = await Promise.race([
+        chrome.runtime.sendMessage({ type: 'RUN_TASK', taskId: t.id }),
+        new Promise((_, rj) => setTimeout(() => rj(new Error('RUN_TASK 60 秒沒有回應')), 60000))
+      ])
+    } catch (e) { sendErr = String(e?.message || e) }
+    chrome.windows.onCreated.removeListener(onCreated)
+    await new Promise(r => setTimeout(r, 500))
+    const after = await count()
+    const touched = (await chrome.scripting.executeScript({
+      target: { tabId: userTab.id, frameIds: [0] },
+      func: () => globalThis.__afContentLoaded === true
+    }))[0]?.result
+    const day = new Date().toLocaleDateString('sv-SE')
+    const recs = ((await chrome.storage.local.get(`rec:${day}`))[`rec:${day}`] || []).filter(r => r.taskId === 'af20bg')
+    const reg = (await chrome.storage.session.get('fetchTabs')).fetchTabs || []
+    return { res, sendErr, before, after, touched, sawWindow, rec: recs[recs.length - 1] || null, reg }
+  })
+  if (!af20.rec) {
+    errors.push(`AF-20:專用視窗抓取沒有留下紀錄:${JSON.stringify({ res: af20.res, sendErr: af20.sendErr })}`)
+  } else if (Number(af20.rec.value) !== 1234) {
+    errors.push(`AF-20:專用視窗應抓到 1234,實得 ${JSON.stringify({ v: af20.rec.value, e: af20.rec.error })}`)
+  } else if (af20.touched) {
+    errors.push('AF-20:排程抓取對使用者開著的同網址分頁注入了 content script')
+  } else if (!af20.sawWindow) {
+    errors.push('AF-20:沒有看到專用抓取視窗被建立')
+  } else if (af20.after.wins !== af20.before.wins || af20.after.tabs !== af20.before.tabs) {
+    errors.push(`AF-20:抓完視窗/分頁數沒有回到原狀:${JSON.stringify({ before: af20.before, after: af20.after })}`)
+  } else if (af20.reg.length !== 0) {
+    errors.push(`AF-20:抓完登記表沒有清空:${JSON.stringify(af20.reg)}`)
+  } else {
+    console.log(`${browserName}:排程在專用視窗抓到 ${af20.rec.value},使用者的分頁沒被碰,抓完視窗與分頁數回到原狀`)
+  }
+  await userPage.close()
+
   // 整頁換頁（`location.href`）的排程案**沒有留在這裡**：它在隔離的探針裡穩定通過
   // （單獨跑、連跑兩次、接在 iframe 任務之後都成功，取到換頁後的值），
   // 但放進這整輪煙霧就必定 60 秒不回應，原因尚未查明（不是本輪改動造成，見 BACKLOG）。
