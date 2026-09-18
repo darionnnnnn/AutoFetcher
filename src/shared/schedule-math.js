@@ -27,6 +27,14 @@ export function slotOf(ms) {
   return `${y}-${m}-${day}T${h}:${min}`
 }
 
+// slotOf 的反向：本地時間排程槽字串 → 該分鐘的時間戳（毫秒）；格式不合回 null
+export function slotToMs(slot) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(String(slot ?? '').slice(0, 16))
+  if (!m) return null
+  const [, y, mo, d, h, mi] = m.map(Number)
+  return new Date(y, mo - 1, d, h, mi, 0, 0).getTime()
+}
+
 // 計算下一次每日排程觸發的時間戳（毫秒）
 export function nextDailyRun(nowMs, times, weekdays) {
   if (!Array.isArray(times) || times.length === 0) return null

@@ -72,7 +72,8 @@ test('抓取失敗不得被改寫成 late', async () => {
   const { c, st, bg } = await fresh(at(2026, 9, 18, 7, 0))
   await st.saveTask(daily('d1', '23:55'))
   c.__setTabResponder(() => ({ ok: false, error: 'not_found' }))
-  await bg.handleAlarm({ name: 'task:d1:0', scheduledTime: at(2026, 9, 17, 23, 55) }, FAST)
+  // 第 1、2 次失敗只排重試不寫紀錄；用第 3 次（重試 alarm 的 attempt 2 → 3）才會寫失敗紀錄
+  await bg.handleAlarm({ name: 'd1:retry:2@2026-09-17T23:55' }, FAST)
   const recs = await st.getRecordsByDate('2026-09-17')
   assert.ok(recs.length >= 1)
   assert.ok(recs.every(r => r.status !== 'late'), '失敗的紀錄維持失敗狀態')
@@ -193,4 +194,16 @@ test('復原：runState 為空（瀏覽器重啟後 session 清空）什麼都�
   const fetcher = await import('../src/background/fetcher.js?t=' + Math.random())
   await assert.doesNotReject(() => fetcher.recoverRunState(FAST))
   assert.deepEqual(await st.getRunState(), {})
+})
+
+test('復原：啟動與看門狗同時復原，同一格只處理一次', async () => {
+  const { c, st } = await fresh(at(2026, 9, 18, 9, 40))
+  const fetcher = await import('../src/background/fetcher.js?t=' + Math.random())
+  await st.saveTask(daily('d1', '09:00'))
+  await st.updateRunState(() => ({ 'd1@2026-09-18T09:00': { state: 'running', at: at(2026, 9, 18, 9, 0), boot: 'old-boot', attempt: 1, reason: 'scheduled' } }))
+  c.__setTabResponder(OK)
+  await Promise.all([fetcher.recoverRunState(FAST), fetcher.recoverRunState(FAST)])
+  const recs = await st.getRecordsByDate('2026-09-18')
+  assert.equal(recs.filter(r => r.status === 'interrupted').length, 1)
+  assert.equal((await st.getMissedList()).filter(m => m.taskId === 'd1').length, 1)
 })

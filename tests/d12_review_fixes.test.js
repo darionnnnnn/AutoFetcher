@@ -100,17 +100,16 @@ test('失敗的抓取不得覆蓋掉上一次成功的值', async () => {
 
 // ---- 卡住的執行從來沒被清掉 ----
 
-test('卡超過三分鐘的執行會被看門狗清掉', async () => {
+test('上一個 worker 留下的舊執行會被看門狗清掉', async () => {
   const { c, st } = await fresh()
   const wd = await import('../src/background/watchdog.js?t=' + Math.random())
   await st.saveTask(task())
-  // fetcher 寫進去的 startedAt 是 ISO 字串（不是數字），過去看門狗比對型別因此永遠不成立
-  await chrome.storage.session.set({
-    inflight: { 't1:2026-09-06T09:00': { state: 'running', startedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString() } }
-  })
+  // AF-21 批次 2：inflight 換成 runState（帶 boot）；別的 worker 留下、超過 10 分鐘的項目記 interrupted 後移除
+  await st.updateRunState(() => ({
+    't1@2026-09-06T09:00': { state: 'running', at: Date.now() - 30 * 60 * 1000, boot: 'old-boot', attempt: 1, reason: 'scheduled' }
+  }))
   await wd.runWatchdog()
-  const res = await chrome.storage.session.get('inflight')
-  assert.deepEqual(res.inflight, {}, '卡住的執行要清掉,否則那個槽永遠不會再跑')
+  assert.deepEqual(await st.getRunState(), {}, '卡住的執行要清掉,否則那個槽永遠不會再跑')
 })
 
 test('還沒卡住的執行不得被清掉', async () => {

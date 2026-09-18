@@ -129,6 +129,7 @@
 
 1. **slot 一律取排定時刻**：daily 與 interval 都用 `slotOf(alarm.scheduledTime)`（daily 的 alarm 本來就排在那一分鐘；使用者改時間會 `REBUILD_ALARMS` 重建）。`scheduledTime` 缺省才退回舊算法。
 2. **遲到標記**：實際開始抓的時刻比 slot 晚超過 30 分鐘〔暫定；必須大於重試視窗 2＋10 分鐘加單次總時限，否則每一筆重試成功都會變黃燈〕→ 成功的紀錄狀態記 `late`（既有狀態、算成功、黃燈）。這是 `lateTolerance` 的最小實作（固定常數、不開設定），SPEC §4.1 與 BACKLOG:50 同步改寫。
+   - **（實作修正）遲到由呼叫端判定**：`handleAlarm` 與 `recoverRunState` 以 `isLateStart(slot, now)` 算好後傳 `markLate` 給 `runTask`；`runTask` 自己不看時鐘（否則所有直接呼叫 runTask 的路徑都會被時鐘影響）。
    - **晚超過 24 小時的 daily alarm 不執行**（電腦關三天，Chrome 只補觸發一次，把今天的值寫進三天前那格沒有意義）：只排下一次，那一格交給錯過清單。
    - 理由：修了第 1 點之後，「23:55 的格子在早上 07:00 才抓到」會被老實寫成昨天那格，不標遲到就是把 07:00 的值當成 23:55 的值。
 3. **daily 也先排下一次再執行**；`handleAlarm` 的外層 catch 改成寫 diag（不再靜默）。
@@ -476,7 +477,8 @@
 - **P1 鎖跨環境（2026-09-19，Chrome for Testing 152）**：擴充功能頁持有 `navigator.locks` 的鎖時 service worker 等了 2698ms、反向 1696ms（持有時間 3s／2s）→ **同一擴充功能來源的頁面與 worker 互斥成立**，批次 1 定案 1 採主方案。`AbortSignal.timeout` 可中止等待（回 `TimeoutError`）→ 取鎖逾時用它。`chrome.storage.local.getKeys` 在 worker 與頁面都存在 → 批次 1 定案 4 採用。
 - **P2 掉筆率**：不做。P1 證實鎖可用後，批次 1 以「漏鎖當場炸」的替身守門取代定量（壓力量測不當偵測器，見 plan-before-dev §拆分原則）。
 - **P5 長佇列截斷**：不做獨立探針。批次 2 的 `runState` 復原本來就同時處理「被截斷」與「被回收」，兩者的使用者可見結果相同（續跑或 `interrupted`）；煙霧測試加一條「worker 重啟後佇列項目被續跑」取代。
-- **P3／P4**：延到批次 7 開工前（量改前基準）。
+- **P3 大表 hover（2026-09-19，改動前）**：5000 列×6 欄的表，滑鼠在表內移動 40 次——沒選任何格時長任務總和 6725ms（平均約 170ms、最長 305ms）；已選 20 格後 16023ms（平均約 400ms、最長 497ms）。**畫面凍結成立**，批次 7 段 A 以此為基準（目標降到 1/10 以下、單次不超過 100ms）。
+- **P4 批次三組面板**：三張表各選 4 個值、視窗高 600 時面板 240px、完成／取消在畫面內——**這個量沒有溢出**；但每組 chip 清單各自 `maxHeight: 40vh`，三組值多時理論上合計超過 100vh。段 B 仍改成單一捲動區（成本低、消掉這條路），驗收改用每組 12 個值實測。
 
 ## 規劃完成後複檢
 
@@ -533,6 +535,10 @@
 
 | 作業-階段 | 執行者 | 結果 | 驗收 | 落差與處置 |
 |---|---|---|---|---|
+| 1-A 鎖＋唯一寫入口＋updateTasks（合併 1-1、1-3 與定案 1 的 updateTasks） | impl-low | 2537 綠（+8） | Claude 先寫 `za1_locks` 守門（讀寫同一次持有、單鎖、白名單）；獨立全套重跑綠；突變（mutateKey 拿掉鎖）3 則紅 | impl-low 主動回報：告警冷卻改「鎖內判斷蓋章、鎖外通知」、`catchUpAll` 只移除補抓過的項目、v1 站台遷移加密挪到鎖外。均接受 |
+| 1-B 帳本按日鍵＋紀錄小時鍵（前綴 `rec2:`）＋全鍵分批（合併 1-2、1-4、1-5） | impl-low | 2570 綠（+33） | 自寫 `za2_keys` 33 則；突變三次皆紅；Claude 獨立全套重跑 | **Claude 補修 7 則恆真的舊帳本斷言**（d5c、d6、m2、l1：它們讀已不再寫入的單一 `runs` 鍵，改成 `getRunStatus`／`runs:` 鍵清單），其中 d6 另有一行測試自己寫入 `runs:{}` 造成誤紅，一併拿掉。z1／z4 的「get(null) 恰好一次」改成「getKeys 或 get(null) 合計一次」 |
+| 1-C 紀錄瘦身＋孤兒鍵清理（1-6、1-7） | impl-low | 2582 綠（+12） | 自寫 `za3_slim`；m2_chain 補 rawTruncated 鏈結；突變 6 次皆紅 | 規格外加 `runOncePerDay`（日戳守衛留在 storage，避免看門狗直接碰 chrome.storage），接受 |
+| 2-A 排程槽取排定時刻、先排後跑、runState 復原（2-1、2-2） | impl-low | 2595 綠 | Claude 先寫 `zb1_slot_recovery`（mock.timers 假 Date）；突變 markLate 恆 false → 紅 | **規格兩處錯誤由 impl-low 回報**：(1) Claude 的測試 #4 用第一次失敗，但第 1、2 次失敗只排重試不寫紀錄 → Claude 改用重試 alarm；(2) 遲到在 runTask 內用時鐘判斷會讓 32 則直接呼叫 runTask 的舊測試變 late → 改為呼叫端（handleAlarm、recoverRunState）以 `isLateStart` 算好傳 `markLate`。**Claude 補修**：兩個復原同時跑（啟動＋看門狗）會把同一格處理兩次 → `takeRunState` 鎖內拿走才處理，補併發測試（突變驗證會紅） |
 
 ## 體檢交接
 

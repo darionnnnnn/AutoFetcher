@@ -7,9 +7,10 @@ import {
   nextDailyRun,
   nextIntervalRun
 } from './scheduler.js'
-import { getTasks, trimOldRecords, trimOldRuns, pruneOrphanEntries, runOncePerDay, getLastTimezone, setLastTimezone, getInflight, updateInflight } from '../shared/storage.js'
+import { getTasks, trimOldRecords, trimOldRuns, pruneOrphanEntries, runOncePerDay, getLastTimezone, setLastTimezone } from '../shared/storage.js'
 import { ensureSiteCheck } from './sitecheck.js'
 import { cleanOrphanFetchTabs } from './fetch-tab.js'
+import { recoverRunState } from './fetcher.js'
 import * as diag from '../shared/diag.js'
 
 
@@ -83,35 +84,6 @@ async function cleanStaleAlarms() {
   }
 }
 
-// 清理執行超過 3 分鐘卡住的 inflight 狀態
-async function cleanStuckInflight() {
-  const inflight = await getInflight()
-  if (!inflight || typeof inflight !== 'object' || Array.isArray(inflight)) {
-    return
-  }
-
-  const now = Date.now()
-  const stale = []
-
-  for (const [key, val] of Object.entries(inflight)) {
-    // fetcher 寫進去的是 ISO 字串，早期這裡比對 typeof === 'number'，所以清理從未觸發過
-    const startedAt = typeof val?.startedAt === 'string' ? Date.parse(val.startedAt) : val?.startedAt
-    if (Number.isFinite(startedAt) && now - startedAt > 3 * 60 * 1000) {
-      stale.push(key)
-    }
-  }
-
-  if (stale.length > 0) {
-    // 鎖內對最新的 inflight 刪除，不會蓋掉這段期間新開始的抓取；診斷在鎖外寫（鎖不巢狀）
-    await updateInflight((cur) => {
-      const next = { ...cur }
-      for (const key of stale) delete next[key]
-      return next
-    })
-    for (const key of stale) await diag.log('interrupted', key)
-  }
-}
-
 // 執行看門狗檢查巡迴
 export async function runWatchdog() {
   try {
@@ -156,7 +128,8 @@ export async function runWatchdog() {
   } catch {}
 
   try {
-    await cleanStuckInflight()
+    // 上一個 worker 留下的排隊中／執行中排程槽：續跑或記 interrupted（本 worker 的項目不碰）
+    await recoverRunState()
   } catch {}
 
   // 上一個 service worker 被回收時沒關掉的抓取視窗（判定只看登記表，見 fetch-tab.js）

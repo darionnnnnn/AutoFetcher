@@ -110,7 +110,7 @@ test('storage 每個寫入函式都在鎖內讀-改-寫（逐一呼叫）', asyn
   await op('updateMissedList', () => s.updateMissedList(list => [...list, { taskId: 't1', slot: '2026-09-05T09:00' }]))
   await op('setLastSeenAt', () => s.setLastSeenAt(Date.now()))
   await op('setLastTimezone', () => s.setLastTimezone('Asia/Taipei'))
-  await op('updateInflight', () => s.updateInflight(m => ({ ...m, 't1@2026-09-05T09:00': { startedAt: new Date().toISOString() } })))
+  await op('updateRunState', () => s.updateRunState(m => ({ ...m, 't1@2026-09-05T09:00': { state: 'running', at: Date.now() } })))
   await op('updateRepickTabs', () => s.updateRepickTabs(m => ({ ...m, t1: 5 })))
   await op('setPanelCtx', () => s.setPanelCtx(7, { kind: 'new' }))
   await op('mergePanelCtx', () => s.mergePanelCtx(7, { name: 'x' }))

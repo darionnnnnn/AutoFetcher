@@ -966,17 +966,17 @@ export async function setLastTimezone(tz) {
   await writeKey('lastTimezone', tz)
 }
 
-// ---- session：抓取中的排程槽（inflight）與重選開的分頁（repickTabs）----
+// ---- session：排隊中／執行中的排程槽（runState）與重選開的分頁（repickTabs）----
 
-// 取得抓取中的排程槽表（key -> { state, startedAt }）
-export async function getInflight() {
-  const res = await chrome.storage.session.get('inflight')
-  return asObject(res?.inflight)
+// 取得排程槽的執行狀態表（'<taskId>@<slot>' -> { state:'queued'|'running', at, boot, attempt, reason }）
+export async function getRunState() {
+  const res = await chrome.storage.session.get('runState')
+  return asObject(res?.runState)
 }
 
-// 在 session:inflight 鎖內讀 → mutator(副本) 回傳新值 → 寫回
-export async function updateInflight(mutator) {
-  return updateValue('inflight', asObject, mutator, 'session')
+// 在 session:runState 鎖內讀 → mutator(副本) 回傳新值 → 寫回
+export async function updateRunState(mutator) {
+  return updateValue('runState', asObject, mutator, 'session')
 }
 
 // 取得為了重選而開的分頁表（taskId -> tabId）

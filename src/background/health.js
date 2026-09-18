@@ -10,7 +10,8 @@ const STATUS_TEXT = {
   failed: '抓取失敗',
   fallback: '用備援方式抓到',
   late: '遲到',
-  partial: '只抓到部分'
+  partial: '只抓到部分',
+  interrupted: '被瀏覽器中斷'
 }
 
 // 健康紀錄裡站台項目的鍵前綴（sitecheck.js 寫入）

@@ -8,7 +8,8 @@ export const RED_STATUSES = [
   'parse_error',
   'failed',
   'not_found',
-  'error'
+  'error',
+  'interrupted'
 ]
 
 const RECORD_TO_HEALTH_STATUS = {
@@ -19,7 +20,8 @@ const RECORD_TO_HEALTH_STATUS = {
   not_found: 'selector_lost',
   parse_error: 'parse_error',
   login_failed: 'login_failed',
-  error: 'failed'
+  error: 'failed',
+  interrupted: 'interrupted'
 }
 
 /**

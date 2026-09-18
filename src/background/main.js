@@ -17,9 +17,10 @@ import {
   nextIntervalRun,
   parseAlarmName
 } from './scheduler.js'
-import { runTask } from './fetcher.js'
+import { runTask, recoverRunState, isLateStart } from './fetcher.js'
 import { refreshMissed, catchUpAll, skipAll, catchUpOne, skipOne } from './missed.js'
 import { runWatchdog, selfCheck } from './watchdog.js'
+import { cleanOrphanFetchTabs } from './fetch-tab.js'
 import { refreshBadge, markRead } from './health.js'
 import {
   schedulePrechecks,
@@ -224,16 +225,8 @@ function parseRetryName(name) {
   return { taskId, attempt: Number(attemptStr), slot }
 }
 
-// 計算每日任務當日時間槽（格式：YYYY-MM-DDTHH:mm）
-function getDailySlot(task, index) {
-  const d = new Date()
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  const time = task?.schedule?.times?.[index] || '00:00'
-  const [h = '00', min = '00'] = time.split(':')
-  return `${y}-${m}-${day}T${h.padStart(2, '0')}:${min.padStart(2, '0')}`
-}
+// 晚超過這麼久才觸發的 daily alarm 不執行（把今天的值寫進好幾天前那格沒有意義），那一格交給錯過清單
+const DAILY_STALE_MS = 24 * 60 * 60 * 1000
 
 // 短暫等待輔助函式
 function sleep(ms) {
@@ -357,7 +350,7 @@ export async function handleAlarm(alarm, testOpts = {}) {
       if (!task || !active) return
       // 重試補的是原本那一格;舊格式沒帶槽時才退回當下時刻
       const retrySlot = retry.slot || slotOf(Date.now())
-      await runTask(task, { slot: retrySlot, attempt: retry.attempt + 1, ...testOpts })
+      await runTask(task, { slot: retrySlot, attempt: retry.attempt + 1, markLate: isLateStart(retrySlot, Date.now()), ...testOpts })
       return
     }
 
@@ -370,7 +363,7 @@ export async function handleAlarm(alarm, testOpts = {}) {
         await chrome.alarms.clear(alarm.name)
         return
       }
-      // interval 是 one-shot alarm,必須先把下一次排好,任何提早 return 都不能跳過重排
+      // interval 與 daily 都是 one-shot alarm,必須先把下一次排好,任何提早 return 或例外都不能跳過重排
       if (task.schedule?.type === 'interval') {
         const nextWhen = nextIntervalRun(task, Date.now())
         if (nextWhen !== null) await chrome.alarms.create(alarm.name, { when: nextWhen })
@@ -379,13 +372,6 @@ export async function handleAlarm(alarm, testOpts = {}) {
         const decideAt = alarm.scheduledTime ?? Date.now()
         if (!shouldRunInterval(task, decideAt)) return
       }
-
-      // interval 的槽取 alarm 排定時刻(對齊格線),晚觸發不可自成新槽,冪等帳本靠它
-      const slot = task.schedule?.type === 'daily'
-        ? getDailySlot(task, parsed.index)
-        : slotOf(alarm.scheduledTime ?? Date.now())
-      await runTask(task, { slot, ...testOpts })
-
       if (task.schedule?.type === 'daily') {
         const times = task.schedule.times
         const weekdays = task.schedule.weekdays ?? task.weekdays ?? [0, 1, 2, 3, 4, 5, 6]
@@ -393,10 +379,18 @@ export async function handleAlarm(alarm, testOpts = {}) {
           const when = nextDailyRun(Date.now(), [times[parsed.index]], weekdays)
           if (when !== null) await chrome.alarms.create(alarm.name, { when })
         }
+        if (typeof alarm.scheduledTime === 'number' && Date.now() - alarm.scheduledTime > DAILY_STALE_MS) return
       }
+
+      // 槽一律取 alarm 排定時刻:晚觸發(跨日)不可寫進隔天那一格,冪等帳本與錯過清單都靠它
+      const slot = slotOf(alarm.scheduledTime ?? Date.now())
+      await runTask(task, { slot, markLate: isLateStart(slot, Date.now()), ...testOpts })
       await refreshBadge()
     }
-  } catch {}
+  } catch (err) {
+    // 寫診斷本身失敗才吞掉
+    await diag.log('alarm_error', `${alarm?.name}：${String(err?.message || err)}`).catch(() => {})
+  }
 }
 
 // 處理內部訊息分派
@@ -936,3 +930,8 @@ if (chrome.sidePanel?.onClosed?.addListener) {
   chrome.sidePanel.onClosed.addListener((info) => { closePanelFor(info?.tabId) })
 }
 chrome.tabs?.onRemoved?.addListener?.((tabId) => { closePanelFor(tabId, { keepMarks: true }) })
+
+// worker 每次啟動（不只瀏覽器啟動）：上一個 worker 留下的抓取分頁與排隊中／執行中的排程槽。
+// storage 是空的時候兩者都只讀不寫
+cleanOrphanFetchTabs().catch((err) => diag.log('startup_error', `cleanOrphanFetchTabs：${String(err?.message || err)}`).catch(() => {}))
+recoverRunState().catch((err) => diag.log('startup_error', `recoverRunState：${String(err?.message || err)}`).catch(() => {}))

@@ -1,9 +1,10 @@
 // AutoFetcher 擷取流程：開分頁、注入、擷取、寫紀錄、重試
-import { getTask, updateTasks, appendRecord, appendRecords, getRecordsInRange, getSettings, updateAlertLog, setLastValue, setLastValues, getRunStatus, setRunStatus, updateInflight } from '../shared/storage.js'
+import { getTask, updateTasks, appendRecord, appendRecords, getRecordsInRange, getSettings, updateAlertLog, setLastValue, setLastValues, getRunStatus, setRunStatus, getRunState, updateRunState, updateMissedList } from '../shared/storage.js'
 import { waitMsOf, timeoutMsOf, preActionFailure, DEFAULT_WAIT_TIMEOUT_MS, messageTimeoutMs } from '../shared/preaction.js'
 import { seriesIdOf, parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
 import { MSG } from '../shared/messages.js'
 import { slotOf } from './scheduler.js'
+import { slotToMs } from '../shared/schedule-math.js'
 import { notify } from './notify.js'
 import { injectContent } from './inject.js'
 import { evaluateAlerts } from '../shared/alerts.js'
@@ -11,7 +12,7 @@ import { isSuccess, healthStatusOf } from '../shared/record-status.js'
 import { setTaskHealth, refreshBadge } from './health.js'
 import { ensureLoggedIn } from './login.js'
 import { locateFrame, sameOriginPath } from './frames.js'
-import { acquireFetchTab, openForegroundTab, enqueueForOrigin, waitTabReady } from './fetch-tab.js'
+import { acquireFetchTab, openForegroundTab, enqueueForOrigin, waitTabReady, BOOT } from './fetch-tab.js'
 
 // `locateFrame` 找到才有 frameId；失敗時回的是帶候選清單的物件（給診斷用），不是 null
 function frameFound(loc) {
@@ -94,17 +95,113 @@ function getOrigin(url) {
   }
 }
 
-// 寫入 inflight 狀態至 storage.session
-async function setInflight(key, stateObj) {
-  await updateInflight((inflight) => ({ ...inflight, [key]: stateObj }))
+// 實際開始抓的時刻比排程槽晚超過這麼久，成功的紀錄記 late（AF-21 批次 2 定案 2；
+// 必須大於重試視窗 2＋10 分鐘加單次執行時間，否則每一筆重試成功都會變黃燈）
+const LATE_AFTER_MS = 30 * 60 * 1000
+// 別的 worker 留下的 runState 項目：這麼久以內續跑，超過就記 interrupted（定案 4，暫定值）
+const RECOVER_WITHIN_MS = 10 * 60 * 1000
+
+// 這一次開始抓的時刻比排程槽晚超過 LATE_AFTER_MS（呼叫端用它算出 runTask 的 markLate）
+export function isLateStart(slot, nowMs) {
+  const slotMs = slotToMs(slot)
+  if (slotMs === null) return false
+  return nowMs - slotMs > LATE_AFTER_MS
 }
 
-// 清除 storage.session 中的 inflight 狀態
-async function removeInflight(key) {
-  await updateInflight((inflight) => {
-    delete inflight[key]
-    return inflight
+// runState 的鍵：'<taskId>@<slot>'
+function runStateKeyOf(taskId, slot) {
+  return `${taskId}@${slot}`
+}
+
+// 寫入（或覆寫）自己那一項
+async function putRunState(key, entry) {
+  await updateRunState((cur) => ({ ...cur, [key]: entry }))
+}
+
+// 只改自己那一項的狀態（項目已被移除就不復活它）
+async function markRunState(key, state) {
+  await updateRunState((cur) => {
+    if (!cur[key]) return undefined
+    cur[key] = { ...cur[key], state }
+    return cur
   })
+}
+
+// 移除自己那一項；本來就沒有就不寫
+async function dropRunState(key) {
+  return takeRunState(key)
+}
+
+// 鎖內「拿走」一項：回傳拿走前它還在不在。啟動時與看門狗可能同時復原，
+// 只有真的拿到的那一方可以續跑或寫 interrupted，否則同一格會被處理兩次
+async function takeRunState(key) {
+  let taken = false
+  await updateRunState((cur) => {
+    if (!Object.prototype.hasOwnProperty.call(cur, key)) return undefined
+    delete cur[key]
+    taken = true
+    return cur
+  })
+  return taken
+}
+
+// '<taskId>@<slot>' 拆回兩段：slot 固定是 YYYY-MM-DDTHH:mm，從最後一個 @ 切
+function parseRunStateKey(key) {
+  const at = key.lastIndexOf('@')
+  if (at <= 0) return null
+  return { taskId: key.slice(0, at), slot: key.slice(at + 1) }
+}
+
+/**
+ * 復原上一個 worker 留下的排隊中／執行中項目（worker 啟動與看門狗每輪呼叫）。
+ * 只處理 boot 不是現在這個 worker 的項目；boot 相同的是自己正在跑的，一律不碰。
+ * runOpts 只給測試縮短等待，正式呼叫不傳。
+ */
+export async function recoverRunState(runOpts = {}) {
+  const state = await getRunState()
+  for (const [key, entry] of Object.entries(state)) {
+    if (!entry || entry.boot === BOOT) continue
+    const parsed = parseRunStateKey(key)
+    if (!parsed) {
+      await dropRunState(key)
+      continue
+    }
+    const { taskId, slot } = parsed
+    const task = await getTask(taskId)
+    const at = typeof entry.at === 'number' ? entry.at : 0
+    // 先拿走再處理：續跑會用同一個鍵登記自己（帶現在的 boot）；沒拿到＝另一個復原已經在處理
+    if (!(await takeRunState(key))) continue
+    if (Date.now() - at <= RECOVER_WITHIN_MS) {
+      if (!task || task.enabled === false) continue
+      await runTask(task, {
+        slot,
+        attempt: typeof entry.attempt === 'number' ? entry.attempt : 1,
+        reason: typeof entry.reason === 'string' ? entry.reason : 'scheduled',
+        markLate: isLateStart(slot, Date.now()),
+        ...runOpts
+      })
+      continue
+    }
+    if (task) {
+      // 不寫帳本（寫了補抓就會被冪等擋掉）、不動 lastValues；燈號要紅
+      const record = {
+        taskId,
+        slot,
+        capturedAt: new Date().toISOString(),
+        status: 'interrupted',
+        error: '上一次執行被瀏覽器中斷'
+      }
+      await appendRecord(slot.slice(0, 10), record)
+      await updateHealth(taskId, healthFromRecords([record]))
+      if (task.schedule?.type === 'daily') {
+        await updateMissedList((list) => {
+          if (list.some(m => m?.taskId === taskId && m?.slot === slot)) return undefined
+          return [...list, { taskId, taskName: task.name || taskId, slot }]
+            .sort((x, y) => String(x.slot).localeCompare(String(y.slot)) || String(x.taskId).localeCompare(String(y.taskId)))
+        })
+      }
+    }
+  }
 }
 
 // 清掉「找不到元素」的連續次數與前景建議（抓到了就歸零）；鎖內讀最新任務，沒有要清的就不寫
@@ -318,494 +415,509 @@ export async function runTask(task, opts = {}) {
 
   // 同站台串行佇列執行
   const origin = getOrigin(task.url)
-  return enqueueForOrigin(origin, async (queueCtx) => {
-    // 前置動作的逐步軌跡：立即測試要說得出「hover 有做、是 click 沒點到」，
-    // 只回一句「成功」的話，使用者在調 hover 選單時完全沒有線索
-    const preActionTrace = []
-    // 分頁 id 與框架定位結果在 try 外面宣告：最外層的 catch 要用它們組診斷包
-    // （讀分頁實際網址；框架其實找到了、是擷取階段斷線，診斷包不能長得跟「找不到框架」一樣）
-    let tabId
-    let loc = null
-    let restoreForeground = null
-    let acquiredTab = false
-    let reusedPreActions = false
-    const hasPreActions = Array.isArray(task.preActions) && task.preActions.length > 0
-    // 佇列中再次確認冪等，防止併發重複執行（dryRun 與手動抓取略過）
-    if (!dryRun && !isManual) {
-      if (await getRunStatus(task.id, slot)) return null
-    }
-
-    const inflightKey = `${task.id}:${slot}`
-    // 3. 開始執行：寫入 session inflight 並呼叫延壽 API
-    await setInflight(inflightKey, { state: 'running', startedAt: new Date().toISOString() })
-    await chrome.runtime.getPlatformInfo()
-
-    try {
-      // 取得分頁：指定分頁存在則用、否則開前景分頁或走專用抓取分頁
-      let tab = null
-      if (opts.tabId !== undefined && opts.tabId !== null) {
-        try {
-          tab = await chrome.tabs.get(opts.tabId)
-        } catch {}
+  // 進佇列前記下開始時刻（runState 的 at）；遲到與否由呼叫端以 markLate 決定
+  const startedMs = Date.now()
+  const tracked = !dryRun && !isManual
+  const lateRun = opts.markLate === true
+  // 排隊中／執行中登記在 session.runState（手動與試抓不登記）：worker 被回收時留下痕跡，下一個 worker 才復原得了
+  const runKey = tracked ? runStateKeyOf(task.id, slot) : null
+  if (runKey) await putRunState(runKey, { state: 'queued', at: startedMs, boot: BOOT, attempt, reason })
+  try {
+    return await enqueueForOrigin(origin, async (queueCtx) => {
+      // 前置動作的逐步軌跡：立即測試要說得出「hover 有做、是 click 沒點到」，
+      // 只回一句「成功」的話，使用者在調 hover 選單時完全沒有線索
+      const preActionTrace = []
+      // 分頁 id 與框架定位結果在 try 外面宣告：最外層的 catch 要用它們組診斷包
+      // （讀分頁實際網址；框架其實找到了、是擷取階段斷線，診斷包不能長得跟「找不到框架」一樣）
+      let tabId
+      let loc = null
+      let restoreForeground = null
+      let acquiredTab = false
+      let reusedPreActions = false
+      const hasPreActions = Array.isArray(task.preActions) && task.preActions.length > 0
+      // 佇列中再次確認冪等，防止併發重複執行（dryRun 與手動抓取略過）
+      if (!dryRun && !isManual) {
+        if (await getRunStatus(task.id, slot)) return null
       }
 
-      // 前景抓取開不起來(沒有任何一般視窗)就退回背景那條路,不讓整次抓取失敗
-      let fg = null
-      if (!(tab && sameOriginPath(tab.url, task.url)) && task.foreground === true) {
-        try {
-          fg = await openForegroundTab(task.url, { pollMs, loadTimeoutMs })
-        } catch {}
-      }
+      // 3. 開始執行：runState 改成 running 並呼叫延壽 API
+      if (runKey) await markRunState(runKey, 'running')
+      await chrome.runtime.getPlatformInfo()
 
-      // 這次有沒有真的載入頁面:沿用同一頁時不必再等一次「額外等待秒數」
-      let pageLoaded = true
-      if (tab && sameOriginPath(tab.url, task.url)) {
-        tabId = tab.id
-        await waitTabReady(tabId, { pollMs, loadTimeoutMs })
-      } else if (fg !== null) {
-        tabId = fg.tabId
-        restoreForeground = fg.restore
-      } else {
-        const loadsBefore = queueCtx.fetchTab?.loads
-        // 同一頁、同一組前置動作、而且那之後頁面沒被換掉 → 前置動作留下的狀態就是這個任務要的:
-        // 不重載、不重跑,一個分頁接著抓(使用者定案:同一頁的值一次抓完)。
-        // 頁面有沒有被換掉只看入口的載入次數 `loads`(前置動作可能把網址導去別處,不能比網址)。
-        const preSig = hasPreActions ? JSON.stringify(task.preActions) : null
-        const applied = queueCtx.preApplied
-        let canKeep = preSig !== null && applied?.sig === preSig && sameOriginPath(applied.url, task.url)
-        const freshLoad = !canKeep && (queueCtx.pageDirty === true || hasPreActions)
-        tabId = await acquireFetchTab(queueCtx, task.url, { pollMs, loadTimeoutMs, freshLoad, keepPage: canKeep })
-        if (canKeep && queueCtx.fetchTab?.loads !== applied.loads) {
-          // 做完前置動作之後頁面被換過(中間插進來的站台檢查導去登入頁、或被卸載而重載當下的網址):
-          // 前置動作的狀態沒了——回到任務網址重跑
-          tabId = await acquireFetchTab(queueCtx, task.url, { pollMs, loadTimeoutMs, freshLoad: true })
-          canKeep = false
+      try {
+        // 取得分頁：指定分頁存在則用、否則開前景分頁或走專用抓取分頁
+        let tab = null
+        if (opts.tabId !== undefined && opts.tabId !== null) {
+          try {
+            tab = await chrome.tabs.get(opts.tabId)
+          } catch {}
         }
-        reusedPreActions = canKeep
-        if (!reusedPreActions) {
-          queueCtx.pageDirty = false
-          queueCtx.preApplied = null
+
+        // 前景抓取開不起來(沒有任何一般視窗)就退回背景那條路,不讓整次抓取失敗
+        let fg = null
+        if (!(tab && sameOriginPath(tab.url, task.url)) && task.foreground === true) {
+          try {
+            fg = await openForegroundTab(task.url, { pollMs, loadTimeoutMs })
+          } catch {}
         }
-        acquiredTab = true
-        pageLoaded = queueCtx.fetchTab?.loads !== loadsBefore
-      }
 
-      if (pageLoaded && extraDelayMs > 0) await sleep(extraDelayMs)
-
-      // 8. 確認登入狀態（若停留在登入頁則執行自動登入）
-      const login = await ensureLoggedIn(tabId, task, { pollMs, loadTimeoutMs, extraDelayMs })
-      // 登入流程填了表單、換了頁,入口的載入次數量不到它:自己標記頁面被動過。
-      // 本來打算沿用前置動作狀態的(session 剛好在兩個任務之間過期),回任務網址重跑。
-      if (login?.attempted === true && acquiredTab) {
-        queueCtx.pageDirty = true
-        queueCtx.preApplied = null
-        if (reusedPreActions && login.ok === true) {
-          tabId = await acquireFetchTab(queueCtx, task.url, { pollMs, loadTimeoutMs, freshLoad: true })
-          queueCtx.pageDirty = false
-          reusedPreActions = false
-          if (extraDelayMs > 0) await sleep(extraDelayMs)
+        // 這次有沒有真的載入頁面:沿用同一頁時不必再等一次「額外等待秒數」
+        let pageLoaded = true
+        if (tab && sameOriginPath(tab.url, task.url)) {
+          tabId = tab.id
+          await waitTabReady(tabId, { pollMs, loadTimeoutMs })
+        } else if (fg !== null) {
+          tabId = fg.tabId
+          restoreForeground = fg.restore
+        } else {
+          const loadsBefore = queueCtx.fetchTab?.loads
+          // 同一頁、同一組前置動作、而且那之後頁面沒被換掉 → 前置動作留下的狀態就是這個任務要的:
+          // 不重載、不重跑,一個分頁接著抓(使用者定案:同一頁的值一次抓完)。
+          // 頁面有沒有被換掉只看入口的載入次數 `loads`(前置動作可能把網址導去別處,不能比網址)。
+          const preSig = hasPreActions ? JSON.stringify(task.preActions) : null
+          const applied = queueCtx.preApplied
+          let canKeep = preSig !== null && applied?.sig === preSig && sameOriginPath(applied.url, task.url)
+          const freshLoad = !canKeep && (queueCtx.pageDirty === true || hasPreActions)
+          tabId = await acquireFetchTab(queueCtx, task.url, { pollMs, loadTimeoutMs, freshLoad, keepPage: canKeep })
+          if (canKeep && queueCtx.fetchTab?.loads !== applied.loads) {
+            // 做完前置動作之後頁面被換過(中間插進來的站台檢查導去登入頁、或被卸載而重載當下的網址):
+            // 前置動作的狀態沒了——回到任務網址重跑
+            tabId = await acquireFetchTab(queueCtx, task.url, { pollMs, loadTimeoutMs, freshLoad: true })
+            canKeep = false
+          }
+          reusedPreActions = canKeep
+          if (!reusedPreActions) {
+            queueCtx.pageDirty = false
+            queueCtx.preApplied = null
+          }
+          acquiredTab = true
+          pageLoaded = queueCtx.fetchTab?.loads !== loadsBefore
         }
-      }
-      if (login?.ok !== true) {
-        if (dryRun) return { ok: false, error: 'login_failed' }
-        return await writeRecord({
-          taskId: task.id,
-          slot,
-          capturedAt: new Date().toISOString(),
-          status: 'login_failed',
-          error: login?.reason || '無法登入'
-        }, { parentId: task.id, skipLedger: isManual })
-      }
 
-      // 9. 注入 content script（必須在送訊息之前）
-      await injectContent(tabId)
+        if (pageLoaded && extraDelayMs > 0) await sleep(extraDelayMs)
 
-      // 執行前置動作（若有指定）：一次一個，各自定位自己的 frame。
-      // 「先點按鈕，iframe 才出現」是常見情境，整批送給同一個 frame 一定失敗。
-      const ranPreActions = hasPreActions && !reusedPreActions
-      if (ranPreActions) {
-        // 同站台共用分頁，前一個任務的點擊會留在頁面上，開關型按鈕第二次按會收回去；
-        // 中途失敗也算按過，所以在迴圈前就標記、做完才記下「哪一組做好了」
-        if (acquiredTab) {
+        // 8. 確認登入狀態（若停留在登入頁則執行自動登入）
+        const login = await ensureLoggedIn(tabId, task, { pollMs, loadTimeoutMs, extraDelayMs })
+        // 登入流程填了表單、換了頁,入口的載入次數量不到它:自己標記頁面被動過。
+        // 本來打算沿用前置動作狀態的(session 剛好在兩個任務之間過期),回任務網址重跑。
+        if (login?.attempted === true && acquiredTab) {
           queueCtx.pageDirty = true
           queueCtx.preApplied = null
+          if (reusedPreActions && login.ok === true) {
+            tabId = await acquireFetchTab(queueCtx, task.url, { pollMs, loadTimeoutMs, freshLoad: true })
+            queueCtx.pageDirty = false
+            reusedPreActions = false
+            if (extraDelayMs > 0) await sleep(extraDelayMs)
+          }
         }
-        for (let i = 0; i < task.preActions.length; i++) {
-          const action = task.preActions[i]
-          const startedAt = Date.now()
-          if (action?.type === 'wait') {
-            const ms = waitMsOf(action)
-            if (ms > 0) await sleep(ms)
-            preActionTrace.push({ step: i + 1, type: 'wait', ok: true, ms: Date.now() - startedAt })
-            continue
+        if (login?.ok !== true) {
+          if (dryRun) return { ok: false, error: 'login_failed' }
+          return await writeRecord({
+            taskId: task.id,
+            slot,
+            capturedAt: new Date().toISOString(),
+            status: 'login_failed',
+            error: login?.reason || '無法登入'
+          }, { parentId: task.id, skipLedger: isManual })
+        }
+
+        // 9. 注入 content script（必須在送訊息之前）
+        await injectContent(tabId)
+
+        // 執行前置動作（若有指定）：一次一個，各自定位自己的 frame。
+        // 「先點按鈕，iframe 才出現」是常見情境，整批送給同一個 frame 一定失敗。
+        const ranPreActions = hasPreActions && !reusedPreActions
+        if (ranPreActions) {
+          // 同站台共用分頁，前一個任務的點擊會留在頁面上，開關型按鈕第二次按會收回去；
+          // 中途失敗也算按過，所以在迴圈前就標記、做完才記下「哪一組做好了」
+          if (acquiredTab) {
+            queueCtx.pageDirty = true
+            queueCtx.preApplied = null
           }
-          const actionTimeout = action?.type === 'waitFor'
-            ? timeoutMsOf(action)
-            : (opts.frameTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS)
-          let actionLoc = await locateFrame(tabId, action?.frame, action?.locator, { pollMs, timeoutMs: actionTimeout })
-          // `locateFrame` 失敗時回的是帶候選清單的物件（診斷用），判定一律看有沒有 frameId
-          if (!frameFound(actionLoc)) {
-            preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
-            throw new Error(preActionFailure(i, action, 'frame_not_found'))
-          }
-          // 前置動作自己也可能「送不到」：前一步的點擊讓頁面換掉，這一步就打中將死的文件
-          // （SPEC §4 推薦的「點擊切頁籤 → 等元素出現」正是這種）。
-          // **只有 `waitFor` 可以重送**——它只觀察不動頁面；`hover`／`click` 有副作用，
-          // 重放就是再按一次，所以只能停下來用中文說清楚。
-          // 沒有逾時的話，回應一旦跟著換掉的文件消失，整個抓取會吊到 service worker 被回收；
-          // 逾時值必須涵蓋動作自己需要的時間（`messageTimeoutMs`，唯一一份）。
-          const resendable = action?.type === 'waitFor'
-          const preAttempts = resendable ? 1 + reviveDelaysMs.length : 1
-          let preRes = null
-          let preLiveErr = null
-          for (let pa = 0; pa < preAttempts; pa++) {
-            if (pa > 0) {
-              await sleep(reviveDelaysMs[pa - 1])
-              const again = await locateFrame(tabId, action?.frame, action?.locator, { pollMs, timeoutMs: actionTimeout })
-              if (!frameFound(again)) break
-              actionLoc = again
+          for (let i = 0; i < task.preActions.length; i++) {
+            const action = task.preActions[i]
+            const startedAt = Date.now()
+            if (action?.type === 'wait') {
+              const ms = waitMsOf(action)
+              if (ms > 0) await sleep(ms)
+              preActionTrace.push({ step: i + 1, type: 'wait', ok: true, ms: Date.now() - startedAt })
+              continue
             }
-            try {
-              await injectContent(tabId, { frameId: actionLoc.frameId })
-              preRes = await sendToFrame(tabId, {
-                type: MSG.RUN_PRE_ACTIONS,
-                actions: [action]
-              }, actionLoc.frameId, opts.preActionTimeoutMs ?? messageTimeoutMs(action), 'Pre-action')
-              preLiveErr = null
-              break
-            } catch (err) {
-              if (err?.afTimeout) {
-                preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
-                throw new Error(preActionFailure(i, action, 'no_response'))
+            const actionTimeout = action?.type === 'waitFor'
+              ? timeoutMsOf(action)
+              : (opts.frameTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS)
+            let actionLoc = await locateFrame(tabId, action?.frame, action?.locator, { pollMs, timeoutMs: actionTimeout })
+            // `locateFrame` 失敗時回的是帶候選清單的物件（診斷用），判定一律看有沒有 frameId
+            if (!frameFound(actionLoc)) {
+              preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
+              throw new Error(preActionFailure(i, action, 'frame_not_found'))
+            }
+            // 前置動作自己也可能「送不到」：前一步的點擊讓頁面換掉，這一步就打中將死的文件
+            // （SPEC §4 推薦的「點擊切頁籤 → 等元素出現」正是這種）。
+            // **只有 `waitFor` 可以重送**——它只觀察不動頁面；`hover`／`click` 有副作用，
+            // 重放就是再按一次，所以只能停下來用中文說清楚。
+            // 沒有逾時的話，回應一旦跟著換掉的文件消失，整個抓取會吊到 service worker 被回收；
+            // 逾時值必須涵蓋動作自己需要的時間（`messageTimeoutMs`，唯一一份）。
+            const resendable = action?.type === 'waitFor'
+            const preAttempts = resendable ? 1 + reviveDelaysMs.length : 1
+            let preRes = null
+            let preLiveErr = null
+            for (let pa = 0; pa < preAttempts; pa++) {
+              if (pa > 0) {
+                await sleep(reviveDelaysMs[pa - 1])
+                const again = await locateFrame(tabId, action?.frame, action?.locator, { pollMs, timeoutMs: actionTimeout })
+                if (!frameFound(again)) break
+                actionLoc = again
               }
-              preLiveErr = err
+              try {
+                await injectContent(tabId, { frameId: actionLoc.frameId })
+                preRes = await sendToFrame(tabId, {
+                  type: MSG.RUN_PRE_ACTIONS,
+                  actions: [action]
+                }, actionLoc.frameId, opts.preActionTimeoutMs ?? messageTimeoutMs(action), 'Pre-action')
+                preLiveErr = null
+                break
+              } catch (err) {
+                if (err?.afTimeout) {
+                  preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
+                  throw new Error(preActionFailure(i, action, 'no_response'))
+                }
+                preLiveErr = err
+              }
             }
+            if (preLiveErr !== null) {
+              preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
+              // 原文留給診斷（與擷取那條同一個鍵），使用者看的是說得出怎麼辦的中文
+              try { await diag.log('fetch_page_gone', `「${task.name}」${String(preLiveErr?.message || preLiveErr)}`) } catch {}
+              throw new Error(preActionFailure(i, action, 'page_gone'))
+            }
+            if (preRes?.ok !== true) {
+              preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
+              // 訊息要說得出「第幾步、哪一種動作、怎麼了」，使用者才知道要調哪一列
+              throw new Error(preActionFailure(i, action, preRes?.error))
+            }
+            preActionTrace.push({ step: i + 1, type: action?.type, ok: true, ms: Date.now() - startedAt })
           }
-          if (preLiveErr !== null) {
-            preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
-            // 原文留給診斷（與擷取那條同一個鍵），使用者看的是說得出怎麼辦的中文
-            try { await diag.log('fetch_page_gone', `「${task.name}」${String(preLiveErr?.message || preLiveErr)}`) } catch {}
-            throw new Error(preActionFailure(i, action, 'page_gone'))
+          if (acquiredTab) {
+            queueCtx.preApplied = { sig: JSON.stringify(task.preActions), url: task.url, loads: queueCtx.fetchTab?.loads }
           }
-          if (preRes?.ok !== true) {
-            preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
-            // 訊息要說得出「第幾步、哪一種動作、怎麼了」，使用者才知道要調哪一列
-            throw new Error(preActionFailure(i, action, preRes?.error))
-          }
-          preActionTrace.push({ step: i + 1, type: action?.type, ok: true, ms: Date.now() - startedAt })
         }
-        if (acquiredTab) {
-          queueCtx.preApplied = { sig: JSON.stringify(task.preActions), url: task.url, loads: queueCtx.fetchTab?.loads }
-        }
-      }
 
-      // 前置動作跑完之後再等一次「額外等待秒數」（AF-13）：
-      // 前置動作的點擊常常讓頁面換頁，擷取若趕在導覽生效前打中**舊文件**，
-      // 而 locator 剛好在舊頁面上匹配得到，就會回一個成功的錯誤值靜靜寫進紀錄——那比看到錯誤更糟。
-      // **這只是縮小窗口，不是關閉窗口**：真實瀏覽器實測，子框架導覽時分頁狀態全程 `complete`，
-      // 沒有任何訊號能證明「頁面已經安定」。
-      if (ranPreActions && extraDelayMs > 0) await sleep(extraDelayMs)
+        // 前置動作跑完之後再等一次「額外等待秒數」（AF-13）：
+        // 前置動作的點擊常常讓頁面換頁，擷取若趕在導覽生效前打中**舊文件**，
+        // 而 locator 剛好在舊頁面上匹配得到，就會回一個成功的錯誤值靜靜寫進紀錄——那比看到錯誤更糟。
+        // **這只是縮小窗口，不是關閉窗口**：真實瀏覽器實測，子框架導覽時分頁狀態全程 `complete`，
+        // 沒有任何訊號能證明「頁面已經安定」。
+        if (ranPreActions && extraDelayMs > 0) await sleep(extraDelayMs)
 
-      // 10. 取得目標並擷取：定位 → 注入 → 捲動 → 擷取，四步是一個整體。
-      // 中間任何一步「送不到」都代表文件被換掉了（content script 隨舊文件一起消失），
-      // 這時重新走一次就好；**逾時不重試**（那是頁面沒回應，重試只會把 15 秒乘以四），
-      // **找不到框架也不重試**（`locateFrame` 自己已經輪詢到逾時才放棄）。
-      // 前置動作留在這個區塊**外面**：它有副作用，重放就是把按鈕再按一次。
-      let res
-      let lastLiveErr = null
-      const maxAttempts = 1 + reviveDelaysMs.length
-      for (let a = 0; a < maxAttempts; a++) {
-        if (a > 0) await sleep(reviveDelaysMs[a - 1])
-        loc = await locateFrame(tabId, task.frame, task.locator, { pollMs, timeoutMs: opts.frameTimeoutMs ?? 20000 })
-        if (!frameFound(loc)) break
-        try {
-          await injectContent(tabId, { frameId: loc.frameId })
-          // 捲動到可視區是**盡力而為**：它逾時不代表擷取也會失敗，
-          // 為它重試就是把 10 秒乘以四卡住同站台佇列，所以逾時就往下走，讓擷取自己去判定。
-          // 但捲動「送不到」是另一回事——那是文件被換掉的訊號，要讓它往上冒出去觸發重試。
+        // 10. 取得目標並擷取：定位 → 注入 → 捲動 → 擷取，四步是一個整體。
+        // 中間任何一步「送不到」都代表文件被換掉了（content script 隨舊文件一起消失），
+        // 這時重新走一次就好；**逾時不重試**（那是頁面沒回應，重試只會把 15 秒乘以四），
+        // **找不到框架也不重試**（`locateFrame` 自己已經輪詢到逾時才放棄）。
+        // 前置動作留在這個區塊**外面**：它有副作用，重放就是把按鈕再按一次。
+        let res
+        let lastLiveErr = null
+        const maxAttempts = 1 + reviveDelaysMs.length
+        for (let a = 0; a < maxAttempts; a++) {
+          if (a > 0) await sleep(reviveDelaysMs[a - 1])
+          loc = await locateFrame(tabId, task.frame, task.locator, { pollMs, timeoutMs: opts.frameTimeoutMs ?? 20000 })
+          if (!frameFound(loc)) break
           try {
-            await sendToFrame(tabId, { type: MSG.SCROLL_INTO_VIEW, locator: task.locator }, loc.frameId, scrollTimeoutMs, 'Scroll')
+            await injectContent(tabId, { frameId: loc.frameId })
+            // 捲動到可視區是**盡力而為**：它逾時不代表擷取也會失敗，
+            // 為它重試就是把 10 秒乘以四卡住同站台佇列，所以逾時就往下走，讓擷取自己去判定。
+            // 但捲動「送不到」是另一回事——那是文件被換掉的訊號，要讓它往上冒出去觸發重試。
+            try {
+              await sendToFrame(tabId, { type: MSG.SCROLL_INTO_VIEW, locator: task.locator }, loc.frameId, scrollTimeoutMs, 'Scroll')
+            } catch (err) {
+              if (!err?.afTimeout) throw err
+            }
+            res = await sendToFrame(tabId, { type: MSG.EXTRACT, locator: task.locator, spec: task.spec }, loc.frameId, extractTimeoutMs, 'Extract')
+            lastLiveErr = null
+            break
           } catch (err) {
-            if (!err?.afTimeout) throw err
+            if (err?.afTimeout) throw err
+            lastLiveErr = err
           }
-          res = await sendToFrame(tabId, { type: MSG.EXTRACT, locator: task.locator, spec: task.spec }, loc.frameId, extractTimeoutMs, 'Extract')
-          lastLiveErr = null
-          break
-        } catch (err) {
-          if (err?.afTimeout) throw err
-          lastLiveErr = err
         }
-      }
-      if (!frameFound(loc)) {
-        if (dryRun) return { ok: false, error: 'frame_not_found', debug: await buildDebug(task, tabId, loc, preActionTrace, { error: 'frame_not_found' }) }
-        return await writeRecord({
-          taskId: task.id,
-          slot,
-          capturedAt: new Date().toISOString(),
-          status: 'not_found',
-          error: '找不到目標所在的框架'
-        }, { parentId: task.id, skipLedger: isManual })
-      }
-      if (lastLiveErr !== null) {
-        // 重試耗盡：標成「頁面沒了」，錯誤訊息在最外層的 catch 統一轉譯
-        lastLiveErr.afPageGone = true
-        throw lastLiveErr
-      }
-
-      // 演練模式：直接回傳 content script 擷取回覆（附上前置動作做了哪幾步）
-      if (dryRun) {
-        const out = preActionTrace.length > 0 ? { ...res, preActionTrace } : { ...res }
-        // 失敗才附診斷：成功時沒有人要看，白帶一份大字串。
-        // **多值任務要看逐值結果**：表格解析得出來就是 ok:true，即使每個值都失敗（SPEC §7），
-        // 只看 res.ok 的話，本輪主打的情境（多值表格試抓失敗）反而沒有匯出入口。
-        const fieldsFailed = res?.fields && typeof res.fields === 'object'
-          && Object.values(res.fields).some(f => f?.ok !== true)
-        if (res?.ok !== true || fieldsFailed) {
-          const page = res?.debug?.page
-          delete out.debug
-          out.debug = await buildDebug(task, tabId, loc, preActionTrace,
-            { error: res?.error, message: res?.message }, page)
+        if (!frameFound(loc)) {
+          if (dryRun) return { ok: false, error: 'frame_not_found', debug: await buildDebug(task, tabId, loc, preActionTrace, { error: 'frame_not_found' }) }
+          return await writeRecord({
+            taskId: task.id,
+            slot,
+            capturedAt: new Date().toISOString(),
+            status: 'not_found',
+            error: '找不到目標所在的框架'
+          }, { parentId: task.id, skipLedger: isManual })
         }
-        return out
-      }
-
-      // 結果處理：成功路徑
-      if (res?.ok === true) {
-        if (res.fields && typeof res.fields === 'object' && Object.keys(res.fields).length === 0) {
-          // 任務宣告了多值卻一個值都沒有：不寫紀錄、不動帳本與燈號，當成設定沒做完
-          return null
+        if (lastLiveErr !== null) {
+          // 重試耗盡：標成「頁面沒了」，錯誤訊息在最外層的 catch 統一轉譯
+          lastLiveErr.afPageGone = true
+          throw lastLiveErr
         }
 
-        if (res.fields && typeof res.fields === 'object') {
-          const date = (typeof slot === 'string' && slot.length >= 10)
-            ? slot.slice(0, 10)
-            : getLocalDateStr(new Date())
-          const capturedAt = new Date().toISOString()
-          const records = []
+        // 演練模式：直接回傳 content script 擷取回覆（附上前置動作做了哪幾步）
+        if (dryRun) {
+          const out = preActionTrace.length > 0 ? { ...res, preActionTrace } : { ...res }
+          // 失敗才附診斷：成功時沒有人要看，白帶一份大字串。
+          // **多值任務要看逐值結果**：表格解析得出來就是 ok:true，即使每個值都失敗（SPEC §7），
+          // 只看 res.ok 的話，本輪主打的情境（多值表格試抓失敗）反而沒有匯出入口。
+          const fieldsFailed = res?.fields && typeof res.fields === 'object'
+            && Object.values(res.fields).some(f => f?.ok !== true)
+          if (res?.ok !== true || fieldsFailed) {
+            const page = res?.debug?.page
+            delete out.debug
+            out.debug = await buildDebug(task, tabId, loc, preActionTrace,
+              { error: res?.error, message: res?.message }, page)
+          }
+          return out
+        }
 
-          for (const [key, r] of Object.entries(res.fields)) {
-            const rec = {
-              taskId: seriesIdOf(task.id, key),
-              slot,
-              capturedAt
-            }
-            if (r?.ok) {
-              rec.value = r.value
-              rec.raw = r.raw
-              rec.status = reason === 'late' ? 'late' : (r.status || 'ok')
-              if (r.used !== undefined) {
-                rec.used = r.used
+        // 結果處理：成功路徑
+        if (res?.ok === true) {
+          if (res.fields && typeof res.fields === 'object' && Object.keys(res.fields).length === 0) {
+            // 任務宣告了多值卻一個值都沒有：不寫紀錄、不動帳本與燈號，當成設定沒做完
+            return null
+          }
+
+          if (res.fields && typeof res.fields === 'object') {
+            const date = (typeof slot === 'string' && slot.length >= 10)
+              ? slot.slice(0, 10)
+              : getLocalDateStr(new Date())
+            const capturedAt = new Date().toISOString()
+            const records = []
+
+            for (const [key, r] of Object.entries(res.fields)) {
+              const rec = {
+                taskId: seriesIdOf(task.id, key),
+                slot,
+                capturedAt
               }
-              if (r.skipped !== undefined) {
-                rec.skipped = r.skipped
-              }
-              // 位置定位抓到的值要記下是哪一列：每天的最後一筆會變，
-              // 光看數字看不出抓的是今天還是昨天那一列
-              if (r.label !== undefined) {
-                rec.label = r.label
-              }
-              if (r.excluded !== undefined) {
-                rec.excluded = r.excluded
-              }
-              if (r.message !== undefined) {
-                rec.error = r.message
-              }
-            } else {
-              rec.status = r?.error || 'error'
-              if (r?.raw !== undefined) {
+              if (r?.ok) {
+                rec.value = r.value
                 rec.raw = r.raw
+                rec.status = (reason === 'late' || lateRun) ? 'late' : (r.status || 'ok')
+                if (r.used !== undefined) {
+                  rec.used = r.used
+                }
+                if (r.skipped !== undefined) {
+                  rec.skipped = r.skipped
+                }
+                // 位置定位抓到的值要記下是哪一列：每天的最後一筆會變，
+                // 光看數字看不出抓的是今天還是昨天那一列
+                if (r.label !== undefined) {
+                  rec.label = r.label
+                }
+                if (r.excluded !== undefined) {
+                  rec.excluded = r.excluded
+                }
+                if (r.message !== undefined) {
+                  rec.error = r.message
+                }
+              } else {
+                rec.status = r?.error || 'error'
+                if (r?.raw !== undefined) {
+                  rec.raw = r.raw
+                }
+                if (r?.message !== undefined) {
+                  rec.error = r.message
+                }
               }
-              if (r?.message !== undefined) {
-                rec.error = r.message
+              if (res.partial === true) {
+                rec.partial = true
+              }
+              records.push(slimRecord(rec))
+            }
+
+            // 告警評估：整組只讀一次 getRecordsInRange
+            const [y, m, d] = date.split('-').map(Number)
+            const pastDate = new Date(y, m - 1, d - 6, 12, 0, 0)
+            const fromDate = getLocalDateStr(pastDate)
+            const recordsInRange = await getRecordsInRange(fromDate, date)
+
+            for (const rec of records) {
+              await processAlerts(rec, recordsInRange)
+            }
+
+            // 批次寫入：整組紀錄只呼叫一次 appendRecords
+            await appendRecords(date, records)
+
+            // 帳本：整組只寫一次，用父任務 id（手動抓取不寫帳本）
+            if (!isManual) {
+              const hasSuccess = records.some(r => isSuccess(r))
+              const firstFail = records.find(r => !isSuccess(r))
+              const ledgerStatus = hasSuccess ? 'ok' : (firstFail ? firstFail.status : 'error')
+              await setRunStatus(task.id, slot, ledgerStatus)
+            }
+
+            // lastValues：成功的值各自以子序列 id 寫入（整組一次寫完，不逐個讀寫）
+            const lastEntries = {}
+            for (const rec of records) {
+              if (isSuccess(rec)) {
+                lastEntries[rec.taskId] = { value: rec.value, capturedAt: rec.capturedAt }
               }
             }
-            if (res.partial === true) {
-              rec.partial = true
+            await setLastValues(lastEntries)
+
+            // health：整個任務只寫一次，寫在父任務 id 上；狀態的算法與單值共用同一份
+            const failCount = records.filter(r => !isSuccess(r)).length
+            await updateHealth(task.id, healthFromRecords(records, res.partial))
+
+            if (failCount === 0) {
+              await clearNotFoundStreak(task.id)
             }
-            records.push(slimRecord(rec))
+
+            // 設定頁的診斷要看得出這一次抓了幾個值、哪幾個沒抓到
+            // 診斷頁是用字串串接顯示；環形緩衝只有 500 筆，全成功就不占位子（否則會把看門狗紀錄擠掉）
+            const failedNames = records
+              .filter(r => !isSuccess(r))
+              .map(r => buildSeriesIndex([task]).byId[r.taskId]?.shortName || r.taskId)
+            if (failedNames.length > 0) {
+              await diag.log('fetch_fields', `「${task.name}」${records.length} 個值，失敗 ${failedNames.length}：${failedNames.join('、')}`)
+            }
+
+            const firstSuccess = records.find(r => isSuccess(r))
+            return firstSuccess || records[0] || null
           }
 
-          // 告警評估：整組只讀一次 getRecordsInRange
-          const [y, m, d] = date.split('-').map(Number)
-          const pastDate = new Date(y, m - 1, d - 6, 12, 0, 0)
-          const fromDate = getLocalDateStr(pastDate)
-          const recordsInRange = await getRecordsInRange(fromDate, date)
+          await clearNotFoundStreak(task.id)
 
-          for (const rec of records) {
-            await processAlerts(rec, recordsInRange)
+          const status = (reason === 'late' || lateRun) ? 'late' : (res.status || 'ok')
+          const record = {
+            taskId: task.id,
+            slot,
+            capturedAt: new Date().toISOString(),
+            value: res.value,
+            raw: res.raw,
+            status,
+            strategyUsed: res.strategyUsed,
+            layer: res.layer
           }
 
-          // 批次寫入：整組紀錄只呼叫一次 appendRecords
-          await appendRecords(date, records)
+          if (res.used !== undefined) {
+            record.used = res.used
+          }
+          if (res.skipped !== undefined) {
+            record.skipped = res.skipped
+          }
+          if (res.label !== undefined) {
+            record.label = res.label
+          }
+          if (res.excluded !== undefined) {
+            record.excluded = res.excluded
+          }
+          if (res.message !== undefined) {
+            record.error = res.message
+          }
+          if (res.partial === true) {
+            record.partial = true
+          }
 
-          // 帳本：整組只寫一次，用父任務 id（手動抓取不寫帳本）
+          return await writeRecord(record, { parentId: task.id, skipLedger: isManual })
+        }
+
+        // 結果處理：元素未找到（可重試）
+        if (res?.error === 'not_found') {
+          if (!isManual && attempt < 3) {
+            await scheduleRetry(task.id, attempt, false, slot)
+            return null
+          }
+
           if (!isManual) {
-            const hasSuccess = records.some(r => isSuccess(r))
-            const firstFail = records.find(r => !isSuccess(r))
-            const ledgerStatus = hasSuccess ? 'ok' : (firstFail ? firstFail.status : 'error')
-            await setRunStatus(task.id, slot, ledgerStatus)
+            // 重試用盡：更新 notFoundStreak，連兩次建議前台擷取
+            await updateTasks([task.id], (t) => {
+              const streak = (t.notFoundStreak || 0) + 1
+              t.notFoundStreak = streak
+              if (streak >= 2) t.suggestForeground = true
+              return t
+            })
+
+            await notify(`${task.id}:not_found`, {
+              title: `AutoFetcher: ${task.name}`,
+              message: '擷取失敗：找不到目標元素'
+            })
           }
 
-          // lastValues：成功的值各自以子序列 id 寫入（整組一次寫完，不逐個讀寫）
-          const lastEntries = {}
-          for (const rec of records) {
-            if (isSuccess(rec)) {
-              lastEntries[rec.taskId] = { value: rec.value, capturedAt: rec.capturedAt }
-            }
-          }
-          await setLastValues(lastEntries)
-
-          // health：整個任務只寫一次，寫在父任務 id 上；狀態的算法與單值共用同一份
-          const failCount = records.filter(r => !isSuccess(r)).length
-          await updateHealth(task.id, healthFromRecords(records, res.partial))
-
-          if (failCount === 0) {
-            await clearNotFoundStreak(task.id)
-          }
-
-          // 設定頁的診斷要看得出這一次抓了幾個值、哪幾個沒抓到
-          // 診斷頁是用字串串接顯示；環形緩衝只有 500 筆，全成功就不占位子（否則會把看門狗紀錄擠掉）
-          const failedNames = records
-            .filter(r => !isSuccess(r))
-            .map(r => buildSeriesIndex([task]).byId[r.taskId]?.shortName || r.taskId)
-          if (failedNames.length > 0) {
-            await diag.log('fetch_fields', `「${task.name}」${records.length} 個值，失敗 ${failedNames.length}：${failedNames.join('、')}`)
-          }
-
-          const firstSuccess = records.find(r => isSuccess(r))
-          return firstSuccess || records[0] || null
+          return await writeRecord({
+            taskId: task.id,
+            slot,
+            capturedAt: new Date().toISOString(),
+            status: 'not_found',
+            // 「標題找不到，改用位置定位」這種訊息要留在紀錄裡，
+            // 只寫 not_found 的話使用者看到的永遠是同一句沒有解法的話
+            ...(res.message !== undefined ? { error: res.message } : {})
+          }, { parentId: task.id, skipLedger: isManual })
         }
 
-        await clearNotFoundStreak(task.id)
-
-        const status = reason === 'late' ? 'late' : (res.status || 'ok')
-        const record = {
-          taskId: task.id,
-          slot,
-          capturedAt: new Date().toISOString(),
-          value: res.value,
-          raw: res.raw,
-          status,
-          strategyUsed: res.strategyUsed,
-          layer: res.layer
+        // 結果處理：解析錯誤（不重試，不得含 value 欄位）
+        if (res?.error === 'parse_error') {
+          return await writeRecord({
+            taskId: task.id,
+            slot,
+            capturedAt: new Date().toISOString(),
+            status: 'parse_error',
+            raw: res.raw
+          }, { parentId: task.id, skipLedger: isManual })
         }
 
-        if (res.used !== undefined) {
-          record.used = res.used
-        }
-        if (res.skipped !== undefined) {
-          record.skipped = res.skipped
-        }
-        if (res.label !== undefined) {
-          record.label = res.label
-        }
-        if (res.excluded !== undefined) {
-          record.excluded = res.excluded
-        }
-        if (res.message !== undefined) {
-          record.error = res.message
-        }
-        if (res.partial === true) {
-          record.partial = true
-        }
-
-        return await writeRecord(record, { parentId: task.id, skipLedger: isManual })
-      }
-
-      // 結果處理：元素未找到（可重試）
-      if (res?.error === 'not_found') {
+        // 其他未知錯誤
         if (!isManual && attempt < 3) {
           await scheduleRetry(task.id, attempt, false, slot)
           return null
         }
+        return await writeRecord({
+          taskId: task.id,
+          slot,
+          capturedAt: new Date().toISOString(),
+          status: 'error',
+          error: String(res?.error || '擷取失敗')
+        }, { parentId: task.id, skipLedger: isManual })
 
-        if (!isManual) {
-          // 重試用盡：更新 notFoundStreak，連兩次建議前台擷取
-          await updateTasks([task.id], (t) => {
-            const streak = (t.notFoundStreak || 0) + 1
-            t.notFoundStreak = streak
-            if (streak >= 2) t.suggestForeground = true
-            return t
-          })
-
-          await notify(`${task.id}:not_found`, {
-            title: `AutoFetcher: ${task.name}`,
-            message: '擷取失敗：找不到目標元素'
-          })
+      } catch (err) {
+        // 存活重試耗盡才會走到這裡：把 Chrome 的英文原文換成說得出怎麼辦的中文，
+        // **原文寫進診斷不丟掉**（除錯時找不到原文就等於什麼線索都沒有）。
+        // 轉譯只能在這裡做一次：放進重試迴圈的話，每重試一次就把原文覆蓋一次。
+        const raw = String(err?.message || err)
+        let shown = raw
+        if (err?.afPageGone === true) {
+          shown = PAGE_GONE_MESSAGE
+          try { await diag.log('fetch_page_gone', `「${task.name}」${raw}`) } catch {}
         }
-
+        // 立即測試失敗時也要帶軌跡：使用者最需要知道的是「hover 有做、卡在第幾步」，
+        // 只回一句錯誤訊息就是把軌跡丟掉
+        if (dryRun) {
+          const out = { ok: false, error: shown }
+          if (preActionTrace.length > 0) out.preActionTrace = preActionTrace
+          out.debug = await buildDebug(task, tabId, loc, preActionTrace, { error: shown, raw })
+          return out
+        }
+        if (!isManual && attempt < 3) {
+          await scheduleRetry(task.id, attempt, false, slot)
+          return null
+        }
         return await writeRecord({
           taskId: task.id,
           slot,
           capturedAt: new Date().toISOString(),
-          status: 'not_found',
-          // 「標題找不到，改用位置定位」這種訊息要留在紀錄裡，
-          // 只寫 not_found 的話使用者看到的永遠是同一句沒有解法的話
-          ...(res.message !== undefined ? { error: res.message } : {})
+          status: 'error',
+          error: shown
         }, { parentId: task.id, skipLedger: isManual })
+      } finally {
+        if (restoreForeground) {
+          try {
+            await restoreForeground()
+          } catch {}
+        }
       }
-
-      // 結果處理：解析錯誤（不重試，不得含 value 欄位）
-      if (res?.error === 'parse_error') {
-        return await writeRecord({
-          taskId: task.id,
-          slot,
-          capturedAt: new Date().toISOString(),
-          status: 'parse_error',
-          raw: res.raw
-        }, { parentId: task.id, skipLedger: isManual })
+    })
+  } finally {
+    // 不論成功、失敗、提早 return 或丟例外都移除自己那一項；移除失敗不得蓋掉抓取結果
+    if (runKey) {
+      try {
+        await dropRunState(runKey)
+      } catch (err) {
+        try { await diag.log('run_state_error', `${runKey}：${String(err?.message || err)}`) } catch {}
       }
-
-      // 其他未知錯誤
-      if (!isManual && attempt < 3) {
-        await scheduleRetry(task.id, attempt, false, slot)
-        return null
-      }
-      return await writeRecord({
-        taskId: task.id,
-        slot,
-        capturedAt: new Date().toISOString(),
-        status: 'error',
-        error: String(res?.error || '擷取失敗')
-      }, { parentId: task.id, skipLedger: isManual })
-
-    } catch (err) {
-      // 存活重試耗盡才會走到這裡：把 Chrome 的英文原文換成說得出怎麼辦的中文，
-      // **原文寫進診斷不丟掉**（除錯時找不到原文就等於什麼線索都沒有）。
-      // 轉譯只能在這裡做一次：放進重試迴圈的話，每重試一次就把原文覆蓋一次。
-      const raw = String(err?.message || err)
-      let shown = raw
-      if (err?.afPageGone === true) {
-        shown = PAGE_GONE_MESSAGE
-        try { await diag.log('fetch_page_gone', `「${task.name}」${raw}`) } catch {}
-      }
-      // 立即測試失敗時也要帶軌跡：使用者最需要知道的是「hover 有做、卡在第幾步」，
-      // 只回一句錯誤訊息就是把軌跡丟掉
-      if (dryRun) {
-        const out = { ok: false, error: shown }
-        if (preActionTrace.length > 0) out.preActionTrace = preActionTrace
-        out.debug = await buildDebug(task, tabId, loc, preActionTrace, { error: shown, raw })
-        return out
-      }
-      if (!isManual && attempt < 3) {
-        await scheduleRetry(task.id, attempt, false, slot)
-        return null
-      }
-      return await writeRecord({
-        taskId: task.id,
-        slot,
-        capturedAt: new Date().toISOString(),
-        status: 'error',
-        error: shown
-      }, { parentId: task.id, skipLedger: isManual })
-    } finally {
-      if (restoreForeground) {
-        try {
-          await restoreForeground()
-        } catch {}
-      }
-      // 清除 inflight 狀態
-      await removeInflight(inflightKey)
     }
-  })
+  }
 }

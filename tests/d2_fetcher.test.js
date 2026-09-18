@@ -221,10 +221,11 @@ test('執行中狀態寫入 storage.session,結束後清除', async () => {
   await st.saveTask(task())
   await fe.runTask(task(), { slot: '2026-09-05T09:00', ...FAST })
   const sess = await c.storage.session.get(null)
-  const inflight = sess.inflight || {}
-  assert.equal(Object.keys(inflight).length, 0, '結束後不得殘留')
+  const runState = sess.runState || {}
+  assert.equal(Object.keys(runState).length, 0, '結束後不得殘留')
   // 以前這裡讀的是正式碼自己塞進 chrome.__calls 的假紀錄(測試後門,AF-20 拔掉);改看替身記下的真呼叫
-  assert.ok(c.__calls.some(x => x.api === 'storage.session.set' && x.args[0]?.inflight), '執行期間要寫狀態機')
+  // AF-21 批次 2：inflight 換成 runState（鍵 '<taskId>@<slot>'）
+  assert.ok(c.__calls.some(x => x.api === 'storage.session.set' && x.args[0]?.runState?.['t1@2026-09-05T09:00']), '執行期間要寫狀態機')
 })
 
 // AF-13 起：送不到訊息會先重試（文件被換掉是最常見的原因），重試耗盡後
