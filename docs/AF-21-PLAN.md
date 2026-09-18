@@ -196,6 +196,7 @@
 
 1. **網址 scheme**：`validateTask` 只收 `http:`／`https:`／`file:`；其餘拒絕。**匯入設定檔時 `file:` 也拒絕**（本機自己用 Picker 建的可以，外來檔不行）。`file:` 保留的理由：有人拿它抓本機儀表板，Chrome 本來就要使用者手動開「允許存取檔案網址」。
 2. **匯入先驗後寫**：整份解析→驗證→產生「將新增 N／覆寫 N／略過 N（附原因）」摘要→使用者確認→才寫。摘要另列「N 個站台需要重新輸入密碼」（設定檔不含密碼，團隊部署時每台都會遇到）。`settings` 走白名單與數值域（`retentionDays` 1～3650、`extraDelaySec` 0～60、`alertCooldownMin` 0～1440〔暫定〕）；`passwordEnc` 一律丟棄；任一步寫入失敗要把已寫的鍵還原成匯入前的快照。`importRecords` 逐筆驗 `taskId`（字串、至多一個保留分隔）、`capturedAt`（可解析）、`status`（已知列舉），不合格計入 `skipped` 並回報前 5 筆原因。
+   （實作修正：**沒有** `status` 欄位的紀錄照收，只拒絕帶了未知 status 的；同一台機器再匯入沒帶密碼的設定檔時，本機既有站台的密碼沿用、不列入要重輸；網址沒變的 `updateTasks` 不檢查 scheme。）
 3. **sender 守門**：`messages.js` 增列「content script 可送的型別」清單；`handleMessage` 開頭判定——`sender.url` 不是本擴充功能來源的訊息只准清單內型別，其餘回 `{ ok:false, error:'forbidden' }` 並寫 diag。判定式：「有 `sender.tab` **且** `sender.url` 不以本擴充功能來源開頭」＝content script（真實的 content script 一定有 `sender.tab`；Report 開在分頁裡也有 `sender.tab`，所以不能只看它；大量既有測試傳空的 `sender`，維持視為擴充功能頁）。新增的訊息型別預設不在清單內（預設拒絕）。
 4. **WAR 收斂**到 content 端 import 圖實際用到的檔案；新增慣例測試從 `content/*.js` 起算靜態 import 閉包，與 manifest 清單比對（多列、漏列都紅）。
 5. **匯出改 Blob**：`download` 在有 DOM 的頁面用 `Blob`＋`URL.createObjectURL`（下載完成或 60 秒後才 revoke——另存視窗開著時提早 revoke 會讓下載失敗）；呼叫端都在 Report 頁〔寫規格前 grep 確認沒有 background 呼叫端；有的話該處維持 `data:` 並限制大小〕。
