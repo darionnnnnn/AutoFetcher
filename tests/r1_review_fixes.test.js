@@ -91,6 +91,9 @@ test('編輯表格卡片的標題，不會清掉它的小數位與單位', async
   t.value = '改標題'
   fire(win, t, 'change')
   await new Promise(r => setTimeout(r, 30))
+  // AF-21 批次 4 定案 5：抽屜改成草稿模型，按「套用」才寫進 storage
+  doc.getElementById('drawer-apply').click()
+  await new Promise(r => setTimeout(r, 30))
   const saved = (await ls.getLayout()).dashboards[0].cards[0].options
   assert.equal(saved.decimals, 2, '看不到的欄位不可被清掉')
   assert.equal(saved.unit, '元')
@@ -107,6 +110,9 @@ test('編輯數字卡片不會清掉它的 Y 軸範圍設定', async () => {
   u.value = '度'
   fire(win, u, 'change')
   await new Promise(r => setTimeout(r, 30))
+  // AF-21 批次 4 定案 5：抽屜改成草稿模型，按「套用」才寫進 storage
+  doc.getElementById('drawer-apply').click()
+  await new Promise(r => setTimeout(r, 30))
   const saved = (await ls.getLayout()).dashboards[0].cards[0].options
   assert.equal(saved.yMin, 0)
   assert.equal(saved.yMax, 50)
@@ -121,6 +127,9 @@ test('顯示中的欄位被清空時仍可移除該設定', async () => {
   const u = doc.getElementById('drawer-unit')
   u.value = ''
   fire(win, u, 'change')
+  await new Promise(r => setTimeout(r, 30))
+  // AF-21 批次 4 定案 5：抽屜改成草稿模型，按「套用」才寫進 storage
+  doc.getElementById('drawer-apply').click()
   await new Promise(r => setTimeout(r, 30))
   assert.equal((await ls.getLayout()).dashboards[0].cards[0].options.unit, undefined)
 })

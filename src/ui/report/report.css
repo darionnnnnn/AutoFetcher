@@ -671,6 +671,8 @@ input[data-rename-input] {
 .drawer-header-actions { display: flex; gap: var(--space-2); }
 .drawer-header-actions button, #drawer-delete-confirm button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: var(--space-1) var(--space-2); border-radius: var(--radius); font-size: var(--text-xs); cursor: pointer; }
 .drawer-header-actions button:hover, #drawer-delete-confirm button:hover { background: var(--hover); }
+/* 底部固定動作列：樣式沿用 ui.css 的 footer，這裡只讓它黏在捲動的抽屜底部 */
+.drawer-footer { position: sticky; bottom: calc(-1 * var(--space-3)); margin-top: auto; padding-bottom: var(--space-3); background: var(--surface); }
 #drawer-delete { color: var(--danger); border-color: var(--danger); }
 #drawer-delete:hover { background: var(--danger-soft); }
 #drawer-delete-confirm { background: var(--danger-bg); border: 1px solid var(--danger); border-radius: var(--radius); padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--text-sm); }

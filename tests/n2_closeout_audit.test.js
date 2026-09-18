@@ -118,6 +118,9 @@ test('欄序被使用者調成跨任務交錯後，改任何設定都不能把�
   title.value = '改個標題'
   title.dispatchEvent(new jd.window.Event('change', { bubbles: true }))
   await new Promise(r => setTimeout(r, 40))
+  // AF-21 批次 4 定案 5：抽屜改成草稿模型，按「套用」才寫進 storage
+  jd.window.document.getElementById('drawer-apply').click()
+  await new Promise(r => setTimeout(r, 40))
   const after = (await ls.getLayout()).dashboards[0].cards.find(c => c.id === card.id)
   assert.deepEqual(after.source.map(s => s.taskId), ['bank#k1', 'p', 'bank#k2'],
     '來源清單是依任務分組畫的，用它的 DOM 順序重建就把使用者的欄序洗掉了')

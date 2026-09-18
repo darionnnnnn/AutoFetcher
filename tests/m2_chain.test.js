@@ -370,6 +370,9 @@ test('抽屜保留的來源要留在原本的位置，不能跳到第一欄', as
   title.value = '換個標題'
   title.dispatchEvent(new jd.window.Event('change', { bubbles: true }))
   await new Promise(r => setTimeout(r, 40))
+  // AF-21 批次 4 定案 5：抽屜改成草稿模型，按「套用」才寫進 storage
+  jd.window.document.getElementById('drawer-apply').click()
+  await new Promise(r => setTimeout(r, 40))
   const after = (await ls.getLayout()).dashboards[0].cards.find(c => c.id === card.id)
   assert.deepEqual(after.source.map(s => s.taskId), ['x', 'gone#k1'],
     '欄序就是這個陣列的順序，保留的來源跳到最前面等於偷偷換了欄位')

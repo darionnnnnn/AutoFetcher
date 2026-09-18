@@ -89,6 +89,9 @@ test('開抽屜改個標題不會把按天分列改掉', async () => {
   title.value = '匯率'
   title.dispatchEvent(new jd.window.Event('change', { bubbles: true }))
   await new Promise(r => setTimeout(r, 40))
+  // AF-21 批次 4 定案 5：抽屜改成草稿模型，按「套用」才寫進 storage
+  jd.window.document.getElementById('drawer-apply').click()
+  await new Promise(r => setTimeout(r, 40))
   const after = (await ls.getLayout()).dashboards[0].cards.find(c => c.id === card.id)
   assert.equal(after.options.bucketMinutes, 1440, '看一眼設定就把按天分列弄丟了')
   assert.equal(after.options.showDelta, true)

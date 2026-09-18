@@ -27,6 +27,9 @@ async function fresh() {
   await st.saveTask(task('t3', '公告', 'text'))
   const ls = await import('../src/shared/layout-store.js?t=' + Math.random())
   const jd = new JSDOM(html, { url: 'chrome-extension://abc/ui/report/report.html' })
+  // jsdom 25 沒有 <dialog> 的 showModal／close（抽屜關閉時的確認框用得到）
+  jd.window.HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  jd.window.HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
   globalThis.window = jd.window
   globalThis.document = jd.window.document
   const grid = jd.window.document.getElementById('dashboard-grid')
@@ -45,6 +48,12 @@ async function seedOne(ls, over = {}) {
 }
 
 const fire = (win, el, type) => el.dispatchEvent(new win.Event(type, { bubbles: true }))
+
+// AF-21 批次 4 定案 5：抽屜改成草稿模型，變更按「套用」才寫進 storage
+async function applyDrawer(doc) {
+  doc.getElementById('drawer-apply').click()
+  await new Promise(r => setTimeout(r, 30))
+}
 
 // ---- 開關 ----
 
@@ -72,6 +81,9 @@ test('關閉抽屜後設定已存進 storage', async () => {
   await new Promise(r => setTimeout(r, 20))
   doc.getElementById('drawer-close').click()
   await new Promise(r => setTimeout(r, 20))
+  // 草稿模型：有未套用的變更時關閉要先問，選「套用」
+  doc.querySelector('dialog.modal [data-action="confirm"]').click()
+  await new Promise(r => setTimeout(r, 30))
   assert.ok(doc.getElementById('card-drawer').hidden)
   const saved = (await ls.getLayout()).dashboards[0].cards[0]
   assert.equal(saved.title, '改過的標題')
@@ -90,6 +102,7 @@ test('改型別後該卡片立即重畫成新型別', async () => {
   await new Promise(r => setTimeout(r, 30))
   const el = doc.querySelector(`[data-card-id="${cardId}"]`)
   assert.equal(el.dataset.cardType, 'line')
+  await applyDrawer(doc)
   assert.equal((await ls.getLayout()).dashboards[0].cards[0].type, 'line')
 })
 
@@ -106,6 +119,7 @@ test('改來源後序列跟著變', async () => {
   box1.checked = false
   fire(win, box1, 'change')
   await new Promise(r => setTimeout(r, 30))
+  await applyDrawer(doc)
   const saved = (await ls.getLayout()).dashboards[0].cards[0]
   assert.deepEqual(saved.source.map(s => s.taskId), ['t2'])
 })
@@ -119,6 +133,7 @@ test('改期間立即寫回設定', async () => {
   sel.value = '7'
   fire(win, sel, 'change')
   await new Promise(r => setTimeout(r, 30))
+  await applyDrawer(doc)
   assert.equal((await ls.getLayout()).dashboards[0].cards[0].options.period, 7)
 })
 
@@ -134,6 +149,7 @@ test('小數位與單位寫回設定', async () => {
   u.value = '度'
   fire(win, u, 'change')
   await new Promise(r => setTimeout(r, 30))
+  await applyDrawer(doc)
   const o = (await ls.getLayout()).dashboards[0].cards[0].options
   assert.equal(o.decimals, 2)
   assert.equal(o.unit, '度')
@@ -161,6 +177,7 @@ test('閾值設定寫回並帶顏色', async () => {
   doc.getElementById('drawer-threshold-value').value = '90'
   fire(win, doc.getElementById('drawer-threshold-value'), 'change')
   await new Promise(r => setTimeout(r, 30))
+  await applyDrawer(doc)
   const th = (await ls.getLayout()).dashboards[0].cards[0].options.thresholds
   assert.ok(Array.isArray(th) && th.length === 1)
   assert.equal(th[0].op, 'gte')
@@ -194,7 +211,7 @@ test('切成表格型別後文字模式任務可選', async () => {
 
 // ---- 還原 ----
 
-test('還原回到開啟抽屜時的狀態', async () => {
+test('取消回到開啟抽屜時的狀態（還原鈕已併入取消）', async () => {
   const { ls, db, dw, doc, win } = await fresh()
   const { did, cardId } = await seedOne(ls, { title: '原標題' })
   await db.renderDashboard(did)
@@ -203,23 +220,27 @@ test('還原回到開啟抽屜時的狀態', async () => {
   t.value = '亂改的'
   fire(win, t, 'change')
   await new Promise(r => setTimeout(r, 20))
-  doc.getElementById('drawer-revert').click()
+  assert.equal(doc.getElementById('drawer-revert'), null, '還原鈕已刪除')
+  doc.getElementById('drawer-cancel').click()
   await new Promise(r => setTimeout(r, 30))
   assert.equal((await ls.getLayout()).dashboards[0].cards[0].title, '原標題')
+  await dw.openDrawer(did, cardId)
   assert.equal(doc.getElementById('drawer-title').value, '原標題')
 })
 
-test('還原後再改仍會存檔（還原不會鎖住抽屜）', async () => {
+test('取消後再開再改仍會存檔（取消不會鎖住抽屜）', async () => {
   const { ls, db, dw, doc, win } = await fresh()
   const { did, cardId } = await seedOne(ls, { title: '原標題' })
   await db.renderDashboard(did)
   await dw.openDrawer(did, cardId)
-  doc.getElementById('drawer-revert').click()
+  doc.getElementById('drawer-cancel').click()
   await new Promise(r => setTimeout(r, 20))
+  await dw.openDrawer(did, cardId)
   const t = doc.getElementById('drawer-title')
   t.value = '第二次改'
   fire(win, t, 'change')
   await new Promise(r => setTimeout(r, 30))
+  await applyDrawer(doc)
   assert.equal((await ls.getLayout()).dashboards[0].cards[0].title, '第二次改')
 })
 
@@ -316,6 +337,7 @@ test('可設定 number 卡片的比較基準（前一筆／前一日）', async 
   sel.value = 'prevDay'
   fire(win, sel, 'change')
   await new Promise(r => setTimeout(r, 30))
+  await applyDrawer(doc)
   assert.equal((await ls.getLayout()).dashboards[0].cards[0].options.compare, 'prevDay')
 })
 
@@ -329,6 +351,7 @@ test('可設定表格卡片的筆數上限', async () => {
   el.value = '25'
   fire(win, el, 'change')
   await new Promise(r => setTimeout(r, 30))
+  await applyDrawer(doc)
   assert.equal((await ls.getLayout()).dashboards[0].cards[0].options.limit, 25)
 })
 
@@ -342,6 +365,7 @@ test('可設定表格卡片的模式（最近 N 筆／樞紐）', async () => {
   sel.value = 'pivot'
   fire(win, sel, 'change')
   await new Promise(r => setTimeout(r, 30))
+  await applyDrawer(doc)
   assert.equal((await ls.getLayout()).dashboards[0].cards[0].options.mode, 'pivot')
 })
 
@@ -355,6 +379,7 @@ test('可設定 status 卡片要顯示哪些任務', async () => {
   box.checked = true
   fire(win, box, 'change')
   await new Promise(r => setTimeout(r, 30))
+  await applyDrawer(doc)
   assert.deepEqual((await ls.getLayout()).dashboards[0].cards[0].options.taskIds, ['t2'])
 })
 

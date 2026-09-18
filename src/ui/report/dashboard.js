@@ -7,7 +7,7 @@ import { getRecordsInRange, getTasks, getHealthMap, getMissedList } from '../../
 import { renderCard } from './cards.js'
 import { resolvePeriod } from './series.js'
 import { placeCard, resizeCard, compact, autoArrange } from './layout.js'
-import { openDrawer } from './drawer.js'
+import { openDrawer, getDraftPreview, mergeIntoDraft } from './drawer.js'
 import { applyTemplate } from './templates.js'
 import { MSG } from '../../shared/messages.js'
 import { createDragSource, registerDropTarget, resetDnd, isPointInside } from './dnd.js'
@@ -855,6 +855,8 @@ function registerCardDropTarget(cardEl, card, ctx) {
       if (patch.notice) showToast(patch.notice)
 
       const { notice, ...cardPatch } = patch
+      // 抽屜正在編輯這張卡：投放併進草稿（抽屜的來源清單與預覽跟著變），不寫 storage
+      if (await mergeIntoDraft(currentDashId, card.id, cardPatch)) return
       await pushHistory()
       await updateCard(currentDashId, card.id, cardPatch)
       await renderDashboard(currentDashId)
@@ -913,13 +915,17 @@ function registerGridDropTarget(grid) {
         const layout = await getLayout()
         const currentDash = layout.dashboards.find(d => d.id === currentDashId) || layout.dashboards[0]
         if (!currentDash) return
-        const card = currentDash.cards.find(c => c.id === cardId)
-        if (!card) return
+        const stored = currentDash.cards.find(c => c.id === cardId)
+        if (!stored) return
+        // 抽屜正在編輯這張卡：以草稿為基準移除，併進草稿（不寫 storage）
+        const draft = getDraftPreview(currentDash.id, cardId)
+        const card = draft ? { ...stored, ...draft } : stored
 
         // status 卡片的來源存在 options.taskIds,不是 source
         const patch = card.type === 'status'
           ? { options: { ...(card.options || {}), taskIds: (card.options?.taskIds || []).filter(id => parentIdOf(id) !== parentIdOf(taskId)) } }
           : { source: (card.source || []).filter(s => s.taskId !== taskId) }
+        if (draft && await mergeIntoDraft(currentDash.id, cardId, patch)) return
         await pushHistory()
         await updateCard(currentDash.id, cardId, patch)
         await renderDashboard(currentDash.id)
@@ -1169,7 +1175,10 @@ export async function renderDashboard(dashId) {
 
   registerGridDropTarget(grid)
 
-  for (const card of cards) {
+  for (const stored of cards) {
+    // 抽屜正在編輯的那張卡繼續顯示草稿預覽，不被 storage 版本蓋回去
+    const draft = getDraftPreview(dash.id, stored.id)
+    const card = draft ? { ...stored, ...draft } : stored
     const cardEl = prepareCardElement(card, ctx, dash.id)
     registerCardDropTarget(cardEl, card, ctx)
     grid.appendChild(cardEl)
@@ -1182,7 +1191,7 @@ export async function renderDashboard(dashId) {
 /**
  * 僅重新渲染指定單張卡片（不重建其他卡片 DOM 節點）
  */
-export async function rerenderCard(dashId, cardId) {
+export async function rerenderCard(dashId, cardId, draft = null) {
   const layout = await getLayout()
   let dash = null
   if (dashId) {
@@ -1193,8 +1202,10 @@ export async function rerenderCard(dashId, cardId) {
   }
   if (!dash) return
 
-  const card = dash.cards.find(c => c.id === cardId)
-  if (!card) return
+  const stored = dash.cards.find(c => c.id === cardId)
+  if (!stored) return
+  // 抽屜的草稿只蓋它自己的欄位（型別、來源、呈現選項、標題）；位置大小照 storage
+  const card = draft ? { ...stored, ...draft } : stored
 
   const grid = document.getElementById('dashboard-grid')
   if (!grid) return
