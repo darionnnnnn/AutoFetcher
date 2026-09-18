@@ -201,7 +201,11 @@ test('數值不得露出浮點運算的尾巴', async () => {
 })
 
 test('報表頁的 hidden 屬性壓得過各區塊自己的 display', () => {
-  const src = readFileSync(new URL('../src/ui/report/report.html', import.meta.url), 'utf8')
+  // AF-21 4-A：規則改由共用的 ui.css 提供；這裡讀報表頁實際載入的樣式表
+  const html = readFileSync(new URL('../src/ui/report/report.html', import.meta.url), 'utf8')
+  assert.ok(/<link[^>]+href="\.\.\/ui\.css"/.test(html), '報表頁要載入 ui.css')
+  const src = readFileSync(new URL('../src/ui/ui.css', import.meta.url), 'utf8') +
+    readFileSync(new URL('../src/ui/report/report.css', import.meta.url), 'utf8')
   assert.ok(/\[hidden\]\s*\{\s*display:\s*none\s*!important/.test(src),
     '空的錯過清單橫幅會露出一條空殼')
 })

@@ -202,3 +202,51 @@ test('D-6 面板與工具列套用深色系與可點尺寸', async () => {
   assert.equal(remove.textContent, '×', '移除鈕用乘號字元，不得用 emoji')
   pm.exitPickMode()
 })
+
+// ---------- AF-21 4-A：Report 與 popup 改載共用的 ui.css ----------
+
+const PAGE_CSS = {
+  report: { html: '../src/ui/report/report.html', css: '../src/ui/report/report.css', link: 'report.css' },
+  popup: { html: '../src/ui/popup/popup.html', css: '../src/ui/popup/popup.css', link: 'popup.css' }
+}
+
+test('4-A Report、popup、Picker 三頁都載入 ui.css', () => {
+  const pages = {
+    report: readOrEmpty(PAGE_CSS.report.html),
+    popup: readOrEmpty(PAGE_CSS.popup.html),
+    picker: PICKER_HTML
+  }
+  for (const [name, html] of Object.entries(pages)) {
+    assert.ok(html.length > 0, `${name} 的 HTML 要存在`)
+    assert.match(html, /<link[^>]+href=["']\.\.\/ui\.css["']/, `${name} 要載入 ui.css`)
+  }
+})
+
+test('4-A Report 與 popup 不再內嵌 <style>，樣式表順序 theme → ui → 自己那份', () => {
+  for (const [name, p] of Object.entries(PAGE_CSS)) {
+    const html = readOrEmpty(p.html)
+    assert.ok(!/<style/i.test(html), `${name}.html 不得再有 <style>`)
+    const iTheme = html.indexOf('../theme.css')
+    const iUi = html.indexOf('../ui.css')
+    const iOwn = html.indexOf(`./${p.link}`)
+    assert.ok(iTheme >= 0 && iUi > iTheme && iOwn > iUi, `${name} 的載入順序要是 theme.css → ui.css → ${p.link}`)
+  }
+})
+
+test('4-A report.css 與 popup.css 不得出現色碼字面值，也不得寫死 white', () => {
+  for (const [name, p] of Object.entries(PAGE_CSS)) {
+    const css = readOrEmpty(p.css)
+    assert.ok(css.length > 0, `${p.css} 要存在`)
+    const hits = css.match(HEX) || []
+    assert.deepEqual(hits, [], `${name}.css 實得 ${JSON.stringify(hits)}`)
+    assert.ok(!/color:\s*white/.test(css), `${name}.css 的主要按鈕文字色要吃 ui.css 的定義`)
+  }
+})
+
+test('4-A Report 與 popup 的 [hidden] 強制規則來自 ui.css，且自己那份沒有用 display 蓋掉', () => {
+  assert.match(UI_CSS, /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/)
+  for (const [name, p] of Object.entries(PAGE_CSS)) {
+    const css = readOrEmpty(p.css)
+    assert.ok(!/\[hidden\]\s*\{[^}]*display:\s*(?!none)[a-z-]+\s*!important/.test(css), `${name}.css 不得強制顯示 [hidden]`)
+  }
+})

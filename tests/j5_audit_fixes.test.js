@@ -185,7 +185,7 @@ test('落點被既有卡片佔住時仍要找得到不重疊的位置', async ()
 })
 
 test('窄視窗時側欄不與格線搶寬度', async () => {
-  const css = readFileSync(new URL('../src/ui/report/report.html', import.meta.url), 'utf8')
+  const css = readFileSync(new URL('../src/ui/report/report.css', import.meta.url), 'utf8')
   // 逐個 @media 區塊檢查;跨整份檔案的鬆散比對會讓任何一條 @media 都通過
   const blocks = []
   const re = /@media([^{]*)\{/g

@@ -302,7 +302,7 @@ test('滑鼠移到另一張表格不清空已選，點下去才換表（AF-10）
 })
 
 test('樞紐表的差值有顏色可以分辨漲跌', () => {
-  const css = readFileSync(new URL('../src/ui/report/report.html', import.meta.url), 'utf8')
+  const css = readFileSync(new URL('../src/ui/report/report.css', import.meta.url), 'utf8')
   assert.ok(/\.delta-up\s*\{/.test(css), '漲要有樣式')
   assert.ok(/\.delta-down\s*\{/.test(css), '跌要有樣式')
 })
