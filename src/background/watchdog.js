@@ -7,7 +7,7 @@ import {
   nextDailyRun,
   nextIntervalRun
 } from './scheduler.js'
-import { getTasks, trimOldRecords, trimOldRuns, getLastTimezone, setLastTimezone, getInflight, updateInflight } from '../shared/storage.js'
+import { getTasks, trimOldRecords, trimOldRuns, pruneOrphanEntries, runOncePerDay, getLastTimezone, setLastTimezone, getInflight, updateInflight } from '../shared/storage.js'
 import { ensureSiteCheck } from './sitecheck.js'
 import { cleanOrphanFetchTabs } from './fetch-tab.js'
 import * as diag from '../shared/diag.js'
@@ -134,6 +134,13 @@ export async function runWatchdog() {
     const d = new Date()
     const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
     await trimOldRuns(today)
+  } catch {}
+
+  // 孤兒鍵清理（alertLog／lastValues／health）：一天一次，自帶日戳，不放在抓取路徑
+  try {
+    const d = new Date()
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    await runOncePerDay('lastOrphanPruneDate', today, pruneOrphanEntries)
   } catch {}
 
   try {

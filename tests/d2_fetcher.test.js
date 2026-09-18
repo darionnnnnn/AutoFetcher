@@ -144,7 +144,7 @@ test('重試用盡才寫失敗紀錄並通知', async () => {
   await st.saveTask(task())
   const rec = await fe.runTask(task(), { slot: '2026-09-05T09:00', attempt: 3, ...FAST })
   assert.equal(rec.status, 'not_found')
-  assert.equal(rec.snippet, 'x', '失敗紀錄要留 DOM 片段方便除錯')
+  assert.equal('snippet' in rec, false, 'AF-21：頁面片段可能含 token／個資，不進紀錄（診斷包另帶）')
   assert.equal(c.__calls.filter(x => x.api === 'notifications.create').length, 1)
 })
 

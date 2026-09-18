@@ -736,3 +736,50 @@ test('AF-20：批次共用的前置動作要從面板一路走到 fetcher 送出
     assert.equal(x.args[2]?.frameId, 7, '要送到前置動作自己的 frame')
   }
 })
+
+test('AF-21：整欄聚合抓到 600 字的 raw → 紀錄截成 500 字並標 rawTruncated → 歷史頁明細接「（已截斷）」', async () => {
+  resetChromeMock()
+  const c = installChromeMock()
+  globalThis.navigator = { onLine: true }
+  const st = await import('../src/shared/storage.js?t=' + Math.random())
+  await st.init()
+  const fe = await import('../src/background/fetcher.js?t=' + Math.random())
+  const { extractValue } = await import('../src/shared/extract.js')
+
+  // 產生端：真的擷取函式；50 格（48 格 10 位數＋2 格 11 位數）以 ", " 串起來恰好 600 字
+  const cells = [...Array(48).fill('1000000000'), '10000000000', '10000000000']
+  const rows = cells.map((v, i) => `<tr><td>r${i}</td><td>${v}</td></tr>`).join('')
+  const tableEl = new JSDOM(`<!doctype html><body><table><thead><tr><th>主機</th><th>值</th></tr></thead><tbody>${rows}</tbody></table></body>`)
+    .window.document.body.firstElementChild
+  const block = { axis: 'col', index: 1, headerText: '值', aggregate: 'sum', skip: { head: 0, tail: 0 } }
+  const produced = extractValue(tableEl, { mode: 'block', block })
+  assert.equal(produced.ok, true, `前提：擷取成功，實得 ${JSON.stringify(produced.error)}`)
+  assert.equal(produced.raw.length, 600, '前提：擷取端回全文 600 字（擷取端不截）')
+
+  // 中段：排程抓取把 content 的回應寫成紀錄
+  c.__setTabResponder((tabId, msg) => (msg.type === 'EXTRACT' ? { ...produced, layer: 'css' } : { ok: true }))
+  const task = { id: 'agg', name: '整欄合計', url: 'https://real.test/x', enabled: true, locator: { css: '#t' },
+    spec: { mode: 'block', block }, schedule: { type: 'daily', times: ['09:00'], weekdays: [0, 1, 2, 3, 4, 5, 6] } }
+  await st.saveTask(task)
+  await fe.runTask(task, { slot: '2026-09-05T09:00', ...FAST })
+  const [rec] = await st.getRecordsByDate('2026-09-05')
+  assert.equal(rec.rawTruncated, true)
+  assert.equal(rec.raw.length, 500)
+  assert.equal(rec.raw, produced.raw.slice(0, 500))
+
+  // 消費端：歷史頁明細
+  const REPORT_HTML = readFileSync(new URL('../src/ui/report/report.html', import.meta.url), 'utf8')
+  const jd = new JSDOM(REPORT_HTML, { url: 'chrome-extension://abc/ui/report/report.html' })
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  const rp = await import('../src/ui/report/report.js?t=' + Math.random())
+  rp.renderTable([{ ...rec, date: '2026-09-05', taskName: task.name }], [
+    { key: 'slot', label: '時間', visible: true },
+    { key: 'value', label: '值', visible: true }
+  ])
+  const doc = jd.window.document
+  doc.querySelector('#record-table tbody tr').click()
+  const detail = doc.querySelector('#record-table tbody tr.detail')
+  assert.ok(detail, '點一下要展開明細')
+  assert.ok(detail.textContent.includes('（已截斷）'), '截斷過的 raw 要說出來')
+})

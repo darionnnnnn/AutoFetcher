@@ -862,6 +862,37 @@ export async function updateHealthMap(mutator) {
   return updateValue('health', asObject, mutator)
 }
 
+// 清掉 alertLog／lastValues／health 裡已刪任務與站台的項目（AF-21 定案 6；看門狗一天一次呼叫）
+// 以目前的 tasks（父任務 id）與 sites（origin）為準；每個鍵各自在自己的鎖內讀-改-寫，沒有要清的就不寫
+export async function pruneOrphanEntries() {
+  const taskIds = new Set((await getTasks()).map(t => t?.id).filter(id => typeof id === 'string'))
+  const origins = new Set(Object.keys(await getSites()))
+  const bySeries = (k) => taskIds.has(parentIdOf(k))
+  const byHealth = (k) => k.startsWith('site:') ? origins.has(k.slice('site:'.length)) : taskIds.has(k)
+  const removed = {}
+  for (const [key, keep] of [['alertLog', bySeries], ['lastValues', bySeries], ['health', byHealth]]) {
+    await mutateKey(key, (current) => {
+      if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined
+      const stale = Object.keys(current).filter(k => !keep(k))
+      if (stale.length === 0) return undefined
+      const next = { ...current }
+      for (const k of stale) delete next[k]
+      removed[key] = stale
+      return next
+    })
+  }
+  return removed
+}
+
+// 一天一次的日戳守衛（看門狗的日常清理用）：stampKey 已記著 today 就不跑，跑完才記
+export async function runOncePerDay(stampKey, today, fn) {
+  const stamp = await chrome.storage.local.get(stampKey)
+  if (stamp?.[stampKey] === today) return false
+  await fn()
+  await writeKey(stampKey, today)
+  return true
+}
+
 // 在 missed 鎖內讀錯過清單 → mutator(副本) 回傳新清單 → 寫回
 export async function updateMissedList(mutator) {
   return updateValue('missed', asArray, mutator)

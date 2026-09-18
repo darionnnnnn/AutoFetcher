@@ -60,7 +60,9 @@ function formatJson(days, seriesIndex, isSingleDay) {
           records: []
         }
       }
-      dayTasks[taskId].records.push(record)
+      // snippet 是頁面片段（可能含 token／個資），舊紀錄帶著也不匯出（AF-21 定案 5）
+      const { snippet, ...rest } = record
+      dayTasks[taskId].records.push(rest)
     }
     return { date, tasks: dayTasks }
   })

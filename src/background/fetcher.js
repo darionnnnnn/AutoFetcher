@@ -234,9 +234,24 @@ async function updateHealth(taskId, healthObj) {
   await refreshBadge()
 }
 
+// 紀錄裡 raw 的上限（AF-21 定案 5）：只在寫紀錄這一層截，擷取端與立即測試預覽照舊回全文
+const RECORD_RAW_MAX = 500
+
+// 寫紀錄前的瘦身：snippet 不進紀錄；raw 字串超過上限截斷並標 rawTruncated
+function slimRecord(record) {
+  const out = { ...record }
+  delete out.snippet
+  if (typeof out.raw === 'string' && out.raw.length > RECORD_RAW_MAX) {
+    out.raw = out.raw.slice(0, RECORD_RAW_MAX)
+    out.rawTruncated = true
+  }
+  return out
+}
+
 // 寫入抓取紀錄並更新帳本與 health
-async function writeRecord(record, opts = {}) {
+async function writeRecord(input, opts = {}) {
   const { parentId, skipLedger } = opts
+  const record = slimRecord(input)
   await processAlerts(record)
   await appendRecord(record.slot.slice(0, 10), record)
   if (!skipLedger) {
@@ -607,7 +622,7 @@ export async function runTask(task, opts = {}) {
             if (res.partial === true) {
               rec.partial = true
             }
-            records.push(rec)
+            records.push(slimRecord(rec))
           }
 
           // 告警評估：整組只讀一次 getRecordsInRange
@@ -724,7 +739,6 @@ export async function runTask(task, opts = {}) {
           slot,
           capturedAt: new Date().toISOString(),
           status: 'not_found',
-          snippet: res.snippet,
           // 「標題找不到，改用位置定位」這種訊息要留在紀錄裡，
           // 只寫 not_found 的話使用者看到的永遠是同一句沒有解法的話
           ...(res.message !== undefined ? { error: res.message } : {})

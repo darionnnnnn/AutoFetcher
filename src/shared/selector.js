@@ -84,10 +84,12 @@ export function describe(el) {
   const xpath = '/' + chain.map(node => `${node.tag}[${node.index}]`).join('/');
 
   // 第 3 層：anchor
+  const ANCHOR_TEXT_MAX = 120;
   let anchor = null;
   const prev = el.previousElementSibling;
   const text = prev?.textContent?.trim();
-  if (text) anchor = { text, hops: 1 };
+  // 前一個兄弟可能是整張表：太長的文字不當錨點（AF-21 定案 5；解析端照舊接受既有的長 anchor）
+  if (text && text.length <= ANCHOR_TEXT_MAX) anchor = { text, hops: 1 };
 
   return { css, path, anchor, xpath };
 }

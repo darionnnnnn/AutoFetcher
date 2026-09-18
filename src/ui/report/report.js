@@ -606,8 +606,10 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
       }
 
       const detailItems = [
-        ['原始值 (raw)', record.raw ?? '—'], ['錯誤訊息 (error)', record.error ?? '—'],
-        ['DOM 片段 (snippet)', record.snippet ?? '—'], ['使用策略 (strategyUsed)', record.strategyUsed ?? '—'],
+        ['原始值 (raw)', record.raw !== undefined && record.raw !== null
+          ? `${record.raw}${record.rawTruncated === true ? '（已截斷）' : ''}` : '—'],
+        ['錯誤訊息 (error)', record.error ?? '—'],
+        ['使用策略 (strategyUsed)', record.strategyUsed ?? '—'],
         ['排定時間 (slot)', record.slot ?? '—'], ['擷取時間 (capturedAt)', record.capturedAt ?? '—'],
         ['時間差 (diff)', diffText]
       ]
