@@ -128,6 +128,7 @@ function buildChromeMock() {
   let blockSetOptionsUntilOpen = false
   const setOptionsWaiters = []
   let currentWindowId = 900
+  let lastFocusedWindowId = null
   let currentTab = null
   const onStartup = createEvent()
   const onInstalled = createEvent()
@@ -385,9 +386,31 @@ function buildChromeMock() {
       },
       async create(createData = {}) {
         recordCall('windows.create', [createData])
-        const win = { id: nextWindowId++, ...createData }
+        if (typeof mock.__windowCreateHook === 'function') mock.__windowCreateHook(createData)
+        const win = { id: nextWindowId++, type: 'normal', ...createData }
+        // 真實 Chrome(AF-20 探針):`state:'minimized'` 與 `focused:false` 同時給,
+        // 視窗會靜默變成一般視窗,不是最小化
+        if (win.state === 'minimized' && win.focused === false) win.state = 'normal'
         windowsMap.set(win.id, win)
+        // 真實 Chrome 帶 url 建視窗時會一起開分頁,回傳值帶 `tabs`
+        if (typeof createData.url === 'string') {
+          const tab = {
+            id: nextTabId++,
+            url: createData.url,
+            active: true,
+            status: defaultTabStatus,
+            discarded: false,
+            windowId: win.id
+          }
+          tabsMap.set(tab.id, tab)
+          if (typeof mock.__onTabCreated === 'function') mock.__onTabCreated(tab)
+          return { ...win, tabs: [tab] }
+        }
         return win
+      },
+      async getLastFocused(queryOptions) {
+        recordCall('windows.getLastFocused', [queryOptions])
+        return windowsMap.get(lastFocusedWindowId) || { id: currentWindowId, type: 'normal', focused: true, state: 'normal' }
       },
       async get(windowId, queryOptions) {
         recordCall('windows.get', [windowId, queryOptions])
@@ -400,6 +423,9 @@ function buildChromeMock() {
       async remove(windowId) {
         recordCall('windows.remove', [windowId])
         windowsMap.delete(windowId)
+        for (const [id, t] of tabsMap) {
+          if (t.windowId === windowId) tabsMap.delete(id)
+        }
       },
       async update(windowId, updateInfo = {}) {
         recordCall('windows.update', [windowId, updateInfo])
@@ -481,6 +507,11 @@ function buildChromeMock() {
     __setCurrentWindowId(id) {
       currentWindowId = id
     },
+    __setLastFocusedWindow(id) {
+      lastFocusedWindowId = id
+    },
+    // 讓 windows.create 丟例外之類(AF-20:建專用視窗失敗要退回分頁)
+    __windowCreateHook: null,
     __setCurrentTab(tab) {
       currentTab = tab
     },
@@ -521,6 +552,9 @@ function buildChromeMock() {
       blockSetOptionsUntilOpen = false
       setOptionsWaiters.length = 0
       currentWindowId = 900
+      lastFocusedWindowId = null
+      mock.__windowCreateHook = null
+      mock.__onTabCreated = null
       currentTab = null
       storageOnChanged._reset()
       alarmsMap.clear()
