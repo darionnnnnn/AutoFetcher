@@ -6,7 +6,7 @@ import {
 } from '../shared/storage.js'
 import { pruneSeries } from '../shared/layout-store.js'
 import { openPanel, closePanel } from '../shared/panel.js'
-import { MSG } from '../shared/messages.js'
+import { MSG, CONTENT_ALLOWED } from '../shared/messages.js'
 import * as diag from '../shared/diag.js'
 import {
   rebuildAlarms,
@@ -446,10 +446,24 @@ async function applyPickEntry(tabId, batch) {
 // 那幾則都是頁面上立刻完成的動作，回應遺失時不要吊到 worker 被回收
 const CONTENT_MESSAGE_TIMEOUT_MS = 10000
 
+// 本擴充功能的來源取自 getURL('')（＝ chrome-extension://<runtime.id>/）
+async function isFromContentScript(sender) {
+  if (!sender?.tab) return false
+  const origin = await chrome.runtime.getURL('')
+  return !String(sender.url ?? '').startsWith(origin)
+}
+
 export async function handleMessage(msg, sender, runOpts = {}) {
   const contentMs = runOpts.contentTimeoutMs ?? CONTENT_MESSAGE_TIMEOUT_MS
   try {
     if (!msg || typeof msg !== 'object') return undefined
+
+    // sender 守門（AF-21 批次 3 定案 3）：有 tab 且網址不是本擴充功能頁 → content script，
+    // 只准送 CONTENT_ALLOWED 內的型別。Report 開在分頁裡也有 tab，所以要連網址一起看
+    if (await isFromContentScript(sender) && !CONTENT_ALLOWED.has(msg.type)) {
+      await diag.log('forbidden', `${msg.type} 來自 ${sender.url}`)
+      return { ok: false, error: 'forbidden' }
+    }
 
     if (msg.type === MSG.TEST_TASK) {
       const task = msg.task

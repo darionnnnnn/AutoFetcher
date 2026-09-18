@@ -654,8 +654,10 @@ try {
       ])
     } catch (e) { sendErr = String(e?.message || e) }
     const day = new Date().toLocaleDateString('sv-SE')
-    const all = await chrome.storage.local.get(`rec:${day}`)
-    return { res, sendErr, records: all[`rec:${day}`] || [] }
+    // 紀錄鍵是 rec2:<日期>:<時>（AF-21）；舊的 rec:<日期> 只讀不寫
+    const all = await chrome.storage.local.get(null)
+    const records = Object.keys(all).filter(k => k === `rec:${day}` || k.startsWith(`rec2:${day}:`)).flatMap(k => all[k] || [])
+    return { res, sendErr, records }
   }, taskDef)
 
   // (1) 子框架換頁:分頁狀態全程 complete(探針證實),只有重試救得回來
@@ -719,7 +721,8 @@ try {
       func: () => globalThis.__afContentLoaded === true
     }))[0]?.result
     const day = new Date().toLocaleDateString('sv-SE')
-    const recs = ((await chrome.storage.local.get(`rec:${day}`))[`rec:${day}`] || []).filter(r => r.taskId === 'af20bg')
+    const allRec = await chrome.storage.local.get(null)
+    const recs = Object.keys(allRec).filter(k => k === `rec:${day}` || k.startsWith(`rec2:${day}:`)).flatMap(k => allRec[k] || []).filter(r => r.taskId === 'af20bg')
     const reg = (await chrome.storage.session.get('fetchTabs')).fetchTabs || []
     return { res, sendErr, before, after, touched, sawWindow, rec: recs[recs.length - 1] || null, reg }
   }, mode)

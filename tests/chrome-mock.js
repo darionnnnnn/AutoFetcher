@@ -139,6 +139,7 @@ function buildChromeMock() {
 
   const actionOnClicked = createEvent()
   const contextMenusOnClicked = createEvent()
+  const downloadsOnChanged = createEvent()
   const notificationsOnButtonClicked = createEvent()
   const notificationsOnClicked = createEvent()
 
@@ -352,7 +353,8 @@ function buildChromeMock() {
       async download(...args) {
         recordCall('downloads.download', args)
         return nextDownloadId++
-      }
+      },
+      onChanged: downloadsOnChanged
     },
 
     sidePanel: {
@@ -485,6 +487,9 @@ function buildChromeMock() {
       }
     },
 
+    __emitDownloadChanged(delta) {
+      for (const fn of downloadsOnChanged._listeners) fn(delta)
+    },
     async __emitContextMenuClick(info, tab) {
       for (const fn of contextMenusOnClicked._listeners) await fn(info, tab)
     },
@@ -571,6 +576,7 @@ function buildChromeMock() {
       onInstalled._reset()
       nextDownloadId = 1
       contextMenusOnClicked._reset()
+      downloadsOnChanged._reset()
       notificationsOnButtonClicked._reset()
       notificationsOnClicked._reset()
       windowsMap.clear()

@@ -24,5 +24,9 @@ export const MSG = {
   CLOSE_PANEL: 'CLOSE_PANEL'
 }
 
+// content script（跑在任意網頁上）可以送給 background 的型別（AF-21 批次 3 定案 3）。
+// 預設拒絕：新增的訊息型別不在這裡，網頁端就送不進來
+export const CONTENT_ALLOWED = new Set([MSG.PICKED, MSG.DESCEND_FRAME])
+
 // 一批最多建立幾個任務：頁面上的多任務組數上限與面板「拆成每個值一個任務」共用這一個數字
 export const MAX_BATCH_TASKS = 20

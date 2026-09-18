@@ -39,8 +39,16 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "content/*.js",
-        "shared/*.js"
+        "content/main.js",
+        "content/picker-mode.js",
+        "shared/aggregate.js",
+        "shared/block-detect.js",
+        "shared/describe.js",
+        "shared/extract.js",
+        "shared/messages.js",
+        "shared/preaction.js",
+        "shared/selector.js",
+        "shared/table.js"
       ],
       "matches": [
         "<all_urls>"

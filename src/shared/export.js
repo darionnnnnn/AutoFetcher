@@ -503,12 +503,45 @@ export async function buildExport({ from, to, format, dashId }) {
   return { filename, content }
 }
 
-// 觸發使用者手動下載檔案（呼叫 chrome.downloads.download，saveAs 恆為 true）
-export async function download({ filename, content }) {
+// object URL 最晚多久釋放（AF-21 批次 3 定案 5）：另存視窗開著時提早 revoke 會讓下載失敗
+const REVOKE_AFTER_MS = 60000
+
+// 觸發使用者手動下載檔案（呼叫 chrome.downloads.download，saveAs 恆為 true）。
+// 內容走 Blob＋object URL（data: URL 大範圍匯出會超過長度上限）；呼叫端都在擴充功能頁。
+// object URL 在下載完成／中斷或 REVOKE_AFTER_MS 後（先到者）才釋放；opts.revokeAfterMs 只給測試縮短等待
+export async function download({ filename, content }, opts = {}) {
   const isCsv = typeof filename === 'string' && filename.endsWith('.csv')
   const isHtml = typeof filename === 'string' && filename.endsWith('.html')
   const mime = isCsv ? 'text/csv' : (isHtml ? 'text/html' : 'application/json')
-  const url = `data:${mime};charset=utf-8,${encodeURIComponent(content)}`
-  return await chrome.downloads.download({ url, filename, saveAs: true })
+  const url = URL.createObjectURL(new Blob([content], { type: mime }))
+  let downloadId = null
+  let timer = null
+  let done = false
+  const endedEarly = new Set()
+  const release = () => {
+    if (done) return
+    done = true
+    clearTimeout(timer)
+    chrome.downloads.onChanged.removeListener(onChanged)
+    URL.revokeObjectURL(url)
+  }
+  function onChanged(delta) {
+    const state = delta?.state?.current
+    if (state !== 'complete' && state !== 'interrupted') return
+    if (downloadId === null) endedEarly.add(delta.id)
+    else if (delta.id === downloadId) release()
+  }
+  chrome.downloads.onChanged.addListener(onChanged)
+  timer = setTimeout(release, opts.revokeAfterMs ?? REVOKE_AFTER_MS)
+  // Node 測試環境裡計時器會把行程多留 60 秒；瀏覽器的 setTimeout 回數字，沒有 unref
+  timer?.unref?.()
+  try {
+    downloadId = await chrome.downloads.download({ url, filename, saveAs: true })
+  } catch (e) {
+    release()
+    throw e
+  }
+  if (endedEarly.has(downloadId)) release()
+  return downloadId
 }
 

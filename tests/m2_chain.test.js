@@ -584,7 +584,9 @@ test('試抓的診斷從 content 一路帶到 Picker 匯出的檔案內容', asy
 
   const dl = c.__calls.filter(x => x.api === 'downloads.download')
   assert.equal(dl.length, 1, '匯出要真的送出下載')
-  const json = JSON.parse(decodeURIComponent(dl[0].args[0].url.split(',')[1]))
+  // AF-21：匯出改走 Blob object URL，從 object URL 讀回內容
+  const { resolveObjectURL } = await import('node:buffer')
+  const json = JSON.parse(await resolveObjectURL(dl[0].args[0].url).text())
   assert.equal(json.tabUrl, 'https://real.test/x?session=9', '分頁的實際網址要一路到檔案裡，不是任務設定的那個')
   assert.deepEqual(json.page.table.rowHeaders, ['歐元'], 'content 給的現況不得在中途被丟掉')
   assert.ok(json.error.message.includes('目前這張表的列標題是'), '訊息也要在檔案裡')

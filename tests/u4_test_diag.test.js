@@ -231,7 +231,9 @@ test('B3-2 按下匯出：檔名可辨識、內容是可讀的 JSON、含關鍵�
   const arg = dl[0].args[0]
   assert.ok(/autofetcher-diag-.*\.json$/.test(arg.filename), `檔名：${arg.filename}`)
   assert.equal(arg.saveAs, true, '檔案一律使用者手動存（SPEC §5）')
-  const json = JSON.parse(decodeURIComponent(arg.url.split(',')[1]))
+  // AF-21：匯出改走 Blob object URL，從 object URL 讀回內容
+  const { resolveObjectURL } = await import('node:buffer')
+  const json = JSON.parse(await resolveObjectURL(arg.url).text())
   assert.equal(json.tabUrl, 'https://target.test/page')
   assert.ok(json.version, '要記下擴充功能版本，否則回報時對不上程式碼')
   assert.equal(json.frame.matchedBy, 'path')

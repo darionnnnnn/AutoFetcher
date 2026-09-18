@@ -88,7 +88,7 @@ test('download 呼叫 chrome.downloads 且 saveAs 為 true', async () => {
   assert.ok(call, '應呼叫 downloads.download')
   assert.equal(call.args[0].filename, 'AutoFetcher/x.json')
   assert.equal(call.args[0].saveAs, true, '必須讓使用者選存檔位置')
-  assert.ok(String(call.args[0].url).startsWith('data:'), '以 data URL 傳內容')
+  assert.ok(String(call.args[0].url).startsWith('blob:'), '以 Blob 的 object URL 傳內容（AF-21：data: URL 大範圍匯出會超過長度上限）')
 })
 
 test('已刪除任務的舊紀錄仍會被匯出,任務名以 id 代替', async () => {
