@@ -392,7 +392,8 @@
 
     /* 任務頁工具列與清單 */
     .task-toolbar { display: flex; gap: var(--space-3); align-items: center; margin-bottom: var(--space-3); }
-    #task-search {
+    #task-search,
+    input[data-rename-input] {
       background: var(--surface);
       border: 1px solid var(--border);
       color: var(--text);
@@ -403,6 +404,17 @@
       max-width: 320px;
     }
     .task-toolbar label { display: flex; align-items: center; gap: var(--space-1); font-size: var(--text-sm); color: var(--text-muted); cursor: pointer; }
+    #task-bulk-bar {
+      display: flex;
+      gap: var(--space-2);
+      align-items: center;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: var(--space-2) var(--space-3);
+      margin-bottom: var(--space-3);
+    }
+    #task-bulk-bar[hidden] { display: none; }
     #task-list { display: flex; flex-direction: column; gap: var(--space-2); }
     .task-row {
       display: flex;
@@ -418,11 +430,12 @@
       transition: box-shadow 0.15s ease;
     }
     .task-row:hover { box-shadow: var(--shadow-2); }
+    .task-row.selected { border-color: var(--primary); }
     .task-name { font-weight: 600; }
     .task-url { color: var(--text-muted); font-size: var(--text-xs); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .task-mode, .task-schedule, .task-next, .task-streak { color: var(--text-muted); }
     .task-actions { margin-left: auto; display: flex; gap: var(--space-1); }
-    .task-actions button, .missed-actions button, .dialog-actions button {
+    .task-actions button, .missed-actions button, .dialog-actions button, #task-bulk-bar button {
       background: var(--surface);
       border: 1px solid var(--border);
       color: var(--text);
@@ -431,7 +444,7 @@
       font-size: var(--text-xs);
       cursor: pointer;
     }
-    .task-actions button:hover, .missed-actions button:hover, .dialog-actions button:hover { background: var(--hover); }
+    .task-actions button:hover, .missed-actions button:hover, .dialog-actions button:hover, #task-bulk-bar button:hover { background: var(--hover); }
     #task-delete-dialog {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -1024,11 +1037,24 @@
       <div id="missed-banner" hidden></div>
 
       <div class="task-toolbar">
+        <label class="task-select-all-label">
+          <input type="checkbox" id="task-select-all" aria-label="全選目前篩選結果">
+          全選
+        </label>
         <input type="search" id="task-search" placeholder="搜尋任務名稱或網址...">
         <label>
           <input type="checkbox" id="task-failed-only">
           只看失敗
         </label>
+      </div>
+
+      <div id="task-bulk-bar" role="toolbar" hidden>
+        <span data-bulk-count></span>
+        <button type="button" data-action="bulk-enable">啟用</button>
+        <button type="button" data-action="bulk-disable">停用</button>
+        <button type="button" data-action="bulk-schedule">改排程</button>
+        <button type="button" data-action="bulk-delete">刪除</button>
+        <button type="button" data-action="bulk-clear">取消選取</button>
       </div>
 
       <div id="task-note"></div>

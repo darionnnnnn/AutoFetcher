@@ -382,3 +382,13 @@ test('B 排程欄仍然顯示白話句（點得動不代表看不到內容）', 
   const btn = rowOf(doc, 'a').querySelector('[data-action="edit-schedule"]')
   assert.match(btn.textContent, /每日 09:00/)
 })
+
+test('B 任務頁重畫好幾次之後，按一次整批停用仍然只做一次（監聽不得累加）', async () => {
+  const { c, ts, st, doc, win } = await withTasks(['a', 'b'])
+  for (let i = 0; i < 3; i++) ts.renderTasks(await st.getTasks(), {}, [], { nextRuns: {} })
+  pick(win, doc, 'a')
+  const m = mark(c)
+  doc.querySelector('#task-bulk-bar [data-action="bulk-disable"]').click()
+  await tick()
+  assert.equal(setsAfter(c, m), 1, '每重畫一次多綁一個監聽，按一下就會寫好幾次')
+})
