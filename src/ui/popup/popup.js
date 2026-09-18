@@ -2,6 +2,7 @@
 import { getTasks, updateTasks, getHealthMap, getMissedList, getLastValues } from '../../shared/storage.js'
 import { openPanel } from '../../shared/panel.js'
 import { MSG } from '../../shared/messages.js'
+import { statusTextOf } from '../../shared/record-status.js'
 import { applySavedTheme } from '../theme-apply.js'
 import { seriesIdOf } from '../../shared/series-index.js'
 import { computeHealth } from '../../background/health.js'
@@ -113,10 +114,11 @@ function renderTaskRow(task, { lastValues, nextRuns, healthMap }) {
         } else if (res && res.outcome === 'done') {
           showResult(res.value !== null && res.value !== undefined ? `抓到 ${res.value}` : '抓到值')
         } else {
-          showResult(`失敗：${res?.error || res?.status || ''}`.trim())
+          showResult(`失敗：${res?.error || (res?.status ? statusTextOf(res.status) : '')}`.trim())
         }
       } catch (err) {
-        showResult(`失敗：${err?.message || String(err)}`)
+        // 訊息通道被拒絕，與 ok:false 是兩條路，兩條都要有字
+        showResult('抓取被中斷，請再試一次')
       } finally {
         retryBtn.disabled = false
       }

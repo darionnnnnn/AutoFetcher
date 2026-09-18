@@ -5,7 +5,7 @@ import { buildSeries, resolvePeriod, latest, pivot, effectiveTimeOf, withDelta }
 // 樞紐表未指定列數上限時的預設(避免長時間區間渲染上千列)
 const DEFAULT_PIVOT_ROWS = 50;
 import { lineChart, barChart, gauge, sparkline } from './charts.js';
-import { isSuccess, isRed, isWarn } from '../../shared/record-status.js';
+import { isSuccess, isRed, isWarn, statusTextOf } from '../../shared/record-status.js';
 import { parentIdOf } from '../../shared/series-index.js';
 import { openTrendPopover } from './trend-popover.js';
 
@@ -542,7 +542,8 @@ function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
       tr.appendChild(valTd);
 
       const statusTd = document.createElement('td');
-      statusTd.textContent = r.status || '—';
+      // 畫面顯示白話，複製的 TSV 維持代碼
+      statusTd.textContent = r.status ? statusTextOf(r.status) : '—';
       tr.appendChild(statusTd);
 
       tbody.appendChild(tr);
@@ -684,7 +685,8 @@ function renderStatusCard(card, ctx, { bodyEl }) {
   for (const id of taskIds) {
     const task = parents[id] || { id, name: id };
     const taskName = task.name || id;
-    const healthStatus = ctx?.health?.[id]?.status || '—';
+    const healthCode = ctx?.health?.[id]?.status;
+    const healthStatus = healthCode ? statusTextOf(healthCode) : '—';
     const nextRun = ctx?.nextRuns?.[id] || '—';
     const missedCount = (ctx?.missed || []).filter(m => m && m.taskId === id).length;
 

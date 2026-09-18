@@ -1,5 +1,6 @@
 import { getTask, saveTasks, updateTasks, deleteTasks, getTasks, countRecordsForTasks, listDates, setPanelCtx } from '../../shared/storage.js'
 import { openPanel } from '../../shared/panel.js'
+import { statusTextOf } from '../../shared/record-status.js'
 import { MSG } from '../../shared/messages.js'
 import { buildExport, download } from '../../shared/export.js'
 import { describeSchedule, describeTarget, targetOfTask, exclusionOfTarget } from '../../shared/describe.js'
@@ -550,7 +551,10 @@ function createTaskRow(t) {
   const healthInfo = currentHealth?.[t.id]
   const statusEl = document.createElement('span')
   statusEl.className = 'task-status'
-  statusEl.textContent = healthInfo?.status || 'ok'
+  // 顯示白話；代碼放 data-status 給配色用
+  const statusCode = healthInfo?.status || 'ok'
+  statusEl.textContent = statusTextOf(statusCode)
+  statusEl.dataset.status = statusCode
   if (healthInfo && healthInfo.reason) {
     statusEl.setAttribute('title', healthInfo.reason)
   }
@@ -617,10 +621,11 @@ function createTaskRow(t) {
       } else if (res && res.outcome === 'done') {
         showResult(res.value !== null && res.value !== undefined ? `抓到 ${res.value}` : '抓到值')
       } else {
-        showResult(`失敗：${res?.error || res?.status || ''}`.trim())
+        showResult(`失敗：${res?.error || (res?.status ? statusTextOf(res.status) : '')}`.trim())
       }
     } catch (err) {
-      showResult(`失敗：${err?.message || String(err)}`)
+      // 訊息通道被拒絕（背景被回收等），與 ok:false 是兩條路，兩條都要有字
+      showResult('抓取被中斷，請再試一次')
     } finally {
       runBtn.disabled = false
     }

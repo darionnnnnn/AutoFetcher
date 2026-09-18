@@ -65,3 +65,29 @@ export function healthStatusOf(recordStatus) {
     : recordStatus
 }
 
+
+// 狀態代碼 → 白話（紀錄狀態與 health 狀態共用，全站唯一一份；AF-21 定案 12）
+const STATUS_TEXT_MAP = {
+  ok: '成功',
+  fallback: '用備援方式抓到',
+  late: '遲到',
+  partial: '只抓到部分',
+  not_found: '找不到元素',
+  selector_lost: '找不到元素',
+  parse_error: '抓不到數值',
+  login_failed: '無法登入',
+  error: '抓取失敗',
+  failed: '抓取失敗',
+  interrupted: '被瀏覽器中斷'
+}
+
+/**
+ * 狀態代碼的白話文字；表外代碼原樣回傳
+ * @param {string} status
+ * @returns {string}
+ */
+export function statusTextOf(status) {
+  return Object.prototype.hasOwnProperty.call(STATUS_TEXT_MAP, status)
+    ? STATUS_TEXT_MAP[status]
+    : status
+}

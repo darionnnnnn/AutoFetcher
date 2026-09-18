@@ -15,6 +15,7 @@ import { buildExport, download } from '../../shared/export.js'
 import { exportSettings, importSettings } from '../../shared/settings-io.js'
 import * as diag from '../../shared/diag.js'
 import { MSG } from '../../shared/messages.js'
+import { statusTextOf } from '../../shared/record-status.js'
 import { applyTheme } from '../theme-apply.js'
 
 // 重新繪製儲存用量區
@@ -202,10 +203,22 @@ function setupExportAndImportListeners() {
   if (selfCheckBtn && !selfCheckBtn._afBound) {
     selfCheckBtn._afBound = true
     selfCheckBtn.addEventListener('click', async () => {
+      // 自檢沒有專屬結果位置：失敗訊息接在「最近診斷紀錄」最上面（不新增版面）
+      let failText = ''
       try {
-        await chrome.runtime.sendMessage({ type: MSG.SELF_CHECK })
-        await renderDiag()
-      } catch {}
+        const res = await chrome.runtime.sendMessage({ type: MSG.SELF_CHECK })
+        if (res && res.ok === false) failText = `自檢失敗：${res.error || '背景處理失敗'}`
+      } catch {
+        failText = '自檢沒有完成，請再試一次'
+      }
+      try { await renderDiag() } catch {}
+      const diagBox = document.getElementById('health-diag')
+      if (failText && diagBox) {
+        const row = document.createElement('div')
+        row.className = 'selfcheck-result'
+        row.textContent = failText
+        diagBox.prepend(row)
+      }
     })
   }
 }
@@ -464,7 +477,7 @@ async function renderSitesList() {
       } else if (record.status === 'login_failed') {
         healthText = record.reason || '無法登入'
       } else {
-        healthText = record.reason || record.status
+        healthText = record.reason || statusTextOf(record.status)
       }
     }
     healthEl.textContent = `最近檢查：${healthText}`

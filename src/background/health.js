@@ -1,18 +1,6 @@
 // AutoFetcher 健康狀態彙總與工具列燈號 (SPEC §12.1)
 import { getTasks, getHealthMap, updateHealthMap, getMissedList } from '../shared/storage.js'
-import { RED_STATUSES, WARN_STATUSES } from '../shared/record-status.js'
-
-// 狀態代碼對應繁體中文詞對照表
-const STATUS_TEXT = {
-  login_failed: '無法登入',
-  selector_lost: '找不到元素',
-  parse_error: '抓不到數值',
-  failed: '抓取失敗',
-  fallback: '用備援方式抓到',
-  late: '遲到',
-  partial: '只抓到部分',
-  interrupted: '被瀏覽器中斷'
-}
+import { RED_STATUSES, WARN_STATUSES, statusTextOf } from '../shared/record-status.js'
 
 // 健康紀錄裡站台項目的鍵前綴（sitecheck.js 寫入）
 const SITE_PREFIX = 'site:'
@@ -80,14 +68,14 @@ export function computeHealth(tasks = [], healthMap = {}, missed = []) {
   if (redCount > 0) {
     level = 'red'
     const items = unreadRedTasks.map(
-      ({ task, record }) => `${task.name || task.id} ${STATUS_TEXT[record.status] || record.reason || '抓取失敗'}`
+      ({ task, record }) => `${task.name || task.id} ${statusTextOf(record.status) || record.reason || '抓取失敗'}`
     )
     const desc = items.slice(0, 2).join('、') + (items.length > 2 ? '等' : '')
     summary = `${redCount} 個任務異常:${desc}`
   } else if (yellowCount > 0) {
     level = 'yellow'
     const items = unreadYellowTasks.map(
-      ({ task, record }) => `${task.name || task.id} ${STATUS_TEXT[record.status] || record.reason || '注意'}`
+      ({ task, record }) => `${task.name || task.id} ${statusTextOf(record.status) || record.reason || '注意'}`
     )
     if (hasMissed) {
       items.push('錯過排程')
@@ -116,7 +104,7 @@ export async function setTaskHealth(taskId, { status, reason, detail } = {}) {
 
     const resolvedReason = (reason !== undefined && reason !== '')
       ? reason
-      : (STATUS_TEXT[status] || '')
+      : (statusTextOf(status) || '')
 
     record = {
       status,

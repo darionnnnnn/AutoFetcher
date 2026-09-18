@@ -33,7 +33,7 @@ import { isAnchorText, putSkip } from '../shared/table.js'
 import { pickSpecOf, reconcileFields } from '../shared/field-match.js'
 import { withInnerLabel } from '../shared/describe.js'
 import { scheduleSiteCheck, runSiteCheck } from './sitecheck.js'
-import { isSuccess } from '../shared/record-status.js'
+import { isSuccess, statusTextOf } from '../shared/record-status.js'
 import { parentIdOf, buildSeriesIndex, nameOf, seriesIdOf } from '../shared/series-index.js'
 
 
@@ -506,7 +506,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
             name: idx.byId[r.taskId]?.shortName || nameOf(idx, r.taskId),
             ok: isSuccess(r),
             value: isSuccess(r) ? r.value : undefined,
-            error: isSuccess(r) ? undefined : (r.error || r.status)
+            error: isSuccess(r) ? undefined : (r.error || statusTextOf(r.status))
           }))
         }
       }
@@ -751,8 +751,11 @@ export async function handleMessage(msg, sender, runOpts = {}) {
     }
 
     return undefined
-  } catch {
-    return undefined
+  } catch (err) {
+    // 背景出錯不得靜默：UI 等結果的按鈕要拿得到 ok:false 與原因
+    const message = String(err?.message || err)
+    try { await diag.log('message_error', `${msg?.type}：${message}`) } catch {}
+    return { ok: false, error: `背景處理失敗：${message}` }
   }
 }
 

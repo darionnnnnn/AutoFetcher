@@ -10,6 +10,7 @@ import { nextIntervalRun } from '../../shared/schedule-math.js'
 import { isAnchorText, putInner, skipOf, putSkip, excludeOf, putExclude } from '../../shared/table.js'
 import { reconcileFields } from '../../shared/field-match.js'
 import { download } from '../../shared/export.js'
+import { statusTextOf } from '../../shared/record-status.js'
 
 let currentCtx = null
 let currentBlock = null
@@ -2725,11 +2726,20 @@ export async function handleTestNow() {
   task.id = '__preview'
 
   try {
-    const res = await chrome.runtime.sendMessage({
-      type: MSG.TEST_TASK,
-      task,
-      tabId: currentCtx?.tabId
-    })
+    let res
+    try {
+      res = await chrome.runtime.sendMessage({
+        type: MSG.TEST_TASK,
+        task,
+        tabId: currentCtx?.tabId
+      })
+    } catch {
+      // 訊息通道被拒絕（背景被回收等），與 ok:false 是兩條路，兩條都要有字
+      if (errorsEl) errorsEl.textContent = '抓取被中斷，請再試一次'
+      if (previewEl) previewEl.textContent = '—'
+      setPreviewState('error')
+      return
+    }
     if (res && res.ok) {
       if (values.fields) {
         const lines = values.fields.map(f => {
@@ -2740,7 +2750,7 @@ export async function handleTestNow() {
             if (fieldRes.message) line += ` ⚠ ${fieldRes.message}`
             return line
           } else {
-            const err = fieldRes?.message || fieldRes?.error || '抓取失敗'
+            const err = fieldRes?.message || statusTextOf(fieldRes?.error) || '抓取失敗'
             return `${f.name}: ${err}`
           }
         })
@@ -2783,7 +2793,7 @@ export async function handleTestNow() {
       renderTestDetail(values, res)
     } else {
       // 有解法的訊息優先：'not_found' 只說了失敗，沒說使用者能怎麼辦
-      const err = res?.message || res?.error || '找不到目標元素'
+      const err = res?.message || statusTextOf(res?.error) || '找不到目標元素'
       if (errorsEl) errorsEl.textContent = err
       if (previewEl) previewEl.textContent = '—'
       setPreviewState('error')
@@ -3555,14 +3565,20 @@ async function handleBatchTest() {
         if (btn) btn.textContent = `試抓中 ${i + 1}／${entries.length}…`
         const task = taskFromForm(values, currentCtx)
         task.id = '__preview'
-        const res = await chrome.runtime.sendMessage({ type: MSG.TEST_TASK, task, tabId: item.tabId })
+        let res
+        try {
+          res = await chrome.runtime.sendMessage({ type: MSG.TEST_TASK, task, tabId: item.tabId })
+        } catch {
+          if (resultEl) resultEl.textContent = '抓取被中斷，請再試一次'
+          continue
+        }
         if (res && res.ok) {
           let text
           if (values.fields) {
             text = values.fields.map(f => {
               const r = res.fields?.[f.key]
               if (r && r.ok) return `${f.name}: ${r.value !== undefined ? String(r.value) : (r.raw ?? '')}${blockCountsText(r)}`
-              return `${f.name}: 失敗：${r?.message || r?.error || '抓取失敗'}`
+              return `${f.name}: 失敗：${r?.message || statusTextOf(r?.error) || '抓取失敗'}`
             }).join('\n')
           } else {
             const val = res.value !== undefined ? String(res.value) : (res.raw ?? '')
@@ -3570,7 +3586,7 @@ async function handleBatchTest() {
           }
           if (resultEl) resultEl.textContent = text
         } else if (resultEl) {
-          resultEl.textContent = `失敗：${res?.message || res?.error || '抓取失敗'}`
+          resultEl.textContent = `失敗：${res?.message || statusTextOf(res?.error) || '抓取失敗'}`
         }
       } catch (e) {
         if (resultEl) resultEl.textContent = `失敗：${e?.message || e}`

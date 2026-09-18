@@ -16,7 +16,7 @@ import { buildTsv } from './cards.js'
 import { renderTasks } from './tasks.js'
 import { renderSettings } from './settings.js'
 import { renderDashboard, isEditing } from './dashboard.js'
-import { isSuccess } from '../../shared/record-status.js'
+import { isSuccess, statusTextOf } from '../../shared/record-status.js'
 import { MSG } from '../../shared/messages.js'
 import { buildSeriesIndex, nameOf } from '../../shared/series-index.js'
 
@@ -326,15 +326,9 @@ export async function renderFilters() {
   // 2. 狀態多選容器 #filter-statuses
   const statusesContainer = document.createElement('div')
   statusesContainer.id = 'filter-statuses'
-  const allStatuses = [
-    { key: 'ok', label: '成功 (ok)' },
-    { key: 'fallback', label: '備援 (fallback)' },
-    { key: 'late', label: '逾時 (late)' },
-    { key: 'not_found', label: '未找到 (not_found)' },
-    { key: 'parse_error', label: '抓不到數值 (parse_error)' },
-    { key: 'login_failed', label: '無法登入 (login_failed)' },
-    { key: 'error', label: '錯誤 (error)' }
-  ]
+  // 標籤文字只經 statusTextOf（全站唯一一份），格式「白話 (代碼)」
+  const allStatuses = ['ok', 'fallback', 'late', 'not_found', 'parse_error', 'login_failed', 'error', 'interrupted']
+    .map(key => ({ key, label: `${statusTextOf(key)} (${key})` }))
   for (const item of allStatuses) {
     const label = document.createElement('label')
     const cb = document.createElement('input')
@@ -576,7 +570,10 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
     const isFailed = !isSuccess(record)
     const hasAlert = record.alert === true
     const cells = visibleCols.map(col => {
-      const text = formatValue(record[col.key])
+      // 狀態欄顯示白話；複製 TSV 與匯出維持代碼
+      const text = col.key === 'status' && record.status
+        ? statusTextOf(record.status)
+        : formatValue(record[col.key])
       if (col.key === 'status' && hasAlert) {
         return `${text} 🔔`
       }

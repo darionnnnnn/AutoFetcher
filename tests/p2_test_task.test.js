@@ -114,7 +114,8 @@ test('B-1 多值任務逐值顯示', async () => {
   await pk.handleTestNow()
   const text = doc.getElementById('preview').textContent
   assert.ok(text.includes('42'), `第一個值要顯示，實得 ${JSON.stringify(text)}`)
-  assert.ok(text.includes('parse_error'), `失敗的值要說原因，實得 ${JSON.stringify(text)}`)
+  // AF-21 2-B：狀態代碼經 statusTextOf 顯示白話
+  assert.ok(text.includes('抓不到數值'), `失敗的值要說原因，實得 ${JSON.stringify(text)}`)
 })
 
 // ---------- B-2 背景端 ----------
