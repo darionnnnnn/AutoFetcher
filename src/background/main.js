@@ -1,6 +1,6 @@
 // AutoFetcher MV3 Background Service Worker 入口總接線
 import {
-  init as initStorage, getTask, saveTask, getRecordsByDate,
+  init as initStorage, getTask, updateTasks, getRecordsByDate, updateRepickTabs,
   getPanelCtx, setPanelCtx, mergePanelCtx, clearPanelCtx,
   getSettings, subscribe, deleteLastValues
 } from '../shared/storage.js'
@@ -615,13 +615,16 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       }
 
       if (msg.purpose === 'repick') {
-        const task = await getTask(msg.taskId)
+        // 鎖內讀最新的任務再套用重選，不會把同時寫入的 notFoundStreak 之類洗掉
+        let orphanSeries = []
+        const [task] = await updateTasks([msg.taskId], (t) => {
+          t.locator = msg.locator
+          orphanSeries = applyRepick(t, Array.isArray(msg.picks) ? msg.picks : [])
+          return t
+        })
         if (!task) {
           return { ok: true }
         }
-        task.locator = msg.locator
-        const orphanSeries = applyRepick(task, Array.isArray(msg.picks) ? msg.picks : [])
-        await saveTask(task)
         // 被移除的值：清掉它們在儀表板上的來源與最後一次的值，紀錄留到保留天數自然到期。
         // 不清的話卡片會一直指著不存在的序列，使用者只看得到一張永遠空白的卡
         if (Array.isArray(orphanSeries) && orphanSeries.length > 0) {
@@ -800,20 +803,20 @@ export async function handleNotificationClick(notificationId) {
 // 為了重選而開的分頁：`taskId -> tabId`。使用者原本就開著的分頁不進這張表，也就不會被收掉。
 // 放 `storage.session` 而不是模組級 Map——MV3 的 service worker 一被回收就整張歸零，
 // 而重選流程（開分頁→等載入→使用者慢慢選）很容易跨過閒置回收。
-const REPICK_KEY = 'repickTabs'
 
 async function rememberRepickTab(taskId, tabId) {
-  const cur = (await chrome.storage.session.get(REPICK_KEY))[REPICK_KEY] || {}
-  cur[taskId] = tabId
-  await chrome.storage.session.set({ [REPICK_KEY]: cur })
+  await updateRepickTabs((cur) => ({ ...cur, [taskId]: tabId }))
 }
 
 async function closeRepickTab(taskId) {
-  const cur = (await chrome.storage.session.get(REPICK_KEY))[REPICK_KEY] || {}
-  const tabId = cur[taskId]
+  let tabId
+  await updateRepickTabs((cur) => {
+    tabId = cur[taskId]
+    const next = { ...cur }
+    delete next[taskId]
+    return next
+  })
   if (tabId === undefined) return
-  delete cur[taskId]
-  await chrome.storage.session.set({ [REPICK_KEY]: cur })
   try { await chrome.tabs.remove(tabId) } catch {}
 }
 

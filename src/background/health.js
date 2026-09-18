@@ -1,5 +1,5 @@
 // AutoFetcher 健康狀態彙總與工具列燈號 (SPEC §12.1)
-import { getTasks } from '../shared/storage.js'
+import { getTasks, getHealthMap, updateHealthMap, getMissedList } from '../shared/storage.js'
 import { RED_STATUSES, WARN_STATUSES } from '../shared/record-status.js'
 
 // 狀態代碼對應繁體中文詞對照表
@@ -100,52 +100,51 @@ export function computeHealth(tasks = [], healthMap = {}, missed = []) {
 
 // 取得儲存空間中的所有健康紀錄
 export async function getHealth() {
-  const res = await chrome.storage.local.get('health')
-  return res && res.health && typeof res.health === 'object' ? res.health : {}
+  return getHealthMap()
 }
 
 // 寫入單一任務的健康狀態紀錄並補上時間戳
 export async function setTaskHealth(taskId, { status, reason, detail } = {}) {
-  const health = await getHealth()
-  const prev = health[taskId]
+  let record
+  await updateHealthMap((health) => {
+    const prev = health[taskId]
 
-  // status 與上一次不同時重設為未讀（false），相同時保留既有 read 標記
-  const statusChanged = !prev || prev.status !== status
-  const read = statusChanged ? false : (prev.read === true)
+    // status 與上一次不同時重設為未讀（false），相同時保留既有 read 標記
+    const statusChanged = !prev || prev.status !== status
+    const read = statusChanged ? false : (prev.read === true)
 
-  const resolvedReason = (reason !== undefined && reason !== '')
-    ? reason
-    : (STATUS_TEXT[status] || '')
+    const resolvedReason = (reason !== undefined && reason !== '')
+      ? reason
+      : (STATUS_TEXT[status] || '')
 
-  const record = {
-    status,
-    reason: resolvedReason,
-    detail,
-    at: Date.now(),
-    read
-  }
+    record = {
+      status,
+      reason: resolvedReason,
+      detail,
+      at: Date.now(),
+      read
+    }
 
-  const updated = {
-    ...health,
-    [taskId]: record
-  }
-
-  await chrome.storage.local.set({ health: updated })
+    return {
+      ...health,
+      [taskId]: record
+    }
+  })
   return record
 }
 
 // 將指定任務的健康紀錄標示為已讀
 export async function markRead(taskId) {
-  const health = await getHealth()
-  const prev = health[taskId] || {}
-  const updated = {
-    ...health,
-    [taskId]: {
-      ...prev,
-      read: true
+  await updateHealthMap((health) => {
+    const prev = health[taskId] || {}
+    return {
+      ...health,
+      [taskId]: {
+        ...prev,
+        read: true
+      }
     }
-  }
-  await chrome.storage.local.set({ health: updated })
+  })
 }
 
 // 將狀態物件反映至瀏覽器擴充功能圖示 badge 與標題
@@ -183,8 +182,7 @@ export async function applyBadge(state) {
 export async function refreshBadge() {
   const tasks = await getTasks()
   const health = await getHealth()
-  const res = await chrome.storage.local.get('missed')
-  const missed = Array.isArray(res?.missed) ? res.missed : []
+  const missed = await getMissedList()
 
   const state = computeHealth(tasks, health, missed)
   await applyBadge(state)

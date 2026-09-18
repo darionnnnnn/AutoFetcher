@@ -1,4 +1,4 @@
-import { getTask, saveTasks, deleteTasks, getTasks, countRecordsForTasks, listDates, setPanelCtx } from '../../shared/storage.js'
+import { getTask, saveTasks, updateTasks, deleteTasks, getTasks, countRecordsForTasks, listDates, setPanelCtx } from '../../shared/storage.js'
 import { openPanel } from '../../shared/panel.js'
 import { MSG } from '../../shared/messages.js'
 import { buildExport, download } from '../../shared/export.js'
@@ -62,17 +62,17 @@ export function duplicateTask(task) {
 export async function applyOrder(ids) {
   if (!Array.isArray(ids)) return
   const tasks = await getTasks()
-  const map = new Map(tasks.map(t => [t.id, t]))
-  const toUpdate = []
+  const known = new Set(tasks.map(t => t.id))
+  const orderOf = new Map()
   let nextOrder = 0
   for (const id of ids) {
-    const t = map.get(id)
-    if (t) {
-      toUpdate.push({ ...t, order: nextOrder++ })
+    if (known.has(id) && !orderOf.has(id)) {
+      orderOf.set(id, nextOrder++)
     }
   }
-  if (toUpdate.length > 0) {
-    await saveTasks(toUpdate)
+  if (orderOf.size > 0) {
+    // 只換 order：鎖內對最新任務改，不拿畫面上的舊副本洗掉別人剛寫的欄位
+    await updateTasks([...orderOf.keys()], (t) => ({ ...t, order: orderOf.get(t.id) }))
   }
 }
 
@@ -175,10 +175,10 @@ async function setBulkEnabled(enabled) {
 
   try {
     const tasks = await getTasks()
-    const targetTasks = tasks.filter((t) => selectedIds.has(t.id))
-    const updated = targetTasks.map((t) => ({ ...t, enabled }))
+    const targetIds = tasks.filter((t) => selectedIds.has(t.id)).map((t) => t.id)
+    // 只換 enabled：鎖內對最新任務改，不會洗掉抓取剛寫入的 notFoundStreak 之類
+    const updated = targetIds.length > 0 ? await updateTasks(targetIds, (t) => ({ ...t, enabled })) : []
     if (updated.length > 0) {
-      await saveTasks(updated)
       await chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS })
     }
     const note = document.getElementById('task-note')
@@ -188,7 +188,7 @@ async function setBulkEnabled(enabled) {
     const freshTasks = await getTasks()
     renderTasks(freshTasks, currentHealth, currentMissed, currentCtx)
   } catch (e) {
-    // 整批寫入是全有全無（saveTasks 先驗證再寫）：失敗就是一個都沒改，要說出來，不能靜默
+    // 整批寫入是全有全無（updateTasks 先驗證再寫）：失敗就是一個都沒改，要說出來，不能靜默
     const note = document.getElementById('task-note')
     if (note) note.textContent = `${enabled ? '啟用' : '停用'}失敗，沒有任何任務被改動：${e?.message || e}`
   } finally {
@@ -229,13 +229,12 @@ async function saveRename(id, val) {
       }
       return
     }
-    const cur = await getTask(id)
+    const [cur] = await updateTasks([id], (t) => ({ ...t, name: trimmed }))
     if (!cur) {
       renaming = null
       renderListRows()
       return
     }
-    await saveTasks([{ ...cur, name: trimmed }])
     renaming = null
     const fresh = await getTasks()
     // 存檔前使用者已經按了另一列的「改名」：接著開那一列
@@ -409,10 +408,8 @@ function createTaskRow(t) {
   toggle.dataset.action = 'toggle'
   toggle.checked = t.enabled !== false
   toggle.addEventListener('change', async () => {
-    const current = await getTask(t.id)
+    const [current] = await updateTasks([t.id], (task) => ({ ...task, enabled: toggle.checked }))
     if (current) {
-      current.enabled = toggle.checked
-      await saveTasks([current])
       await chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS })
     }
   })
@@ -576,10 +573,8 @@ function createTaskRow(t) {
     useFgBtn.dataset.action = 'use-foreground'
     useFgBtn.textContent = '改用前景抓取'
     useFgBtn.addEventListener('click', async () => {
-      const current = await getTask(t.id)
+      const [current] = await updateTasks([t.id], (task) => ({ ...task, foreground: true }))
       if (current) {
-        current.foreground = true
-        await saveTasks([current])
         const idx = currentTasks.findIndex((taskItem) => taskItem.id === t.id)
         if (idx !== -1) {
           currentTasks[idx] = current

@@ -1,20 +1,18 @@
 // 錯過清單：比對與補抓離線期間應執行但未執行的排程槽
-import { getTasks } from '../shared/storage.js'
+import { getTasks, getMissedList, updateMissedList, getLastSeenAt, setLastSeenAt, getLedgerRange } from '../shared/storage.js'
 import { slotOf } from './scheduler.js'
 import { notify } from './notify.js'
 
 // 七天的毫秒數常數
 const SEVEN_DAYS_MS = 7 * 86400000
 
-// 讀取錯過清單
-async function readMissed() {
-  const res = await chrome.storage.local.get('missed')
-  return Array.isArray(res.missed) ? res.missed : []
-}
+// 同一個項目（任務＋排程槽）的比對鍵
+const itemKey = (x) => `${x.taskId}:${x.slot}`
 
-// 寫入錯過清單
-async function writeMissed(list) {
-  await chrome.storage.local.set({ missed: list })
+// 從錯過清單移除指定的項目（在鎖內對最新清單做，不會蓋掉同時新增的項目）
+async function removeMissed(items) {
+  const drop = new Set(items.map(itemKey))
+  await updateMissedList((list) => list.filter((m) => !drop.has(itemKey(m))))
 }
 
 // 計算指定時間範圍內錯過的排程槽（純函式，不操作 chrome API）
@@ -75,33 +73,31 @@ export function computeMissedSlots(tasks, ledger, fromMs, toMs) {
 export async function refreshMissed(nowMs = Date.now(), sinceMs) {
   let effectiveSince = sinceMs
   if (typeof effectiveSince !== 'number') {
-    const res = await chrome.storage.local.get('lastSeenAt')
-    effectiveSince = typeof res.lastSeenAt === 'number' ? res.lastSeenAt : nowMs - SEVEN_DAYS_MS
+    const lastSeenAt = await getLastSeenAt()
+    effectiveSince = typeof lastSeenAt === 'number' ? lastSeenAt : nowMs - SEVEN_DAYS_MS
   }
 
   const fromMs = Math.max(effectiveSince, nowMs - SEVEN_DAYS_MS)
   const tasks = await getTasks()
-  const runsRes = await chrome.storage.local.get('runs')
-  const ledger = runsRes.runs || {}
+  const ledger = fromMs < nowMs ? await getLedgerRange(slotOf(fromMs).slice(0, 10), slotOf(nowMs).slice(0, 10)) : {}
 
   const computed = computeMissedSlots(tasks, ledger, fromMs, nowMs)
-  const existing = await readMissed()
 
-  const existingKeys = new Set(existing.map((x) => `${x.taskId}:${x.slot}`))
+  // 合併要對鎖內讀到的最新清單做，否則同時的補抓／略過會被舊清單蓋回來
   let newCount = 0
-  const merged = [...existing]
-
-  for (const item of computed) {
-    const key = `${item.taskId}:${item.slot}`
-    if (!existingKeys.has(key)) {
-      existingKeys.add(key)
-      merged.push(item)
-      newCount++
+  const merged = await updateMissedList((existing) => {
+    const existingKeys = new Set(existing.map(itemKey))
+    const next = [...existing]
+    for (const item of computed) {
+      const key = itemKey(item)
+      if (!existingKeys.has(key)) {
+        existingKeys.add(key)
+        next.push(item)
+        newCount++
+      }
     }
-  }
-
-  merged.sort((a, b) => a.slot.localeCompare(b.slot) || a.taskId.localeCompare(b.taskId))
-  await writeMissed(merged)
+    return next.sort((a, b) => a.slot.localeCompare(b.slot) || a.taskId.localeCompare(b.taskId))
+  })
 
   if (merged.length > 0 && newCount > 0) {
     await notify('missed-tasks', {
@@ -111,17 +107,17 @@ export async function refreshMissed(nowMs = Date.now(), sinceMs) {
     })
   }
 
-  await chrome.storage.local.set({ lastSeenAt: nowMs })
+  await setLastSeenAt(nowMs)
 }
 
 // 取得當前錯過清單
 export async function getMissed() {
-  return await readMissed()
+  return await getMissedList()
 }
 
 // 補抓清單中的所有項目
 export async function catchUpAll(runTaskFn) {
-  const list = await readMissed()
+  const list = await getMissedList()
   const tasks = await getTasks()
   const taskMap = new Map(tasks.map((t) => [t.id, t]))
 
@@ -135,12 +131,12 @@ export async function catchUpAll(runTaskFn) {
     }
   }
 
-  await writeMissed([])
+  await removeMissed(list)
 }
 
 // 補抓單一項目：從清單找出符合的項目執行並移除
 export async function catchUpOne(taskId, slot, runTaskFn) {
-  const list = await readMissed()
+  const list = await getMissedList()
   const item = list.find((m) => m.taskId === taskId && m.slot === slot)
   if (!item) return
 
@@ -154,18 +150,15 @@ export async function catchUpOne(taskId, slot, runTaskFn) {
     }
   }
 
-  const remaining = list.filter((m) => !(m.taskId === taskId && m.slot === slot))
-  await writeMissed(remaining)
+  await removeMissed([item])
 }
 
 // 全部略過：清空錯過清單
 export async function skipAll() {
-  await writeMissed([])
+  await updateMissedList(() => [])
 }
 
 // 略過單一項目：從清單移除指定任務與排程槽
 export async function skipOne(taskId, slot) {
-  const list = await readMissed()
-  const remaining = list.filter((item) => !(item.taskId === taskId && item.slot === slot))
-  await writeMissed(remaining)
+  await removeMissed([{ taskId, slot }])
 }

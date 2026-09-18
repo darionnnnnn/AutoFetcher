@@ -1,4 +1,5 @@
 // AutoFetcher 診斷紀錄環形緩衝（SPEC §4.1）
+import { withLock } from './lock.js'
 
 const MAX_ENTRIES = 500
 
@@ -10,15 +11,18 @@ export async function getAll() {
 
 // 寫入單筆診斷紀錄，超過 500 筆時丟掉最舊的
 export async function log(kind, detail) {
-  const list = await getAll()
-  const entry = { at: Date.now(), kind, detail }
-  list.push(entry)
-  const trimmed = list.length > MAX_ENTRIES ? list.slice(list.length - MAX_ENTRIES) : list
-  await chrome.storage.local.set({ diag: trimmed })
-  return entry
+  // 讀-改-寫在 diag 鎖內：不同頁面／背景同時寫診斷時，後寫的不會把先寫的蓋掉
+  return withLock('diag', async () => {
+    const list = await getAll()
+    const entry = { at: Date.now(), kind, detail }
+    list.push(entry)
+    const trimmed = list.length > MAX_ENTRIES ? list.slice(list.length - MAX_ENTRIES) : list
+    await chrome.storage.local.set({ diag: trimmed })
+    return entry
+  })
 }
 
 // 清空所有診斷紀錄
 export async function clear() {
-  await chrome.storage.local.set({ diag: [] })
+  await withLock('diag', () => chrome.storage.local.set({ diag: [] }))
 }

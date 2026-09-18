@@ -1,4 +1,5 @@
 // AutoFetcher 站台密碼加解密（SPEC §6）：僅防誤讀，不防同機惡意程式
+import { withLock } from './lock.js'
 
 // Base64 與位元組陣列互轉
 function toBase64(bytes) {
@@ -22,14 +23,17 @@ async function loadKey() {
 }
 
 // 取得金鑰，沒有就產生一把並存起來
+// 「讀→沒有就產生→寫」在 cryptoKey 鎖內：兩個首次加密同時發生會產生兩把金鑰，先加密的密文永遠解不開
 async function getOrCreateKey() {
-  const existing = await loadKey()
-  if (existing) return existing
+  return withLock('cryptoKey', async () => {
+    const existing = await loadKey()
+    if (existing) return existing
 
-  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt'])
-  const exported = await crypto.subtle.exportKey('raw', key)
-  await chrome.storage.local.set({ cryptoKey: toBase64(new Uint8Array(exported)) })
-  return key
+    const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt'])
+    const exported = await crypto.subtle.exportKey('raw', key)
+    await chrome.storage.local.set({ cryptoKey: toBase64(new Uint8Array(exported)) })
+    return key
+  })
 }
 
 // 以 AES-GCM 加密字串，每次都用新的隨機 iv

@@ -7,7 +7,7 @@ import {
   nextDailyRun,
   nextIntervalRun
 } from './scheduler.js'
-import { getTasks, trimOldRecords } from '../shared/storage.js'
+import { getTasks, trimOldRecords, getLastTimezone, setLastTimezone, getInflight, updateInflight } from '../shared/storage.js'
 import { ensureSiteCheck } from './sitecheck.js'
 import { cleanOrphanFetchTabs } from './fetch-tab.js'
 import * as diag from '../shared/diag.js'
@@ -20,11 +20,11 @@ async function checkWatchdogAlarm() {
 
 // 檢查時區變更，必要時重建所有 alarms
 async function checkTimezone() {
-  const { lastTimezone } = await chrome.storage.local.get('lastTimezone')
+  const lastTimezone = await getLastTimezone()
   const currentTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
   if (lastTimezone !== currentTimezone) {
     await rebuildAlarms()
-    await chrome.storage.local.set({ lastTimezone: currentTimezone })
+    await setLastTimezone(currentTimezone)
   }
 }
 
@@ -85,29 +85,30 @@ async function cleanStaleAlarms() {
 
 // 清理執行超過 3 分鐘卡住的 inflight 狀態
 async function cleanStuckInflight() {
-  const res = await chrome.storage.session.get('inflight')
-  const inflight = res?.inflight
+  const inflight = await getInflight()
   if (!inflight || typeof inflight !== 'object' || Array.isArray(inflight)) {
     return
   }
 
   const now = Date.now()
-  const remaining = {}
-  let changed = false
+  const stale = []
 
   for (const [key, val] of Object.entries(inflight)) {
     // fetcher 寫進去的是 ISO 字串，早期這裡比對 typeof === 'number'，所以清理從未觸發過
     const startedAt = typeof val?.startedAt === 'string' ? Date.parse(val.startedAt) : val?.startedAt
     if (Number.isFinite(startedAt) && now - startedAt > 3 * 60 * 1000) {
-      changed = true
-      await diag.log('interrupted', key)
-    } else {
-      remaining[key] = val
+      stale.push(key)
     }
   }
 
-  if (changed) {
-    await chrome.storage.session.set({ inflight: remaining })
+  if (stale.length > 0) {
+    // 鎖內對最新的 inflight 刪除，不會蓋掉這段期間新開始的抓取；診斷在鎖外寫（鎖不巢狀）
+    await updateInflight((cur) => {
+      const next = { ...cur }
+      for (const key of stale) delete next[key]
+      return next
+    })
+    for (const key of stale) await diag.log('interrupted', key)
   }
 }
 

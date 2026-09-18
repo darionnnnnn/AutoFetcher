@@ -1,5 +1,5 @@
 // AutoFetcher 工具列 popup 控制器 (SPEC §12.2)
-import { getTasks, saveTasks, getHealthMap, getMissedList, getLastValues } from '../../shared/storage.js'
+import { getTasks, updateTasks, getHealthMap, getMissedList, getLastValues } from '../../shared/storage.js'
 import { openPanel } from '../../shared/panel.js'
 import { MSG } from '../../shared/messages.js'
 import { applySavedTheme } from '../theme-apply.js'
@@ -241,8 +241,8 @@ export async function handleToggleAll() {
   const tasks = await getTasks()
   const hasActive = tasks.some(t => t.enabled !== false)
   const nextEnabled = !hasActive
-  const updated = tasks.map(t => ({ ...t, enabled: nextEnabled }))
-  await saveTasks(updated)
+  // 只換 enabled：鎖內對最新任務改，不拿讀到的舊副本整份蓋回去
+  await updateTasks(tasks.map(t => t.id), t => ({ ...t, enabled: nextEnabled }))
   chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS })
 }
 

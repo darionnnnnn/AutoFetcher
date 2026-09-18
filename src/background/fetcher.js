@@ -1,5 +1,5 @@
 // AutoFetcher 擷取流程：開分頁、注入、擷取、寫紀錄、重試
-import { getTask, saveTask, appendRecord, appendRecords, getRecordsInRange, getSettings, getAlertLog, setAlertLog, setLastValue, setLastValues } from '../shared/storage.js'
+import { getTask, updateTasks, appendRecord, appendRecords, getRecordsInRange, getSettings, updateAlertLog, setLastValue, setLastValues, getRunStatus, setRunStatus, updateInflight } from '../shared/storage.js'
 import { waitMsOf, timeoutMsOf, preActionFailure, DEFAULT_WAIT_TIMEOUT_MS, messageTimeoutMs } from '../shared/preaction.js'
 import { seriesIdOf, parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
 import { MSG } from '../shared/messages.js'
@@ -94,34 +94,27 @@ function getOrigin(url) {
   }
 }
 
-// 讀取執行帳本（runs 鍵）
-async function getLedger() {
-  const res = await chrome.storage.local.get('runs')
-  return res.runs || {}
-}
-
-// 寫入執行帳本（runs 鍵）
-async function recordLedger(taskId, slot, status) {
-  const runs = await getLedger()
-  if (!runs[taskId]) runs[taskId] = {}
-  runs[taskId][slot] = status
-  await chrome.storage.local.set({ runs })
-}
-
 // 寫入 inflight 狀態至 storage.session
 async function setInflight(key, stateObj) {
-  const res = await chrome.storage.session.get('inflight')
-  const inflight = res.inflight || {}
-  inflight[key] = stateObj
-  await chrome.storage.session.set({ inflight })
+  await updateInflight((inflight) => ({ ...inflight, [key]: stateObj }))
 }
 
 // 清除 storage.session 中的 inflight 狀態
 async function removeInflight(key) {
-  const res = await chrome.storage.session.get('inflight')
-  const inflight = res.inflight || {}
-  delete inflight[key]
-  await chrome.storage.session.set({ inflight })
+  await updateInflight((inflight) => {
+    delete inflight[key]
+    return inflight
+  })
+}
+
+// 清掉「找不到元素」的連續次數與前景建議（抓到了就歸零）；鎖內讀最新任務，沒有要清的就不寫
+async function clearNotFoundStreak(taskId) {
+  await updateTasks([taskId], (t) => {
+    if (!((t.notFoundStreak || 0) > 0 || t.suggestForeground)) return null
+    t.notFoundStreak = 0
+    delete t.suggestForeground
+    return t
+  })
 }
 
 // 排定重試 alarm
@@ -181,33 +174,30 @@ async function processAlerts(record, cachedRecordsInRange) {
   record.alert = true
   record.alertHits = hits.map(h => h.alertId)
 
-  // 5. 去重與通知
-  const alertLog = await getAlertLog()
+  // 5. 去重與通知：冷卻判斷與蓋章在 alertLog 鎖內一起做（同時兩筆命中不會各通知一次）；
+  //    通知在鎖外發（notify 可能寫診斷，鎖不巢狀）
   const settings = await getSettings()
   const cooldownMin = typeof settings?.alertCooldownMin === 'number' ? settings.alertCooldownMin : 60
   const cooldownMs = cooldownMin * 60 * 1000
   const now = Date.now()
 
-  const taskAlerts = alertLog[record.taskId] ? { ...alertLog[record.taskId] } : {}
-  let logChanged = false
+  let toNotify = []
+  await updateAlertLog((alertLog) => {
+    const taskAlerts = alertLog[record.taskId] ? { ...alertLog[record.taskId] } : {}
+    toNotify = hits.filter((hit) => {
+      const lastNotified = taskAlerts[hit.alertId]
+      return !(typeof lastNotified === 'number' && (now - lastNotified) < cooldownMs)
+    })
+    if (toNotify.length === 0) return undefined
+    for (const hit of toNotify) taskAlerts[hit.alertId] = now
+    alertLog[record.taskId] = taskAlerts
+    return alertLog
+  })
 
-  for (const hit of hits) {
-    const lastNotified = taskAlerts[hit.alertId]
-    if (typeof lastNotified === 'number' && (now - lastNotified) < cooldownMs) {
-      continue
-    }
-
+  for (const hit of toNotify) {
     const notificationId = `${record.taskId}:alert:${hit.alertId}:${today}`
     const title = `AutoFetcher: ${displayName}`
     await notify(notificationId, { title, message: hit.message })
-
-    taskAlerts[hit.alertId] = now
-    logChanged = true
-  }
-
-  if (logChanged) {
-    alertLog[record.taskId] = taskAlerts
-    await setAlertLog(alertLog)
   }
 }
 
@@ -250,7 +240,7 @@ async function writeRecord(record, opts = {}) {
   await processAlerts(record)
   await appendRecord(record.slot.slice(0, 10), record)
   if (!skipLedger) {
-    await recordLedger(parentId, record.slot, record.status)
+    await setRunStatus(parentId, record.slot, record.status)
   }
   await updateHealth(parentId, healthFromRecords([record], record.partial))
   // popup 顯示「最後值」讀的是 lastValues；失敗的紀錄不覆蓋上一次成功的值
@@ -291,8 +281,7 @@ export async function runTask(task, opts = {}) {
 
   // 1. 冪等檢查：已在帳本中則直接返回 null（dryRun 與手動抓取略過）
   if (!dryRun && !isManual) {
-    const ledger = await getLedger()
-    if (ledger[task.id]?.[slot]) return null
+    if (await getRunStatus(task.id, slot)) return null
   }
 
   // 2. 離線檢查：若離線則排 10 分鐘後重試，不得開分頁
@@ -328,8 +317,7 @@ export async function runTask(task, opts = {}) {
     const hasPreActions = Array.isArray(task.preActions) && task.preActions.length > 0
     // 佇列中再次確認冪等，防止併發重複執行（dryRun 與手動抓取略過）
     if (!dryRun && !isManual) {
-      const currentLedger = await getLedger()
-      if (currentLedger[task.id]?.[slot]) return null
+      if (await getRunStatus(task.id, slot)) return null
     }
 
     const inflightKey = `${task.id}:${slot}`
@@ -640,7 +628,7 @@ export async function runTask(task, opts = {}) {
             const hasSuccess = records.some(r => isSuccess(r))
             const firstFail = records.find(r => !isSuccess(r))
             const ledgerStatus = hasSuccess ? 'ok' : (firstFail ? firstFail.status : 'error')
-            await recordLedger(task.id, slot, ledgerStatus)
+            await setRunStatus(task.id, slot, ledgerStatus)
           }
 
           // lastValues：成功的值各自以子序列 id 寫入（整組一次寫完，不逐個讀寫）
@@ -657,12 +645,7 @@ export async function runTask(task, opts = {}) {
           await updateHealth(task.id, healthFromRecords(records, res.partial))
 
           if (failCount === 0) {
-            const currentTask = await getTask(task.id)
-            if (currentTask && ((currentTask.notFoundStreak || 0) > 0 || currentTask.suggestForeground)) {
-              currentTask.notFoundStreak = 0
-              delete currentTask.suggestForeground
-              await saveTask(currentTask)
-            }
+            await clearNotFoundStreak(task.id)
           }
 
           // 設定頁的診斷要看得出這一次抓了幾個值、哪幾個沒抓到
@@ -678,12 +661,7 @@ export async function runTask(task, opts = {}) {
           return firstSuccess || records[0] || null
         }
 
-        const currentTask = await getTask(task.id)
-        if (currentTask && ((currentTask.notFoundStreak || 0) > 0 || currentTask.suggestForeground)) {
-          currentTask.notFoundStreak = 0
-          delete currentTask.suggestForeground
-          await saveTask(currentTask)
-        }
+        await clearNotFoundStreak(task.id)
 
         const status = reason === 'late' ? 'late' : (res.status || 'ok')
         const record = {
@@ -728,11 +706,12 @@ export async function runTask(task, opts = {}) {
 
         if (!isManual) {
           // 重試用盡：更新 notFoundStreak，連兩次建議前台擷取
-          const currentTask = (await getTask(task.id)) || { ...task }
-          const streak = (currentTask.notFoundStreak || 0) + 1
-          currentTask.notFoundStreak = streak
-          if (streak >= 2) currentTask.suggestForeground = true
-          await saveTask(currentTask)
+          await updateTasks([task.id], (t) => {
+            const streak = (t.notFoundStreak || 0) + 1
+            t.notFoundStreak = streak
+            if (streak >= 2) t.suggestForeground = true
+            return t
+          })
 
           await notify(`${task.id}:not_found`, {
             title: `AutoFetcher: ${task.name}`,

@@ -2,6 +2,7 @@
 import { pruneCardsForTask } from './layout-store.js'
 import { encryptSecret } from './crypto.js'
 import { parentIdOf, SERIES_SEP } from './series-index.js'
+import { withLock, lockNameOf } from './lock.js'
 
 const DEFAULT_SETTINGS = {
   retentionDays: 365,
@@ -29,6 +30,46 @@ function keyToDate(key) {
 
 const SCHEMA_VERSION = 2
 
+// ---- 讀-改-寫的唯一一份（AF-21 批次 1）----
+// 規則：對某鍵的 set／remove 一律在 lockNameOf(那個鍵) 的鎖內，讀也在同一次持有內；
+// 一次只動一個鍵（動多鍵就等於同時持有多把鎖＝巢狀）；鎖不可重入，鎖內不得再呼叫會取鎖的函式。
+
+// mutator 回傳它表示刪掉這個鍵
+const REMOVE = Symbol('remove')
+
+const asObject = (v) => (v && typeof v === 'object' && !Array.isArray(v)) ? v : {}
+const asArray = (v) => Array.isArray(v) ? v : []
+
+/**
+ * 鎖內讀一個鍵 → mutator(現值) → 寫回。
+ * mutator 回 undefined 表示不寫（回傳現值）；回 REMOVE 表示刪鍵（回傳 undefined）；其餘寫入並回傳。
+ */
+async function mutateKey(key, mutator, area = 'local') {
+  return withLock(lockNameOf(key, area), async () => {
+    const store = chrome.storage[area]
+    const res = await store.get(key)
+    const current = res?.[key]
+    const next = await mutator(current)
+    if (next === undefined) return current
+    if (next === REMOVE) {
+      await store.remove(key)
+      return undefined
+    }
+    await store.set({ [key]: next })
+    return next
+  })
+}
+
+// 公開 update* 共用：缺值／形狀不對時給 shape 的預設，交給 mutator 的是副本
+function updateValue(key, shape, mutator, area = 'local') {
+  return mutateKey(key, (current) => mutator(structuredClone(shape(current))), area)
+}
+
+// 單純覆寫一個鍵（仍在鎖內讀過再寫，寫入點規則只有一種）
+function writeKey(key, value, area = 'local') {
+  return mutateKey(key, () => value, area)
+}
+
 // 站台的舊欄位 loginPageUrlPrefix 轉成 loginCheck（不碰密碼；init 遷移與設定匯入共用）
 export function normalizeSiteShape(site) {
   const next = { ...site }
@@ -39,15 +80,28 @@ export function normalizeSiteShape(site) {
   return next
 }
 
+// 需要加密的明文密碼（v1 站台）
+function plainPasswordOf(site) {
+  return site && typeof site === 'object' && site.passwordEnc === undefined &&
+    typeof site.password === 'string' && site.password !== '' ? site.password : null
+}
+
 // v1 → v2：站台從「登入頁前綴 + 明文密碼」改為「loginCheck + AES-GCM 密文」
-async function migrateSitesToV2(sites) {
+// 密文事先在鎖外算好（加密要取 cryptoKey 的鎖，不得在 sites 的鎖內巢狀取）；
+// 鎖內讀到的密碼若不在事先算好的表裡，就先留著明文不刪（不能讓密碼消失）
+function migrateSitesToV2(sites, encrypted) {
   const migrated = {}
   for (const [origin, site] of Object.entries(sites)) {
     if (!site || typeof site !== 'object') continue
     const next = normalizeSiteShape(site)
     if (next.password !== undefined) {
-      if (next.passwordEnc === undefined && typeof next.password === 'string' && next.password !== '') {
-        next.passwordEnc = await encryptSecret(next.password)
+      const plain = plainPasswordOf(next)
+      if (plain !== null) {
+        if (!encrypted.has(plain)) {
+          migrated[origin] = next
+          continue
+        }
+        next.passwordEnc = encrypted.get(plain)
       }
       delete next.password
     }
@@ -57,22 +111,25 @@ async function migrateSitesToV2(sites) {
 }
 
 // 初始化儲存空間（冪等：已存在值不得覆蓋；順便做一次性的 schema 遷移）
+// 逐鍵依序取鎖：settings → sites → schemaVersion（版本號最後寫，遷移中斷時重跑還會再遷移一次）
 export async function init() {
-  const current = await chrome.storage.local.get(['schemaVersion', 'settings', 'sites'])
-  const patch = {}
-  if (current.settings === undefined) patch.settings = { ...DEFAULT_SETTINGS }
+  await mutateKey('settings', (cur) => cur === undefined ? { ...DEFAULT_SETTINGS } : undefined)
 
+  const current = await chrome.storage.local.get(['schemaVersion', 'sites'])
   const version = typeof current.schemaVersion === 'number' ? current.schemaVersion : SCHEMA_VERSION
   if (version < 2 && current.sites && typeof current.sites === 'object') {
-    patch.sites = await migrateSitesToV2(current.sites)
-  }
-  if (current.schemaVersion === undefined || version < SCHEMA_VERSION) {
-    patch.schemaVersion = SCHEMA_VERSION
+    const encrypted = new Map()
+    for (const site of Object.values(current.sites)) {
+      const plain = plainPasswordOf(site)
+      if (plain !== null && !encrypted.has(plain)) encrypted.set(plain, await encryptSecret(plain))
+    }
+    await mutateKey('sites', (sites) => sites && typeof sites === 'object' ? migrateSitesToV2(sites, encrypted) : undefined)
   }
 
-  if (Object.keys(patch).length > 0) {
-    await chrome.storage.local.set(patch)
-  }
+  await mutateKey('schemaVersion', (cur) => {
+    const v = typeof cur === 'number' ? cur : SCHEMA_VERSION
+    return cur === undefined || v < SCHEMA_VERSION ? SCHEMA_VERSION : undefined
+  })
 }
 
 // 取得架構版本號
@@ -87,17 +144,12 @@ export async function getSettings() {
   return res.settings && typeof res.settings === 'object' ? res.settings : { ...DEFAULT_SETTINGS }
 }
 
-// 儲存設定（與既有設定淺層合併，使用佇列避免併發覆蓋）
-let saveQueue = Promise.resolve()
-
+// 儲存設定（與既有設定淺層合併；在 settings 鎖內讀-改-寫，跨頁面同時存也不會互相覆蓋）
 export async function saveSettings(patch) {
-  saveQueue = saveQueue.then(async () => {
-    const current = await getSettings()
-    const updated = { ...current, ...patch }
-    await chrome.storage.local.set({ settings: updated })
-    return updated
-  })
-  return saveQueue
+  return mutateKey('settings', (current) => ({
+    ...(current && typeof current === 'object' ? current : DEFAULT_SETTINGS),
+    ...patch
+  }))
 }
 
 // 取得所有任務清單，依 order 由小到大排序
@@ -159,9 +211,18 @@ export async function saveTasks(list) {
     validateTask(list[i], i)
   }
 
-  const res = await chrome.storage.local.get('tasks')
-  const tasks = Array.isArray(res.tasks) ? [...res.tasks] : []
+  let savedTasks = []
+  await mutateKey('tasks', (current) => {
+    const tasks = Array.isArray(current) ? [...current] : []
+    savedTasks = mergeTasksUnlocked(tasks, list)
+    return tasks
+  })
+  return savedTasks
+}
 
+// 內部輔助函式（不取鎖，只在 tasks 鎖內用）：把 list 併進 tasks（就地），回傳實際存下的任務
+// 未指定 order 的給目前最大 + 1
+function mergeTasksUnlocked(tasks, list) {
   let nextOrder = tasks.length === 0 ? 0 : Math.max(...tasks.map(t => t.order ?? 0)) + 1
 
   const savedTasks = []
@@ -179,8 +240,37 @@ export async function saveTasks(list) {
     }
     savedTasks.push(taskToSave)
   }
+  return savedTasks
+}
 
-  await chrome.storage.local.set({ tasks })
+/**
+ * 在 tasks 鎖內讀最新的任務，對 ids 中存在的每個任務呼叫 mutator(副本)，寫回改過的那些。
+ * 取代「getTask → 改 → saveTask」：跨兩次呼叫的讀-改-寫鎖不住，別人剛寫的欄位會被舊副本洗掉。
+ * mutator 回 null／undefined 表示這個任務不改；不存在的 id 略過；任一筆不合法整批不寫（丟例外）。
+ * @param {string[]} ids 任務 id
+ * @param {(task: object) => object|null|undefined} mutator 回傳新任務
+ * @returns {Promise<object[]>} 實際寫入的任務
+ */
+export async function updateTasks(ids, mutator) {
+  if (!Array.isArray(ids) || ids.length === 0) return []
+  let savedTasks = []
+  await mutateKey('tasks', async (current) => {
+    const tasks = Array.isArray(current) ? [...current] : []
+    const changed = []
+    for (const id of new Set(ids)) {
+      const found = tasks.find(t => t.id === id)
+      if (!found) continue
+      const next = await mutator(structuredClone(found))
+      if (next === null || next === undefined) continue
+      changed.push(next)
+    }
+    if (changed.length === 0) return undefined
+    for (let i = 0; i < changed.length; i++) {
+      validateTask(changed[i], i)
+    }
+    savedTasks = mergeTasksUnlocked(tasks, changed)
+    return tasks
+  })
   return savedTasks
 }
 
@@ -195,34 +285,29 @@ export async function deleteTasks(ids) {
   if (!Array.isArray(ids) || ids.length === 0) return
 
   const targetIds = new Set(ids)
-  const all = await chrome.storage.local.get(null)
-  const tasks = Array.isArray(all.tasks) ? all.tasks.filter(t => !targetIds.has(t.id)) : []
-  const toSet = { tasks }
-  const toRemove = []
+  // 逐鍵依序「取鎖→讀→改→寫→放」，不同時持有兩把鎖
+  await mutateKey('tasks', (current) => Array.isArray(current) ? current.filter(t => !targetIds.has(t.id)) : [])
 
-  for (const [key, value] of Object.entries(all)) {
-    if (isRecordKey(key)) {
+  // 先列出有哪些紀錄鍵（鎖外），每個鍵再在自己的鎖內重讀最新值來改
+  const all = await chrome.storage.local.get(null)
+  for (const key of Object.keys(all)) {
+    if (!isRecordKey(key)) continue
+    await mutateKey(key, (value) => {
       const records = Array.isArray(value) ? value : []
       const remaining = records.filter(r => !targetIds.has(parentIdOf(r.taskId)))
-      if (remaining.length === 0) {
-        toRemove.push(key)
-      } else if (remaining.length !== records.length) {
-        toSet[key] = remaining
-      }
-    }
+      if (remaining.length === 0) return REMOVE
+      return remaining.length !== records.length ? remaining : undefined
+    })
   }
 
   // 被刪任務最後一次的值也一起清（鍵是序列 id）；不清的話 lastValues 只會越長越大
-  if (all.lastValues && typeof all.lastValues === 'object') {
-    const kept = Object.fromEntries(Object.entries(all.lastValues).filter(([k]) => !targetIds.has(parentIdOf(k))))
-    if (Object.keys(kept).length !== Object.keys(all.lastValues).length) toSet.lastValues = kept
-  }
+  await mutateKey('lastValues', (current) => {
+    if (!current || typeof current !== 'object') return undefined
+    const kept = Object.fromEntries(Object.entries(current).filter(([k]) => !targetIds.has(parentIdOf(k))))
+    return Object.keys(kept).length !== Object.keys(current).length ? kept : undefined
+  })
 
-  await chrome.storage.local.set(toSet)
-  if (toRemove.length > 0) {
-    await chrome.storage.local.remove(toRemove)
-  }
-
+  // 版面有自己的鎖，要在上面的鎖都放掉之後才動
   for (const id of ids) {
     await pruneCardsForTask(id)
   }
@@ -247,37 +332,34 @@ export async function getSite(origin) {
 
 // 儲存單一站台設定
 export async function saveSite(origin, site) {
-  const sites = await getSites()
-  sites[origin] = site
-  await chrome.storage.local.set({ sites })
+  await mutateKey('sites', (current) => ({ ...asObject(current), [origin]: site }))
 }
 
 // 刪除單一站台設定
 export async function deleteSite(origin) {
-  const sites = await getSites()
-  delete sites[origin]
-  await chrome.storage.local.set({ sites })
+  await mutateKey('sites', (current) => {
+    const sites = { ...asObject(current) }
+    delete sites[origin]
+    return sites
+  })
   // 站台不在了，它的健康項目也要拿掉，否則燈號永遠紅著且沒有途徑清除
   await deleteHealthEntry('site:' + origin)
 }
 
 // 移除一筆健康項目（任務 id 或 site:<origin>）
 export async function deleteHealthEntry(key) {
-  const res = await chrome.storage.local.get('health')
-  const health = res.health && typeof res.health === 'object' ? { ...res.health } : {}
-  if (!(key in health)) return
-  delete health[key]
-  await chrome.storage.local.set({ health })
+  await mutateKey('health', (current) => {
+    const health = current && typeof current === 'object' ? { ...current } : {}
+    if (!(key in health)) return undefined
+    delete health[key]
+    return health
+  })
 }
 
 // 追加多筆紀錄至指定日期的 storage 鍵（rec:<date>）
 export async function appendRecords(date, records) {
   if (!Array.isArray(records) || records.length === 0) return
-  const key = dateToKey(date)
-  const res = await chrome.storage.local.get(key)
-  const list = Array.isArray(res[key]) ? res[key] : []
-  list.push(...records)
-  await chrome.storage.local.set({ [key]: list })
+  await mutateKey(dateToKey(date), (current) => [...asArray(current), ...records])
 }
 
 // 追加紀錄至指定日期的 storage 鍵（rec:<date>）
@@ -295,17 +377,13 @@ export async function getRecordsByDate(date) {
 // 刪除指定日期的單一紀錄（依 taskId 與 capturedAt 相符者移除）
 // 移除後若該日已無紀錄則移除整個日期鍵；找不到相符紀錄時不改動任何資料
 export async function deleteRecord(date, taskId, capturedAt) {
-  const key = dateToKey(date)
-  const res = await chrome.storage.local.get(key)
-  const list = Array.isArray(res[key]) ? res[key] : []
-  const index = list.findIndex(r => r.taskId === taskId && r.capturedAt === capturedAt)
-  if (index === -1) return
-  list.splice(index, 1)
-  if (list.length === 0) {
-    await chrome.storage.local.remove(key)
-  } else {
-    await chrome.storage.local.set({ [key]: list })
-  }
+  await mutateKey(dateToKey(date), (current) => {
+    const list = [...asArray(current)]
+    const index = list.findIndex(r => r.taskId === taskId && r.capturedAt === capturedAt)
+    if (index === -1) return undefined
+    list.splice(index, 1)
+    return list.length === 0 ? REMOVE : list
+  })
 }
 
 // 列出所有具備紀錄的日期，由舊到新排序
@@ -353,10 +431,11 @@ export async function trimOldRecords(today) {
 
   const all = await chrome.storage.local.get(null)
   const toRemove = Object.keys(all).filter(key => isRecordKey(key) && keyToDate(key) < cutoff)
-  if (toRemove.length > 0) {
-    await chrome.storage.local.remove(toRemove)
+  // 逐鍵在各自的鎖內刪（同一天的鎖可能正被抓取寫入持有）
+  for (const key of toRemove) {
+    await mutateKey(key, () => REMOVE)
   }
-  await chrome.storage.local.set({ lastTrimDate: today })
+  await writeKey('lastTrimDate', today)
 }
 
 // 取得原始版面資料（無資料回傳 null）
@@ -365,9 +444,17 @@ export async function getRawLayout() {
   return res.layout ?? null
 }
 
-// 寫入原始版面資料至 storage.local.layout
+// 寫入原始版面資料至 storage.local.layout（整份取代；要依現值改請用 updateLayout）
 export async function setRawLayout(layout) {
-  await chrome.storage.local.set({ layout })
+  await writeKey('layout', layout)
+}
+
+/**
+ * 在 layout 鎖內讀原始版面（沒有時給 { dashboards: [] }）→ mutator(副本) 回傳新值 → 寫回。
+ * mutator 回 undefined 表示不寫。版面的增刪改一律經 layout-store，由它呼叫這裡。
+ */
+export async function updateLayout(mutator) {
+  return updateValue('layout', (v) => v ?? { ...DEFAULT_LAYOUT, dashboards: [] }, mutator)
 }
 
 // 匯出設定與架構資料（不含任何抓取紀錄）
@@ -415,41 +502,33 @@ export async function importRecords(input) {
     dateMap.get(day.date).push(day)
   }
 
-  const keys = Array.from(dateMap.keys()).map(dateToKey)
-  const existingData = keys.length > 0 ? await chrome.storage.local.get(keys) : {}
-
   let added = 0
   let skipped = 0
-  const toSet = {}
 
+  // 逐日在各自的鎖內併入（去重要對鎖內讀到的最新值做）
   for (const [date, dayList] of dateMap.entries()) {
-    const key = dateToKey(date)
-    const existingList = Array.isArray(existingData[key]) ? [...existingData[key]] : []
-    const seen = new Set(existingList.map(r => `${r.taskId}::${r.capturedAt}`))
-    const updatedList = [...existingList]
+    await mutateKey(dateToKey(date), (current) => {
+      const updatedList = [...asArray(current)]
+      const seen = new Set(updatedList.map(r => `${r.taskId}::${r.capturedAt}`))
 
-    for (const day of dayList) {
-      if (!day.tasks || typeof day.tasks !== 'object') continue
-      for (const taskData of Object.values(day.tasks)) {
-        if (!taskData || !Array.isArray(taskData.records)) continue
-        for (const rec of taskData.records) {
-          const id = `${rec.taskId}::${rec.capturedAt}`
-          if (seen.has(id)) {
-            skipped++
-          } else {
-            seen.add(id)
-            updatedList.push(rec)
-            added++
+      for (const day of dayList) {
+        if (!day.tasks || typeof day.tasks !== 'object') continue
+        for (const taskData of Object.values(day.tasks)) {
+          if (!taskData || !Array.isArray(taskData.records)) continue
+          for (const rec of taskData.records) {
+            const id = `${rec.taskId}::${rec.capturedAt}`
+            if (seen.has(id)) {
+              skipped++
+            } else {
+              seen.add(id)
+              updatedList.push(rec)
+              added++
+            }
           }
         }
       }
-    }
-
-    toSet[key] = updatedList
-  }
-
-  if (Object.keys(toSet).length > 0) {
-    await chrome.storage.local.set(toSet)
+      return updatedList
+    })
   }
 
   return { added, skipped }
@@ -507,9 +586,11 @@ export async function setLastValues(entries) {
   if (!entries || typeof entries !== 'object') return
   const keys = Object.keys(entries)
   if (keys.length === 0) return
-  const all = await getLastValues()
-  for (const k of keys) all[k] = entries[k]
-  await chrome.storage.local.set({ lastValues: all })
+  await mutateKey('lastValues', (current) => {
+    const all = { ...asObject(current) }
+    for (const k of keys) all[k] = entries[k]
+    return all
+  })
 }
 
 // 記下某個任務最後一次抓到的值
@@ -526,17 +607,17 @@ export async function getLastValues() {
 // 從 lastValues 移除指定的序列鍵
 export async function deleteLastValues(keys) {
   if (!Array.isArray(keys) || keys.length === 0) return
-  const all = await getLastValues()
-  let changed = false
-  for (const k of keys) {
-    if (Object.prototype.hasOwnProperty.call(all, k)) {
-      delete all[k]
-      changed = true
+  await mutateKey('lastValues', (current) => {
+    const all = { ...asObject(current) }
+    let changed = false
+    for (const k of keys) {
+      if (Object.prototype.hasOwnProperty.call(all, k)) {
+        delete all[k]
+        changed = true
+      }
     }
-  }
-  if (changed) {
-    await chrome.storage.local.set({ lastValues: all })
-  }
+    return changed ? all : undefined
+  })
 }
 
 // 取得補抓清單
@@ -557,9 +638,106 @@ export async function getAlertLog() {
   return (res.alertLog && typeof res.alertLog === 'object') ? res.alertLog : {}
 }
 
-// 寫入告警通知時間帳本
-export async function setAlertLog(log) {
-  await chrome.storage.local.set({ alertLog: log })
+// 在 alertLog 鎖內讀告警通知時間帳本 → mutator(副本) 回傳新值 → 寫回
+export async function updateAlertLog(mutator) {
+  return updateValue('alertLog', asObject, mutator)
+}
+
+// 在 health 鎖內讀健康狀態表 → mutator(副本) 回傳新值 → 寫回（寫入的算法在 background/health.js）
+export async function updateHealthMap(mutator) {
+  return updateValue('health', asObject, mutator)
+}
+
+// 在 missed 鎖內讀錯過清單 → mutator(副本) 回傳新清單 → 寫回
+export async function updateMissedList(mutator) {
+  return updateValue('missed', asArray, mutator)
+}
+
+// ---- 執行帳本（runs：{ [taskId]: { [slot]: status } }，冪等靠它，SPEC §4.1）----
+
+async function getRuns() {
+  const res = await chrome.storage.local.get('runs')
+  return asObject(res.runs)
+}
+
+/**
+ * 查某任務某排程槽的帳本狀態（沒有回 undefined）
+ * @param {string} taskId 父任務 id
+ * @param {string} slot 排程槽（本地時間 YYYY-MM-DDTHH:MM）
+ */
+export async function getRunStatus(taskId, slot) {
+  return (await getRuns())[taskId]?.[slot]
+}
+
+/**
+ * 寫某任務某排程槽的帳本狀態（在 runs 鎖內讀-改-寫）
+ */
+export async function setRunStatus(taskId, slot, status) {
+  await updateValue('runs', asObject, (runs) => {
+    runs[taskId] = { ...asObject(runs[taskId]), [slot]: status }
+    return runs
+  })
+}
+
+/**
+ * 取日期範圍內（YYYY-MM-DD，含頭含尾）的帳本：同形狀，只含 slot 日期落在範圍內的格子
+ */
+export async function getLedgerRange(fromDate, toDate) {
+  const runs = await getRuns()
+  const result = {}
+  for (const [taskId, slots] of Object.entries(runs)) {
+    for (const [slot, status] of Object.entries(asObject(slots))) {
+      const date = slot.slice(0, 10)
+      if (date < fromDate || date > toDate) continue
+      if (!result[taskId]) result[taskId] = {}
+      result[taskId][slot] = status
+    }
+  }
+  return result
+}
+
+// 上次看門狗／錯過清單看到的時間（毫秒）；沒有回 undefined
+export async function getLastSeenAt() {
+  const res = await chrome.storage.local.get('lastSeenAt')
+  return res.lastSeenAt
+}
+
+export async function setLastSeenAt(ms) {
+  await writeKey('lastSeenAt', ms)
+}
+
+// 上次記下的時區；沒有回 undefined
+export async function getLastTimezone() {
+  const res = await chrome.storage.local.get('lastTimezone')
+  return res.lastTimezone
+}
+
+export async function setLastTimezone(tz) {
+  await writeKey('lastTimezone', tz)
+}
+
+// ---- session：抓取中的排程槽（inflight）與重選開的分頁（repickTabs）----
+
+// 取得抓取中的排程槽表（key -> { state, startedAt }）
+export async function getInflight() {
+  const res = await chrome.storage.session.get('inflight')
+  return asObject(res?.inflight)
+}
+
+// 在 session:inflight 鎖內讀 → mutator(副本) 回傳新值 → 寫回
+export async function updateInflight(mutator) {
+  return updateValue('inflight', asObject, mutator, 'session')
+}
+
+// 取得為了重選而開的分頁表（taskId -> tabId）
+export async function getRepickTabs() {
+  const res = await chrome.storage.session.get('repickTabs')
+  return asObject(res?.repickTabs)
+}
+
+// 在 session:repickTabs 鎖內讀 → mutator(副本) 回傳新值 → 寫回
+export async function updateRepickTabs(mutator) {
+  return updateValue('repickTabs', asObject, mutator, 'session')
 }
 
 // 查詢多個任務在所有日期的紀錄總數與各任務筆數
@@ -642,7 +820,7 @@ export async function getPanelCtx(tabId) {
  */
 export async function setPanelCtx(tabId, ctx) {
   if (tabId === undefined || tabId === null) return
-  await chrome.storage.session.set({ [PANEL_PREFIX + tabId]: ctx })
+  await writeKey(PANEL_PREFIX + tabId, ctx, 'session')
 }
 
 /**
@@ -652,8 +830,9 @@ export async function setPanelCtx(tabId, ctx) {
  * @param {object} patch 要換的欄位
  */
 export async function mergePanelCtx(tabId, patch) {
-  const current = (await getPanelCtx(tabId)) || {}
-  await setPanelCtx(tabId, { ...current, ...patch })
+  if (tabId === undefined || tabId === null) return
+  // 讀跟寫在同一把鎖內，兩個來源同時併入時不會互相洗掉
+  await mutateKey(PANEL_PREFIX + tabId, (current) => ({ ...(current || {}), ...patch }), 'session')
 }
 
 /**
@@ -662,7 +841,7 @@ export async function mergePanelCtx(tabId, patch) {
  */
 export async function clearPanelCtx(tabId) {
   if (tabId === undefined || tabId === null) return
-  await chrome.storage.session.remove(PANEL_PREFIX + tabId)
+  await mutateKey(PANEL_PREFIX + tabId, () => REMOVE, 'session')
 }
 
 export function subscribe(handler, opts = {}) {
