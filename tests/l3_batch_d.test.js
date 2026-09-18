@@ -91,6 +91,8 @@ test('編輯既有任務不套用預設值', async () => {
 
 test('儲存後記住這次的設定當作下次預設', async () => {
   const { st, pk, doc } = await fresh()
+  // AF-21 批次 4：沒有目標的新任務會被儲存守門擋下，先以一個單一元素的目標渲染
+  pk.render({ locator: { css: '#v' }, url: 'https://x.test/a' })
   doc.getElementById('name').value = '電費'
   doc.getElementById('url').value = 'https://x.test/a'
   doc.getElementById('times').value = '11:20'
@@ -104,6 +106,8 @@ test('儲存後記住這次的設定當作下次預設', async () => {
 
 test('勾了「固定為預設值」才寫 pinned，且不動到 last', async () => {
   const { st, pk, doc } = await fresh()
+  // AF-21 批次 4：沒有目標的新任務會被儲存守門擋下，先以一個單一元素的目標渲染
+  pk.render({ locator: { css: '#v' }, url: 'https://x.test/a' })
   doc.getElementById('name').value = '電費'
   doc.getElementById('url').value = 'https://x.test/a'
   doc.getElementById('times').value = '11:20'
@@ -120,6 +124,8 @@ test('勾了「固定為預設值」才寫 pinned，且不動到 last', async ()
 
 test('寫 last 不會把既有的 pinned 洗掉', async () => {
   const { st, pk, doc } = await fresh()
+  // AF-21 批次 4：沒有目標的新任務會被儲存守門擋下，先以一個單一元素的目標渲染
+  pk.render({ locator: { css: '#v' }, url: 'https://x.test/a' })
   await st.saveSettings({ pickerDefaults: { pinned: { scheduleType: 'daily', times: ['07:45'], weekdays: [5] } } })
   doc.getElementById('name').value = '電費'
   doc.getElementById('url').value = 'https://x.test/a'

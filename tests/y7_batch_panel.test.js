@@ -451,10 +451,12 @@ test('體檢-5 全部試抓進行中「全部儲存」不可按，結束後還�
   let saveDuring = null
   c.__setRuntimeResponder((msg) => {
     if (msg?.type !== 'TEST_TASK') return undefined
-    saveDuring = saveDuring ?? doc.getElementById('save').disabled
+    // AF-21 批次 4：改用 aria-disabled（原生 disabled 被點了完全沒回饋），被按時就地說原因
+    saveDuring = saveDuring ?? doc.getElementById('save').getAttribute('aria-disabled')
     return { ok: true, value: 1, raw: '1', status: 'ok' }
   })
   await pk.handleTestNow()
-  assert.equal(saveDuring, true)
+  assert.equal(saveDuring, 'true')
+  assert.equal(doc.getElementById('save').getAttribute('aria-disabled'), null)
   assert.equal(doc.getElementById('save').disabled, false)
 })

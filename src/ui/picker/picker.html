@@ -210,7 +210,17 @@
       align-items: center;
       justify-content: center;
     }
-    #errors { color: var(--danger); font-size: var(--text-xs, 12px); white-space: pre-line; }
+    #preview[data-empty] {
+      font-family: inherit;
+      font-size: var(--text-xs, 12px);
+      color: var(--text-muted);
+    }
+    input[aria-invalid="true"] { border-color: var(--danger); }
+    #save[aria-disabled="true"] { opacity: 0.6; cursor: not-allowed; }
+    #dashboard-edit-link { color: var(--primary); }
+    [data-saved-first] { font-size: var(--text-sm); color: var(--text-muted); }
+    [data-saved-first][data-state="ok"] { color: var(--ok); }
+    [data-saved-first][data-state="error"] { color: var(--danger); }
     #test-note { color: var(--text-muted); font-size: var(--text-xs, 12px); line-height: 1.4; }
     #block-summary { font-size: var(--text-xs, 12px); color: var(--text-muted); line-height: 1.4; }
     #preview[data-state="ok"] { border-color: var(--ok); color: var(--ok); }
@@ -401,6 +411,7 @@
     <div id="task-status-note" role="status" hidden></div>
     <label for="name" class="field-label">任務名稱</label>
     <input type="text" id="name" placeholder="替這個任務取個名字">
+    <div id="name-error" class="field-error" hidden></div>
     <div id="setup-summary" role="status">
       <div id="summary-target"></div>
       <button type="button" id="goto-rowpos" hidden>去設定「列定位」</button>
@@ -482,7 +493,6 @@
       <fieldset id="preview-section">
         <legend>先試抓看看</legend>
         <div id="preview"></div>
-        <div id="errors" role="alert"></div>
         <div id="test-note" role="status"></div>
         <details id="test-detail" hidden>
           <summary></summary>
@@ -510,7 +520,7 @@
                上面的 time 選擇器與 chip 只是它的輸入介面，兩邊一律同步 -->
           <input type="text" id="times" value="09:30" hidden>
         </div>
-        <label data-schedule-only="interval">間隔時間（分鐘）<input type="number" id="every-minutes" value="15" min="1"></label>
+        <label data-schedule-only="interval">間隔時間（分鐘）<input type="number" id="every-minutes" value="15" min="1"><div id="every-minutes-error" class="field-error" hidden></div></label>
         <div data-schedule-only="interval" id="window-block">
           <label class="checkbox-label">
             <input type="checkbox" id="window-enabled">只在某個時段內執行
@@ -523,11 +533,12 @@
         </div>
         <label>執行星期</label>
         <div id="weekdays" class="chip-row">
-          <label><input type="checkbox" value="1" checked>一</label>
-          <label><input type="checkbox" value="2" checked>二</label>
-          <label><input type="checkbox" value="3" checked>三</label>
-          <label><input type="checkbox" value="4" checked>四</label>
-          <label><input type="checkbox" value="5" checked>五</label>
+          <!-- 預設值只有一份：picker.js 的 BUILTIN_DEFAULTS（每天），這裡不寫死勾選 -->
+          <label><input type="checkbox" value="1">一</label>
+          <label><input type="checkbox" value="2">二</label>
+          <label><input type="checkbox" value="3">三</label>
+          <label><input type="checkbox" value="4">四</label>
+          <label><input type="checkbox" value="5">五</label>
           <label><input type="checkbox" value="6">六</label>
           <label><input type="checkbox" value="0">日</label>
         </div>
@@ -535,12 +546,15 @@
       </fieldset>
       <fieldset id="add-to-dashboard">
         <legend>抓完放哪裡</legend>
-        <label>目標儀表板
+        <!-- 編輯既有任務時不加卡片（只有新建才加）：整區藏起來使用者會以為設定不見了，改成一行說明＋去處 -->
+        <div id="dashboard-edit-note" class="field-label" hidden>要把這個任務加進儀表板，請到報表的儀表板用「＋」新增卡片。
+          <a href="#" id="dashboard-edit-link">開啟報表</a></div>
+        <label id="dashboard-select-label">目標儀表板
           <select id="dashboard-select">
             <option value="none">不加入</option>
           </select>
         </label>
-        <label>卡片型別</label>
+        <label id="card-types-label">卡片型別</label>
         <div id="card-types">
           <label><input type="checkbox" value="number">數字</label>
           <label><input type="checkbox" value="line">折線</label>
@@ -565,7 +579,7 @@
           </select>
         </label>
         <div id="legacy-strategy-note" class="hint" hidden></div>
-      <label>正規表達式<input type="text" id="regex" placeholder="策略為正規表達式時必填"></label>
+      <label>正規表達式<input type="text" id="regex" placeholder="策略為正規表達式時必填"><div id="regex-error" class="field-error" hidden></div></label>
         <fieldset id="alert-section">
           <legend>告警條件</legend>
           <div class="alert-desc">命中時會發通知，並在報表標記。同一條件 60 分鐘內只通知一次。</div>
@@ -594,11 +608,20 @@
       <input type="checkbox" id="pin-defaults">將此次設定固定為預設值
     </label>
     <div id="save-summary" hidden></div>
-    <footer>
-      <button type="button" id="repick-target">回頁面重選目標</button>
-      <button type="button" id="test-now">立即測試</button>
-      <button type="button" id="cancel">取消</button>
-      <button type="button" id="save" class="btn-primary">儲存</button>
+    <!-- 「還不能儲存」的原因、存檔失敗、立即測試的錯誤都在這裡：緊貼固定列上方、在捲動區外，
+         使用者在底部按儲存時一定看得到（save-guard.js） -->
+    <div id="errors" class="save-guard" role="alert" hidden></div>
+    <footer class="action-bar">
+      <div class="action-bar-primary">
+        <button type="button" id="save" class="btn-primary">儲存</button>
+        <span id="save-missing" class="save-guard-count" hidden></span>
+        <span id="paused-badge" class="status-badge" title="這個任務停用中：存檔後也不會排程，到任務頁啟用後才會抓。" hidden>停用中</span>
+      </div>
+      <div class="action-bar-secondary">
+        <button type="button" id="test-now">立即測試</button>
+        <button type="button" id="repick-target" title="回頁面重選目標"><span class="label-full">回頁面重選目標</span><span class="label-short" aria-hidden="true">重選目標</span></button>
+        <button type="button" id="cancel">取消</button>
+      </div>
     </footer>
   </form>
 </body>

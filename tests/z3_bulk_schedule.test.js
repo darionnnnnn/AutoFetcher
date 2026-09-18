@@ -307,14 +307,19 @@ test('C 整批檢視時標題列看得到標題，離開後名稱欄回來', asy
   assert.equal(doc.getElementById('target-host').hidden, false)
 })
 
-test('C 回填星期缺省的排程：interval 是每天，daily 回到表單預設的週一～五（不沿用上一個任務的勾選）', async () => {
+// AF-21 批次 4：排程預設值只留一份（BUILTIN_DEFAULTS＝每天），daily 缺星期也回到每天
+test('C 回填星期缺省的排程：interval 與 daily 都回到唯一一份預設（每天），不沿用上一個任務的勾選', async () => {
   const { st, pk, doc } = await fresh()
   await st.saveTasks([
     task('a', { schedule: { type: 'interval', everyMinutes: 30 } }),
-    task('b', { schedule: { type: 'daily', times: ['09:00'] } })
+    task('b', { schedule: { type: 'daily', times: ['09:00'] } }),
+    task('c', { schedule: { type: 'daily', times: ['09:00'], weekdays: [3] } })
   ])
   await pk.renderFromPanelCtx({ kind: 'bulk', taskIds: ['a'] })
   assert.equal(wd(doc).length, 7)
+  // 先切到只勾週三的任務，再切到缺星期的 daily：不得留著週三那一格
+  await pk.renderFromPanelCtx({ kind: 'bulk', taskIds: ['c'] })
+  assert.deepEqual(wd(doc), ['3'])
   await pk.renderFromPanelCtx({ kind: 'bulk', taskIds: ['b'] })
-  assert.deepEqual(wd(doc).sort(), ['1', '2', '3', '4', '5'], '上一個任務的七天全勾不得留下來')
+  assert.deepEqual(wd(doc).sort(), ['0', '1', '2', '3', '4', '5', '6'], '缺星期回到唯一一份預設（每天），上一個任務的勾選不得留下來')
 })

@@ -166,6 +166,108 @@ footer {
   flex-shrink: 0;
 }
 
+/* 兩層固定列（Picker）：上層主要動作滿寬、下層次要動作；窄面板（320px）也不折字 */
+footer.action-bar {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.action-bar-primary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.action-bar-primary > .btn-primary {
+  flex: 1 1 auto;
+  min-height: 36px;
+}
+
+.action-bar-secondary {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.action-bar-secondary > button {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-left: var(--space-2);
+  padding-right: var(--space-2);
+  white-space: nowrap;
+}
+
+/* 同一顆按鈕的長短兩種說法：寬度夠顯示長的，窄面板換短的（完整文字在 title） */
+.label-short { display: none; }
+
+@media (max-width: 340px) {
+  .label-full { display: none; }
+  .label-short { display: inline; }
+}
+
+/* ============================================================
+   儲存守門（save-guard.js）：「還不能儲存」原因區、還差 N 項、欄位下方錯誤字
+   ============================================================ */
+.save-guard {
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  flex-shrink: 0;
+}
+
+/* 內容由 save-guard.js 動態產生：標題或單行訊息是 div、原因清單是 ul > li > button
+   （用結構選擇器，不另開只有程式碼掛的類別） */
+.save-guard > div { white-space: pre-line; }
+
+.save-guard > div:first-child:not(:only-child) { font-weight: 600; }
+
+.save-guard > ul {
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.save-guard > ul button {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+  font-size: var(--text-xs);
+  color: var(--danger);
+  background: var(--surface);
+  border-color: var(--danger);
+}
+
+.save-guard-count {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: var(--danger);
+  white-space: nowrap;
+}
+
+.status-badge {
+  flex-shrink: 0;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.field-error {
+  font-size: var(--text-xs);
+  color: var(--danger);
+  line-height: 1.4;
+}
+
 /* ============================================================
    prefers-reduced-motion：關閉過渡與動畫
    ============================================================ */

@@ -9,7 +9,9 @@ const phtml = readFileSync(new URL('../src/ui/picker/picker.html', import.meta.u
 
 const existing = (id = 'old') => ({
   id, name: '既有任務', url: 'https://x.test/old', mode: 'number', enabled: true,
-  spec: { strategy: 'text' }, schedule: { type: 'daily', times: ['09:00'] }
+  spec: { strategy: 'text' }, schedule: { type: 'daily', times: ['09:00'] },
+  // AF-21 批次 4：沒有目標的任務會被儲存守門擋下，既有任務一定有 locator
+  locator: { css: '#old' }
 })
 
 async function fresh(url = 'chrome-extension://abc/ui/picker/picker.html') {
@@ -22,6 +24,8 @@ async function fresh(url = 'chrome-extension://abc/ui/picker/picker.html') {
   globalThis.window = jd.window
   globalThis.document = jd.window.document
   const pk = await import('../src/ui/picker/picker.js?t=' + Math.random())
+  // AF-21 批次 4：新建表單要有目標才存得下去（儲存守門），先以一個單一元素的目標渲染
+  pk.render({ locator: { css: '#v' }, url: 'https://x.test/a' })
   return { c, st, ls, pk, doc: jd.window.document, win: jd.window }
 }
 
@@ -43,11 +47,15 @@ test('新建任務時顯示加入儀表板區塊', async () => {
   assert.ok(sec && !sec.hidden)
 })
 
-test('編輯既有任務時不顯示加入儀表板區塊', async () => {
+// AF-21 批次 4：編輯既有任務不加卡片，但不再整區消失——改成一行說明＋開報表的連結，下拉與卡片型別收起來
+test('編輯既有任務時「抓完放哪裡」只留說明與連結，不給加卡片的欄位', async () => {
   const { st, pk, doc } = await fresh()
   await st.saveTask(existing())
   await pk.renderDashboardSection(existing())
-  assert.ok(doc.getElementById('add-to-dashboard').hidden)
+  assert.equal(doc.getElementById('add-to-dashboard').hidden, false)
+  assert.equal(doc.getElementById('dashboard-edit-note').hidden, false)
+  assert.equal(doc.getElementById('dashboard-select-label').hidden, true)
+  assert.equal(doc.getElementById('card-types').hidden, true)
 })
 
 test('儀表板下拉列出所有儀表板並含不加入選項', async () => {
