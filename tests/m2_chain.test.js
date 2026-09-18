@@ -699,3 +699,41 @@ test('AF-17：擷取端算出的 items 經 background 試抓回傳到 Picker，�
   assert.deepEqual(trs.map(tr => tr.dataset.use), produced.items.map(it => it.use))
   assert.deepEqual(trs.map(tr => tr.querySelectorAll('td')[1].textContent), produced.items.map(it => it.header))
 })
+
+test('AF-20：批次共用的前置動作要從面板一路走到 fetcher 送出的 RUN_PRE_ACTIONS（含 frame）', async () => {
+  const { st, pk, doc } = await freshPicker()
+  const item = (key, css) => ({
+    key, locator: { css, path: '', anchor: null, xpath: '' }, url: 'https://a.test/p', tabId: 9, nameHint: key,
+    preview: '1', previewValue: 1, blockInfo: { kind: 'number' }, picks: [{ locator: { css } }]
+  })
+  await pk.renderFromPanelCtx({ kind: 'batch', items: [item('b1', '#x1'), item('b2', '#x2')] })
+  doc.getElementById('preaction-add').click()
+  const row = doc.querySelector('#preaction-list [data-preaction-row]')
+  const sel = row.querySelector('select')
+  sel.value = 'click'
+  sel.dispatchEvent(new window.Event('change', { bubbles: true }))
+  row._locator = { css: '#tab2', path: '', anchor: null, xpath: '' }
+  row._frame = { url: 'https://f.test/inner' }
+  await pk.handleSave()
+  globalThis.window.close = () => {}
+  const tasks = await st.getTasks()
+  assert.equal(tasks.length, 2)
+
+  // 存下來的任務原樣交給 fetcher：每個任務都要對那個 frame 送出同一個 click
+  globalThis.navigator = { onLine: true }
+  const c = globalThis.chrome
+  c.__setScriptResponder(() => [{ frameId: 0, result: 'https://a.test/p' }, { frameId: 7, result: 'https://f.test/inner' }])
+  c.__setTabResponder((tabId, msg) => (msg.type === 'RUN_PRE_ACTIONS'
+    ? { ok: true }
+    : { ok: true, value: 1, raw: '1', status: 'ok', strategyUsed: 'auto', layer: 'css' }))
+  const fe = await import('../src/background/fetcher.js?t=' + Math.random())
+  for (const t of tasks) {
+    await fe.runTask(t, { slot: '2026-09-05T09:00', pollMs: 1, loadTimeoutMs: 50, extraDelayMs: 0, extractTimeoutMs: 200, frameTimeoutMs: 50 })
+  }
+  const pre = c.__calls.filter(x => x.api === 'tabs.sendMessage' && x.args[1]?.type === 'RUN_PRE_ACTIONS')
+  assert.equal(pre.length, 2, '兩個任務分開跑（佇列已清空），各送一次')
+  for (const x of pre) {
+    assert.deepEqual(x.args[1].actions.map(a => [a.type, a.locator?.css, a.frame?.url]), [['click', '#tab2', 'https://f.test/inner']])
+    assert.equal(x.args[2]?.frameId, 7, '要送到前置動作自己的 frame')
+  }
+})

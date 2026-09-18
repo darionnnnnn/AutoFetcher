@@ -4,11 +4,7 @@ import { setTaskHealth, refreshBadge } from './health.js'
 import { nextDailyRun } from './scheduler.js'
 import { notify } from './notify.js'
 import { ensureLoggedIn } from './login.js'
-
-// 短暫等待輔助函式
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
+import { enqueueForOrigin, acquireFetchTab } from './fetch-tab.js'
 
 // 排定每日站台健康檢查的 alarm
 export async function scheduleSiteCheck() {
@@ -37,21 +33,15 @@ export async function runSiteCheck(opts = {}) {
   for (const [origin, site] of Object.entries(sites)) {
     if (!site || site.enabled === false) continue
 
-    let tab = null
     try {
-      // `autoDiscardable` 只有 `tabs.update` 吃得下（見 fetcher.js 的同一處修正）
-      tab = await chrome.tabs.create({ url: site.loginUrl, active: false })
-      try {
-        await chrome.tabs.update(tab.id, { autoDiscardable: false })
-      } catch {}
-      let tabInfo = await chrome.tabs.get(tab.id)
-      const loadStart = Date.now()
-      while (tabInfo?.status !== 'complete' && Date.now() - loadStart < loadTimeoutMs) {
-        await sleep(pollMs)
-        tabInfo = await chrome.tabs.get(tab.id)
-      }
-
-      const res = await ensureLoggedIn(tab.id, { url: site.loginUrl }, opts)
+      // 與抓取走同一條同站台佇列與同一個專用視窗（AF-20）：
+      // 登入檢查會填表單、按送出，和同站台的抓取同時操作就會互相踩到登入狀態。
+      // 一律重新載入登入頁，並標記頁面被動過，排在後面的抓取才會先重載。
+      const res = await enqueueForOrigin(origin, async (holder) => {
+        const tabId = await acquireFetchTab(holder, site.loginUrl, { pollMs, loadTimeoutMs, freshLoad: true })
+        holder.pageDirty = true
+        return ensureLoggedIn(tabId, { url: site.loginUrl }, opts)
+      })
       if (res?.ok === true) {
         await setTaskHealth('site:' + origin, { status: 'ok' })
       } else {
@@ -69,12 +59,6 @@ export async function runSiteCheck(opts = {}) {
         title: 'AutoFetcher 站台健康檢查失敗',
         message: `站台「${origin}」檢查過程發生錯誤：${reason}。`
       })
-    } finally {
-      if (tab?.id) {
-        try {
-          await chrome.tabs.remove(tab.id)
-        } catch {}
-      }
     }
   }
 

@@ -131,8 +131,10 @@ test('G3-1 批次畫面：N 列＋共用排程與去處；單任務的抓什麼�
     assert.ok(row.querySelector('[data-batch-result]'))
     assert.ok(row.querySelector('button[data-batch-remove]'))
   }
-  for (const id of ['block-section', 'preview-section', 'advanced-section']) {
-    assert.equal(doc.getElementById(id).hidden, true, `${id} 不顯示`)
+  // AF-20:進階區在批次畫面只露出前置動作(共用),其餘逐任務進階設定仍不顯示(細節見 z7_batch_preactions)
+  for (const id of ['block-section', 'preview-section', 'strategy', 'alert-section']) {
+    const el = doc.getElementById(id)
+    assert.equal(Boolean(el.hidden || el.closest('[hidden]')), true, `${id} 不顯示`)
   }
   for (const id of ['schedule-section', 'add-to-dashboard']) {
     assert.equal(doc.getElementById(id).hidden, false, `${id} 共用`)

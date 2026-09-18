@@ -1133,6 +1133,13 @@
             <input type="number" id="pref-extra-delay" min="0">
           </div>
           <div class="settings-row">
+            <label for="pref-fetch-tab-mode">排程抓取的頁面開在：</label>
+            <select id="pref-fetch-tab-mode">
+              <option value="tab">目前視窗的背景分頁（不切過去，抓完就關）</option>
+              <option value="window">另一個最小化視窗（不佔分頁列，建立時可能閃一下）</option>
+            </select>
+          </div>
+          <div class="settings-row">
             <label for="pref-alert-cooldown">同一告警的通知間隔（分鐘）：</label>
             <input type="number" id="pref-alert-cooldown" min="1">
           </div>

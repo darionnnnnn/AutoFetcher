@@ -69,6 +69,46 @@ function currentBlockSpecs() {
     : ((currentBlock && !currentBlock.cell && currentBlock.axis) ? [currentBlock] : [])
 }
 
+function preActionsFromForm() {
+  const preActionRows = document.querySelectorAll('[data-preaction-row]')
+  return Array.from(preActionRows).map(row => {
+    const type = row.querySelector('select')?.value || 'waitFor'
+    const locator = row._locator || null
+    const valInput = row.querySelector('input[type="number"]') || row.querySelector('input')
+    const valStr = valInput?.value?.trim() ?? ''
+    const num = valStr === '' ? NaN : Number(valStr)
+
+    const frame = row._frame || null
+    if (type === 'waitFor') {
+      // 畫面是秒、資料是毫秒；沒填就交給 buildTask 那一份預設值（不要兩層各寫一份）
+      const act = { type, locator }
+      if (valStr !== '' && Number.isFinite(num)) act.timeoutMs = Math.round(num * 1000)
+      const visibleBox = row.querySelector('[data-preaction-visible]')
+      if (visibleBox && !visibleBox.checked) act.visible = false
+      if (frame) act.frame = frame
+      return act
+    }
+    if (type === 'hover') {
+      const act = { type, locator }
+      if (valStr !== '' && Number.isFinite(num)) act.holdMs = num
+      if (frame) act.frame = frame
+      return act
+    }
+    if (type === 'click') {
+      const act = { type, locator }
+      if (frame) act.frame = frame
+      return act
+    }
+    if (type === 'wait') {
+      return {
+        type,
+        sec: valStr === '' ? '' : num
+      }
+    }
+    return { type, locator }
+  })
+}
+
 export function getFormData() {
   const name = document.getElementById('name')?.value ?? ''
   const urlEl = document.getElementById('url')
@@ -109,43 +149,7 @@ export function getFormData() {
     return alertItem
   })
 
-  const preActionRows = document.querySelectorAll('[data-preaction-row]')
-  const preActions = Array.from(preActionRows).map(row => {
-    const type = row.querySelector('select')?.value || 'waitFor'
-    const locator = row._locator || null
-    const valInput = row.querySelector('input[type="number"]') || row.querySelector('input')
-    const valStr = valInput?.value?.trim() ?? ''
-    const num = valStr === '' ? NaN : Number(valStr)
-
-    const frame = row._frame || null
-    if (type === 'waitFor') {
-      // 畫面是秒、資料是毫秒；沒填就交給 buildTask 那一份預設值（不要兩層各寫一份）
-      const act = { type, locator }
-      if (valStr !== '' && Number.isFinite(num)) act.timeoutMs = Math.round(num * 1000)
-      const visibleBox = row.querySelector('[data-preaction-visible]')
-      if (visibleBox && !visibleBox.checked) act.visible = false
-      if (frame) act.frame = frame
-      return act
-    }
-    if (type === 'hover') {
-      const act = { type, locator }
-      if (valStr !== '' && Number.isFinite(num)) act.holdMs = num
-      if (frame) act.frame = frame
-      return act
-    }
-    if (type === 'click') {
-      const act = { type, locator }
-      if (frame) act.frame = frame
-      return act
-    }
-    if (type === 'wait') {
-      return {
-        type,
-        sec: valStr === '' ? '' : num
-      }
-    }
-    return { type, locator }
-  })
+  const preActions = preActionsFromForm()
 
   const aggregateValue = document.getElementById('block-aggregate')?.value || 'sum'
   const rowPos = posValueOf('row-pos')
@@ -428,6 +432,48 @@ function withFrame(action, frame) {
   return action
 }
 
+// 前置動作哪些算「設定好了」:沒選元素的點擊、沒填秒數的等待都不算(留著只會在抓取時失敗)。
+// `buildTask` 用它過濾;批次儲存用它擋下沒設定好的共用列(一列錯,N 個任務全都沒有前置動作)。
+function validPreActionsOf(list) {
+  return list
+    .map(a => {
+      if (!a || typeof a !== 'object') return null
+      if (a.type === 'click') {
+        const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
+        if (!hasLoc) return null
+        return withFrame({ type: 'click', locator: a.locator }, a.frame)
+      }
+      if (a.type === 'hover') {
+        const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
+        if (!hasLoc) return null
+        const act = { type: 'hover', locator: a.locator }
+        const hold = Number(a.holdMs)
+        if (Number.isFinite(hold) && hold >= 0) act.holdMs = hold
+        return withFrame(act, a.frame)
+      }
+      if (a.type === 'waitFor') {
+        const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
+        if (!hasLoc) return null
+        const timeoutMs = Number.isFinite(Number(a.timeoutMs)) ? Number(a.timeoutMs) : DEFAULT_WAIT_TIMEOUT_MS
+        const act = { type: 'waitFor', locator: a.locator, timeoutMs }
+        if (a.visible === false) act.visible = false
+        return withFrame(act, a.frame)
+      }
+      if (a.type === 'wait') {
+        // 空字串經 Number() 會變成 0，看起來合法但其實是使用者沒填
+        const raw = a.sec !== undefined ? a.sec : a.ms
+        if (raw === '' || raw === null || raw === undefined) return null
+        const n = Number(raw)
+        if (!Number.isFinite(n)) return null
+        // 舊任務存的是 ms，重存一律寫 sec（讀取端仍相容 ms）
+        return a.sec !== undefined ? { type: 'wait', sec: n } : { type: 'wait', sec: n / 1000 }
+      }
+      return null
+    
+    })
+    .filter(Boolean)
+}
+
 /**
  * 表單值 → task.schedule。**唯一一份**：存檔與觸發預覽都走這裡，
  * 各組一份會讓畫面預告的時刻與實際排的 alarm 不一樣。
@@ -508,42 +554,7 @@ export function buildTask(values, locator, existing, frame) {
     }
   }
   if (Array.isArray(values.preActions)) {
-    const validPreActions = values.preActions
-      .map(a => {
-        if (!a || typeof a !== 'object') return null
-        if (a.type === 'click') {
-          const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
-          if (!hasLoc) return null
-          return withFrame({ type: 'click', locator: a.locator }, a.frame)
-        }
-        if (a.type === 'hover') {
-          const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
-          if (!hasLoc) return null
-          const act = { type: 'hover', locator: a.locator }
-          const hold = Number(a.holdMs)
-          if (Number.isFinite(hold) && hold >= 0) act.holdMs = hold
-          return withFrame(act, a.frame)
-        }
-        if (a.type === 'waitFor') {
-          const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
-          if (!hasLoc) return null
-          const timeoutMs = Number.isFinite(Number(a.timeoutMs)) ? Number(a.timeoutMs) : DEFAULT_WAIT_TIMEOUT_MS
-          const act = { type: 'waitFor', locator: a.locator, timeoutMs }
-          if (a.visible === false) act.visible = false
-          return withFrame(act, a.frame)
-        }
-        if (a.type === 'wait') {
-          // 空字串經 Number() 會變成 0，看起來合法但其實是使用者沒填
-          const raw = a.sec !== undefined ? a.sec : a.ms
-          if (raw === '' || raw === null || raw === undefined) return null
-          const n = Number(raw)
-          if (!Number.isFinite(n)) return null
-          // 舊任務存的是 ms，重存一律寫 sec（讀取端仍相容 ms）
-          return a.sec !== undefined ? { type: 'wait', sec: n } : { type: 'wait', sec: n / 1000 }
-        }
-        return null
-      })
-      .filter(Boolean)
+    const validPreActions = validPreActionsOf(values.preActions)
     if (validPreActions.length > 0) {
       task.preActions = validPreActions
     }
@@ -880,31 +891,41 @@ function defaultTaskName(ctx) {
 }
 
 // 目標在 iframe 裡時提醒使用者可能要先點個什麼：那個框架常常是點了頁籤或按鈕才出現，
-// 而排程是開一個乾淨的新分頁，不會沿用現在畫面上的狀態。
+// 而排程會自己另外開一份頁面，不會沿用現在畫面上的狀態。
 let frameHintDismissedFor = null
 function updateFrameHint(ctx) {
   const hint = document.getElementById('frame-hint')
   if (!hint) return
   const textEl = document.getElementById('frame-hint-text')
-  const hasPreActions = Array.isArray(ctx?.task?.preActions) && ctx.task.preActions.length > 0
+  // 批次畫面沒有單一的 ctx:任何一項在框架裡就提示(主機名取第一個)
+  const frameUrl = frameHintUrl(ctx)
+  const hasPreActions = (document.getElementById('preaction-list')?.children.length || 0) > 0
   // 編輯既有任務不提示：使用者已經決定過要不要加了
   // 使用者按過「不需要」之後，同一個框架的任何一次 re-render 都不該再跳出來
-  const show = Boolean(ctx?.frameUrl) && !ctx?.task && !hasPreActions && frameHintDismissedFor !== ctx.frameUrl
+  const show = Boolean(frameUrl) && !ctx?.task && !hasPreActions && frameHintDismissedFor !== frameUrl
   hint.hidden = !show
   if (!show) return
 
-  let host = ctx.frameUrl
-  try {
-    host = new URL(ctx.frameUrl).hostname || ctx.frameUrl
-  } catch {}
-  if (textEl) {
-    textEl.textContent = `目標在框架（${host}）內。若這個框架要先點頁籤或按鈕才會出現，`
-      + '請加入「點元素」前置動作；排程抓取是開新分頁，不會沿用你現在看到的畫面。'
-  }
+  if (textEl) textEl.textContent = frameHintText(frameUrl)
   const advSection = document.getElementById('advanced-section')
   if (advSection) advSection.setAttribute('open', '')
 
   bindFrameHintEvents()
+}
+
+function frameHintUrl(ctx) {
+  if (batchViewOn) return (batchItems || []).find(it => it.frameUrl)?.frameUrl || null
+  return ctx?.frameUrl || null
+}
+
+// 框架提示那一句:單任務與批次畫面共用這一份
+function frameHintText(frameUrl) {
+  let host = frameUrl
+  try {
+    host = new URL(frameUrl).hostname || frameUrl
+  } catch {}
+  return `目標在框架（${host}）內。若這個框架要先點頁籤或按鈕才會出現，`
+    + '請加入「點元素」前置動作；排程會自己另外開一份頁面，不會沿用你現在看到的畫面。'
 }
 
 function bindFrameHintEvents() {
@@ -924,7 +945,7 @@ function bindFrameHintEvents() {
     dismissBtn.addEventListener('click', () => {
       const hint = document.getElementById('frame-hint')
       if (hint) hint.hidden = true
-      frameHintDismissedFor = currentCtx?.frameUrl || null
+      frameHintDismissedFor = frameHintUrl(currentCtx)
     })
     dismissBtn._frameHintBound = true
   }
@@ -2053,8 +2074,9 @@ function addPreActionRow(data = {}) {
       chrome.runtime.sendMessage({
         type: MSG.ENTER_PICK,
         purpose: 'preaction',
-        tabId: currentCtx?.tabId,
-        taskId: currentCtx?.task?.id,
+        // 批次畫面沒有單一的 ctx(逐項 render 之前 `currentCtx` 是 null):不帶 tabId 的話 background 靜默回 ok:false
+        tabId: batchViewOn ? batchTabId() : currentCtx?.tabId,
+        taskId: batchViewOn ? undefined : currentCtx?.task?.id,
         // 一律從最上層開始：要點的按鈕跟要抓的值常常不在同一層（值在 iframe 裡、
         // 按鈕是外層的頁籤）。進到值所在的 frame 就選不到外層的按鈕了——
         // 選取模式只能往下鑽、回不去（SPEC §2）。
@@ -2114,6 +2136,7 @@ function addPreActionRow(data = {}) {
       lastPreActionPickRow = null
     }
     row.remove()
+    updateFrameHint(batchViewOn ? null : currentCtx)
   })
 
   row.appendChild(select)
@@ -2138,6 +2161,7 @@ function bindPreActionEvents() {
   if (addBtn && !addBtn._preactionEventsBound) {
     addBtn.addEventListener('click', () => {
       addPreActionRow()
+      updateFrameHint(batchViewOn ? null : currentCtx)
     })
     addBtn._preactionEventsBound = true
   }
@@ -2735,7 +2759,7 @@ export async function handleTestNow() {
         ? Object.values(res.fields || {}).some(f => f && f.ok && f.message)
         : Boolean(res.message)
       setPreviewState(warned ? 'warn' : 'ok')
-      // 這次測試是在使用者眼前這個分頁跑的，iframe 已經開著；排程是開新分頁，
+      // 這次測試是在使用者眼前這個分頁跑的，iframe 已經開著；排程會自己另外開一份頁面，
       // 兩者會不一樣，成功不代表排程也會成功
       const noPreActions = !Array.isArray(values.preActions) || values.preActions.length === 0
       const noteEl = document.getElementById('test-note')
@@ -2746,7 +2770,7 @@ export async function handleTestNow() {
         const total = res.preActionTrace.reduce((sum, step) => sum + (Number(step.ms) || 0), 0)
         notes.push(`前置動作 ${res.preActionTrace.length} 步完成（共 ${(total / 1000).toFixed(1)} 秒）`)
       } else if (noteEl && currentCtx?.frameUrl && noPreActions) {
-        notes.push('這次測試在目前分頁執行；排程會開新分頁，若那個框架要先點才會出現，請加入前置動作。')
+        notes.push('這次測試在目前分頁執行；排程會自己另外開一份頁面，若那個框架要先點才會出現，請加入前置動作。')
       }
       if (!values.fields && res.message) {
         notes.push(res.message)
@@ -3190,7 +3214,30 @@ function setBatchView(on) {
     show('add-to-dashboard', true)
   }
   show('preview-section', !on)
-  show('advanced-section', !on)
+  const adv = document.getElementById('advanced-section')
+  if (adv) {
+    adv.hidden = false
+    const summary = adv.querySelector('summary')
+    if (on) {
+      adv.setAttribute('open', '')
+      if (summary) summary.textContent = '前置動作(套用到每一個任務)'
+      for (const child of adv.children) {
+        if (child.id === 'preaction-section' || child.tagName === 'SUMMARY') continue
+        if (!child.hidden) {
+          child.setAttribute('data-batch-hidden', '')
+          child.hidden = true
+        }
+      }
+    } else {
+      if (summary) summary.textContent = '進階設定'
+      for (const child of adv.children) {
+        if (child.hasAttribute('data-batch-hidden')) {
+          child.removeAttribute('data-batch-hidden')
+          child.hidden = false
+        }
+      }
+    }
+  }
   show('repick-target', !on)
   const header = document.querySelector('[data-picker-header]')
   if (header && on) header.hidden = true
@@ -3216,6 +3263,8 @@ function batchRows() {
 }
 
 async function renderBatch(ctx) {
+  const preList = document.getElementById('preaction-list')
+  if (preList) preList.replaceChildren()
   batchItems = ctx.items.slice()
   setBatchView(true)
   await renderDashboardSection(null)
@@ -3226,6 +3275,9 @@ async function renderBatch(ctx) {
   restoreDraft(ctx.draft)
   renderBatchList(ctx.draft?.batchNames)
   setBatchView(true)
+  bindPreActionEvents()
+  bindPreActionMessageListener()
+  updateFrameHint(null)
 }
 
 function renderBatchList(savedNames) {
@@ -3342,6 +3394,10 @@ function snapshotShared() {
   out.weekdays = Array.from(document.querySelectorAll('#weekdays input[type="checkbox"]')).map(cb => cb.checked)
   out.cardTypes = Array.from(document.querySelectorAll('#card-types input[type="checkbox"]')).map(cb => cb.checked)
   out.aggregate = document.getElementById('batch-aggregate')?.value || 'sum'
+  out.preActions = preActionsFromForm()
+  out.pickingIndex = lastPreActionPickRow
+    ? Array.from(document.querySelectorAll('[data-preaction-row]')).indexOf(lastPreActionPickRow)
+    : -1
   return out
 }
 
@@ -3356,6 +3412,19 @@ function pasteShared(shared) {
   document.querySelectorAll('#card-types input[type="checkbox"]').forEach((cb, i) => { cb.checked = Boolean(shared.cardTypes[i]) })
   const blockAgg = document.getElementById('block-aggregate')
   if (blockAgg) blockAgg.value = shared.aggregate
+  const preList = document.getElementById('preaction-list')
+  if (preList) {
+    preList.replaceChildren()
+    if (Array.isArray(shared.preActions)) {
+      for (const pa of shared.preActions) {
+        addPreActionRow(pa)
+      }
+    }
+    // 列是整批重建的:使用者正在頁面上替某一列選元素時(面板不會關),選取結果要落在重建後的同一列,
+    // 否則 `PICKED` 回來發現舊節點已經不在畫面上,結果就被丟掉。
+    // 第幾列要在抄共用設定時就記下——逐項 `render` 會先把舊列清掉,到這裡已經查不到了
+    if (shared.pickingIndex >= 0) lastPreActionPickRow = preList.children[shared.pickingIndex] || null
+  }
 }
 
 // 一項 → 表單值：與單任務同一條「render → 收集」，不從 payload 另組
@@ -3387,6 +3456,13 @@ async function handleBatchSave() {
   const busy = () => { busySave(); busyTest() }
   const shared = snapshotShared()
   const entries = batchEntries()
+  // 沒設定好的前置動作列存檔時會被濾掉(單任務既有行為);批次是共用的,濾掉就是 N 個任務都沒有前置動作、排程全部失敗
+  const badPre = shared.preActions.findIndex(pa => validPreActionsOf([pa]).length === 0)
+  if (badPre >= 0) {
+    if (errorsEl) errorsEl.textContent = `前置動作第 ${badPre + 1} 列還沒設定好（沒選元素或沒填秒數）；請補完或刪掉那一列再儲存`
+    busy()
+    return
+  }
   const saved = []
   let lastValues = null
   let failure = null

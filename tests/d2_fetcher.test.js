@@ -24,6 +24,7 @@ const task = (over = {}) => ({
   ...over
 })
 
+// 預設是目前視窗的背景分頁(AF-20 使用者定案:不閃、不切過去;專用視窗是設定選項,見 z4／z5)
 test('成功路徑:開背景分頁、擷取、寫紀錄、關掉自己開的分頁', async () => {
   const { c, st, fe } = await fresh()
   await st.saveTask(task())
@@ -34,11 +35,11 @@ test('成功路徑:開背景分頁、擷取、寫紀錄、關掉自己開的分�
   const created = c.__calls.find(x => x.api === 'tabs.create')
   assert.equal(created.args[0].active, false, '必須是背景分頁')
   // AF-13：`autoDiscardable` 不是 `tabs.create` 的屬性，Chrome 會擋下整個呼叫。
-  // 原本的斷言把這個 bug 寫死了，反而讓「排程抓取一律失敗」在單元測試裡完全看不出來。
   assert.equal(created.args[0].autoDiscardable, undefined,
     'tabs.create 不吃 autoDiscardable，帶了它整個呼叫會被 Chrome 擋下')
   const upd = c.__calls.find(x => x.api === 'tabs.update' && x.args[1]?.autoDiscardable === false)
   assert.ok(upd, '省電模式仍會卸載背景分頁，要改用 tabs.update 設')
+  assert.equal(c.__calls.filter(x => x.api === 'windows.create').length, 0)
   assert.equal(c.__calls.filter(x => x.api === 'tabs.remove').length, 1, '自己開的分頁要關掉')
   assert.equal((await st.getRecordsByDate('2026-09-05')).length, 1)
 })
@@ -62,14 +63,15 @@ test('不同 slot 不受冪等影響', async () => {
   assert.equal((await st.getRecordsByDate('2026-09-05')).length, 2)
 })
 
-test('已開著同 URL 的分頁時直接沿用,不另開也不關掉', async () => {
+// AF-20 推翻 SPEC 舊條「已開著同 URL 的分頁優先直接擷取」:會在使用者眼前點按鈕、捲動,而且那一頁可能幾小時沒刷新
+test('已開著同 URL 的分頁時不拿來用,也不關掉它', async () => {
   const { c, st, fe } = await fresh()
   await st.saveTask(task())
-  await c.tabs.create({ url: 'https://a.test/p' })
-  const before = c.__calls.filter(x => x.api === 'tabs.create').length
+  const mine = await c.tabs.create({ url: 'https://a.test/p' })
   await fe.runTask(task(), { slot: '2026-09-05T09:00', ...FAST })
-  assert.equal(c.__calls.filter(x => x.api === 'tabs.create').length, before, '不得另開分頁')
-  assert.equal(c.__calls.filter(x => x.api === 'tabs.remove').length, 0, '不得關掉使用者的分頁')
+  assert.ok(!c.__calls.some(x => x.api === 'tabs.sendMessage' && x.args[0] === mine.id), '不得對使用者的分頁送訊息')
+  // 抓完會關掉「自己開的」背景分頁,這裡只管使用者那一個
+  assert.ok(!c.__calls.some(x => x.api === 'tabs.remove' && x.args[0] === mine.id), '不得關掉使用者的分頁')
 })
 
 test('沒有任何視窗時先建一個最小化視窗,用完關掉', async () => {
@@ -79,14 +81,15 @@ test('沒有任何視窗時先建一個最小化視窗,用完關掉', async () =
   await fe.runTask(task(), { slot: '2026-09-05T09:00', ...FAST })
   const created = c.__calls.find(x => x.api === 'windows.create')
   assert.ok(created, 'macOS 上 Chrome 可在無視窗狀態執行')
-  assert.equal(created.args[0].state, 'minimized')
+  // AF-20:直接以 minimized 建立的頁面 viewport 是 0×0,改成建好再最小化
+  assert.ok(c.__calls.some(x => x.api === 'windows.update' && x.args[1]?.state === 'minimized'))
   assert.equal(c.__calls.filter(x => x.api === 'windows.remove').length, 1)
 })
 
 test('分頁被丟棄(discarded)時先 reload', async () => {
   const { c, st, fe } = await fresh()
-  const t = await c.tabs.create({ url: 'https://a.test/p' })
-  c.__setTabState(t.id, { discarded: true })
+  // AF-20 起不沿用使用者的分頁,改讓抓取自己開的那一頁被卸載
+  c.__onTabCreated = (tab) => c.__setTabState(tab.id, { discarded: true })
   await st.saveTask(task())
   await fe.runTask(task(), { slot: '2026-09-05T09:00', ...FAST })
   assert.equal(c.__calls.filter(x => x.api === 'tabs.reload').length, 1)
@@ -220,7 +223,8 @@ test('執行中狀態寫入 storage.session,結束後清除', async () => {
   const sess = await c.storage.session.get(null)
   const inflight = sess.inflight || {}
   assert.equal(Object.keys(inflight).length, 0, '結束後不得殘留')
-  assert.ok(c.__calls.some(x => x.api === 'session.set'), '執行期間要寫狀態機')
+  // 以前這裡讀的是正式碼自己塞進 chrome.__calls 的假紀錄(測試後門,AF-20 拔掉);改看替身記下的真呼叫
+  assert.ok(c.__calls.some(x => x.api === 'storage.session.set' && x.args[0]?.inflight), '執行期間要寫狀態機')
 })
 
 // AF-13 起：送不到訊息會先重試（文件被換掉是最常見的原因），重試耗盡後

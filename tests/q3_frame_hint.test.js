@@ -41,7 +41,8 @@ test('D-1 目標在框架內且還沒有前置動作時顯示提示，並把進�
   assert.equal(hint.hidden, false)
   assert.equal(hint.getAttribute('role'), 'status')
   assert.ok(/widget\.example/.test(hint.textContent), `要說出是哪個框架，實得 ${JSON.stringify(hint.textContent)}`)
-  assert.ok(/新分頁/.test(hint.textContent), '要說明排程是開新分頁，不會沿用現在的畫面')
+  // AF-20:排程改在專用視窗抓,文案不再綁「分頁」
+  assert.ok(/另外開一份頁面/.test(hint.textContent), '要說明排程自己另開頁面，不會沿用現在的畫面')
   assert.equal($(doc, 'advanced-section').hasAttribute('open'), true, '藏在收合區裡等於沒提示')
 })
 
@@ -137,7 +138,7 @@ test('D-3 目標在框架內且沒有前置動作時，測試成功要說明排�
     (msg?.type === 'TEST_TASK' ? { ok: true, value: 42 } : undefined)
   await pk.handleTestNow()
   assert.equal($(doc, 'preview').getAttribute('data-state'), 'ok')
-  assert.ok(/新分頁/.test($(doc, 'test-note').textContent),
+  assert.ok(/另外開一份頁面/.test($(doc, 'test-note').textContent),
     `實得 ${JSON.stringify($(doc, 'test-note').textContent)}`)
   assert.equal($(doc, 'errors').textContent, '', '這是說明不是錯誤，不該染紅')
 })

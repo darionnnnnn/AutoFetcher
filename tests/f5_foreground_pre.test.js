@@ -37,6 +37,7 @@ test('預設仍是背景分頁', async () => {
   await st.saveTask(task())
   await fe.runTask(task(), { slot: '2026-09-06T09:00', extraDelayMs: 0, ...FAST })
   assert.equal(c.__calls.find(x => x.api === 'tabs.create').args[0].active, false)
+  assert.equal(c.__calls.filter(x => x.api === 'windows.create').length, 0)
 })
 
 test('foreground 為真時開前景分頁,抓完把焦點還給原本的分頁', async () => {
