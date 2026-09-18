@@ -308,13 +308,6 @@
             </select>
             <button type="button" data-action="copy-records-tsv">複製 TSV</button>
           </div>
-          <div id="record-delete-confirm" hidden>
-            <p>確定要刪除此筆紀錄嗎？</p>
-            <div class="dialog-actions">
-              <button type="button" data-action="cancel">取消</button>
-              <button type="button" data-action="confirm">確定</button>
-            </div>
-          </div>
           <div id="empty-state" hidden>
             <p>目前尚無紀錄</p>
             <p class="empty-guide">在網頁上按右鍵 → AutoFetcher → 選取要抓的內容</p>
@@ -362,14 +355,6 @@
 
       <div id="task-list"></div>
 
-      <div id="task-delete-dialog" hidden>
-        <p class="dialog-message"></p>
-        <div class="dialog-actions">
-          <button type="button" data-action="cancel">取消</button>
-          <button type="button" data-action="confirm">確定刪除</button>
-          <button type="button" data-action="export-then-delete">先匯出再刪除</button>
-        </div>
-      </div>
     </section>
 
     <section id="panel-settings" hidden>
@@ -421,7 +406,7 @@
           <h2>偏好設定</h2>
           <div class="settings-row">
             <label for="pref-retention">紀錄保留天數：</label>
-            <input type="number" id="pref-retention" min="1">
+            <input type="number" id="pref-retention" min="1" max="3650" step="1">
           </div>
           <div class="settings-row">
             <label>
@@ -431,7 +416,7 @@
           </div>
           <div class="settings-row">
             <label for="pref-extra-delay">頁面載入額外等待秒數：</label>
-            <input type="number" id="pref-extra-delay" min="0">
+            <input type="number" id="pref-extra-delay" min="0" max="60">
           </div>
           <div class="settings-row">
             <label for="pref-fetch-tab-mode">排程抓取的頁面開在：</label>
@@ -442,7 +427,7 @@
           </div>
           <div class="settings-row">
             <label for="pref-alert-cooldown">同一告警的通知間隔（分鐘）：</label>
-            <input type="number" id="pref-alert-cooldown" min="1">
+            <input type="number" id="pref-alert-cooldown" min="0" max="1440">
           </div>
           <div class="settings-row">
             <label for="pref-site-check-time">每日站台登入檢查時間：</label>

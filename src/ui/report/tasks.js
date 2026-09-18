@@ -3,6 +3,7 @@ import { openPanel } from '../../shared/panel.js'
 import { statusTextOf } from '../../shared/record-status.js'
 import { MSG } from '../../shared/messages.js'
 import { buildExport, download } from '../../shared/export.js'
+import { confirmDialog, dismissDialog, isDialogOpen } from '../modal.js'
 import { isGap, gapTextOf } from '../../shared/describe.js'
 import { describeSchedule, describeTarget, targetOfTask, exclusionOfTarget } from '../../shared/describe.js'
 
@@ -78,12 +79,10 @@ export async function applyOrder(ids) {
   }
 }
 
-// 開啟刪除確認對話框並計算關聯紀錄數
+// 刪除確認：共用 modal（AF-21 4-D），計算關聯紀錄數；「先匯出再刪除」是 extra 那顆
 async function openDeleteDialog(ids, fromSelection = false) {
   if (!Array.isArray(ids) || ids.length === 0) return
-  const dlg = document.getElementById('task-delete-dialog')
-  if (!dlg) return
-  dialogSelectionSig = fromSelection ? selectionSig() : null
+  const sig = fromSelection ? selectionSig() : null
 
   const { total } = await countRecordsForTasks(ids)
   const count = total || 0
@@ -97,70 +96,49 @@ async function openDeleteDialog(ids, fromSelection = false) {
     msgText = `確定要刪除這 ${ids.length} 個任務嗎？此操作將一併刪除合計 ${count} 筆歷史紀錄。`
   }
 
-  const msgEl = dlg.querySelector('.dialog-message')
-  if (msgEl) {
-    msgEl.textContent = msgText
-  } else {
-    let p = dlg.querySelector('p')
-    if (!p) {
-      p = document.createElement('p')
-      dlg.prepend(p)
-    }
-    p.textContent = msgText
-  }
+  dialogSelectionSig = sig
+  const pending = confirmDialog({
+    title: '刪除任務',
+    body: msgText,
+    confirmText: '確定刪除',
+    cancelText: '取消',
+    danger: true,
+    extra: { text: '先匯出再刪除', value: 'export' }
+  })
+  const choice = await pending
+  if (dialogSelectionSig === sig) dialogSelectionSig = null
+  if (choice === false) return
+  // 開著的時候選取變了（updateSelectionUI 會先收掉對話框）：不刪，刪的永遠是訊息說的那幾個
+  if (sig !== null && sig !== selectionSig()) return
 
-  dlg.hidden = false
+  const note = document.getElementById('task-note')
+  if (choice === 'export') {
+    const d = new Date()
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    const today = `${y}-${m}-${day}`
+    // 匯出範圍從最舊的紀錄日起算（重構後 dates 不再由外層提供，改在此取得）
+    const dates = await listDates()
+    const from = dates[0] || today
+    const to = today
 
-  const cancelBtn = dlg.querySelector('[data-action="cancel"]')
-  if (cancelBtn) {
-    cancelBtn.onclick = () => {
-      dlg.hidden = true
-    }
-  }
-
-  const confirmBtn = dlg.querySelector('[data-action="confirm"]')
-  if (confirmBtn) {
-    confirmBtn.onclick = async () => {
-      await deleteTasks(ids)
-      for (const id of ids) {
-        selectedIds.delete(id)
-      }
-      dlg.hidden = true
-      const remaining = await getTasks()
-      renderTasks(remaining, currentHealth, currentMissed, currentCtx)
-    }
-  }
-
-  const exportBtn = dlg.querySelector('[data-action="export-then-delete"]')
-  if (exportBtn) {
-    exportBtn.onclick = async () => {
-      const d = new Date()
-      const y = d.getFullYear()
-      const m = String(d.getMonth() + 1).padStart(2, '0')
-      const day = String(d.getDate()).padStart(2, '0')
-      const today = `${y}-${m}-${day}`
-      // 匯出範圍從最舊的紀錄日起算（重構後 dates 不再由外層提供，改在此取得）
-      const dates = await listDates()
-      const from = dates[0] || today
-      const to = today
-
-      // 下載沒成功（使用者在另存視窗按取消、配額）就不刪：說出來，對話框留著讓他改選「確定刪除」或取消
-      try {
-        const exp = await buildExport({ from, to, format: 'csv' })
-        await download(exp)
-      } catch (e) {
-        if (msgEl) msgEl.textContent = `${msgText}匯出沒有完成（${e?.message || e}），所以還沒有刪除。`
-        return
-      }
-      await deleteTasks(ids)
-      for (const id of ids) {
-        selectedIds.delete(id)
-      }
-      dlg.hidden = true
-      const remaining = await getTasks()
-      renderTasks(remaining, currentHealth, currentMissed, currentCtx)
+    // 下載沒成功（使用者在另存視窗按取消、配額）就不刪：在任務頁說出來，要刪請再按一次
+    try {
+      const exp = await buildExport({ from, to, format: 'csv' })
+      await download(exp)
+    } catch (e) {
+      if (note) note.textContent = `匯出沒有完成（${e?.message || e}），所以還沒有刪除。`
+      return
     }
   }
+
+  await deleteTasks(ids)
+  for (const id of ids) {
+    selectedIds.delete(id)
+  }
+  const remaining = await getTasks()
+  renderTasks(remaining, currentHealth, currentMissed, currentCtx)
 }
 
 // 整批切換選取任務的啟用狀態並重建排程
@@ -278,10 +256,9 @@ function updateSelectionUI() {
     }
   }
 
-  const dlg = document.getElementById('task-delete-dialog')
-  if (dlg && !dlg.hidden && dialogSelectionSig !== null && dialogSelectionSig !== selectionSig()) {
-    dlg.hidden = true
+  if (dialogSelectionSig !== null && isDialogOpen() && dialogSelectionSig !== selectionSig()) {
     dialogSelectionSig = null
+    dismissDialog()
     const note = document.getElementById('task-note')
     if (note) note.textContent = '選取已經變了，刪除確認已收起；要刪除請再按一次「刪除」。'
   }

@@ -19,6 +19,9 @@ async function fresh() {
   const st = await import('../src/shared/storage.js?t=' + Math.random())
   await st.init()
   const jd = new JSDOM(html, { url: 'chrome-extension://abc/ui/report/report.html' })
+  // jsdom 25 沒有 <dialog> 的 showModal／close（AF-21 4-D 共用 modal）：替身只切 open 屬性
+  jd.window.HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  jd.window.HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
   globalThis.window = jd.window
   globalThis.document = jd.window.document
   const ts = await import('../src/ui/report/tasks.js?t=' + Math.random())
@@ -221,9 +224,9 @@ test('B 整批刪除的對話框說出幾個任務與合計幾筆紀錄', async 
   doc.querySelector('#task-bulk-bar [data-action="bulk-delete"]').click()
   await tick()
 
-  const dlg = doc.getElementById('task-delete-dialog')
-  assert.equal(dlg.hidden, false)
-  const msg = dlg.querySelector('.dialog-message').textContent
+  const dlg = doc.querySelector('dialog.modal')
+  assert.equal(dlg?.open, true)
+  const msg = dlg.querySelector('.modal-body').textContent
   assert.match(msg, /2 個任務/)
   assert.match(msg, /2 筆/)
 })
@@ -252,7 +255,7 @@ test('B 整批刪除確認後那幾個任務與紀錄都消失，其餘原樣', 
   pick(win, doc, 'b')
   doc.querySelector('#task-bulk-bar [data-action="bulk-delete"]').click()
   await tick()
-  doc.querySelector('#task-delete-dialog [data-action="confirm"]').click()
+  doc.querySelector('dialog.modal [data-action="confirm"]').click()
   await tick()
 
   assert.deepEqual((await st.getTasks()).map(t => t.id), ['d'])
@@ -266,7 +269,7 @@ test('B 整批刪除取消時什麼都不動', async () => {
   pick(win, doc, 'a')
   doc.querySelector('#task-bulk-bar [data-action="bulk-delete"]').click()
   await tick()
-  doc.querySelector('#task-delete-dialog [data-action="cancel"]').click()
+  doc.querySelector('dialog.modal [data-action="cancel"]').click()
   await tick()
   assert.equal(JSON.stringify(await st.getTasks()), before)
 })
@@ -275,9 +278,9 @@ test('B 單一任務的刪除鈕仍然走同一個對話框，訊息維持單數
   const { st, doc } = await withTasks(['a'])
   rowOf(doc, 'a').querySelector('[data-action="delete"]').click()
   await tick()
-  const msg = doc.querySelector('#task-delete-dialog .dialog-message').textContent
+  const msg = doc.querySelector('dialog.modal .modal-body').textContent
   assert.match(msg, /任務a/, '單一任務要說出名稱')
-  doc.querySelector('#task-delete-dialog [data-action="confirm"]').click()
+  doc.querySelector('dialog.modal [data-action="confirm"]').click()
   await tick()
   assert.equal((await st.getTasks()).length, 0)
 })
@@ -430,10 +433,10 @@ test('B 整批刪除對話框開著時選取變了，對話框要收掉（確認
   pick(win, doc, 'b')
   doc.querySelector('#task-bulk-bar [data-action="bulk-delete"]').click()
   await tick()
-  assert.equal(doc.getElementById('task-delete-dialog').hidden, false, '前置')
+  assert.equal(doc.querySelector('dialog.modal')?.open, true, '前置')
   pick(win, doc, 'a')   // 取消 a
   pick(win, doc, 'd')   // 改勾 d：動作列現在說的是 b、d
-  assert.equal(doc.getElementById('task-delete-dialog').hidden, true,
+  assert.equal(doc.querySelector('dialog.modal'), null,
     '不收掉的話，按確認刪掉的是 a、b，畫面上勾的卻是 b、d')
   assert.match(doc.getElementById('task-note').textContent, /再按一次/)
   assert.equal((await st.getTasks()).length, 3)
@@ -444,7 +447,7 @@ test('B 單列刪除的對話框不受選取變動影響', async () => {
   rowOf(doc, 'a').querySelector('[data-action="delete"]').click()
   await tick()
   pick(win, doc, 'b')
-  assert.equal(doc.getElementById('task-delete-dialog').hidden, false)
+  assert.equal(doc.querySelector('dialog.modal')?.open, true)
 })
 
 test('B 先匯出再刪除：下載沒成功就不刪，而且要說出來', async () => {
@@ -455,13 +458,13 @@ test('B 先匯出再刪除：下載沒成功就不刪，而且要說出來', asy
   const orig = chrome.downloads.download
   chrome.downloads.download = async () => { throw new Error('Download canceled by the user') }
   try {
-    doc.querySelector('#task-delete-dialog [data-action="export-then-delete"]').click()
+    doc.querySelector('dialog.modal [data-action="extra"]').click()
     await tick()
   } finally {
     chrome.downloads.download = orig
   }
   assert.equal((await st.getTasks()).length, 2, '沒匯出成功不得刪')
-  assert.match(doc.querySelector('#task-delete-dialog .dialog-message').textContent, /還沒有刪除/)
+  assert.match(doc.getElementById('task-note').textContent, /還沒有刪除/)
 })
 
 test('B 同一時間只會有一列在改名；換列時上一列先存檔', async () => {

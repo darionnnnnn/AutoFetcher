@@ -133,6 +133,9 @@ async function settings() {
   await st.init()
   const cr = await import('../src/shared/crypto.js?t=' + Math.random())
   const jd = new JSDOM(reportHtml, { url: 'https://x/report.html' })
+  // jsdom 25 沒有 <dialog> 的 showModal／close（AF-21 4-D 共用 modal）：替身只切 open 屬性
+  jd.window.HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  jd.window.HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
   globalThis.window = jd.window
   globalThis.document = jd.window.document
   const se = await import('../src/ui/report/settings.js?t=' + Math.random())
@@ -177,6 +180,9 @@ test('可以刪除站台', async () => {
   await site(st, cr)
   await se.renderSettings()
   doc.querySelector('#sites-list [data-action="site-delete"]').click()
+  await new Promise(r => setTimeout(r, 30))
+  // AF-21 4-D：站台刪除改成二段確認，確認後才刪
+  doc.querySelector('dialog.modal [data-action="confirm"]').click()
   await new Promise(r => setTimeout(r, 30))
   assert.equal(await st.getSite(ORIGIN), null)
 })

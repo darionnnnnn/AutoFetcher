@@ -22,6 +22,9 @@ async function fresh() {
   const st = await import('../src/shared/storage.js?t=' + Math.random())
   await st.init()
   const jd = new JSDOM(html, { url: 'chrome-extension://abc/ui/report/report.html' })
+  // jsdom 25 沒有 <dialog> 的 showModal／close（AF-21 4-D 共用 modal）：替身只切 open 屬性
+  jd.window.HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  jd.window.HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
   globalThis.window = jd.window
   globalThis.document = jd.window.document
   const lg = await import('../src/ui/report/logic.js?t=' + Math.random())
@@ -244,8 +247,8 @@ test('展開的紀錄有刪除按鈕，需確認', async () => {
   assert.ok(btn, '展開後要有刪除按鈕')
   btn.click()
   await new Promise(r => setTimeout(r, 20))
-  assert.ok(doc.getElementById('record-delete-confirm'), '要有確認框')
-  doc.querySelector('#record-delete-confirm [data-action="cancel"]').click()
+  assert.ok(doc.querySelector('dialog.modal')?.open, '要有確認框')
+  doc.querySelector('dialog.modal [data-action="cancel"]').click()
   await new Promise(r => setTimeout(r, 20))
   assert.equal((await st.getRecordsByDate('2026-09-01')).length, 1)
 })

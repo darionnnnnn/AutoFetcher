@@ -269,6 +269,61 @@ footer.action-bar {
 }
 
 /* ============================================================
+   共用確認對話框（modal.js）：原生 <dialog> 的 showModal()，置中＋遮罩
+   內容由 modal.js 動態產生（h2 標題、內文 div、動作列 div）：用結構選擇器，
+   不另開只有程式碼掛的類別（同 save-guard）
+   ============================================================ */
+dialog {
+  width: min(480px, calc(100vw - 2 * var(--space-4)));
+  max-height: calc(100vh - 2 * var(--space-4));
+  overflow: auto;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-2);
+}
+
+dialog::backdrop {
+  background: var(--text);
+  opacity: 0.4;
+}
+
+dialog > h2 { margin: 0 0 var(--space-2); }
+
+dialog > div:first-of-type {
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+dialog > div:first-of-type p { margin: 0 0 var(--space-2); }
+
+dialog > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+/* 危險動作的確認鈕：紅框紅字，刻意不是實心主要按鈕 */
+.btn-danger,
+button.btn-danger {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
+  font-weight: 500;
+}
+
+.btn-danger:hover,
+button.btn-danger:hover {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  filter: brightness(1.1);
+}
+
+/* ============================================================
    prefers-reduced-motion：關閉過渡與動畫
    ============================================================ */
 @media (prefers-reduced-motion: reduce) {

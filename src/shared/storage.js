@@ -638,9 +638,8 @@ export async function trimOldRecords(today) {
   const retentionDays = settings.retentionDays
   if (typeof retentionDays !== 'number' || retentionDays <= 0) return
 
-  const d = new Date(today + 'T00:00:00Z')
-  d.setUTCDate(d.getUTCDate() - retentionDays + 1)
-  const cutoff = d.toISOString().slice(0, 10)
+  // 截止日與設定頁「會刪除幾天以前的紀錄」算的是同一條公式（countRecordsBeyondRetention）
+  const cutoff = addDays(today, -retentionDays + 1)
 
   const toRemove = (await listAllKeys()).filter(key => isRecordKey(key) && keyToDate(key) < cutoff)
   // 逐鍵在各自的鎖內刪（同一天的鎖可能正被抓取寫入持有）
@@ -1138,6 +1137,21 @@ export async function countRecordsForTasks(ids) {
   })
 
   return { total, byId }
+}
+
+// 唯讀：保留天數改成 retentionDays 時，看門狗下一輪（trimOldRecords）會刪掉幾筆紀錄
+// 截止日算法與 trimOldRecords 相同（today 往前 retentionDays-1 天，更早的日期刪）；分批讀，不一次載入全部紀錄
+export async function countRecordsBeyondRetention(retentionDays, today = localToday()) {
+  if (typeof retentionDays !== 'number' || retentionDays <= 0) return { count: 0, cutoff: null }
+  const cutoff = addDays(today, -retentionDays + 1)
+  const keys = (await listAllKeys()).filter(key => isRecordKey(key) && keyToDate(key) < cutoff)
+  let count = 0
+  await forEachBatch(keys, (data) => {
+    for (const val of Object.values(data)) {
+      if (Array.isArray(val)) count += val.length
+    }
+  })
+  return { count, cutoff }
 }
 
 // 查詢單一任務在所有日期的紀錄總數

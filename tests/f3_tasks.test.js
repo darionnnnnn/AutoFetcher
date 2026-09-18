@@ -18,6 +18,9 @@ async function fresh() {
   const st = await import('../src/shared/storage.js?t=' + Math.random())
   await st.init()
   const jd = new JSDOM(html, { url: 'chrome-extension://abc/ui/report/report.html' })
+  // jsdom 25 沒有 <dialog> 的 showModal／close（AF-21 4-D 共用 modal）：替身只切 open 屬性
+  jd.window.HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  jd.window.HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
   globalThis.window = jd.window
   globalThis.document = jd.window.document
   const ts = await import('../src/ui/report/tasks.js?t=' + Math.random())
@@ -158,8 +161,8 @@ test('刪除對話框顯示將一併刪除的紀錄筆數', async () => {
   ts.renderTasks([task('a')], {}, [])
   doc.querySelector('[data-task-id="a"] [data-action="delete"]').click()
   await new Promise(r => setTimeout(r, 20))
-  const dlg = doc.getElementById('task-delete-dialog')
-  assert.ok(dlg && !dlg.hidden, '要出現刪除確認對話框')
+  const dlg = doc.querySelector('dialog.modal')
+  assert.ok(dlg && dlg.open, '要出現刪除確認對話框')
   assert.ok(dlg.textContent.includes('2'), `對話框要顯示 2 筆紀錄，實得：${dlg.textContent}`)
 })
 
@@ -170,7 +173,7 @@ test('刪除對話框取消時 storage 完全不變', async () => {
   ts.renderTasks([task('a')], {}, [])
   doc.querySelector('[data-task-id="a"] [data-action="delete"]').click()
   await new Promise(r => setTimeout(r, 20))
-  doc.querySelector('#task-delete-dialog [data-action="cancel"]').click()
+  doc.querySelector('dialog.modal [data-action="cancel"]').click()
   await new Promise(r => setTimeout(r, 20))
   assert.equal((await st.getTasks()).length, 1)
   assert.equal((await st.getRecordsByDate('2026-09-05')).length, 1)
@@ -183,7 +186,7 @@ test('刪除對話框確認後任務與紀錄都清掉', async () => {
   ts.renderTasks([task('a')], {}, [])
   doc.querySelector('[data-task-id="a"] [data-action="delete"]').click()
   await new Promise(r => setTimeout(r, 20))
-  doc.querySelector('#task-delete-dialog [data-action="confirm"]').click()
+  doc.querySelector('dialog.modal [data-action="confirm"]').click()
   await new Promise(r => setTimeout(r, 30))
   assert.equal((await st.getTasks()).length, 0)
   assert.equal((await st.getRecordsByDate('2026-09-05')).length, 0)
@@ -196,7 +199,7 @@ test('先匯出再刪除會呼叫下載後才刪任務', async () => {
   ts.renderTasks([task('a')], {}, [])
   doc.querySelector('[data-task-id="a"] [data-action="delete"]').click()
   await new Promise(r => setTimeout(r, 20))
-  doc.querySelector('#task-delete-dialog [data-action="export-then-delete"]').click()
+  doc.querySelector('dialog.modal [data-action="extra"]').click()
   await new Promise(r => setTimeout(r, 40))
   assert.ok(c.__calls.some(x => x.api === 'downloads.download'), '要先觸發下載')
   assert.equal((await st.getTasks()).length, 0, '下載後才刪除任務')

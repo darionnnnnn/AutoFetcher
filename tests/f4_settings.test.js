@@ -18,6 +18,9 @@ async function fresh() {
   const st = await import('../src/shared/storage.js?t=' + Math.random())
   await st.init()
   const jd = new JSDOM(html, { url: 'chrome-extension://abc/ui/report/report.html' })
+  // jsdom 25 沒有 <dialog> 的 showModal／close（AF-21 4-D 共用 modal）：替身只切 open 屬性
+  jd.window.HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  jd.window.HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
   globalThis.window = jd.window
   globalThis.document = jd.window.document
   const se = await import('../src/ui/report/settings.js?t=' + Math.random())
@@ -204,6 +207,9 @@ test('保留天數變更立即寫入設定', async () => {
   const el = doc.getElementById('pref-retention')
   el.value = '30'
   el.dispatchEvent(new win.Event('change', { bubbles: true }))
+  await new Promise(r => setTimeout(r, 20))
+  // AF-21 4-D：調低保留天數要先在對話框確認，確認後才寫入
+  doc.querySelector('dialog.modal [data-action="confirm"]').click()
   await new Promise(r => setTimeout(r, 20))
   assert.equal((await st.getSettings()).retentionDays, 30)
 })

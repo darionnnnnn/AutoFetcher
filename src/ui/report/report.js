@@ -13,6 +13,7 @@ import { applyTheme } from '../theme-apply.js'
 import { buildSeries, pivot } from './series.js'
 import { lineChart } from './charts.js'
 import { buildTsv } from './cards.js'
+import { confirmDialog } from '../modal.js'
 import { renderTasks } from './tasks.js'
 import { renderSettings } from './settings.js'
 import { renderDashboard, isEditing } from './dashboard.js'
@@ -647,50 +648,40 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
       delBtn.type = 'button'
       delBtn.dataset.action = 'delete-record'
       delBtn.textContent = '刪除此紀錄'
-      delBtn.addEventListener('click', (e) => {
+      delBtn.addEventListener('click', async (e) => {
         e.stopPropagation()
-        const confirmBox = document.getElementById('record-delete-confirm')
-        if (confirmBox) {
-          confirmBox.hidden = false
-          const cancelBtn = confirmBox.querySelector('[data-action="cancel"]')
-          const okBtn = confirmBox.querySelector('[data-action="confirm"]')
+        // 共用 modal（AF-21 4-D）：確認框就在畫面正中，不再離刪除鈕數百像素
+        const ok = await confirmDialog({
+          title: '刪除紀錄',
+          body: `確定要刪除此筆紀錄嗎？（${record.taskName || record.taskId || ''}，${record.capturedAt || record.slot || ''}）刪除後無法復原。`,
+          confirmText: '刪除',
+          cancelText: '取消',
+          danger: true
+        })
+        if (ok !== true) return
+        const recDate = record.date || (record.slot ? record.slot.slice(0, 10) : '')
+        await deleteRecord(recDate, record.taskId, record.capturedAt)
 
-          if (cancelBtn) {
-            cancelBtn.onclick = () => {
-              confirmBox.hidden = true
-            }
-          }
-
-          if (okBtn) {
-            okBtn.onclick = async () => {
-              confirmBox.hidden = true
-
-              const recDate = record.date || (record.slot ? record.slot.slice(0, 10) : '')
-              await deleteRecord(recDate, record.taskId, record.capturedAt)
-
-              if (state.from && state.to) {
-                let tasks = []
-                try { tasks = await getTasks() } catch {}
-                const raw = await getRecordsInRange(state.from, state.to)
-                allLoadedRecords = joinTaskNames(raw, tasks)
-                const filtered = filterRecords(allLoadedRecords, {
-                  taskIds: state.taskIds,
-                  statuses: state.statuses,
-                  alertsOnly: state.alertsOnly,
-                  valueMin: state.valueMin,
-                  valueMax: state.valueMax,
-                  keyword: state.keyword
-                })
-                await renderCurrentHistoryTable(filtered, tasks)
-                renderSummary(summarize(filtered))
-              } else {
-                const idx = lastRecords.findIndex(r => r.taskId === record.taskId && r.capturedAt === record.capturedAt)
-                if (idx !== -1) lastRecords.splice(idx, 1)
-                renderTable(lastRecords, lastColumns, opts)
-                renderSummary(summarize(lastRecords))
-              }
-            }
-          }
+        if (state.from && state.to) {
+          let tasks = []
+          try { tasks = await getTasks() } catch {}
+          const raw = await getRecordsInRange(state.from, state.to)
+          allLoadedRecords = joinTaskNames(raw, tasks)
+          const filtered = filterRecords(allLoadedRecords, {
+            taskIds: state.taskIds,
+            statuses: state.statuses,
+            alertsOnly: state.alertsOnly,
+            valueMin: state.valueMin,
+            valueMax: state.valueMax,
+            keyword: state.keyword
+          })
+          await renderCurrentHistoryTable(filtered, tasks)
+          renderSummary(summarize(filtered))
+        } else {
+          const idx = lastRecords.findIndex(r => r.taskId === record.taskId && r.capturedAt === record.capturedAt)
+          if (idx !== -1) lastRecords.splice(idx, 1)
+          renderTable(lastRecords, lastColumns, opts)
+          renderSummary(summarize(lastRecords))
         }
       })
       deleteActionRow.appendChild(delBtn)

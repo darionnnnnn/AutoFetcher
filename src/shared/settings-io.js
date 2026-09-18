@@ -118,13 +118,30 @@ const isObj = (v) => isPlainObject(v) ? '' : '必須是物件'
 const isTime = (v) => typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v) ? '' : '必須是 HH:MM'
 const isDateText = (v) => typeof v === 'string' && Number.isFinite(Date.parse(v)) ? '' : '必須是可解析的時間'
 
+// 數值設定的值域：匯入白名單與設定頁欄位驗證共用這一份（AF-21 4-D）
+export const NUMERIC_SETTING_RANGES = Object.freeze({
+  retentionDays: Object.freeze({ min: 1, max: 3650, integer: true }),
+  extraDelaySec: Object.freeze({ min: 0, max: 60, integer: false }),
+  alertCooldownMin: Object.freeze({ min: 0, max: 1440, integer: false })
+})
+const numericRule = (key) => {
+  const r = NUMERIC_SETTING_RANGES[key]
+  return inRange(r.min, r.max, r.integer)
+}
+
+// 數值設定合不合法：回傳空字串＝合格，否則是原因（設定頁欄位用；不認識的鍵視為合格）
+export function numericSettingProblem(key, value) {
+  if (!NUMERIC_SETTING_RANGES[key]) return ''
+  return numericRule(key)(value)
+}
+
 const SETTINGS_RULES = {
-  retentionDays: inRange(1, 3650, true),
+  retentionDays: numericRule('retentionDays'),
   notifications: isBool,
-  extraDelaySec: inRange(0, 60),
+  extraDelaySec: numericRule('extraDelaySec'),
   theme: oneOf('system', 'light', 'dark'),
   fetchTabMode: oneOf('tab', 'window'),
-  alertCooldownMin: inRange(0, 1440),
+  alertCooldownMin: numericRule('alertCooldownMin'),
   siteCheckTime: isTime,
   showHelpMenu: isBool,
   pickerDefaults: isObj,

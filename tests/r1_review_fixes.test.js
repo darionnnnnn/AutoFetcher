@@ -28,6 +28,9 @@ async function fresh() {
   await st.saveTask(task('t2', '水費'))
   const ls = await import('../src/shared/layout-store.js?t=' + Math.random())
   const jd = new JSDOM(html, { url: 'chrome-extension://abc/ui/report/report.html' })
+  // jsdom 25 沒有 <dialog> 的 showModal／close（AF-21 4-D 共用 modal）：替身只切 open 屬性
+  jd.window.HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  jd.window.HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
   globalThis.window = jd.window
   globalThis.document = jd.window.document
   const grid = jd.window.document.getElementById('dashboard-grid')
@@ -170,7 +173,7 @@ test('連續對兩筆按刪除，確認只會刪掉最後一筆', async () => {
   const btns = doc.querySelectorAll('#record-table [data-action="delete-record"]')
   btns[btns.length - 1].click()
   await new Promise(r => setTimeout(r, 20))
-  doc.querySelector('#record-delete-confirm [data-action="confirm"]').click()
+  doc.querySelector('dialog.modal [data-action="confirm"]').click()
   await new Promise(r => setTimeout(r, 40))
   assert.equal((await st.getRecordsByDate('2026-09-01')).length, 1, '一次確認只能刪一筆')
 })

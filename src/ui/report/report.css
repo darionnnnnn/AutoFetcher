@@ -456,14 +456,6 @@ input[data-rename-input] {
   cursor: pointer;
 }
 .task-actions button:hover, .missed-actions button:hover, .dialog-actions button:hover, #task-bulk-bar button:hover { background: var(--hover); }
-#task-delete-dialog {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: var(--space-3);
-  margin-top: var(--space-3);
-  box-shadow: var(--shadow-1);
-}
 .dialog-actions { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
 
 /* 設定頁 */
@@ -481,6 +473,9 @@ input[data-rename-input] {
 .settings-section h2 { font-size: var(--text-md); font-weight: 600; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: var(--space-2); }
 .settings-section h3 { font-size: var(--text-sm); font-weight: 600; color: var(--text-muted); margin-top: var(--space-2); }
 .settings-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); font-size: var(--text-sm); }
+/* 設定頁欄位就地回饋（AF-21 4-D）：「已儲存 ✓」與匯出結果（role=status）；錯誤原因換一整行 */
+.field-saved { font-size: var(--text-xs); color: var(--ok); white-space: nowrap; }
+.settings-row > .field-error { flex-basis: 100%; }
 .settings-row input[type="date"], .settings-row input[type="number"], .settings-row input[type="password"], .settings-row select, .settings-row input[type="file"] {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -700,8 +695,6 @@ input[data-rename-input] {
 .table-toolbar { display: flex; justify-content: flex-end; gap: var(--space-2); margin-bottom: var(--space-2); }
 .table-toolbar button, .table-container button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: var(--space-1) var(--space-2); border-radius: var(--radius); font-size: var(--text-xs); cursor: pointer; }
 .table-toolbar button:hover, .table-container button:hover { background: var(--hover); }
-#record-delete-confirm { background: var(--danger-bg); border: 1px solid var(--danger); border-radius: var(--radius); padding: var(--space-3) var(--space-4); margin-bottom: var(--space-3); }
-#record-delete-confirm[hidden] { display: none; }
 #record-pager { display: flex; justify-content: center; align-items: center; gap: var(--space-3); padding: var(--space-3); font-size: var(--text-sm); color: var(--text-muted); }
 #record-pager[hidden] { display: none; }
 #record-pager button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: var(--space-1) var(--space-2); border-radius: var(--radius); font-size: var(--text-sm); cursor: pointer; }

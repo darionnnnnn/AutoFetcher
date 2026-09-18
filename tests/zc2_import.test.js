@@ -27,6 +27,9 @@ async function fresh() {
 async function freshPage() {
   const { c, st, io } = await fresh()
   const jd = new JSDOM(html, { url: 'chrome-extension://abc/ui/report/report.html' })
+  // jsdom 25 沒有 <dialog> 的 showModal／close（批次 4-D 起匯入確認走共用對話框）
+  jd.window.HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  jd.window.HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
   globalThis.window = jd.window
   globalThis.document = jd.window.document
   const se = await import('../src/ui/report/settings.js?t=' + Math.random())

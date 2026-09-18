@@ -2,7 +2,7 @@
 process.env.TZ = 'Asia/Taipei'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { JSDOM } from 'jsdom'
 import { installChromeMock, resetChromeMock } from './chrome-mock.js'
 
@@ -177,9 +177,21 @@ test('E-4 共用樣式表裡不得有沒人使用的類別', () => {
   const selectors = [...noComments.matchAll(/([^{}]+)\{/g)].map(m => m[1])
   const defined = selectors.flatMap(sel => [...sel.matchAll(/\.([a-z][a-z0-9-]*)/g)].map(m => m[1]))
   // 用「類別 token」精確比對：`class="btn-primary"` 不能讓 `.btn` 算成有人用
+  // AF-21 起 Report、popup、教學頁也載入 ui.css，共用元件（對話框、儲存守門）的類別由 JS 動態掛上：
+  // 掃 src/ui 下所有 HTML 的 class 屬性，加上 JS 裡 className／classList 的字串字面值
   const usedTokens = new Set()
-  for (const m of (PICKER_HTML + SITE_HTML).matchAll(/class="([^"]*)"/g)) {
-    for (const tok of m[1].split(/\s+/)) if (tok) usedTokens.add(tok)
+  const uiRoot = new URL('../src/ui/', import.meta.url)
+  const files = []
+  const walk = (u) => { for (const e of readdirSync(u, { withFileTypes: true })) { const c = new URL(e.name + (e.isDirectory() ? '/' : ''), u); if (e.isDirectory()) walk(c); else if (/\.(html|js)$/.test(e.name)) files.push(c) } }
+  walk(uiRoot)
+  assert.ok(files.length > 5, '掃描集合不得為空')
+  for (const f of files) {
+    const src = readFileSync(f, 'utf8')
+    for (const m of src.matchAll(/class="([^"]*)"/g)) for (const tok of m[1].split(/\s+/)) if (tok) usedTokens.add(tok)
+    for (const m of src.matchAll(/className\s*=\s*['`]([^'`]*)['`]/g)) for (const tok of m[1].split(/\s+/)) if (tok && !tok.includes('$')) usedTokens.add(tok)
+    for (const m of src.matchAll(/classList\.(?:add|toggle)\(([^)]*)\)/g)) for (const s of m[1].matchAll(/['`]([a-z][a-z0-9-]*)['`]/g)) usedTokens.add(s[1])
+    // 類別名當參數傳進共用元件（例如 modal.js 的 makeButton(…, 'btn-danger')）：JS 裡整段就是一個帶連字號的字串字面值
+    if (f.pathname.endsWith('.js')) for (const m of src.matchAll(/['`]([a-z][a-z0-9]*-[a-z0-9-]+)['`]/g)) usedTokens.add(m[1])
   }
   const dead = [...new Set(defined)].filter(cls => !usedTokens.has(cls))
   assert.deepEqual(dead, [], `這些類別沒有任何頁面用到，是死規則：${JSON.stringify(dead)}`)

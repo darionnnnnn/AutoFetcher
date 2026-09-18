@@ -10,9 +10,11 @@ import {
   getSite,
   saveSite,
   deleteSite,
-  getHealthMap, deleteHealthEntry } from '../../shared/storage.js'
+  getHealthMap, deleteHealthEntry,
+  countRecordsBeyondRetention } from '../../shared/storage.js'
 import { buildExport, download } from '../../shared/export.js'
-import { exportSettings, previewSettingsImport, applySettingsImport } from '../../shared/settings-io.js'
+import { exportSettings, previewSettingsImport, applySettingsImport, numericSettingProblem } from '../../shared/settings-io.js'
+import { confirmDialog } from '../modal.js'
 import * as diag from '../../shared/diag.js'
 import { MSG } from '../../shared/messages.js'
 import { statusTextOf } from '../../shared/record-status.js'
@@ -119,6 +121,44 @@ async function renderNextRuns() {
   }
 }
 
+// 匯出按鈕旁的結果（role=status）；建一次、之後沿用
+function exportResultOf(btn) {
+  let el = document.getElementById(`${btn.id}-result`)
+  if (!el) {
+    el = document.createElement('span')
+    el.id = `${btn.id}-result`
+    el.setAttribute('role', 'status')
+    btn.after(el)
+  }
+  return el
+}
+
+// 匯出：download 丟例外（含在另存視窗按取消）或沒回下載 id 都算沒完成；成功才記時間
+async function runExport(btn, work, stampKey) {
+  const resultEl = exportResultOf(btn)
+  resultEl.className = ''
+  resultEl.textContent = '匯出中…'
+  let id
+  try {
+    id = await work()
+  } catch (e) {
+    resultEl.className = 'field-error'
+    resultEl.textContent = `匯出沒有完成：${e?.message || e}`
+    return
+  }
+  if (typeof id !== 'number') {
+    resultEl.className = 'field-error'
+    resultEl.textContent = '匯出沒有完成：瀏覽器沒有開始下載'
+    return
+  }
+  resultEl.className = 'field-saved'
+  resultEl.textContent = '已開始下載'
+  try {
+    await saveSettings({ [stampKey]: new Date().toISOString() })
+    await renderStorageStats()
+  } catch {}
+}
+
 // 綁定匯出與匯入控制項事件
 function setupExportAndImportListeners() {
   const htmlOpt = document.querySelector('#export-format option[value="html"]')
@@ -139,10 +179,7 @@ function setupExportAndImportListeners() {
       const to = toEl?.value || today
       const format = formatEl?.value || 'json'
 
-      const data = await buildExport({ from, to, format })
-      await download(data)
-      await saveSettings({ lastRecordsExportAt: new Date().toISOString() })
-      await renderStorageStats()
+      await runExport(exportRunBtn, async () => download(await buildExport({ from, to, format })), 'lastRecordsExportAt')
     })
   }
 
@@ -152,10 +189,10 @@ function setupExportAndImportListeners() {
     settingsExportBtn.addEventListener('click', async () => {
       const includePasswords = document.getElementById('settings-include-passwords')?.checked || false
       const passphrase = document.getElementById('settings-passphrase')?.value || ''
-      const content = await exportSettings({ includePasswords, passphrase })
-      await download({ filename: 'AutoFetcher/autofetcher-settings.json', content })
-      await saveSettings({ lastSettingsExportAt: new Date().toISOString() })
-      await renderStorageStats()
+      await runExport(settingsExportBtn, async () => {
+        const content = await exportSettings({ includePasswords, passphrase })
+        return download({ filename: 'AutoFetcher/autofetcher-settings.json', content })
+      }, 'lastSettingsExportAt')
     })
   }
 
@@ -223,97 +260,175 @@ function setupExportAndImportListeners() {
   }
 }
 
+// ---- 欄位就地回饋（AF-21 4-D）：設定頁維持即時生效，每一欄寫入後說清楚存了沒 ----
+
+// 已儲存提示顯示多久
+const SAVED_HINT_MS = 2000
+
+// 欄位旁的「已儲存 ✓」（role=status）與欄位下方的原因（aria-describedby）；建一次、之後沿用
+function feedbackOf(el) {
+  if (el._afFeedback) return el._afFeedback
+  const row = el.closest('.settings-row') || el.parentElement
+  const status = document.createElement('span')
+  status.className = 'field-saved'
+  status.id = `${el.id}-status`
+  status.setAttribute('role', 'status')
+  const error = document.createElement('div')
+  error.className = 'field-error'
+  error.id = `${el.id}-error`
+  error.hidden = true
+  row.appendChild(status)
+  row.appendChild(error)
+  el.setAttribute('aria-describedby', error.id)
+  el._afFeedback = { status, error, timer: null }
+  return el._afFeedback
+}
+
+function showFieldError(el, text) {
+  const fb = feedbackOf(el)
+  clearTimeout(fb.timer)
+  fb.status.textContent = ''
+  fb.error.textContent = text
+  fb.error.hidden = false
+  el.setAttribute('aria-invalid', 'true')
+}
+
+function clearFieldError(el) {
+  const fb = feedbackOf(el)
+  fb.error.textContent = ''
+  fb.error.hidden = true
+  el.removeAttribute('aria-invalid')
+}
+
+function showFieldSaved(el) {
+  const fb = feedbackOf(el)
+  clearFieldError(el)
+  clearTimeout(fb.timer)
+  fb.status.textContent = '已儲存 ✓'
+  fb.timer = setTimeout(() => { fb.status.textContent = '' }, SAVED_HINT_MS)
+}
+
+// 寫一欄設定：成功顯示「已儲存」、失敗說原因；回傳有沒有寫成
+async function persistField(el, patch) {
+  try {
+    await saveSettings(patch)
+  } catch (e) {
+    showFieldError(el, `沒有儲存：${e?.message || e}`)
+    return false
+  }
+  showFieldSaved(el)
+  return true
+}
+
+// 設定頁的「今天」：與看門狗清理用的本地日期同一種算法
+function localDateText() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+// 數值欄：空白或超出值域不寫入、欄位下說原因，離開焦點恢復成上一個有效值（值域與匯入白名單同一份）
+// beforeSave(next, prev) 回 false 表示使用者取消（欄位恢復原值、不寫入）
+function bindNumericField(el, key, value, beforeSave = null) {
+  el.value = value
+  el._afLastValid = value
+  el._afInvalid = false
+  feedbackOf(el)
+  if (el._afBound) return
+  el._afBound = true
+  el.addEventListener('change', async () => {
+    const raw = String(el.value).trim()
+    const next = raw === '' ? NaN : Number(raw)
+    const problem = raw === '' ? '不能空白' : numericSettingProblem(key, next)
+    if (problem) {
+      el._afInvalid = true
+      showFieldError(el, `沒有儲存：${problem}（離開欄位後恢復成 ${el._afLastValid}）`)
+      return
+    }
+    el._afInvalid = false
+    clearFieldError(el)
+    const prev = el._afLastValid
+    if (next === prev) return
+    if (beforeSave && !(await beforeSave(next, prev))) {
+      el.value = prev
+      return
+    }
+    if (await persistField(el, { [key]: next })) el._afLastValid = next
+  })
+  el.addEventListener('blur', () => {
+    if (!el._afInvalid) return
+    el._afInvalid = false
+    el.value = el._afLastValid
+    el.removeAttribute('aria-invalid')
+  })
+}
+
+// 保留天數調低：看門狗下一輪就會不可逆地刪，先問（調高不問）
+async function confirmRetentionLowered(next, prev) {
+  if (!(next < prev)) return true
+  let count = 0
+  try {
+    count = (await countRecordsBeyondRetention(next, localDateText())).count
+  } catch {}
+  return await confirmDialog({
+    title: '調低紀錄保留天數',
+    body: `將會刪除 ${next} 天以前的紀錄（約 ${count} 筆），無法復原。`,
+    confirmText: '確定調低',
+    cancelText: '取消',
+    danger: true
+  }) === true
+}
+
+// 一般欄位（勾選／下拉／時間）：改了就寫，寫完就地回饋
+function bindField(el, patchOf, after = null) {
+  if (el._afBound) return
+  el._afBound = true
+  feedbackOf(el)
+  el.addEventListener('change', async () => {
+    const patch = patchOf()
+    if (await persistField(el, patch) && after) after(patch)
+  })
+}
+
 // 綁定偏好設定控制項事件
 function setupPreferenceListeners(settings) {
   const retentionEl = document.getElementById('pref-retention')
-  if (retentionEl) {
-    retentionEl.value = settings.retentionDays ?? 365
-    if (!retentionEl._afBound) {
-      retentionEl._afBound = true
-      retentionEl.addEventListener('change', async () => {
-        await saveSettings({ retentionDays: Number(retentionEl.value) })
-      })
-    }
-  }
+  if (retentionEl) bindNumericField(retentionEl, 'retentionDays', settings.retentionDays ?? 365, confirmRetentionLowered)
 
   const notificationsEl = document.getElementById('pref-notifications')
   if (notificationsEl) {
     notificationsEl.checked = settings.notifications ?? true
-    if (!notificationsEl._afBound) {
-      notificationsEl._afBound = true
-      notificationsEl.addEventListener('change', async () => {
-        await saveSettings({ notifications: Boolean(notificationsEl.checked) })
-      })
-    }
+    bindField(notificationsEl, () => ({ notifications: Boolean(notificationsEl.checked) }))
   }
 
   const extraDelayEl = document.getElementById('pref-extra-delay')
-  if (extraDelayEl) {
-    extraDelayEl.value = settings.extraDelaySec ?? 3
-    if (!extraDelayEl._afBound) {
-      extraDelayEl._afBound = true
-      extraDelayEl.addEventListener('change', async () => {
-        await saveSettings({ extraDelaySec: Number(extraDelayEl.value) })
-      })
-    }
-  }
+  if (extraDelayEl) bindNumericField(extraDelayEl, 'extraDelaySec', settings.extraDelaySec ?? 3)
 
   // 兩種都不會碰使用者開著的分頁；預設背景分頁（不閃）。「視窗」不佔分頁列，但建立的瞬間可能閃一下（AF-20）
   const fetchTabModeEl = document.getElementById('pref-fetch-tab-mode')
   if (fetchTabModeEl) {
     fetchTabModeEl.value = settings.fetchTabMode === 'window' ? 'window' : 'tab'
-    if (!fetchTabModeEl._afBound) {
-      fetchTabModeEl._afBound = true
-      fetchTabModeEl.addEventListener('change', async () => {
-        await saveSettings({ fetchTabMode: fetchTabModeEl.value })
-      })
-    }
+    bindField(fetchTabModeEl, () => ({ fetchTabMode: fetchTabModeEl.value }))
   }
 
   const alertCooldownEl = document.getElementById('pref-alert-cooldown')
-  if (alertCooldownEl) {
-    alertCooldownEl.value = settings.alertCooldownMin ?? 60
-    if (!alertCooldownEl._afBound) {
-      alertCooldownEl._afBound = true
-      alertCooldownEl.addEventListener('change', async () => {
-        await saveSettings({ alertCooldownMin: Number(alertCooldownEl.value) })
-      })
-    }
-  }
+  if (alertCooldownEl) bindNumericField(alertCooldownEl, 'alertCooldownMin', settings.alertCooldownMin ?? 60)
 
   const siteCheckTimeEl = document.getElementById('pref-site-check-time')
   if (siteCheckTimeEl) {
     siteCheckTimeEl.value = settings.siteCheckTime ?? '08:00'
-    if (!siteCheckTimeEl._afBound) {
-      siteCheckTimeEl._afBound = true
-      siteCheckTimeEl.addEventListener('change', async () => {
-        await saveSettings({ siteCheckTime: siteCheckTimeEl.value })
-      })
-    }
+    bindField(siteCheckTimeEl, () => ({ siteCheckTime: siteCheckTimeEl.value }))
   }
 
   const themeEl = document.getElementById('pref-theme')
   if (themeEl) {
     themeEl.value = settings.theme ?? 'system'
-    if (!themeEl._afBound) {
-      themeEl._afBound = true
-      themeEl.addEventListener('change', async () => {
-        const val = themeEl.value
-        await saveSettings({ theme: val })
-        applyTheme(val)
-      })
-    }
+    bindField(themeEl, () => ({ theme: themeEl.value }), (patch) => applyTheme(patch.theme))
   }
 
   const helpMenuEl = document.getElementById('pref-help-menu')
   if (helpMenuEl) {
     helpMenuEl.checked = settings.showHelpMenu !== false
-    if (!helpMenuEl._afBound) {
-      helpMenuEl._afBound = true
-      helpMenuEl.addEventListener('change', async () => {
-        await saveSettings({ showHelpMenu: helpMenuEl.checked })
-      })
-    }
+    bindField(helpMenuEl, () => ({ showHelpMenu: helpMenuEl.checked }))
   }
 
   const clearPinnedBtn = document.getElementById('clear-pinned-defaults')
@@ -408,6 +523,14 @@ function setupSitesListListeners() {
       await saveSite(origin, site)
       await renderSitesList()
     } else if (action === 'site-delete') {
+      const ok = await confirmDialog({
+        title: '刪除站台登入設定',
+        body: `確定要刪除「${origin}」的登入設定（含加密保存的密碼）嗎？刪除後排程抓取不會再替這個站台自動登入。`,
+        confirmText: '刪除',
+        cancelText: '取消',
+        danger: true
+      })
+      if (ok !== true) return
       await deleteSite(origin)
       await renderSitesList()
     }
@@ -559,7 +682,6 @@ function renderImportSummary(resultEl, summary) {
   resultEl.textContent = ''
   const box = document.createElement('div')
   box.className = 'settings-import-summary'
-  appendLine(box, '即將匯入（尚未寫入）：')
   appendList(box, '內容', [
     `任務：新增 ${summary.tasks.add} 個、覆寫 ${summary.tasks.update} 個、略過 ${summary.tasks.skipped.length} 個`,
     `站台：新增 ${summary.sites.add} 個、覆寫 ${summary.sites.update} 個`,
@@ -576,22 +698,22 @@ function renderImportSummary(resultEl, summary) {
     appendList(box, '被拒絕的設定', summary.settings.rejected.map(r => `${r.key}：${r.reason}`))
   }
 
-  const actions = document.createElement('div')
-  actions.className = 'settings-import-actions'
-  const confirmBtn = document.createElement('button')
-  confirmBtn.type = 'button'
-  confirmBtn.id = 'settings-import-confirm'
-  confirmBtn.textContent = '確認匯入'
-  confirmBtn.onclick = () => confirmSettingsImport()
-  const cancelBtn = document.createElement('button')
-  cancelBtn.type = 'button'
-  cancelBtn.id = 'settings-import-cancel'
-  cancelBtn.textContent = '取消'
-  cancelBtn.onclick = () => cancelSettingsImport()
-  actions.appendChild(confirmBtn)
-  actions.appendChild(cancelBtn)
-  box.appendChild(actions)
-  resultEl.appendChild(box)
+  // 共用 modal（AF-21 4-D，取代 3-A 暫放在結果區的按鈕）；對話框元素掛在結果區底下，
+  // showModal 一律進最上層，掛哪裡不影響顯示；不等它關閉（選檔的處理到此結束）
+  const plan = pendingSettingsImport
+  confirmDialog({
+    title: '即將匯入（尚未寫入）',
+    body: box,
+    confirmText: '確認匯入',
+    cancelText: '取消',
+    container: resultEl,
+    ids: { confirm: 'settings-import-confirm', cancel: 'settings-import-cancel' }
+  }).then((ok) => {
+    // 已經被新的一次選檔取代：不動
+    if (pendingSettingsImport !== plan) return
+    if (ok === true) confirmSettingsImport()
+    else cancelSettingsImport()
+  })
 }
 
 // 處理設定匯入：選檔後只做 preview、顯示摘要與確認／取消（零寫入）
