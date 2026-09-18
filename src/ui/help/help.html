@@ -175,9 +175,9 @@
     <section class="news" aria-labelledby="news-title">
       <h2 id="news-title">這一版改了什麼</h2>
       <ul>
-        <li>在表格上點一下是「加選」，再點一次是取消（不用再按 Ctrl）。</li>
-        <li>工具列多了「<span class="ui" data-ui-label="content/picker-mode.js">整欄→每格</span>」，一次選好一整欄。</li>
-        <li>右鍵多了「<span class="ui" data-ui-label="background/main.js">一次建立多個任務</span>」。</li>
+        <li>任務管理可以勾好幾個任務，一起「<span class="ui" data-ui-label="ui/report/report.html">改排程</span>」、停用或刪除。</li>
+        <li>已經選了好幾格時，Esc 要按兩次才會全部取消，不怕手滑。</li>
+        <li>好幾個值想分開存，按「<span class="ui" data-ui-label="ui/picker/picker.html">拆成每個值一個任務</span>」。</li>
       </ul>
     </section>
   </header>
@@ -312,7 +312,9 @@
           <dl>
             <dt>想一次拉一大塊？</dt><dd>按住滑鼠拖曳框選，或先點一格再 Shift＋點另一格。</dd>
             <dt>點到另一張表了？</dt><dd>一個任務只能抓同一張表。點另一張表會換成那張表（已選兩個以上時要再點一次確認），可以按「<span class="ui" data-ui-label="content/picker-mode.js">復原</span>」。要兩張表都抓，用「一次建立好幾個任務」。</dd>
-            <dt>鍵盤操作</dt><dd>Enter 完成、Esc 取消、Backspace 移除最後一個、Ctrl＋A 全選這張表、Tab 切換工具列。</dd>
+            <dt>鍵盤操作</dt><dd>Enter 完成（只送已經選的，滑鼠停著的那格要先點）、Esc 取消（選了兩個以上要按兩次）、Backspace 或 Delete 移除最後一個、Ctrl＋A 全選這張表、Tab 切換工具列。</dd>
+            <dt>選了很多格，認不出哪個是哪格？</dt><dd>滑鼠移到面板上的名稱，頁面上那一格會加粗標出來；點名稱會捲到那一格。</dd>
+            <dt>其實想分成好幾個任務？</dt><dd>按「<span class="ui" data-ui-label="content/picker-mode.js">完成</span>」之後，在面板按「<span class="ui" data-ui-label="ui/picker/picker.html">拆成每個值一個任務</span>」，每個值會各自成為一個任務。</dd>
           </dl>
         </details>
       </section>
@@ -493,7 +495,7 @@
           <li>右鍵選「<span class="ui" data-ui-label="background/main.js">開啟 AutoFetcher 報表</span>」。</li>
           <li>「<span class="ui" data-ui-label="ui/report/report.html">儀表板</span>」放卡片，新任務預設會加一張。</li>
           <li>「<span class="ui" data-ui-label="ui/report/report.html">歷史紀錄</span>」查某一天或一段期間。</li>
-          <li>「<span class="ui" data-ui-label="ui/report/report.html">任務管理</span>」可以編輯、停用、刪除任務。</li>
+          <li>「<span class="ui" data-ui-label="ui/report/report.html">任務管理</span>」可以改名、改時間、停用或刪除。</li>
         </ol>
         <figure class="demo" data-help-figure>
           <div class="demo-row" aria-hidden="true">
@@ -504,6 +506,8 @@
         <details data-help-more>
           <summary>遇到這些狀況</summary>
           <dl>
+            <dt>想一次改好幾個任務的時間？</dt><dd>在任務管理勾選它們，按「<span class="ui" data-ui-label="ui/report/report.html">改排程</span>」。只改一個的話，直接點那一列的排程文字。</dd>
+            <dt>只想改名字？</dt><dd>按名稱旁的「<span class="ui" data-ui-label="ui/report/tasks.js">改名</span>」，改完按 Enter。</dd>
             <dt>想調整卡片？</dt><dd>儀表板按「編輯版面」，可以拖曳、改大小，點卡片開設定。</dd>
             <dt>要把資料帶走？</dt><dd>歷史紀錄可以匯出；設定頁可以匯出匯入全部任務（密碼預設不帶，勾選並設密語才會帶出）。</dd>
             <dt>不想在右鍵看到「使用教學」？</dt><dd>在「<span class="ui" data-ui-label="ui/report/report.html">設定</span>」關掉；那裡也留著開啟教學的連結。</dd>
