@@ -421,3 +421,59 @@ test('B 剛按改名時原值是全選的（直接打字就取代）', async () 
   assert.equal(input.selectionStart, 0)
   assert.equal(input.selectionEnd, input.value.length)
 })
+
+// ================= 收尾體檢（探針實測抓到的）=================
+
+test('B 整批刪除對話框開著時選取變了，對話框要收掉（確認鈕刪的必須是訊息說的那幾個）', async () => {
+  const { st, doc, win } = await withTasks(['a', 'b', 'd'])
+  pick(win, doc, 'a')
+  pick(win, doc, 'b')
+  doc.querySelector('#task-bulk-bar [data-action="bulk-delete"]').click()
+  await tick()
+  assert.equal(doc.getElementById('task-delete-dialog').hidden, false, '前置')
+  pick(win, doc, 'a')   // 取消 a
+  pick(win, doc, 'd')   // 改勾 d：動作列現在說的是 b、d
+  assert.equal(doc.getElementById('task-delete-dialog').hidden, true,
+    '不收掉的話，按確認刪掉的是 a、b，畫面上勾的卻是 b、d')
+  assert.match(doc.getElementById('task-note').textContent, /再按一次/)
+  assert.equal((await st.getTasks()).length, 3)
+})
+
+test('B 單列刪除的對話框不受選取變動影響', async () => {
+  const { doc, win } = await withTasks(['a', 'b'])
+  rowOf(doc, 'a').querySelector('[data-action="delete"]').click()
+  await tick()
+  pick(win, doc, 'b')
+  assert.equal(doc.getElementById('task-delete-dialog').hidden, false)
+})
+
+test('B 先匯出再刪除：下載沒成功就不刪，而且要說出來', async () => {
+  const { st, doc, win } = await withTasks(['a', 'b'])
+  pick(win, doc, 'a')
+  doc.querySelector('#task-bulk-bar [data-action="bulk-delete"]').click()
+  await tick()
+  const orig = chrome.downloads.download
+  chrome.downloads.download = async () => { throw new Error('Download canceled by the user') }
+  try {
+    doc.querySelector('#task-delete-dialog [data-action="export-then-delete"]').click()
+    await tick()
+  } finally {
+    chrome.downloads.download = orig
+  }
+  assert.equal((await st.getTasks()).length, 2, '沒匯出成功不得刪')
+  assert.match(doc.querySelector('#task-delete-dialog .dialog-message').textContent, /還沒有刪除/)
+})
+
+test('B 同一時間只會有一列在改名；換列時上一列先存檔', async () => {
+  const { st, doc } = await withTasks(['a', 'b'])
+  rowOf(doc, 'a').querySelector('[data-action="rename"]').click()
+  await tick()
+  rowOf(doc, 'a').querySelector('input[data-rename-input]').value = '電費'
+  rowOf(doc, 'b').querySelector('[data-action="rename"]').click()
+  await tick()
+  const inputs = doc.querySelectorAll('#task-list input[data-rename-input]')
+  assert.equal(inputs.length, 1, '兩個輸入框共用一份改名狀態，存其中一個會把另一個的編輯丟掉')
+  assert.equal(inputs[0].closest('[data-task-id]').dataset.taskId, 'b')
+  assert.equal(inputs[0].value, '任務b', '上一列打的字不得灌進這一列')
+  assert.equal((await st.getTask('a')).name, '電費', '上一列要先存檔')
+})

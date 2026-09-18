@@ -527,3 +527,62 @@ test('D-3 鏈結：面板已有多值表單時回頁面加選一格，後台寫�
   assert.deepEqual(after.slice(0, 2).map(r => r.querySelector('input[data-field-name]').value), ['美金', '日圓'])
   assert.deepEqual(after.slice(0, 2).map(r => r.dataset.fieldKey), keys)
 })
+
+// ================= 收尾體檢（探針實測抓到的）=================
+
+test('D-5 單值任務重選成多值：原本那條序列（id 就是任務 id）的卡片來源與 lastValues 也要清', async () => {
+  const { c, st, ls, bg } = await freshBg()
+  await st.saveTask({
+    id: 't2', name: '總量', url: 'https://a.test/p', mode: 'block', enabled: true, locator: LOCATOR,
+    spec: { mode: 'block', block: { cell: cellPick(1, 2).cell } }, schedule: { type: 'daily', times: ['09:00'] }
+  })
+  await st.setLastValues({ t2: { value: 7 }, 'other#k': { value: 1 } })
+  const did = (await ls.getLayout()).dashboards[0].id
+  await ls.addCard(did, { type: 'number', x: 0, y: 0, w: 3, h: 2, source: [{ taskId: 't2', aggregation: 'raw' }], options: {} })
+  const tab = await c.tabs.create({ url: 'https://a.test/p' })
+  await bg.handleMessage(
+    { type: 'PICKED', purpose: 'repick', taskId: 't2', locator: LOCATOR, picks: [cellPick(1, 2), cellPick(2, 2)] },
+    { tab }
+  )
+  assert.equal((await st.getTask('t2')).fields.length, 2, '前置：變成多值')
+  assert.deepEqual(Object.keys(await st.getLastValues()), ['other#k'])
+  assert.equal((await ls.getLayout()).dashboards[0].cards.length, 0, '指著舊序列的卡片不會再有新資料')
+})
+
+test('D-3 換目標後使用者排過的順序也留著，新加的值接在後面', async () => {
+  const { pk, doc } = await fresh()
+  await renderThreeFields(pk)
+  const rows = () => Array.from(doc.querySelectorAll('#field-list [data-field-row]'))
+  rows().forEach((r, i) => { r.querySelector('input[data-field-name]').value = ['甲', '乙', '丙'][i] })
+  rows()[2].querySelector('[data-field-up]').click()   // 甲 丙 乙
+  await pk.renderFromPanelCtx({
+    kind: 'new', retarget: true,
+    ctx: {
+      url: 'https://a.test/p', locator: LOCATOR,
+      picks: [cellPick(1, 2), cellPick(2, 2), cellPick(3, 2), cellPick(4, 2)],
+      blockInfo: { kind: 'table', rows: 5, cols: 4 }
+    }
+  })
+  const names = rows().map(r => r.querySelector('input[data-field-name]').value)
+  assert.deepEqual(names.slice(0, 3), ['甲', '丙', '乙'])
+  assert.equal(names.length, 4)
+})
+
+test('D-3 多值換成單值時，提示句不說「移除了 N 個」', async () => {
+  const { pk, doc } = await fresh()
+  await renderThreeFields(pk)
+  await pk.renderFromPanelCtx({
+    kind: 'new', retarget: true,
+    ctx: { url: 'https://a.test/p', locator: LOCATOR, picks: [cellPick(1, 2)], blockInfo: { kind: 'table', rows: 5, cols: 4 } }
+  })
+  const text = doc.getElementById('retarget-note').textContent
+  assert.ok(!/移除了/.test(text), text)
+  assert.match(text, /只抓一個值/)
+})
+
+test('D-2 reconcileFields：認不得的 pick 不得與認不得的舊值配成一對', async () => {
+  const fm = await import('../src/shared/field-match.js?t=' + Math.random())
+  const out = fm.reconcileFields([{ key: 'k1', name: '壞掉的', spec: null }], [{}])
+  assert.equal(out[0].kept, false)
+  assert.deepEqual(out.removed, ['k1'])
+})

@@ -85,7 +85,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 2432 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 2445 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -126,9 +126,9 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **值被移除時紀錄保留、卡片來源與 `lastValues` 清掉**(AF-19):`pruneSeries` 比對完整序列 id(不是父任務 id)。
 - **任務頁要跨重畫保留的狀態放模組層**(AF-19):選取集合、改名到一半的文字——任務頁每抓一次就整份重畫,存在 DOM 上的都會被洗掉。
 - **取消類二段確認的旗標與換表旗標一起清**(AF-19):一起清的地方只經 `clearPendingConfirms`;長按(`repeat`)與 400 毫秒內的連按不算第二次,
-  右鍵開選單不清(選單裡的「取消」要能當第二步)。確認時另比對已選數量,但**數量相同不代表是同一批**——加減值都要清旗標。
+  右鍵開選單不清(選單裡的「取消」要能當第二步)。「是不是同一次確認」比**清單內容的簽章**,不比數量(換成整欄、排除都不改數量);
+  太快的第二下不算但**不得重設計時**(重設就是每 300 毫秒按一次永遠取消不了,收尾探針實測抓到)。
 - **排程欄位的回填要每一欄都寫**(AF-19 終檢):`fillSchedule` 只寫「有的鍵」時,同一份面板文件從編輯 A 切到整批改排程,A 的時段與星期會殘留並被套用到所有被選的任務。
-- **不得為了讓測試好寫改正式碼**(AF-19 終檢再犯):委派端把 `#errors` 搬進儲存回饋區,只因為 Claude 的測試在存檔成功後還讀它;改測試,退掉正式碼。
 - 設定/資料的事實來源是 `chrome.storage.local`;檔案一律**使用者手動匯出**,不自動下載(SPEC §5)。
 - 訊息型別集中 `shared/messages.js`;三個執行環境的分工見 SPEC §0。
 - **顏色一律走 `ui/theme.css` 變數**,任何模組內都不得出現色碼字面值(多序列用 `--chart-1`~`--chart-8`)。
@@ -166,7 +166,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **不要讓 `chrome.tabs.sendMessage` 少掉第三個參數**:一個分頁可能有多個 frame,不指名 `{ frameId }`
   就是廣播,最上層會搶先回「找不到」而結案(`tests/a4_conventions.test.js` 的 D13 會擋)。
 - **不要用 `matchOriginAsFallback`**:它不是 `executeScript` 的屬性,只用於 `registerContentScripts` 與 manifest。
-- **不要為了讓測試好寫去改寫內建原型**:改測試,不要改實作(`tests/a4_conventions.test.js` 會擋)。
+- **不要為了讓測試好寫去改正式碼**:改寫內建原型(`tests/a4_conventions.test.js` 會擋)、把元素搬到測試讀得到的地方(AF-19:委派端把 `#errors` 搬進儲存回饋區,只因為測試在存檔成功後還讀它)都算;改測試,不要改實作。
 - **不要在 `src/` 寫色碼字面值**:只有兩處豁免,都是拿不到 CSS 變數的執行環境——
   `content/picker-mode.js`(注入在網頁上,網頁沒載入 theme.css)與
   `background/health.js`(`setBadgeBackgroundColor` 只吃色碼字串)。

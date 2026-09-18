@@ -120,7 +120,7 @@ let batchMode = false, batchGroups = [], currentGroupIdx = -1
 // 各表最後一次 hover 的列欄（送出時非目前這張表的組要用它組 blockInfo，與非批次送出同一口徑）
 const batchHover = new Map()
 const MAX_BATCH_GROUPS = MAX_BATCH_TASKS
-const BATCH_LIMIT_NOTICE = '一次最多建立 20 個任務；要再加請先完成這一批'
+const BATCH_LIMIT_NOTICE = `一次最多建立 ${MAX_BATCH_GROUPS} 個任務；要再加請先完成這一批`
 const BATCH_FRAME_NOTICE = '進入框架會離開這一頁的選取；請先完成這一批，再對框架內的內容另開一批'
 
 // detectKind 會掃整棵子樹，而滑鼠每移動一格都要問一次，因此記住最後一次的結果
@@ -2171,7 +2171,8 @@ function confirmPick() {
       const payloads = batchGroups.map(g => {
         if (g.el) {
           const payload = buildPickPayload(g.el, [{ locator: describe(g.el) }], null)
-          const hint = elementNameHint(g.el)
+          // 只有真的送出 batch 陣列時才補名稱提示：恰好一組走單任務訊息，要與非批次模式逐欄相同
+          const hint = batchGroups.length >= 2 ? elementNameHint(g.el) : ''
           if (hint) payload.nameHint = hint
           return payload
         }
@@ -2320,15 +2321,18 @@ function requestCancel() {
   const count = selectedCount()
   const needConfirm = (currentPurpose === 'task' || currentPurpose === 'repick') && count >= 2
   if (needConfirm) {
-    if (!cancelConfirmPending || cancelConfirmPending.count !== count) {
-      cancelConfirmPending = { at: Date.now(), count }
+    // 「是不是同一次確認」比的是清單內容，不是數量：工具列把最後一格換成整欄、右鍵排除／取消排除
+    // 都不改數量，只比數量的話這些變動之後的 Esc 會被當成第二次而直接取消
+    const sig = JSON.stringify(batchMode
+      ? batchGroupsView().map(g => (g.el ? describe(g.el) : g.picks))
+      : selectedList)
+    if (!cancelConfirmPending || cancelConfirmPending.sig !== sig) {
+      cancelConfirmPending = { at: Date.now(), count, sig }
       if (panelEl) updatePanel(panelEl, currentTargetEl)
       return
     }
-    if (Date.now() - cancelConfirmPending.at < 400) {
-      cancelConfirmPending.at = Date.now()
-      return
-    }
+    // 太快的第二下（習慣性連按）不算；**不得重設計時**——重設的話每 300 毫秒按一次就永遠取消不了
+    if (Date.now() - cancelConfirmPending.at < 400) return
   }
   cancelPick()
 }
@@ -3487,6 +3491,7 @@ function onClick(event) {
         const key = pickKey(candidate)
         if (selectedList.length >= 2 && replaceConfirmPending !== key) {
           replaceConfirmPending = key
+          cancelConfirmPending = null
           applyPickedMarks(pickedTableEl)
           updatePanel(panelEl, currentTargetEl)
           return

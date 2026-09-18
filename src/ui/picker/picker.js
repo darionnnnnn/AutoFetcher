@@ -609,10 +609,14 @@ function fillSchedule(schedule) {
   document.getElementById('schedule-type').value = schedule.type || 'daily'
   if (Array.isArray(schedule.times)) document.getElementById('times').value = schedule.times.join(', ')
   if (schedule.everyMinutes !== undefined) document.getElementById('every-minutes').value = schedule.everyMinutes
-  // 星期缺省或空陣列＝每天（與 nextIntervalRun／shouldRunInterval 同一條規則）
-  const wds = Array.isArray(schedule.weekdays) && schedule.weekdays.length > 0 ? new Set(schedule.weekdays.map(Number)) : null
+  // 星期缺省或空陣列：interval＝每天（nextIntervalRun／shouldRunInterval 的規則）；
+  // daily 的星期是必填，缺了（匯入的舊資料）就明確回到表單預設的週一～五——與全新面板文件上的結果相同，
+  // 重點是「確定地寫」：留著不動會沿用上一個任務的勾選
+  const wds = Array.isArray(schedule.weekdays) && schedule.weekdays.length > 0
+    ? new Set(schedule.weekdays.map(Number))
+    : new Set(schedule.type === 'interval' ? [0, 1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5])
   document.querySelectorAll('#weekdays input[type="checkbox"]').forEach(cb => {
-    cb.checked = wds ? wds.has(Number(cb.value)) : true
+    cb.checked = wds.has(Number(cb.value))
   })
   const hasWindow = Boolean(schedule.window?.from && schedule.window?.to)
   document.getElementById('window-from').value = hasWindow ? schedule.window.from : ''
@@ -1825,7 +1829,11 @@ async function splitIntoTasks() {
     return
   }
   const tabId = currentCtx?.tabId ?? panelTabId
-  if (tabId === null || tabId === undefined) return
+  if (tabId === null || tabId === undefined) {
+    const hint = document.querySelector('[data-split-hint]')
+    if (hint) hint.textContent = '找不到這個面板所屬的分頁，拆不了；請關掉面板重新選取'
+    return
+  }
   // 共同欄位照搬；整批的預覽（preview 等）不屬於任何單一個值，不帶
   const common = {}
   for (const k of ['locator', 'blockInfo', 'url', 'tabId', 'frameId', 'frameUrl', 'nameHint']) {
@@ -2949,6 +2957,13 @@ function applyRetarget(payload) {
         }
       }
     })
+    // 使用者上下移過的順序也要留著：沿用的值照原本的相對順序排前面，新加的值接在後面
+    const listEl = document.getElementById('field-list')
+    const order = new Map(prevRows.map((r, i) => [r.key, i]))
+    const sorted = rows
+      .map((r, i) => ({ r, i, at: order.has(r.dataset.fieldKey) ? order.get(r.dataset.fieldKey) : prevRows.length + i }))
+      .sort((a, b) => a.at - b.at)
+    for (const x of sorted) listEl.appendChild(x.r)
     updateFieldListState()
   }
 
@@ -2968,8 +2983,11 @@ function applyRetarget(payload) {
   if (note) {
     note.hidden = false
     const dropped = matched ? matched.removed.length : 0
+    // 多值變回單值時清單整個收起來，說「移除了 N 個」會讓人以為弄丟了東西
+    const becameSingle = prevRows.length >= 2 && picks.length < 2
     note.textContent = '已換成新的目標；名稱、排程、告警、前置動作都留著。'
-      + (dropped > 0 ? `對不到新目標的值移除了 ${dropped} 個。` : '')
+      + (becameSingle ? '現在只抓一個值，原本各個值的名稱不再適用。'
+        : (dropped > 0 ? `對不到新目標的值移除了 ${dropped} 個。` : ''))
   }
 }
 

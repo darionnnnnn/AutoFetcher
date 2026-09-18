@@ -12,6 +12,12 @@ const selectedIds = new Set()
 let lastPickedId = null
 let renaming = null
 let isSavingRename = false
+// 改名中又按了另一列的「改名」：上一列失焦存檔會整份重畫，那顆按鈕節點跟著被換掉、click 不會來；
+// 在 pointerdown（比 blur 早）先記下意圖，存檔完成後兌現
+let pendingRenameId = null
+// 整批刪除對話框是依哪一組選取開的（單列刪除為 null）；選取一變就收掉，確認鈕刪的永遠是訊息說的那幾個
+let dialogSelectionSig = null
+const selectionSig = () => [...selectedIds].sort().join('|')
 
 // 純函式：依關鍵字與健康狀態篩選任務
 export function filterTasks(tasks, { q, failedOnly } = {}, health = {}) {
@@ -71,10 +77,11 @@ export async function applyOrder(ids) {
 }
 
 // 開啟刪除確認對話框並計算關聯紀錄數
-async function openDeleteDialog(ids) {
+async function openDeleteDialog(ids, fromSelection = false) {
   if (!Array.isArray(ids) || ids.length === 0) return
   const dlg = document.getElementById('task-delete-dialog')
   if (!dlg) return
+  dialogSelectionSig = fromSelection ? selectionSig() : null
 
   const { total } = await countRecordsForTasks(ids)
   const count = total || 0
@@ -135,8 +142,14 @@ async function openDeleteDialog(ids) {
       const from = dates[0] || today
       const to = today
 
-      const exp = await buildExport({ from, to, format: 'csv' })
-      await download(exp)
+      // 下載沒成功（使用者在另存視窗按取消、配額）就不刪：說出來，對話框留著讓他改選「確定刪除」或取消
+      try {
+        const exp = await buildExport({ from, to, format: 'csv' })
+        await download(exp)
+      } catch (e) {
+        if (msgEl) msgEl.textContent = `${msgText}匯出沒有完成（${e?.message || e}），所以還沒有刪除。`
+        return
+      }
       await deleteTasks(ids)
       for (const id of ids) {
         selectedIds.delete(id)
@@ -194,7 +207,11 @@ async function openBulkSchedule(ids) {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
     tabId = tabs?.[0]?.id
   }
-  if (tabId === undefined) return
+  if (tabId === undefined) {
+    const note = document.getElementById('task-note')
+    if (note) note.textContent = '找不到這個報表所在的分頁，開不了設定面板；請重新整理這一頁再試。'
+    return
+  }
   await setPanelCtx(tabId, { kind: 'bulk', taskIds: ids })
   await openPanel(tabId, 'picker')
 }
@@ -221,6 +238,10 @@ async function saveRename(id, val) {
     await saveTasks([{ ...cur, name: trimmed }])
     renaming = null
     const fresh = await getTasks()
+    // 存檔前使用者已經按了另一列的「改名」：接著開那一列
+    const next = pendingRenameId && fresh.find((x) => x.id === pendingRenameId)
+    pendingRenameId = null
+    if (next) renaming = { id: next.id, value: next.name || '' }
     renderTasks(fresh, currentHealth, currentMissed, currentCtx)
   } finally {
     isSavingRename = false
@@ -254,6 +275,14 @@ function updateSelectionUI() {
       selectAll.checked = false
       selectAll.indeterminate = false
     }
+  }
+
+  const dlg = document.getElementById('task-delete-dialog')
+  if (dlg && !dlg.hidden && dialogSelectionSig !== null && dialogSelectionSig !== selectionSig()) {
+    dlg.hidden = true
+    dialogSelectionSig = null
+    const note = document.getElementById('task-note')
+    if (note) note.textContent = '選取已經變了，刪除確認已收起；要刪除請再按一次「刪除」。'
   }
 
   const bulkBar = document.getElementById('task-bulk-bar')
@@ -429,23 +458,27 @@ function createTaskRow(t) {
   renameBtn.type = 'button'
   renameBtn.dataset.action = 'rename'
   renameBtn.textContent = '改名'
-  renameBtn.addEventListener('pointerdown', (e) => e.stopPropagation())
-  renameBtn.addEventListener('click', (e) => {
+  renameBtn.addEventListener('pointerdown', (e) => {
     e.stopPropagation()
+    if (renaming && renaming.id !== t.id) pendingRenameId = t.id
+  })
+  renameBtn.addEventListener('click', async (e) => {
+    e.stopPropagation()
+    // 另一列還在改名（沒有失焦存檔就點過來）：先把那一列存掉，畫面上同時只會有一個輸入框
+    if (renaming && renaming.id !== t.id) {
+      const prevInput = document.querySelector('#task-list input[data-rename-input]')
+      pendingRenameId = null
+      await saveRename(renaming.id, prevInput ? prevInput.value : renaming.value)
+      if (renaming && renaming.id !== t.id) return
+    }
     renaming = { id: t.id, value: t.name || '' }
-    const newRow = createTaskRow(t)
-    row.replaceWith(newRow)
-    const curInput = newRow.querySelector('input[data-rename-input]')
+    renderListRows()
+    const curInput = document.querySelector('#task-list input[data-rename-input]')
     if (curInput) {
       try {
         curInput.focus()
         // 剛按「改名」＝全選原值（直接打字就取代）；重畫時還原的是打到一半的字，那時才把游標放結尾
-        if (typeof curInput.select === 'function') {
-          curInput.select()
-          return
-        }
-        const len = curInput.value.length
-        curInput.setSelectionRange(len, len)
+        curInput.select()
       } catch {}
     }
   })
@@ -869,7 +902,7 @@ export function renderTasks(tasks, health = {}, missed = [], ctx = {}) {
     }
     const deleteBtn = bulkBar.querySelector('[data-action="bulk-delete"]')
     if (deleteBtn) {
-      deleteBtn.addEventListener('click', () => openDeleteDialog([...selectedIds]))
+      deleteBtn.addEventListener('click', () => openDeleteDialog([...selectedIds], true))
     }
     const clearBtn = bulkBar.querySelector('[data-action="bulk-clear"]')
     if (clearBtn) {

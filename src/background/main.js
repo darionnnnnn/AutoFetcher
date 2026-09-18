@@ -98,7 +98,7 @@ function applyRepick(task, picks) {
   if (!hadFields && picks.length === 1) {
     // 單值任務只換定位與規格，聚合方式沿用
     const spec = pickSpecOf(picks[0])
-    if (!spec) return
+    if (!spec) return []
     task.mode = 'block'
     task.spec = { ...(task.spec || {}), mode: 'block' }
     delete task.spec.fields
@@ -159,8 +159,9 @@ function applyRepick(task, picks) {
   task.fields = fields
   task.spec = { ...(task.spec || {}), mode: 'block', fields: specFields }
   delete task.spec.block
-  // 少掉的值：它們的卡片來源與 lastValues 會變成孤兒，呼叫端要清（紀錄一律保留）
-  return matched.removed
+  // 少掉的序列：它們的卡片來源與 lastValues 會變成孤兒，呼叫端要清（紀錄一律保留）。
+  // 單值任務變成多值時，原本那一條序列的 id 就是任務 id 本身（SPEC §7），同樣不會再有新紀錄
+  return hadFields ? matched.removed.map(k => seriesIdOf(task.id, k)) : [task.id]
 }
 
 // 由任務的擷取規格推出選取模式要預先勾回去的值（多值走 spec.fields，單值走 spec.block）
@@ -619,15 +620,14 @@ export async function handleMessage(msg, sender, runOpts = {}) {
           return { ok: true }
         }
         task.locator = msg.locator
-        const removedKeys = applyRepick(task, Array.isArray(msg.picks) ? msg.picks : [])
+        const orphanSeries = applyRepick(task, Array.isArray(msg.picks) ? msg.picks : [])
         await saveTask(task)
         // 被移除的值：清掉它們在儀表板上的來源與最後一次的值，紀錄留到保留天數自然到期。
         // 不清的話卡片會一直指著不存在的序列，使用者只看得到一張永遠空白的卡
-        if (Array.isArray(removedKeys) && removedKeys.length > 0) {
-          const seriesIds = removedKeys.map(k => seriesIdOf(task.id, k))
-          await pruneSeries(seriesIds)
-          await deleteLastValues(seriesIds)
-          await diag.log('fields_pruned', { taskId: task.id, keys: removedKeys })
+        if (Array.isArray(orphanSeries) && orphanSeries.length > 0) {
+          await pruneSeries(orphanSeries)
+          await deleteLastValues(orphanSeries)
+          await diag.log('fields_pruned', { taskId: task.id, series: orphanSeries })
         }
         // 定位換了會影響抓取：排程與燈號要跟著重算（其他改任務的路徑都有做，這裡漏了）
         await rebuildAlarms()

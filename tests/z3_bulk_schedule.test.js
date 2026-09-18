@@ -306,3 +306,15 @@ test('C 整批檢視時標題列看得到標題，離開後名稱欄回來', asy
   assert.equal(doc.getElementById('setup-summary').hidden, false)
   assert.equal(doc.getElementById('target-host').hidden, false)
 })
+
+test('C 回填星期缺省的排程：interval 是每天，daily 回到表單預設的週一～五（不沿用上一個任務的勾選）', async () => {
+  const { st, pk, doc } = await fresh()
+  await st.saveTasks([
+    task('a', { schedule: { type: 'interval', everyMinutes: 30 } }),
+    task('b', { schedule: { type: 'daily', times: ['09:00'] } })
+  ])
+  await pk.renderFromPanelCtx({ kind: 'bulk', taskIds: ['a'] })
+  assert.equal(wd(doc).length, 7)
+  await pk.renderFromPanelCtx({ kind: 'bulk', taskIds: ['b'] })
+  assert.deepEqual(wd(doc).sort(), ['1', '2', '3', '4', '5'], '上一個任務的七天全勾不得留下來')
+})

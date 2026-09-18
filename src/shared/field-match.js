@@ -63,7 +63,8 @@ export function reconcileFields(prevRows, picks) {
   // 同一個舊值只能被認領一次：兩個一模一樣的 pick 不得共用同一個 key
   const claimed = new Set()
   const out = list.map((pick) => {
-    const hit = prev.find(p => !claimed.has(p.key) && sameSpec(p.spec, pick))
+    // 認不得的 pick（pickSpecOf 回 null）一律當新值：null 與 null 做 JSON 比對會相等
+    const hit = pickSpecOf(pick) ? prev.find(p => !claimed.has(p.key) && sameSpec(p.spec, pick)) : undefined
     if (hit) {
       claimed.add(hit.key)
       return { key: hit.key, name: hit.name, auto: hit.auto ?? null, kept: true, spec: pickSpecOf(pick) }

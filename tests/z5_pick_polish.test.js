@@ -351,3 +351,43 @@ test('E 單任務模式選非表格元素仍不帶名稱提示（預設名規則
   assert.ok(msg)
   assert.equal(msg.nameHint, undefined)
 })
+
+// ================= 收尾體檢（探針實測抓到的三條）=================
+
+test('E 每 300 毫秒按一次 Esc，第三下就要取消（太快的那一下不得把計時往後推）', async () => {
+  const { c, doc, pm, win } = await boot()
+  pick(win, doc.getElementById('a1'))
+  pick(win, doc.getElementById('b1'))
+  key(doc, win, 'Escape')
+  await wait(300)
+  key(doc, win, 'Escape')
+  assert.equal(cancelled(c).length, 0, '距第一次 300 毫秒：太快，不算')
+  await wait(300)
+  key(doc, win, 'Escape')
+  assert.equal(cancelled(c).length, 1, '距第一次 600 毫秒：要取消。重設計時的話這個節奏永遠取消不了')
+  pm.exitPickMode()
+})
+
+test('E 工具列把最後一格換成整欄（數量不變）之後，取消的確認要重來', async () => {
+  const { c, doc, pm, win } = await boot()
+  pick(win, doc.getElementById('a1'))
+  pick(win, doc.getElementById('b2'))
+  key(doc, win, 'Escape')
+  click(win, doc.querySelector('[data-af-tool="col"]'))
+  assert.equal(pm.selectedPicks().length, 2, '前置：數量沒變、內容變了')
+  assert.ok(pm.selectedPicks()[1].block, '前置：最後一項變成整欄值')
+  await wait(450)
+  key(doc, win, 'Escape')
+  assert.equal(cancelled(c).length, 0, '清單內容變了就不是原本那次確認（只比數量會漏掉這種變動）')
+  pm.exitPickMode()
+})
+
+test('E 批次模式恰好一組元素時，送出的單任務訊息不帶名稱提示（與非批次逐欄相同）', async () => {
+  const { c, doc, win } = await boot(BATCH_PAGE, { batch: true })
+  pick(win, doc.getElementById('plain'))
+  key(doc, win, 'Enter')
+  const msg = sent(c).find(m => m?.type === 'PICKED' && !m.cancelled)
+  assert.ok(msg)
+  assert.equal(msg.batch, undefined, '前置：恰好一組走單任務訊息')
+  assert.equal(msg.nameHint, undefined)
+})

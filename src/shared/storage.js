@@ -211,6 +211,12 @@ export async function deleteTasks(ids) {
     }
   }
 
+  // 被刪任務最後一次的值也一起清（鍵是序列 id）；不清的話 lastValues 只會越長越大
+  if (all.lastValues && typeof all.lastValues === 'object') {
+    const kept = Object.fromEntries(Object.entries(all.lastValues).filter(([k]) => !targetIds.has(parentIdOf(k))))
+    if (Object.keys(kept).length !== Object.keys(all.lastValues).length) toSet.lastValues = kept
+  }
+
   await chrome.storage.local.set(toSet)
   if (toRemove.length > 0) {
     await chrome.storage.local.remove(toRemove)

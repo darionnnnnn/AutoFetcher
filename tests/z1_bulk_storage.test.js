@@ -317,3 +317,11 @@ test('popup 全部暫停一次寫回，並只送一次重建排程', async () =>
   const rebuilds = c.__calls.slice(m).filter(x => x.api === 'runtime.sendMessage' && x.args[0]?.type === 'REBUILD_ALARMS')
   assert.equal(rebuilds.length, 1)
 })
+
+test('deleteTasks 連被刪任務的 lastValues 一起清（含序列鍵），別人的留著', async () => {
+  const { st } = await fresh()
+  await st.saveTasks([task('a'), task('b'), task('d')])
+  await st.setLastValues({ 'a#k1': { value: 1 }, b: { value: 2 }, 'd#x': { value: 3 } })
+  await st.deleteTasks(['a', 'b'])
+  assert.deepEqual(Object.keys(await st.getLastValues()), ['d#x'])
+})
