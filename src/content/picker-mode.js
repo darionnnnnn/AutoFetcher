@@ -1,7 +1,7 @@
 // 豁免說明：此檔案在網頁 isolated world 執行，網頁未載入 ui/theme.css，
 // 因此為全專案唯一允許寫色碼字面值之檔案。所有色碼集中在下方 COLORS 常數，
 // 其餘程式碼一律引用 COLORS 的屬性。
-import { MSG } from '../shared/messages.js'
+import { MSG, MAX_BATCH_TASKS } from '../shared/messages.js'
 import { describe } from '../shared/selector.js'
 import { detectKind } from '../shared/block-detect.js'
 import { parseNumber, resolveByPosition, locateByHeader } from '../shared/extract.js'
@@ -119,7 +119,7 @@ let originalUserSelect = '', dragStart = null, isDragging = false, suppressClick
 let batchMode = false, batchGroups = [], currentGroupIdx = -1
 // 各表最後一次 hover 的列欄（送出時非目前這張表的組要用它組 blockInfo，與非批次送出同一口徑）
 const batchHover = new Map()
-const MAX_BATCH_GROUPS = 20
+const MAX_BATCH_GROUPS = MAX_BATCH_TASKS
 const BATCH_LIMIT_NOTICE = '一次最多建立 20 個任務；要再加請先完成這一批'
 const BATCH_FRAME_NOTICE = '進入框架會離開這一頁的選取；請先完成這一批，再對框架內的內容另開一批'
 

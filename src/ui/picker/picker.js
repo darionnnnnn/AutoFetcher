@@ -2,7 +2,7 @@ import { saveTask, getTask, getTasks, saveTasks, getSettings, saveSettings, getP
 } from '../../shared/storage.js'
 import { applySavedTheme } from '../theme-apply.js'
 import { DEFAULT_HOVER_HOLD_MS, DEFAULT_WAIT_TIMEOUT_MS } from '../../shared/preaction.js'
-import { MSG } from '../../shared/messages.js'
+import { MSG, MAX_BATCH_TASKS } from '../../shared/messages.js'
 import { getLayout, addCard, pruneSeries } from '../../shared/layout-store.js'
 import { seriesIdOf } from '../../shared/series-index.js'
 import { describeSchedule, describeTarget, describeDashboard, numericHeaderAxis, POS_TEXT, withInnerLabel, skipNote } from '../../shared/describe.js'
@@ -1431,6 +1431,11 @@ function bindModeEvents() {
       btn._renameBound = true
     }
   }
+  const splitBtn = document.getElementById('split-tasks')
+  if (splitBtn && !splitBtn._splitBound) {
+    splitBtn.addEventListener('click', () => splitIntoTasks())
+    splitBtn._splitBound = true
+  }
 
   const dashSel = document.getElementById('dashboard-select')
   if (dashSel && !dashSel._summaryBound) {
@@ -1562,6 +1567,7 @@ function updateFieldListState() {
   // 只有一個值時「一鍵命名」沒有東西可批次改，露出來只是多兩顆按鈕
   const renameRow = document.getElementById('field-rename')
   if (renameRow) renameRow.hidden = n < 2
+  updateSplitButton(n)
   rows.forEach((r, i) => {
     const upBtn = r.querySelector('[data-field-up]')
     const downBtn = r.querySelector('[data-field-down]')
@@ -1796,6 +1802,45 @@ function createFieldRow({ key, name, spec }) {
   return row
 }
 
+
+// 「拆成每個值一個任務」只給新建的多值表單：編輯既有任務拆了會多出新任務、原任務還在
+function updateSplitButton(n) {
+  const btn = document.getElementById('split-tasks')
+  if (!btn) return
+  btn.hidden = n < 2 || Boolean(currentCtx?.task)
+  btn.setAttribute('aria-disabled', String(n > MAX_BATCH_TASKS))
+  const hint = document.querySelector('[data-split-hint]')
+  if (hint) hint.textContent = ''
+}
+
+// 把多值表單轉成多任務清單：每個值各成一個任務，名稱與共用設定（排程、儀表板）照搬。
+// 走既有的 kind:'batch' 面板路徑，存檔、試抓都與「一次建立多個任務」同一條
+async function splitIntoTasks() {
+  const btn = document.getElementById('split-tasks')
+  const rows = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
+  if (!btn || btn.hidden) return
+  if (btn.getAttribute('aria-disabled') === 'true') {
+    const hint = document.querySelector('[data-split-hint]')
+    if (hint) hint.textContent = `一次最多 ${MAX_BATCH_TASKS} 個任務；請先移除一些值再拆`
+    return
+  }
+  const tabId = currentCtx?.tabId ?? panelTabId
+  if (tabId === null || tabId === undefined) return
+  // 共同欄位照搬；整批的預覽（preview 等）不屬於任何單一個值，不帶
+  const common = {}
+  for (const k of ['locator', 'blockInfo', 'url', 'tabId', 'frameId', 'frameUrl', 'nameHint']) {
+    if (currentCtx?.[k] !== undefined) common[k] = currentCtx[k]
+  }
+  const draft = { ...snapshotForm(), batchNames: {} }
+  const items = rows.map((r, i) => {
+    const key = `b${i + 1}`
+    const name = r.querySelector('input[data-field-name]')?.value?.trim()
+    draft.batchNames[key] = name || `值 ${i + 1}`
+    return { key, ...common, picks: [r._spec || fieldSpecs.get(r.dataset.fieldKey || '')] }
+  })
+  if (draftTimer) { clearTimeout(draftTimer); draftTimer = null }
+  await setPanelCtx(tabId, { kind: 'batch', items, draft })
+}
 
 function renderFieldList(items) {
   const fieldList = document.getElementById('field-list')
