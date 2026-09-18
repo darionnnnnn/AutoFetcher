@@ -2,8 +2,9 @@
 import {
   init as initStorage, getTask, saveTask, getRecordsByDate,
   getPanelCtx, setPanelCtx, mergePanelCtx, clearPanelCtx,
-  getSettings, subscribe
+  getSettings, subscribe, deleteLastValues
 } from '../shared/storage.js'
+import { pruneSeries } from '../shared/layout-store.js'
 import { openPanel, closePanel } from '../shared/panel.js'
 import { MSG } from '../shared/messages.js'
 import * as diag from '../shared/diag.js'
@@ -27,52 +28,16 @@ import {
 } from './precheck.js'
 import { injectContent } from './inject.js'
 import { locateFrame, listFrames, matchFrameByUrl } from './frames.js'
-import { isAnchorText, putInner, putSkip, putExclude } from '../shared/table.js'
+import { isAnchorText, putSkip } from '../shared/table.js'
+import { pickSpecOf, sameSpec, reconcileFields } from '../shared/field-match.js'
 import { withInnerLabel } from '../shared/describe.js'
 import { scheduleSiteCheck, runSiteCheck } from './sitecheck.js'
 import { isSuccess } from '../shared/record-status.js'
-import { parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
+import { parentIdOf, buildSeriesIndex, nameOf, seriesIdOf } from '../shared/series-index.js'
 
 
-// 重選時把選好的值寫回任務：沒動的值保留原本的 key 與名稱（紀錄靠 key），新值配新 key
-function pickSpecOf(pick) {
-  // **逐欄挑，不得整包照抄**：pick 來自 content script 的訊息，多帶任何一個欄位都會進 storage、
-  // 讓 `sameSpec` 的全等比對永遠對不上（key 重生、歷史序列斷掉、使用者改過的名稱被預設名蓋掉）。
-  // 格內子路徑也要挑（非空陣列才抄）：漏了它，重選會讓任務默默改回抓整格串接（AF-15）
-  if (pick?.cell) {
-    const cell = {
-      row: { index: pick.cell.row?.index, header: pick.cell.row?.header ?? '' },
-      col: { index: pick.cell.col?.index, header: pick.cell.col?.header ?? '' }
-    }
-    putInner(cell, pick.cell.inner)
-    return { cell }
-  }
-  if (pick?.block) {
-    const block = { axis: pick.block.axis, index: pick.block.index, headerText: pick.block.headerText }
-    putInner(block, pick.block.inner)
-    putExclude(block, pick.block.exclude)
-    return { block }
-  }
-  return null
-}
-// 比對「是不是同一個值」時要忽略定位方式與排除／略過設定：重選送回來的 pick 沒有 pos，
-// 且排除清單不是值的身分（重選改了排除仍是同一個值），帶著比會永遠不相等導致 key 重生、歷史序列斷掉
-function stripPos(spec) {
-  if (!spec) return spec
-  const out = JSON.parse(JSON.stringify(spec))
-  if (out.cell) {
-    delete out.cell.row?.pos
-    delete out.cell.col?.pos
-  }
-  if (out.block) {
-    delete out.block.exclude
-    delete out.block.skip
-  }
-  return out
-}
-function sameSpec(a, b) {
-  return JSON.stringify(stripPos(pickSpecOf(a))) === JSON.stringify(stripPos(pickSpecOf(b)))
-}
+// 重選時把選好的值寫回任務：沒動的值保留原本的 key 與名稱（紀錄靠 key），新值配新 key。
+// 「是不是同一個值」的判定在 shared/field-match.js（Picker 換目標也用同一份）
 const POS_NAMES = { first: '第一', last: '最後一', 'last-1': '倒數第二' }
 // 能當定位錨點的標題才能拿來命名；純數值（4318 這種每天會變的值）退回下一層
 function anchorOnly(header) {
@@ -128,7 +93,7 @@ function keepPos(nextSpec, prevSpec) {
 }
 
 function applyRepick(task, picks) {
-  if (picks.length === 0) return
+  if (picks.length === 0) return []
   const hadFields = Array.isArray(task.fields) && task.fields.length > 0
   if (!hadFields && picks.length === 1) {
     // 單值任務只換定位與規格，聚合方式沿用
@@ -150,7 +115,7 @@ function applyRepick(task, picks) {
     const prevWrapped = prev ? (prev.cell ? { cell: prev.cell } : { block: prev }) : null
     const kept = keepPos(nextWrapped, prevWrapped)
     task.spec.block = kept.cell ? { cell: kept.cell } : kept.block
-    return
+    return []
   }
   const aggregate = task.spec?.block?.aggregate
     || (task.spec?.fields || []).find(f => f.block?.aggregate)?.block?.aggregate
@@ -160,14 +125,23 @@ function applyRepick(task, picks) {
   const taskPos = posOfTask(task)
   const oldSpecs = task.spec?.fields || []
   const oldNames = new Map((task.fields || []).map(f => [f.key, f.name]))
+  // 「哪個 pick 是哪個既有的值」只有 shared/field-match 一份（Picker 換目標也用它）
+  const prevRows = oldSpecs.map(f => ({
+    key: f.key,
+    name: oldNames.get(f.key) || '',
+    spec: f.cell ? { cell: f.cell } : { block: f.block }
+  }))
+  const matched = reconcileFields(prevRows, picks)
+  const keptByKey = new Map(oldSpecs.map(f => [f.key, f]))
   const fields = []
   const specFields = []
   picks.forEach((pick, i) => {
     const spec = pickSpecOf(pick)
     if (!spec) return
-    const kept = oldSpecs.find(f => sameSpec(f, pick))
-    const key = kept ? kept.key : crypto.randomUUID().slice(0, 8)
-    const name = kept ? (oldNames.get(kept.key) || defaultFieldName(pick, i + 1, taskPos)) : defaultFieldName(pick, i + 1, taskPos)
+    const m = matched[i]
+    const key = m.key
+    const kept = m.kept ? keptByKey.get(key) : null
+    const name = m.name || defaultFieldName(pick, i + 1, taskPos)
     fields.push({ key, name })
     let nextSpec
     if (spec.cell) {
@@ -185,6 +159,8 @@ function applyRepick(task, picks) {
   task.fields = fields
   task.spec = { ...(task.spec || {}), mode: 'block', fields: specFields }
   delete task.spec.block
+  // 少掉的值：它們的卡片來源與 lastValues 會變成孤兒，呼叫端要清（紀錄一律保留）
+  return matched.removed
 }
 
 // 由任務的擷取規格推出選取模式要預先勾回去的值（多值走 spec.fields，單值走 spec.block）
@@ -642,8 +618,16 @@ export async function handleMessage(msg, sender, runOpts = {}) {
           return { ok: true }
         }
         task.locator = msg.locator
-        applyRepick(task, Array.isArray(msg.picks) ? msg.picks : [])
+        const removedKeys = applyRepick(task, Array.isArray(msg.picks) ? msg.picks : [])
         await saveTask(task)
+        // 被移除的值：清掉它們在儀表板上的來源與最後一次的值，紀錄留到保留天數自然到期。
+        // 不清的話卡片會一直指著不存在的序列，使用者只看得到一張永遠空白的卡
+        if (Array.isArray(removedKeys) && removedKeys.length > 0) {
+          const seriesIds = removedKeys.map(k => seriesIdOf(task.id, k))
+          await pruneSeries(seriesIds)
+          await deleteLastValues(seriesIds)
+          await diag.log('fields_pruned', { taskId: task.id, keys: removedKeys })
+        }
         // 定位換了會影響抓取：排程與燈號要跟著重算（其他改任務的路徑都有做，這裡漏了）
         await rebuildAlarms()
         await refreshBadge()
