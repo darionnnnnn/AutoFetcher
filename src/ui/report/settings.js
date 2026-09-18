@@ -245,6 +245,18 @@ function setupPreferenceListeners(settings) {
     }
   }
 
+  // 兩種都不會碰使用者開著的分頁；「視窗」建立的瞬間可能閃一下，覺得干擾就改回分頁（AF-20）
+  const fetchTabModeEl = document.getElementById('pref-fetch-tab-mode')
+  if (fetchTabModeEl) {
+    fetchTabModeEl.value = settings.fetchTabMode === 'tab' ? 'tab' : 'window'
+    if (!fetchTabModeEl._afBound) {
+      fetchTabModeEl._afBound = true
+      fetchTabModeEl.addEventListener('change', async () => {
+        await saveSettings({ fetchTabMode: fetchTabModeEl.value })
+      })
+    }
+  }
+
   const alertCooldownEl = document.getElementById('pref-alert-cooldown')
   if (alertCooldownEl) {
     alertCooldownEl.value = settings.alertCooldownMin ?? 60

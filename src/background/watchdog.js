@@ -9,6 +9,7 @@ import {
 } from './scheduler.js'
 import { getTasks, trimOldRecords } from '../shared/storage.js'
 import { ensureSiteCheck } from './sitecheck.js'
+import { cleanOrphanFetchTabs } from './fetch-tab.js'
 import * as diag from '../shared/diag.js'
 
 
@@ -141,6 +142,11 @@ export async function runWatchdog() {
 
   try {
     await cleanStuckInflight()
+  } catch {}
+
+  // 上一個 service worker 被回收時沒關掉的抓取視窗（判定只看登記表，見 fetch-tab.js）
+  try {
+    await cleanOrphanFetchTabs()
   } catch {}
 
   try {
