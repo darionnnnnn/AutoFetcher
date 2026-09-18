@@ -63,6 +63,10 @@ function createStorageArea(ns, recordCall, emitChanges) {
       }
       return { ...store }
     },
+    async getKeys() {
+      recordCall(`${ns}.getKeys`, [])
+      return Object.keys(store)
+    },
     async set(items) {
       recordCall(`${ns}.set`, [items])
       if (items && typeof items === 'object') {

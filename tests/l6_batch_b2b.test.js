@@ -59,7 +59,7 @@ test('整組值只寫一次紀錄（不得每個值各掃一次整天的資料�
   await st.saveTask(multi())
   const before = c.__calls.length
   await fe.runTask(multi(), { slot: '2026-09-06T09:30', ...FAST })
-  const writes = c.__calls.slice(before).filter(x => x.api === 'storage.local.set' && x.args[0]?.['rec:2026-09-06'])
+  const writes = c.__calls.slice(before).filter(x => x.api === 'storage.local.set' && x.args[0]?.['rec2:2026-09-06:09'])
   assert.equal(writes.length, 1, `整組值應該一次寫入，實得 ${writes.length} 次`)
 })
 
@@ -67,7 +67,7 @@ test('帳本記在父任務身上，不是子序列', async () => {
   const { c, st, fe } = await fresh(BOTH_OK)
   await st.saveTask(multi())
   await fe.runTask(multi(), { slot: '2026-09-06T09:30', ...FAST })
-  const runs = (await c.storage.local.get('runs')).runs || {}
+  const runs = (await c.storage.local.get('runs:2026-09-06'))['runs:2026-09-06'] || {}
   assert.deepEqual(Object.keys(runs), ['bank'])
   assert.equal(runs.bank['2026-09-06T09:30'], 'ok')
 })

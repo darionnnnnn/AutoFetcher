@@ -1,7 +1,7 @@
 // AutoFetcher 設定匯出/匯入模組 (SPEC §5)
 // 負責任務、站台與全域設定的備份匯出與還原匯入，支援 PBKDF2 + AES-GCM 加解密
 
-import { exportAll, saveTask, saveSite, saveSettings, setRawLayout, normalizeSiteShape } from './storage.js'
+import { exportAll, saveTask, saveSite, saveSettings, setRawLayout, normalizeSiteShape, SCHEMA_VERSION } from './storage.js'
 import { encryptSecret, decryptSecret } from './crypto.js'
 import { getLayout, saveLayout } from './layout-store.js'
 import { rebuildAlarms } from '../background/scheduler.js'
@@ -112,6 +112,10 @@ export async function importSettings(json, { passphrase } = {}) {
   if (parsed.version !== 1) throw new Error('不支援的設定版本')
   if (!parsed.data || typeof parsed.data !== 'object') throw new Error('缺少設定內容')
   const data = parsed.data
+  // 比程式新的檔案可能帶著這版看不懂的形狀，寫進去就是半套資料
+  if (typeof data.schemaVersion === 'number' && data.schemaVersion > SCHEMA_VERSION) {
+    throw new Error('這個設定檔來自較新的版本，請先更新 AutoFetcher')
+  }
 
   // 2. 處理加密密碼（若有 secrets）
   let decryptedPasswords = null

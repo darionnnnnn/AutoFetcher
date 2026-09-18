@@ -98,9 +98,9 @@ export function heldLocks() {
   return new Map(held)
 }
 
-// 紀錄鍵裡的日期（rec:<YYYY-MM-DD>）；不是紀錄鍵回 null
+// 紀錄鍵裡的日期（舊日鍵 rec:<YYYY-MM-DD> 與小時鍵 rec2:<YYYY-MM-DD>:<HH>）；不是紀錄鍵回 null
 function recordDateOf(key) {
-  if (!key.startsWith('rec:')) return null
+  if (!key.startsWith('rec:') && !key.startsWith('rec2:')) return null
   const m = /\d{4}-\d{2}-\d{2}/.exec(key)
   return m ? m[0] : null
 }

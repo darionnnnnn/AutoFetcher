@@ -113,7 +113,7 @@ test('deleteTasks 一次掃描刪掉多個任務與它們的紀錄', async () =>
   const m = mark(c)
   await st.deleteTasks(['a', 'b'])
   assert.equal(setsAfter(c, 'storage.local.get', m) >= 1, true)
-  const fullScans = c.__calls.slice(m).filter(x => x.api === 'storage.local.get' && (x.args[0] === null || x.args[0] === undefined)).length
+  const fullScans = c.__calls.slice(m).filter(x => (x.api === 'storage.local.getKeys' || (x.api === 'storage.local.get' && (x.args[0] === null || x.args[0] === undefined)))).length
   assert.equal(fullScans, 1, '整批刪除只能掃一次全部 storage')
 
   assert.deepEqual((await st.getTasks()).map(t => t.id), ['d'])
@@ -147,7 +147,7 @@ test('countRecordsForTasks 一次掃描回 total 與 byId', async () => {
 
   const m = mark(c)
   const res = await st.countRecordsForTasks(['a', 'b'])
-  const fullScans = c.__calls.slice(m).filter(x => x.api === 'storage.local.get' && (x.args[0] === null || x.args[0] === undefined)).length
+  const fullScans = c.__calls.slice(m).filter(x => (x.api === 'storage.local.getKeys' || (x.api === 'storage.local.get' && (x.args[0] === null || x.args[0] === undefined)))).length
   assert.equal(fullScans, 1, '整批計數只能掃一次')
 
   assert.equal(res.total, 4, 'a 三筆（含序列）+ b 一筆')

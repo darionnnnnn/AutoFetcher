@@ -7,7 +7,7 @@ import {
   nextDailyRun,
   nextIntervalRun
 } from './scheduler.js'
-import { getTasks, trimOldRecords, getLastTimezone, setLastTimezone, getInflight, updateInflight } from '../shared/storage.js'
+import { getTasks, trimOldRecords, trimOldRuns, getLastTimezone, setLastTimezone, getInflight, updateInflight } from '../shared/storage.js'
 import { ensureSiteCheck } from './sitecheck.js'
 import { cleanOrphanFetchTabs } from './fetch-tab.js'
 import * as diag from '../shared/diag.js'
@@ -127,6 +127,13 @@ export async function runWatchdog() {
     const d = new Date()
     const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
     await trimOldRecords(today)
+  } catch {}
+
+  // 帳本保留 14 天：與紀錄保留天數設定無關，自帶一天一次的日戳
+  try {
+    const d = new Date()
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    await trimOldRuns(today)
   } catch {}
 
   try {

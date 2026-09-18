@@ -238,7 +238,7 @@ test('B 整批刪除只掃一次紀錄算筆數', async () => {
   const m = mark(c)
   doc.querySelector('#task-bulk-bar [data-action="bulk-delete"]').click()
   await tick()
-  const fullScans = c.__calls.slice(m).filter(x => x.api === 'storage.local.get' && (x.args[0] === null || x.args[0] === undefined)).length
+  const fullScans = c.__calls.slice(m).filter(x => (x.api === 'storage.local.getKeys' || (x.api === 'storage.local.get' && (x.args[0] === null || x.args[0] === undefined)))).length
   assert.equal(fullScans, 1, '不得對每個任務各掃一次')
 })
 

@@ -264,9 +264,8 @@ test('值清單是空的時候不得留下矛盾的帳本與燈號', async () =>
   }
   await st.saveTask(task)
   await fe.runTask(task, { slot: '2026-09-06T09:30', ...FAST })
-  const runs = (await c.storage.local.get('runs')).runs || {}
   const health = await he.getHealth()
-  const ledger = runs.bank?.['2026-09-06T09:30']
+  const ledger = await st.getRunStatus('bank', '2026-09-06T09:30')
   assert.ok(!(ledger === 'error' && health.bank?.status === 'ok'),
     `帳本說失敗、燈號說正常，兩邊講不同的話：ledger=${ledger} health=${health.bank?.status}`)
 })

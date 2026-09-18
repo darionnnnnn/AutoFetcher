@@ -13,22 +13,139 @@ const DEFAULT_SETTINGS = {
 }
 
 const DEFAULT_LAYOUT = { dashboards: [] }
+// 紀錄鍵（AF-21 批次 1）：舊的 rec:<date> 一天一鍵只讀與刪；新寫入一律 rec2:<date>:<HH>。
+// 刻意換前綴：舊版以 startsWith('rec:') 認紀錄鍵，降版時小時鍵不會被當成日期
 const REC_PREFIX = 'rec:'
+const REC2_PREFIX = 'rec2:'
+const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'))
 
-// 內部輔助函式：判定與轉換日期紀錄鍵
+// 帳本按日分鍵：runs:<YYYY-MM-DD>，值 { [taskId]: { [slot]: status } }
+const RUNS_PREFIX = 'runs:'
+const LEGACY_RUNS_KEY = 'runs'
+// 帳本保留天數（錯過清單 7 天＋重試餘裕）
+const RUNS_KEEP_DAYS = 14
+// 範圍讀取：天數在這以內由日期列舉鍵，超過先取鍵名再篩〔暫定〕
+const RANGE_ENUM_MAX_DAYS = 62
+// 需要「所有鍵」的操作每批最多取幾個鍵的值
+const BATCH_SIZE = 50
+
+// 內部輔助函式：判定與轉換日期紀錄鍵（舊日鍵與小時鍵都認）
 function isRecordKey(key) {
-  return typeof key === 'string' && key.startsWith(REC_PREFIX)
+  return typeof key === 'string' && (key.startsWith(REC_PREFIX) || key.startsWith(REC2_PREFIX))
 }
 
-function dateToKey(date) {
+function legacyRecordKey(date) {
   return `${REC_PREFIX}${date}`
 }
 
+function hourRecordKey(date, hh) {
+  return `${REC2_PREFIX}${date}:${hh}`
+}
+
+// 某日所有可能的紀錄鍵：舊日鍵在前，接著 00～23 小時鍵（合併時的相對順序就是這個）
+function dayRecordKeys(date) {
+  return [legacyRecordKey(date), ...HOURS.map(hh => hourRecordKey(date, hh))]
+}
+
 function keyToDate(key) {
+  if (key.startsWith(REC2_PREFIX)) return key.slice(REC2_PREFIX.length, REC2_PREFIX.length + 10)
   return key.slice(REC_PREFIX.length)
 }
 
-const SCHEMA_VERSION = 2
+// 紀錄落在哪個小時：slot（本地時間）第 12–13 碼 → capturedAt 換算的本地小時 → '00'
+function hourOfRecord(record) {
+  const slot = record?.slot
+  if (typeof slot === 'string' && /^\d{2}$/.test(slot.slice(11, 13))) return slot.slice(11, 13)
+  const ms = typeof record?.capturedAt === 'string' ? Date.parse(record.capturedAt) : NaN
+  if (Number.isFinite(ms)) return String(new Date(ms).getHours()).padStart(2, '0')
+  return '00'
+}
+
+// 依小時分組（保持原順序）：Map<HH, records[]>
+function groupByHour(records) {
+  const groups = new Map()
+  for (const r of records) {
+    const hh = hourOfRecord(r)
+    if (!groups.has(hh)) groups.set(hh, [])
+    groups.get(hh).push(r)
+  }
+  return groups
+}
+
+// 同日紀錄依 capturedAt 由舊到新（穩定排序；沒有 capturedAt 的保持相對位置、排最後）
+function sortDayRecords(list) {
+  const timeOf = (r) => {
+    const ms = typeof r?.capturedAt === 'string' ? Date.parse(r.capturedAt) : NaN
+    return Number.isFinite(ms) ? ms : null
+  }
+  return list
+    .map((r, i) => ({ r, i, t: timeOf(r) }))
+    .sort((a, b) => {
+      if (a.t === null && b.t === null) return a.i - b.i
+      if (a.t === null) return 1
+      if (b.t === null) return -1
+      return a.t - b.t || a.i - b.i
+    })
+    .map(x => x.r)
+}
+
+// 把某日各鍵的值（依 dayRecordKeys 的順序）合併成一份排序好的清單
+function mergeDay(date, data) {
+  const merged = []
+  for (const key of dayRecordKeys(date)) {
+    if (Array.isArray(data[key])) merged.push(...data[key])
+  }
+  return sortDayRecords(merged)
+}
+
+// YYYY-MM-DD 加減天數（純日曆運算，不受時區影響）
+function addDays(date, n) {
+  const d = new Date(date + 'T00:00:00Z')
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
+
+// 起訖日期（含頭含尾）之間的每一天；起日晚於訖日回空陣列
+function datesBetween(from, to) {
+  const dates = []
+  for (let d = from; d <= to; d = addDays(d, 1)) dates.push(d)
+  return dates
+}
+
+function daySpan(from, to) {
+  return Math.round((Date.parse(to + 'T00:00:00Z') - Date.parse(from + 'T00:00:00Z')) / 86400000) + 1
+}
+
+// 現在的本地日期 YYYY-MM-DD
+function localToday() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function runsKey(date) {
+  return `${RUNS_PREFIX}${date}`
+}
+
+function isRunsKey(key) {
+  return typeof key === 'string' && key.startsWith(RUNS_PREFIX)
+}
+
+// 取 storage 所有鍵名（只要鍵名，不取值）：有 getKeys 就用它，沒有才退回 get(null)
+async function listAllKeys() {
+  const local = chrome.storage.local
+  if (typeof local.getKeys === 'function') return await local.getKeys()
+  return Object.keys(await local.get(null))
+}
+
+// 分批取值：每批最多 BATCH_SIZE 個鍵，逐批交給 onBatch(該批的 { key: value })
+async function forEachBatch(keys, onBatch) {
+  for (let i = 0; i < keys.length; i += BATCH_SIZE) {
+    const data = await chrome.storage.local.get(keys.slice(i, i + BATCH_SIZE))
+    await onBatch(data || {})
+  }
+}
+
+export const SCHEMA_VERSION = 3
 
 // ---- 讀-改-寫的唯一一份（AF-21 批次 1）----
 // 規則：對某鍵的 set／remove 一律在 lockNameOf(那個鍵) 的鎖內，讀也在同一次持有內；
@@ -111,7 +228,7 @@ function migrateSitesToV2(sites, encrypted) {
 }
 
 // 初始化儲存空間（冪等：已存在值不得覆蓋；順便做一次性的 schema 遷移）
-// 逐鍵依序取鎖：settings → sites → schemaVersion（版本號最後寫，遷移中斷時重跑還會再遷移一次）
+// 逐鍵依序取鎖：settings → sites → runs:<date>／runs → schemaVersion（版本號最後寫，遷移中斷時重跑還會再遷移一次）
 export async function init() {
   await mutateKey('settings', (cur) => cur === undefined ? { ...DEFAULT_SETTINGS } : undefined)
 
@@ -126,10 +243,41 @@ export async function init() {
     await mutateKey('sites', (sites) => sites && typeof sites === 'object' ? migrateSitesToV2(sites, encrypted) : undefined)
   }
 
+  await migrateRunsToV3()
+
   await mutateKey('schemaVersion', (cur) => {
     const v = typeof cur === 'number' ? cur : SCHEMA_VERSION
     return cur === undefined || v < SCHEMA_VERSION ? SCHEMA_VERSION : undefined
   })
+}
+
+// v2 → v3：單一 runs 鍵拆成 runs:<date>，只留近 RUNS_KEEP_DAYS 天（以現在的本地日期計），最後刪掉舊鍵。
+// 冪等：各日鍵是「併入」（該日既有的格子優先），中途失敗重跑會再併一次同樣的格子，結果相同；
+// 舊鍵最後才刪，刪掉之後再跑就沒有東西可遷移
+async function migrateRunsToV3() {
+  const res = await chrome.storage.local.get(LEGACY_RUNS_KEY)
+  if (res[LEGACY_RUNS_KEY] === undefined) return
+  const cutoff = addDays(localToday(), -RUNS_KEEP_DAYS)
+  const byDate = new Map()
+  for (const [taskId, slots] of Object.entries(asObject(res[LEGACY_RUNS_KEY]))) {
+    for (const [slot, status] of Object.entries(asObject(slots))) {
+      const date = typeof slot === 'string' ? slot.slice(0, 10) : ''
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date < cutoff) continue
+      if (!byDate.has(date)) byDate.set(date, {})
+      const day = byDate.get(date)
+      day[taskId] = { ...day[taskId], [slot]: status }
+    }
+  }
+  for (const [date, cells] of byDate) {
+    await mutateKey(runsKey(date), (current) => {
+      const next = { ...asObject(current) }
+      for (const [taskId, slots] of Object.entries(cells)) {
+        next[taskId] = { ...slots, ...asObject(next[taskId]) }
+      }
+      return next
+    })
+  }
+  await mutateKey(LEGACY_RUNS_KEY, () => REMOVE)
 }
 
 // 取得架構版本號
@@ -288,16 +436,24 @@ export async function deleteTasks(ids) {
   // 逐鍵依序「取鎖→讀→改→寫→放」，不同時持有兩把鎖
   await mutateKey('tasks', (current) => Array.isArray(current) ? current.filter(t => !targetIds.has(t.id)) : [])
 
-  // 先列出有哪些紀錄鍵（鎖外），每個鍵再在自己的鎖內重讀最新值來改
-  const all = await chrome.storage.local.get(null)
-  for (const key of Object.keys(all)) {
-    if (!isRecordKey(key)) continue
-    await mutateKey(key, (value) => {
-      const records = Array.isArray(value) ? value : []
-      const remaining = records.filter(r => !targetIds.has(parentIdOf(r.taskId)))
-      if (remaining.length === 0) return REMOVE
-      return remaining.length !== records.length ? remaining : undefined
-    })
+  // 先列出有哪些紀錄鍵與帳本鍵（鎖外、只取鍵名），每個鍵再在自己的鎖內重讀最新值來改
+  const keys = await listAllKeys()
+  for (const key of keys) {
+    if (isRecordKey(key)) {
+      await mutateKey(key, (value) => {
+        const records = Array.isArray(value) ? value : []
+        const remaining = records.filter(r => !targetIds.has(parentIdOf(r.taskId)))
+        if (remaining.length === 0) return REMOVE
+        return remaining.length !== records.length ? remaining : undefined
+      })
+    } else if (isRunsKey(key)) {
+      await mutateKey(key, (value) => {
+        const day = asObject(value)
+        const kept = Object.fromEntries(Object.entries(day).filter(([id]) => !targetIds.has(parentIdOf(id))))
+        if (Object.keys(kept).length === 0) return REMOVE
+        return Object.keys(kept).length !== Object.keys(day).length ? kept : undefined
+      })
+    }
   }
 
   // 被刪任務最後一次的值也一起清（鍵是序列 id）；不清的話 lastValues 只會越長越大
@@ -356,61 +512,86 @@ export async function deleteHealthEntry(key) {
   })
 }
 
-// 追加多筆紀錄至指定日期的 storage 鍵（rec:<date>）
+// 追加多筆紀錄至指定日期的小時鍵（rec2:<date>:<HH>）；落在不同小時的分組各寫一次
 export async function appendRecords(date, records) {
   if (!Array.isArray(records) || records.length === 0) return
-  await mutateKey(dateToKey(date), (current) => [...asArray(current), ...records])
+  for (const [hh, group] of groupByHour(records)) {
+    await mutateKey(hourRecordKey(date, hh), (current) => [...asArray(current), ...group])
+  }
 }
 
-// 追加紀錄至指定日期的 storage 鍵（rec:<date>）
+// 追加紀錄至指定日期的小時鍵（rec2:<date>:<HH>）
 export async function appendRecord(date, record) {
   return appendRecords(date, [record])
 }
 
-// 取得指定日期的所有紀錄（無資料回傳空陣列）
+// 取得指定日期的所有紀錄（舊日鍵＋24 個小時鍵合併，依 capturedAt 由舊到新；無資料回傳空陣列）
 export async function getRecordsByDate(date) {
-  const key = dateToKey(date)
-  const res = await chrome.storage.local.get(key)
-  return Array.isArray(res[key]) ? res[key] : []
+  const data = await chrome.storage.local.get(dayRecordKeys(date))
+  return mergeDay(date, data || {})
 }
 
-// 刪除指定日期的單一紀錄（依 taskId 與 capturedAt 相符者移除）
-// 移除後若該日已無紀錄則移除整個日期鍵；找不到相符紀錄時不改動任何資料
+// 刪除指定日期的單一紀錄（依 taskId 與 capturedAt 相符者移除；舊日鍵與小時鍵都找）
+// 移除後若該鍵已無紀錄則移除該鍵；找不到相符紀錄時不改動任何資料
 export async function deleteRecord(date, taskId, capturedAt) {
-  await mutateKey(dateToKey(date), (current) => {
-    const list = [...asArray(current)]
-    const index = list.findIndex(r => r.taskId === taskId && r.capturedAt === capturedAt)
-    if (index === -1) return undefined
-    list.splice(index, 1)
-    return list.length === 0 ? REMOVE : list
+  // 同一天的舊鍵與小時鍵共用一把鎖：鎖內讀全部、只改找到的那一個鍵
+  await withLock(lockNameOf(legacyRecordKey(date)), async () => {
+    const store = chrome.storage.local
+    const data = (await store.get(dayRecordKeys(date))) || {}
+    for (const key of dayRecordKeys(date)) {
+      const list = asArray(data[key])
+      const index = list.findIndex(r => r.taskId === taskId && r.capturedAt === capturedAt)
+      if (index === -1) continue
+      const next = [...list]
+      next.splice(index, 1)
+      if (next.length === 0) await store.remove(key)
+      else await store.set({ [key]: next })
+      return
+    }
   })
 }
 
-// 列出所有具備紀錄的日期，由舊到新排序
+// 列出所有具備紀錄的日期（舊日鍵或小時鍵有非空紀錄），由舊到新排序
 export async function listDates() {
-  const all = await chrome.storage.local.get(null)
-  const dates = []
-  for (const [key, val] of Object.entries(all)) {
-    if (isRecordKey(key) && Array.isArray(val) && val.length > 0) {
-      dates.push(keyToDate(key))
+  const keys = (await listAllKeys()).filter(isRecordKey)
+  const dates = new Set()
+  await forEachBatch(keys, (data) => {
+    for (const [key, val] of Object.entries(data)) {
+      if (isRecordKey(key) && Array.isArray(val) && val.length > 0) dates.add(keyToDate(key))
     }
-  }
-  return dates.sort()
+  })
+  return [...dates].sort()
 }
 
-// 取得指定日期範圍內的所有紀錄（扁平陣列，含 date 欄位，由舊到新排序）
+// 取得指定日期範圍內的所有紀錄（扁平陣列，含 date 欄位；先依日期、同日依 capturedAt 由舊到新）
+// 抓取路徑（告警評估）也會呼叫：範圍不大時由日期列舉鍵直接取，不掃整個 storage
 export async function getRecordsInRange(from, to) {
-  const dates = (await listDates()).filter(d => d >= from && d <= to)
-  if (dates.length === 0) return []
+  if (!(from <= to)) return []
+  const byDate = new Map()
+  const collect = (data) => {
+    for (const [key, val] of Object.entries(data || {})) {
+      if (!isRecordKey(key) || !Array.isArray(val)) continue
+      const date = keyToDate(key)
+      if (!byDate.has(date)) byDate.set(date, {})
+      byDate.get(date)[key] = val
+    }
+  }
 
-  const keys = dates.map(dateToKey)
-  const data = await chrome.storage.local.get(keys)
+  if (daySpan(from, to) <= RANGE_ENUM_MAX_DAYS) {
+    collect(await chrome.storage.local.get(datesBetween(from, to).flatMap(dayRecordKeys)))
+  } else {
+    const keys = (await listAllKeys()).filter(k => {
+      if (!isRecordKey(k)) return false
+      const d = keyToDate(k)
+      return d >= from && d <= to
+    })
+    await forEachBatch(keys, collect)
+  }
+
   const result = []
-
-  for (const d of dates) {
-    const list = Array.isArray(data[dateToKey(d)]) ? data[dateToKey(d)] : []
-    for (const record of list) {
-      result.push({ ...record, date: d })
+  for (const date of [...byDate.keys()].sort()) {
+    for (const record of mergeDay(date, byDate.get(date))) {
+      result.push({ ...record, date })
     }
   }
   return result
@@ -429,13 +610,25 @@ export async function trimOldRecords(today) {
   d.setUTCDate(d.getUTCDate() - retentionDays + 1)
   const cutoff = d.toISOString().slice(0, 10)
 
-  const all = await chrome.storage.local.get(null)
-  const toRemove = Object.keys(all).filter(key => isRecordKey(key) && keyToDate(key) < cutoff)
+  const toRemove = (await listAllKeys()).filter(key => isRecordKey(key) && keyToDate(key) < cutoff)
   // 逐鍵在各自的鎖內刪（同一天的鎖可能正被抓取寫入持有）
   for (const key of toRemove) {
     await mutateKey(key, () => REMOVE)
   }
   await writeKey('lastTrimDate', today)
+}
+
+// 帳本只留 RUNS_KEEP_DAYS 天：刪掉日期早於 today - 14 天的 runs:<date>
+// 看門狗每日呼叫；用自己的日戳一天只做一次；與紀錄保留天數設定無關（retentionDays <= 0 也照清）
+export async function trimOldRuns(today) {
+  const stamp = await chrome.storage.local.get('lastRunsTrimDate')
+  if (stamp.lastRunsTrimDate === today) return
+  const cutoff = addDays(today, -RUNS_KEEP_DAYS)
+  const toRemove = (await listAllKeys()).filter(key => isRunsKey(key) && key.slice(RUNS_PREFIX.length) < cutoff)
+  for (const key of toRemove) {
+    await mutateKey(key, () => REMOVE)
+  }
+  await writeKey('lastRunsTrimDate', today)
 }
 
 // 取得原始版面資料（無資料回傳 null）
@@ -505,12 +698,18 @@ export async function importRecords(input) {
   let added = 0
   let skipped = 0
 
-  // 逐日在各自的鎖內併入（去重要對鎖內讀到的最新值做）
+  // 逐日在各自的鎖內併入（同一天的舊鍵與小時鍵共用一把）；
+  // 去重要對鎖內讀到的「該日所有既有鍵」做，新紀錄依自己的小時寫進 rec2: 鍵
   for (const [date, dayList] of dateMap.entries()) {
-    await mutateKey(dateToKey(date), (current) => {
-      const updatedList = [...asArray(current)]
-      const seen = new Set(updatedList.map(r => `${r.taskId}::${r.capturedAt}`))
+    await withLock(lockNameOf(legacyRecordKey(date)), async () => {
+      const store = chrome.storage.local
+      const data = (await store.get(dayRecordKeys(date))) || {}
+      const seen = new Set()
+      for (const key of dayRecordKeys(date)) {
+        for (const r of asArray(data[key])) seen.add(`${r?.taskId}::${r?.capturedAt}`)
+      }
 
+      const incoming = []
       for (const day of dayList) {
         if (!day.tasks || typeof day.tasks !== 'object') continue
         for (const taskData of Object.values(day.tasks)) {
@@ -521,13 +720,17 @@ export async function importRecords(input) {
               skipped++
             } else {
               seen.add(id)
-              updatedList.push(rec)
+              incoming.push(rec)
               added++
             }
           }
         }
       }
-      return updatedList
+
+      for (const [hh, group] of groupByHour(incoming)) {
+        const key = hourRecordKey(date, hh)
+        await store.set({ [key]: [...asArray(data[key]), ...group] })
+      }
     })
   }
 
@@ -536,31 +739,42 @@ export async function importRecords(input) {
 
 // 取得儲存用量與統計資訊
 export async function getStorageStats() {
-  const all = await chrome.storage.local.get(null)
-  const settings = (all.settings && typeof all.settings === 'object') ? all.settings : {}
+  const allKeys = await listAllKeys()
+  const settingsRes = await chrome.storage.local.get('settings')
+  const settings = (settingsRes.settings && typeof settingsRes.settings === 'object') ? settingsRes.settings : {}
 
   let recordCount = 0
   const dates = []
-  for (const [key, val] of Object.entries(all)) {
-    if (isRecordKey(key) && Array.isArray(val)) {
-      recordCount += val.length
-      if (val.length > 0) {
-        dates.push(keyToDate(key))
+  await forEachBatch(allKeys.filter(isRecordKey), (data) => {
+    for (const [key, val] of Object.entries(data)) {
+      if (isRecordKey(key) && Array.isArray(val)) {
+        recordCount += val.length
+        if (val.length > 0) dates.push(keyToDate(key))
       }
     }
-  }
+  })
   dates.sort()
   const oldestDate = dates.length > 0 ? dates[0] : null
+
+  // 沒有 getBytesInUse 時的估算：分批序列化；金鑰與站台（含密文）不進任何被序列化的字串
+  const estimateBytes = async () => {
+    let total = 0
+    await forEachBatch(allKeys.filter(k => k !== 'cryptoKey' && k !== 'sites'), (data) => {
+      const { cryptoKey, sites, ...rest } = data
+      total += JSON.stringify(rest).length
+    })
+    return total
+  }
 
   let bytes = 0
   if (typeof chrome.storage?.local?.getBytesInUse === 'function') {
     try {
       bytes = await chrome.storage.local.getBytesInUse(null)
     } catch {
-      bytes = JSON.stringify(all).length
+      bytes = await estimateBytes()
     }
   } else {
-    bytes = JSON.stringify(all).length
+    bytes = await estimateBytes()
   }
   if (typeof bytes !== 'number') {
     bytes = Number(bytes) || 0
@@ -653,12 +867,8 @@ export async function updateMissedList(mutator) {
   return updateValue('missed', asArray, mutator)
 }
 
-// ---- 執行帳本（runs：{ [taskId]: { [slot]: status } }，冪等靠它，SPEC §4.1）----
-
-async function getRuns() {
-  const res = await chrome.storage.local.get('runs')
-  return asObject(res.runs)
-}
+// ---- 執行帳本（冪等靠它，SPEC §4.1）----
+// 按日分鍵 runs:<YYYY-MM-DD>（日期＝slot 前 10 碼），值 { [taskId]: { [slot]: status } }；某日無鍵＝該日沒有任何格
 
 /**
  * 查某任務某排程槽的帳本狀態（沒有回 undefined）
@@ -666,14 +876,16 @@ async function getRuns() {
  * @param {string} slot 排程槽（本地時間 YYYY-MM-DDTHH:MM）
  */
 export async function getRunStatus(taskId, slot) {
-  return (await getRuns())[taskId]?.[slot]
+  const key = runsKey(String(slot).slice(0, 10))
+  const res = await chrome.storage.local.get(key)
+  return asObject(res[key])[taskId]?.[slot]
 }
 
 /**
- * 寫某任務某排程槽的帳本狀態（在 runs 鎖內讀-改-寫）
+ * 寫某任務某排程槽的帳本狀態（在該日 runs:<date> 的鎖內讀-改-寫）
  */
 export async function setRunStatus(taskId, slot, status) {
-  await updateValue('runs', asObject, (runs) => {
+  await updateValue(runsKey(String(slot).slice(0, 10)), asObject, (runs) => {
     runs[taskId] = { ...asObject(runs[taskId]), [slot]: status }
     return runs
   })
@@ -681,18 +893,25 @@ export async function setRunStatus(taskId, slot, status) {
 
 /**
  * 取日期範圍內（YYYY-MM-DD，含頭含尾）的帳本：同形狀，只含 slot 日期落在範圍內的格子
+ * 由起訖日期列舉 runs:<date> 鍵直接取（不掃整個 storage）
  */
 export async function getLedgerRange(fromDate, toDate) {
-  const runs = await getRuns()
   const result = {}
-  for (const [taskId, slots] of Object.entries(runs)) {
-    for (const [slot, status] of Object.entries(asObject(slots))) {
-      const date = slot.slice(0, 10)
-      if (date < fromDate || date > toDate) continue
-      if (!result[taskId]) result[taskId] = {}
-      result[taskId][slot] = status
+  if (!(fromDate <= toDate)) return result
+  const keys = datesBetween(fromDate, toDate).map(runsKey)
+  const collect = (data) => {
+    for (const key of keys) {
+      for (const [taskId, slots] of Object.entries(asObject(data?.[key]))) {
+        for (const [slot, status] of Object.entries(asObject(slots))) {
+          const date = slot.slice(0, 10)
+          if (date < fromDate || date > toDate) continue
+          if (!result[taskId]) result[taskId] = {}
+          result[taskId][slot] = status
+        }
+      }
     }
   }
+  await forEachBatch(keys, collect)
   return result
 }
 
@@ -752,11 +971,11 @@ export async function countRecordsForTasks(ids) {
   }
 
   const targetIds = new Set(ids)
-  const all = await chrome.storage.local.get(null)
   let total = 0
-
-  for (const [key, val] of Object.entries(all)) {
-    if (isRecordKey(key) && Array.isArray(val)) {
+  const keys = (await listAllKeys()).filter(isRecordKey)
+  await forEachBatch(keys, (data) => {
+    for (const [key, val] of Object.entries(data)) {
+      if (!isRecordKey(key) || !Array.isArray(val)) continue
       for (const r of val) {
         if (r && r.taskId) {
           const pid = parentIdOf(r.taskId)
@@ -767,7 +986,7 @@ export async function countRecordsForTasks(ids) {
         }
       }
     }
-  }
+  })
 
   return { total, byId }
 }
