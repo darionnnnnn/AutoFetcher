@@ -392,3 +392,32 @@ test('B 任務頁重畫好幾次之後，按一次整批停用仍然只做一次
   await tick()
   assert.equal(setsAfter(c, m), 1, '每重畫一次多綁一個監聽，按一下就會寫好幾次')
 })
+
+test('B 整批停用寫入失敗時要說出來，不得靜默', async () => {
+  const { st, doc, win } = await withTasks(['a', 'b'])
+  pick(win, doc, 'a')
+  const orig = chrome.storage.local.set
+  chrome.storage.local.set = async () => { throw new Error('配額已滿') }
+  try {
+    doc.querySelector('#task-bulk-bar [data-action="bulk-disable"]').click()
+    await tick()
+  } finally {
+    chrome.storage.local.set = orig
+  }
+  assert.match(doc.getElementById('task-note').textContent, /失敗/)
+  assert.equal(doc.querySelector('#task-bulk-bar [data-action="bulk-disable"]').disabled, false, '按鈕要還原')
+  assert.equal((await st.getTask('a')).enabled, true)
+})
+
+test('B 排程欄按鈕有「修改排程」的說明', async () => {
+  const { doc } = await withTasks(['a'])
+  assert.equal(rowOf(doc, 'a').querySelector('[data-action="edit-schedule"]').title, '修改排程')
+})
+
+test('B 剛按改名時原值是全選的（直接打字就取代）', async () => {
+  const { doc } = await withTasks(['a'])
+  rowOf(doc, 'a').querySelector('[data-action="rename"]').click()
+  const input = rowOf(doc, 'a').querySelector('input[data-rename-input]')
+  assert.equal(input.selectionStart, 0)
+  assert.equal(input.selectionEnd, input.value.length)
+})

@@ -495,3 +495,35 @@ test('D-6 中間那列的上下移照常可用', async () => {
   const after = Array.from(doc.querySelectorAll('#field-list [data-field-row]')).map(r => r.dataset.fieldKey)
   assert.deepEqual(after, [keys[1], keys[0], keys[2]])
 })
+
+// ================= 鏈結：後台收到選取結果 → session → 面板換目標 =================
+
+test('D-3 鏈結：面板已有多值表單時回頁面加選一格，後台寫的 session 讓面板保住原本的名稱與 key', async () => {
+  // 面板那一端
+  const { pk, doc } = await fresh()
+  const first = {
+    url: 'https://a.test/p', tabId: 7, locator: LOCATOR,
+    picks: [cellPick(1, 2), cellPick(2, 2)], blockInfo: { kind: 'table', rows: 5, cols: 4 }
+  }
+  await chrome.storage.session.set({ 'panel:7': { kind: 'new', ctx: first } })
+  await pk.renderFromPanelCtx({ kind: 'new', ctx: first })
+  const rows = () => Array.from(doc.querySelectorAll('#field-list [data-field-row]'))
+  rows()[0].querySelector('input[data-field-name]').value = '美金'
+  rows()[1].querySelector('input[data-field-name]').value = '日圓'
+  const keys = rows().map(r => r.dataset.fieldKey)
+
+  // 後台那一端：同一份 chrome 替身，直接送 PICKED（頁面上多選了一格）
+  const bg = await import('../src/background/main.js?t=' + Math.random())
+  await bg.handleMessage(
+    { type: 'PICKED', purpose: 'task', locator: LOCATOR, picks: [cellPick(1, 2), cellPick(2, 2), cellPick(3, 2)], blockInfo: first.blockInfo },
+    { tab: { id: 7, url: 'https://a.test/p' }, frameId: 0 }
+  )
+  const session = (await chrome.storage.session.get('panel:7'))['panel:7']
+  assert.equal(session.retarget, true, '後台要把它標成換目標，不是新表單')
+
+  await pk.renderFromPanelCtx(session)
+  const after = rows()
+  assert.equal(after.length, 3)
+  assert.deepEqual(after.slice(0, 2).map(r => r.querySelector('input[data-field-name]').value), ['美金', '日圓'])
+  assert.deepEqual(after.slice(0, 2).map(r => r.dataset.fieldKey), keys)
+})

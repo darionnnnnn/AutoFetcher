@@ -51,8 +51,10 @@ test('C 整批檢視只露出「多久抓一次」，其餘區塊全部收起來
   for (const id of ['block-section', 'preview-section', 'add-to-dashboard', 'advanced-section', 'repick-target', 'test-now']) {
     assert.equal(doc.getElementById(id).hidden, true, `#${id} 在整批改排程時沒有意義`)
   }
-  assert.equal(doc.getElementById('name').closest('[data-picker-header]').hidden, true,
-    '整批沒有單一任務名稱可改')
+  assert.equal(doc.getElementById('name').hidden, true, '整批沒有單一任務名稱可改')
+  assert.equal(doc.getElementById('setup-summary').hidden, true)
+  assert.equal(doc.getElementById('picker-title').closest('[data-picker-header]').hidden, false,
+    '標題列要留著：「整批修改 N 個任務的排程」就寫在那裡（AF-19 終檢：整列藏起來就看不到標題）')
   assert.equal(doc.getElementById('pin-defaults').closest('label').hidden, true,
     '整批修改不得寫進預設值')
 })
@@ -219,7 +221,8 @@ test('C 整批修改不得要求填任務名稱（單任務那條驗證不適用
   await pk.renderFromPanelCtx({ kind: 'bulk', taskIds: ['a'] })
   doc.getElementById('name').value = ''
   await pk.handleSave()
-  assert.ok(!/名稱不可空白/.test(doc.getElementById('errors').textContent))
+  // 存成功之後表單換成回饋區，#errors 已不在畫面上；沒被名稱驗證擋下就是看到成功回饋
+  assert.ok(!/名稱不可空白/.test(doc.getElementById('picker-form').textContent))
   assert.match(doc.getElementById('picker-form').textContent, /已更新 1 個任務的排程/)
 })
 
@@ -272,4 +275,34 @@ test('C 面板正在整批改排程時，右鍵選取要被擋下並說明', asy
   const ctx = (await chrome.storage.session.get(`panel:${tab.id}`))[`panel:${tab.id}`]
   assert.equal(ctx.kind, 'bulk', '不得把整批清單蓋成等待態')
   assert.match(String(ctx.notice), /排程/)
+})
+
+test('C 從編輯一個有時段的任務切到整批改排程，時段與星期不得殘留', async () => {
+  const { st, pk, doc } = await fresh()
+  await st.saveTasks([
+    task('a', { schedule: { type: 'interval', everyMinutes: 10, weekdays: [1], window: { from: '08:30', to: '09:20' } } }),
+    task('b', { schedule: { type: 'interval', everyMinutes: 30 } })
+  ])
+  // 同一份面板文件：先編輯 a，再從任務頁點 b 的排程欄（不會重載）
+  await pk.renderFromPanelCtx({ kind: 'edit', taskId: 'a' })
+  assert.equal(doc.getElementById('window-enabled').checked, true, '前置：a 有時段')
+  await pk.renderFromPanelCtx({ kind: 'bulk', taskIds: ['b'] })
+  assert.equal(doc.getElementById('window-enabled').checked, false, 'b 沒有時段，不得沿用 a 的')
+  assert.equal(doc.getElementById('window-from').value, '')
+  assert.equal(wd(doc).length, 7, 'b 沒有指定星期＝每天，不得沿用 a 的星期一')
+
+  await pk.handleSave()
+  const b = await st.getTask('b')
+  assert.equal(b.schedule.window, undefined, '殘值一旦被套用，就會寫進所有被選的任務')
+})
+
+test('C 整批檢視時標題列看得到標題，離開後名稱欄回來', async () => {
+  const { st, pk, doc } = await fresh()
+  await st.saveTasks([task('a'), task('b')])
+  await pk.renderFromPanelCtx({ kind: 'bulk', taskIds: ['a', 'b'] })
+  assert.equal(doc.querySelector('[data-picker-header]').hidden, false)
+  await pk.renderFromPanelCtx({ kind: 'edit', taskId: 'a' })
+  assert.equal(doc.getElementById('name').hidden, false)
+  assert.equal(doc.getElementById('setup-summary').hidden, false)
+  assert.equal(doc.getElementById('target-host').hidden, false)
 })

@@ -121,6 +121,33 @@ test('E 第一次 Esc 之後又加了值，確認要重來', async () => {
   pm.exitPickMode()
 })
 
+test('E 清單換過但數量相同，確認仍要重來（加減值都算「清單變了」）', async () => {
+  const { c, doc, pm, win } = await boot()
+  pick(win, doc.getElementById('a1'))
+  pick(win, doc.getElementById('b1'))
+  key(doc, win, 'Escape')
+  pick(win, doc.getElementById('a1'))   // 取消 a1（剩 1 個）
+  pick(win, doc.getElementById('c1'))   // 加 c1（又回到 2 個，但已經不是剛才那兩個）
+  await wait(450)
+  key(doc, win, 'Escape')
+  assert.equal(cancelled(c).length, 0, '數量碰巧一樣不代表是同一批，不得沿用上一次的確認')
+  pm.exitPickMode()
+})
+
+test('E 第一次 Esc 之後右鍵開選單點「取消」＝第二步', async () => {
+  const { c, doc, pm, win } = await boot()
+  pick(win, doc.getElementById('a1'))
+  pick(win, doc.getElementById('b1'))
+  key(doc, win, 'Escape')
+  await wait(450)
+  doc.getElementById('c2').dispatchEvent(new win.MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+  const item = doc.querySelector('[data-af-menu-item="cancel"]')
+  assert.ok(item, '右鍵選單要有「取消」')
+  item.dispatchEvent(new win.MouseEvent('click', { bubbles: true }))
+  assert.equal(cancelled(c).length, 1, '右鍵開選單不得清掉確認，否則選單裡的取消永遠只是第一步')
+  pm.exitPickMode()
+})
+
 test('E 面板的「取消」鈕走同一條二段確認', async () => {
   const { c, doc, pm, win } = await boot()
   pick(win, doc.getElementById('a1'))
@@ -269,6 +296,7 @@ test('E 已選之後工具列說出會換掉哪一個值', async () => {
   pick(win, doc.getElementById('a1'))
   const t = doc.querySelector('[data-af-tool="col"]')
   assert.match(t.getAttribute('title'), /換/, '按下去會取代最後選的那一個，要先說')
+  assert.match(t.getAttribute('title'), /美金 · 買入/, '要說出會被換掉的是哪一個值（與 chip 同名）')
   pm.exitPickMode()
 })
 

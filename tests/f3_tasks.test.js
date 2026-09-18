@@ -90,7 +90,8 @@ test('renderTasks 顯示連續失敗數，最後錯誤放 title 不用 innerHTML
   ts.renderTasks([task('a', { notFoundStreak: 3 })], { a: { status: 'not_found', reason: '找不到元素' } }, [])
   const row = doc.querySelector('[data-task-id="a"]')
   assert.ok(row.textContent.includes('3'), '要顯示連續失敗次數')
-  const holder = row.querySelector('[title]')
+  // 找狀態欄那一個（AF-19 起排程欄也有 title「修改排程」，不能取列裡第一個）
+  const holder = row.querySelector('.task-status[title]')
   assert.ok(holder && holder.getAttribute('title').includes('找不到元素'))
 })
 

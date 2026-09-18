@@ -137,11 +137,14 @@ test('F 拆完之後全部儲存，每個任務都有定位與各自那一個值
 test('F 超過 20 個值時不能拆，點了要說原因', async () => {
   const { pk, doc } = await fresh()
   const picks = Array.from({ length: 21 }, (_, i) => cellPick(i, 1))
-  await pk.renderFromPanelCtx({ kind: 'new', ctx: ctxWith(picks, { blockInfo: { kind: 'table', rows: 30, cols: 4 } }) })
+  const ctx = { kind: 'new', ctx: ctxWith(picks, { blockInfo: { kind: 'table', rows: 30, cols: 4 } }) }
+  // session 先放著這份表單：真的拆了就會被蓋成 batch，斷言才有意義
+  await chrome.storage.session.set({ 'panel:9': ctx })
+  await pk.renderFromPanelCtx(ctx)
   const btn = doc.getElementById('split-tasks')
   assert.equal(btn.getAttribute('aria-disabled'), 'true')
   btn.click()
   await tick()
-  assert.equal((await sessionOf(9))?.kind !== 'batch', true, '不得拆')
+  assert.equal((await sessionOf(9)).kind, 'new', '不得拆')
   assert.match(doc.getElementById('field-rename').textContent + doc.getElementById('errors').textContent, /一次最多 20 個任務/)
 })

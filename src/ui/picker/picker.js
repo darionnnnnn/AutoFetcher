@@ -604,22 +604,22 @@ function setPreviewState(state) {
 // 將排程物件的值填入排程相關表單欄位
 function fillSchedule(schedule) {
   if (!schedule) return
-  if (schedule.type) document.getElementById('schedule-type').value = schedule.type
-  if (schedule.times) document.getElementById('times').value = schedule.times.join(', ')
+  // 每一欄都要寫（沒有的鍵寫成「沒有」），不能只寫有的：同一份面板文件從編輯 A 切到整批改排程不會重載，
+  // 只寫有的會把 A 的時段或星期殘留下來，再一次套用到所有被選的任務（AF-19 終檢）
+  document.getElementById('schedule-type').value = schedule.type || 'daily'
+  if (Array.isArray(schedule.times)) document.getElementById('times').value = schedule.times.join(', ')
   if (schedule.everyMinutes !== undefined) document.getElementById('every-minutes').value = schedule.everyMinutes
-  if (schedule.weekdays) {
-    const wds = new Set(schedule.weekdays)
-    document.querySelectorAll('#weekdays input[type="checkbox"]').forEach(cb => {
-      cb.checked = wds.has(Number(cb.value))
-    })
-  }
-  if (schedule.window) {
-    if (schedule.window.from) document.getElementById('window-from').value = schedule.window.from
-    if (schedule.window.to) document.getElementById('window-to').value = schedule.window.to
-    // 既有任務有時段就要把開關勾起來，否則欄位藏著、使用者以為沒設定
-    const winCb = document.getElementById('window-enabled')
-    if (winCb) winCb.checked = true
-  }
+  // 星期缺省或空陣列＝每天（與 nextIntervalRun／shouldRunInterval 同一條規則）
+  const wds = Array.isArray(schedule.weekdays) && schedule.weekdays.length > 0 ? new Set(schedule.weekdays.map(Number)) : null
+  document.querySelectorAll('#weekdays input[type="checkbox"]').forEach(cb => {
+    cb.checked = wds ? wds.has(Number(cb.value)) : true
+  })
+  const hasWindow = Boolean(schedule.window?.from && schedule.window?.to)
+  document.getElementById('window-from').value = hasWindow ? schedule.window.from : ''
+  document.getElementById('window-to').value = hasWindow ? schedule.window.to : ''
+  // 既有任務有時段就要把開關勾起來，否則欄位藏著、使用者以為沒設定；沒有就取消勾選
+  const winCb = document.getElementById('window-enabled')
+  if (winCb) winCb.checked = hasWindow
 }
 
 export function render(ctx) {
@@ -2316,6 +2316,7 @@ export async function handleSave() {
   let savedNextRun = null
   let cardError = null
   let prunedCount = 0
+  let pruneError = null
   try {
   const task = await saveTaskFromForm(values, currentCtx)
   savedTask = task
@@ -2343,10 +2344,13 @@ export async function handleSave() {
     if (removedKeys.length > 0) {
       prunedCount = removedKeys.length
       const seriesIds = removedKeys.map(k => seriesIdOf(task.id, k))
+      // 任務已經存好了，清理失敗不算存檔失敗；但要說出來，不能照樣說「已移除」卻留著空白卡片
       try {
         await pruneSeries(seriesIds)
         await deleteLastValues(seriesIds)
-      } catch {}
+      } catch (e) {
+        pruneError = e?.message || String(e)
+      }
     }
   }
   // 卡片排最後：任務與排程都好了，卡片失敗只是少一張卡，說出來就好
@@ -2362,6 +2366,7 @@ export async function handleSave() {
     nextRunMs: savedNextRun,
     hint: !currentCtx?.task,
     ...(prunedCount > 0 ? { note: `移除了 ${prunedCount} 個值；它們的歷史紀錄會保留到保留天數到期。` } : {}),
+    ...(pruneError ? { warning: `移除的值在儀表板上的卡片沒有清乾淨：${pruneError}。可以到儀表板把空白的卡片刪掉。`, closeDelayMs: null } : {}),
     ...(cardError ? { warning: `任務已經存好，但沒有加進儀表板：${cardError}。可以到報表的儀表板自己加。`, closeDelayMs: null } : {})
   })
 }
@@ -2466,12 +2471,6 @@ function buildSavedFeedback(form, saved) {
     else if (typeof window !== 'undefined' && window.close) window.close()
   })
   box.appendChild(openBtn)
-
-  const errorsEl = form.querySelector('#errors') || document.getElementById('errors')
-  if (errorsEl) {
-    errorsEl.textContent = ''
-    box.appendChild(errorsEl)
-  }
 
   form.replaceChildren(box)
 }
@@ -2931,7 +2930,6 @@ function applyRetarget(payload) {
   // 同一格就沿用原本的 key 與名稱：key 重生會讓歷史序列斷掉（判定與重選共用 field-match）
   const picks = Array.isArray(payload?.picks) ? payload.picks : []
   const matched = prevRows.length > 0 && picks.length > 0 ? reconcileFields(prevRows, picks) : null
-  const keyMap = new Map()
   if (matched) {
     const rows = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
     rows.forEach((r, i) => {
@@ -2939,7 +2937,6 @@ function applyRetarget(payload) {
       if (!m) return
       const oldKey = r.dataset.fieldKey || ''
       if (m.kept) {
-        keyMap.set(oldKey, m.key)
         const spec = fieldSpecs.get(oldKey)
         fieldSpecs.delete(oldKey)
         if (spec) fieldSpecs.set(m.key, spec)
@@ -2956,13 +2953,11 @@ function applyRetarget(payload) {
   }
 
   // 告警與前置動作原樣重建；告警綁的值若已經不在清單裡，退回「全部值」而不是指著不存在的 key
+  //（沿用下來的值 key 不變，所以直接拿舊 key 比對現在的清單即可）
   const liveKeys = new Set(Array.from(document.querySelectorAll('#field-list [data-field-row]')).map(r => r.dataset.fieldKey))
   for (const a of prevAlerts) {
     const next = { ...a }
-    if (next.field) {
-      const mapped = keyMap.get(next.field) || next.field
-      next.field = liveKeys.has(mapped) ? mapped : ''
-    }
+    if (next.field && !liveKeys.has(next.field)) next.field = ''
     addAlertRow(next)
   }
   for (const pa of prevPreActions) {
@@ -3529,8 +3524,15 @@ function setBulkView(on) {
     show('repick-target', true)
     show('test-now', true)
   }
-  const header = document.querySelector('[data-picker-header]')
-  if (header) header.hidden = on
+  // 標題列本身要留著（「整批修改 N 個任務的排程」就在這裡）；整批沒有單一名稱、主機與摘要可看，只藏這些子項。
+  // 停用提示交給 renderHeader 依任務重算，離開整批時一律先收起來
+  const nameLabel = document.querySelector('label[for="name"]')
+  if (nameLabel) nameLabel.hidden = on
+  show('name', !on)
+  show('target-host', !on)
+  show('setup-summary', !on)
+  const statusNote = document.getElementById('task-status-note')
+  if (statusNote && on) statusNote.hidden = true
   const pinLabel = document.getElementById('pin-defaults')?.closest('label')
   if (pinLabel) pinLabel.hidden = on
   const save = document.getElementById('save')

@@ -29,7 +29,7 @@ import {
 import { injectContent } from './inject.js'
 import { locateFrame, listFrames, matchFrameByUrl } from './frames.js'
 import { isAnchorText, putSkip } from '../shared/table.js'
-import { pickSpecOf, sameSpec, reconcileFields } from '../shared/field-match.js'
+import { pickSpecOf, reconcileFields } from '../shared/field-match.js'
 import { withInnerLabel } from '../shared/describe.js'
 import { scheduleSiteCheck, runSiteCheck } from './sitecheck.js'
 import { isSuccess } from '../shared/record-status.js'

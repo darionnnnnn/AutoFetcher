@@ -174,6 +174,10 @@ async function setBulkEnabled(enabled) {
     }
     const freshTasks = await getTasks()
     renderTasks(freshTasks, currentHealth, currentMissed, currentCtx)
+  } catch (e) {
+    // 整批寫入是全有全無（saveTasks 先驗證再寫）：失敗就是一個都沒改，要說出來，不能靜默
+    const note = document.getElementById('task-note')
+    if (note) note.textContent = `${enabled ? '啟用' : '停用'}失敗，沒有任何任務被改動：${e?.message || e}`
   } finally {
     buttons.forEach((btn) => { btn.disabled = false })
     if (actionBtn) {
@@ -435,6 +439,11 @@ function createTaskRow(t) {
     if (curInput) {
       try {
         curInput.focus()
+        // 剛按「改名」＝全選原值（直接打字就取代）；重畫時還原的是打到一半的字，那時才把游標放結尾
+        if (typeof curInput.select === 'function') {
+          curInput.select()
+          return
+        }
         const len = curInput.value.length
         curInput.setSelectionRange(len, len)
       } catch {}
@@ -493,6 +502,7 @@ function createTaskRow(t) {
   scheduleBtn.type = 'button'
   scheduleBtn.className = 'task-link task-schedule'
   scheduleBtn.dataset.action = 'edit-schedule'
+  scheduleBtn.title = '修改排程'
   // 排程白話一律走 shared/describe.js（Picker 摘要卡與 popup 也用同一份，
   // 各寫一份會讓同一個任務在三個畫面上長得不一樣）
   scheduleBtn.textContent = describeSchedule(t.schedule)
