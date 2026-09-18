@@ -58,8 +58,8 @@ test('importRecords 以 taskId + capturedAt 去重', async () => {
 test('importRecords 接受 days 打包格式', async () => {
   const { st } = await fresh()
   const pack = { days: [
-    { date: '2026-09-01', tasks: { t1: { records: [{ taskId: 't1', capturedAt: 'a', value: 1, status: 'ok' }] } } },
-    { date: '2026-09-02', tasks: { t1: { records: [{ taskId: 't1', capturedAt: 'b', value: 2, status: 'ok' }] } } }
+    { date: '2026-09-01', tasks: { t1: { records: [{ taskId: 't1', capturedAt: '2026-09-01T01:00:00.000Z', value: 1, status: 'ok' }] } } },
+    { date: '2026-09-02', tasks: { t1: { records: [{ taskId: 't1', capturedAt: '2026-09-02T01:00:00.000Z', value: 2, status: 'ok' }] } } }
   ] }
   const res = await st.importRecords(pack)
   assert.equal(res.added, 2)
@@ -167,6 +167,9 @@ test('設定匯入後任務被寫入並重建排程', async () => {
     data: { schemaVersion: 1, tasks: [task('imported')], sites: {}, settings: {}, layout: { dashboards: [] } }
   })
   await se.handleSettingsImport(json)
+  assert.equal(await st.getTask('imported'), null, '選檔後只顯示摘要，確認前不寫入')
+  doc.getElementById('settings-import-confirm').click()
+  await new Promise(r => setTimeout(r, 40))
   assert.ok(await st.getTask('imported'))
   assert.ok(doc.getElementById('settings-import-result').textContent.length > 0, '要顯示匯入結果')
   void c
@@ -182,11 +185,11 @@ test('設定匯入壞 JSON 時顯示錯誤且不寫入', async () => {
 
 test('歷史匯入顯示新增與略過筆數', async () => {
   const { se, st, doc } = await fresh()
-  await st.appendRecord('2026-09-01', { taskId: 't1', capturedAt: 'a', value: 1, status: 'ok' })
+  await st.appendRecord('2026-09-01', { taskId: 't1', capturedAt: '2026-09-01T01:00:00.000Z', value: 1, status: 'ok' })
   await se.renderSettings()
   await se.handleRecordsImport([JSON.stringify({ date: '2026-09-01', tasks: { t1: { records: [
-    { taskId: 't1', capturedAt: 'a', value: 1, status: 'ok' },
-    { taskId: 't1', capturedAt: 'b', value: 2, status: 'ok' }
+    { taskId: 't1', capturedAt: '2026-09-01T01:00:00.000Z', value: 1, status: 'ok' },
+    { taskId: 't1', capturedAt: '2026-09-01T02:00:00.000Z', value: 2, status: 'ok' }
   ] } } })])
   const txt = doc.getElementById('records-import-result').textContent
   assert.ok(txt.includes('1'), `要顯示新增 1 筆，實得：${txt}`)

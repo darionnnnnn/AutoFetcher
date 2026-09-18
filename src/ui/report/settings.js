@@ -12,11 +12,11 @@ import {
   deleteSite,
   getHealthMap, deleteHealthEntry } from '../../shared/storage.js'
 import { buildExport, download } from '../../shared/export.js'
-import { exportSettings, importSettings } from '../../shared/settings-io.js'
+import { exportSettings, previewSettingsImport, applySettingsImport } from '../../shared/settings-io.js'
 import * as diag from '../../shared/diag.js'
 import { MSG } from '../../shared/messages.js'
 import { statusTextOf } from '../../shared/record-status.js'
-import { applyTheme } from '../theme-apply.js'
+import { applyTheme, applySavedTheme } from '../theme-apply.js'
 
 // 重新繪製儲存用量區
 async function renderStorageStats() {
@@ -530,21 +530,118 @@ export async function renderSettings() {
   renderPrivacyNote()
 }
 
-// 處理設定匯入
+// 待確認的設定匯入計畫（選檔後 preview 產生；確認或取消後清掉）
+let pendingSettingsImport = null
+
+// 在結果區塊加一行文字
+function appendLine(parent, text, className) {
+  const el = document.createElement('div')
+  if (className) el.className = className
+  el.textContent = text
+  parent.appendChild(el)
+  return el
+}
+
+// 在結果區塊加一段「標題＋條列」
+function appendList(parent, title, items) {
+  appendLine(parent, title)
+  const ul = document.createElement('ul')
+  for (const text of items) {
+    const li = document.createElement('li')
+    li.textContent = text
+    ul.appendChild(li)
+  }
+  parent.appendChild(ul)
+}
+
+// 設定匯入摘要：新增／覆寫／略過／要重新輸入密碼的站台／被拒絕的設定
+function renderImportSummary(resultEl, summary) {
+  resultEl.textContent = ''
+  const box = document.createElement('div')
+  box.className = 'settings-import-summary'
+  appendLine(box, '即將匯入（尚未寫入）：')
+  appendList(box, '內容', [
+    `任務：新增 ${summary.tasks.add} 個、覆寫 ${summary.tasks.update} 個、略過 ${summary.tasks.skipped.length} 個`,
+    `站台：新增 ${summary.sites.add} 個、覆寫 ${summary.sites.update} 個`,
+    `設定：套用 ${summary.settings.applied.length} 項、拒絕 ${summary.settings.rejected.length} 項`,
+    summary.layout ? '儀表板版面：會以設定檔的版面取代' : '儀表板版面：不變'
+  ])
+  if (summary.tasks.skipped.length > 0) {
+    appendList(box, '略過的任務', summary.tasks.skipped.map(s => `${s.name}：${s.reason}`))
+  }
+  if (summary.sites.needPassword.length > 0) {
+    appendList(box, `${summary.sites.needPassword.length} 個站台匯入後要重新輸入密碼`, summary.sites.needPassword)
+  }
+  if (summary.settings.rejected.length > 0) {
+    appendList(box, '被拒絕的設定', summary.settings.rejected.map(r => `${r.key}：${r.reason}`))
+  }
+
+  const actions = document.createElement('div')
+  actions.className = 'settings-import-actions'
+  const confirmBtn = document.createElement('button')
+  confirmBtn.type = 'button'
+  confirmBtn.id = 'settings-import-confirm'
+  confirmBtn.textContent = '確認匯入'
+  confirmBtn.onclick = () => confirmSettingsImport()
+  const cancelBtn = document.createElement('button')
+  cancelBtn.type = 'button'
+  cancelBtn.id = 'settings-import-cancel'
+  cancelBtn.textContent = '取消'
+  cancelBtn.onclick = () => cancelSettingsImport()
+  actions.appendChild(confirmBtn)
+  actions.appendChild(cancelBtn)
+  box.appendChild(actions)
+  resultEl.appendChild(box)
+}
+
+// 處理設定匯入：選檔後只做 preview、顯示摘要與確認／取消（零寫入）
 export async function handleSettingsImport(jsonText) {
   const resultEl = document.getElementById('settings-import-result')
+  pendingSettingsImport = null
   try {
     const passphraseEl = document.getElementById('settings-passphrase')
     const passphrase = passphraseEl?.value || ''
-    await importSettings(jsonText, { passphrase })
-    if (resultEl) {
-      resultEl.textContent = '設定匯入成功'
-    }
+    const { plan, summary } = await previewSettingsImport(jsonText, { passphrase })
+    pendingSettingsImport = plan
+    if (resultEl) renderImportSummary(resultEl, summary)
   } catch (err) {
     if (resultEl) {
       resultEl.textContent = `設定匯入失敗：${err.message || '未知錯誤'}`
     }
   }
+}
+
+// 取消：零寫入、清掉摘要
+export function cancelSettingsImport() {
+  pendingSettingsImport = null
+  const resultEl = document.getElementById('settings-import-result')
+  if (resultEl) resultEl.textContent = ''
+  const fileEl = document.getElementById('settings-import-file')
+  if (fileEl) fileEl.value = ''
+}
+
+// 確認：寫入；成功後重畫整個設定頁（欄位才會顯示匯入後的值），失敗說明已還原
+export async function confirmSettingsImport() {
+  const plan = pendingSettingsImport
+  if (!plan) return
+  pendingSettingsImport = null
+  const resultEl = document.getElementById('settings-import-result')
+  if (resultEl) resultEl.textContent = '匯入中…'
+  try {
+    await applySettingsImport(plan)
+  } catch (err) {
+    if (resultEl) {
+      const restored = err?.restoreError ? '還原匯入前的設定時也失敗了，請重新整理後檢查' : '已還原成匯入前的設定'
+      resultEl.textContent = `設定匯入失敗：${err?.message || '未知錯誤'}；${restored}`
+    }
+    return
+  }
+  try {
+    await renderSettings()
+    // 匯入可能改了主題：當下就套用，不必重新整理頁面
+    await applySavedTheme()
+  } catch {}
+  if (resultEl) resultEl.textContent = '設定匯入成功'
 }
 
 // 處理歷史紀錄匯入
@@ -570,9 +667,12 @@ export async function handleRecordsImport(jsonTextArray) {
       }
     }
 
-    const { added, skipped } = await importRecords(allDays)
+    const { added, skipped, invalid = [] } = await importRecords(allDays)
     if (resultEl) {
       resultEl.textContent = `已新增 ${added} 筆、略過 ${skipped} 筆`
+      if (invalid.length > 0) {
+        appendList(resultEl, '不合格而略過的紀錄（前幾筆）', invalid.map(v => `${v.date} ${v.taskId || '（無 taskId）'}：${v.reason}`))
+      }
     }
     await renderStorageStats()
   } catch (err) {

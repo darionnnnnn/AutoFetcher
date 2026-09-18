@@ -3,6 +3,7 @@ import { pruneCardsForTask } from './layout-store.js'
 import { encryptSecret } from './crypto.js'
 import { parentIdOf, SERIES_SEP } from './series-index.js'
 import { withLock, lockNameOf } from './lock.js'
+import { isSuccess, isWarn, isRed } from './record-status.js'
 
 const DEFAULT_SETTINGS = {
   retentionDays: 365,
@@ -313,11 +314,29 @@ export async function getTask(id) {
   return tasks.find(t => t.id === id) || null
 }
 
-// 內部輔助函式：驗證單一任務物件格式
-function validateTask(task, index) {
+// 任務網址只收這幾種 scheme（AF-21 批次 3 定案 1）：javascript:／data:／chrome: 之類排程照開就是在擴充功能權限下執行
+const TASK_URL_PROTOCOLS = new Set(['http:', 'https:', 'file:'])
+
+// 任務網址的 scheme（解析不了回 null）
+export function taskUrlProtocolOf(url) {
+  try {
+    return new URL(url).protocol
+  } catch {
+    return null
+  }
+}
+
+// 驗證單一任務物件格式（寫入口與設定匯入共用；不合法丟例外）
+export function validateTask(task, index, { keptUrl } = {}) {
   const isValidStr = v => typeof v === 'string' && v.trim() !== ''
   if (!task || !isValidStr(task.id) || !isValidStr(task.name) || !isValidStr(task.url)) {
     const err = new Error('任務格式錯誤：id、name 與 url 必須皆為非空字串')
+    err.index = index
+    throw err
+  }
+
+  if (task.url !== keptUrl && !TASK_URL_PROTOCOLS.has(taskUrlProtocolOf(task.url))) {
+    const err = new Error('任務網址只能是 http、https 或 file')
     err.index = index
     throw err
   }
@@ -416,13 +435,13 @@ export async function updateTasks(ids, mutator) {
       if (!found) continue
       const next = await mutator(structuredClone(found))
       if (next === null || next === undefined) continue
-      changed.push(next)
+      changed.push({ next, keptUrl: found.url })
     }
     if (changed.length === 0) return undefined
     for (let i = 0; i < changed.length; i++) {
-      validateTask(changed[i], i)
+      validateTask(changed[i].next, i, { keptUrl: changed[i].keptUrl })
     }
-    savedTasks = mergeTasksUnlocked(tasks, changed)
+    savedTasks = mergeTasksUnlocked(tasks, changed.map(c => c.next))
     return tasks
   })
   return savedTasks
@@ -495,6 +514,13 @@ export async function getSite(origin) {
 // 儲存單一站台設定
 export async function saveSite(origin, site) {
   await mutateKey('sites', (current) => ({ ...asObject(current), [origin]: site }))
+}
+
+// 一次併入多個站台（同 origin 整筆取代；在 sites 鎖內讀-改-寫一次）
+export async function saveSites(entries) {
+  const patch = asObject(entries)
+  if (Object.keys(patch).length === 0) return
+  await mutateKey('sites', (current) => ({ ...asObject(current), ...patch }))
 }
 
 // 刪除單一站台設定
@@ -656,6 +682,39 @@ export async function updateLayout(mutator) {
   return updateValue('layout', (v) => v ?? { ...DEFAULT_LAYOUT, dashboards: [] }, mutator)
 }
 
+// 設定匯入會動到的鍵（AF-21 批次 3 定案 2）：只有這幾個可以被整鍵快照／還原
+const IMPORT_KEYS = ['tasks', 'sites', 'settings', 'layout']
+
+/**
+ * 設定匯入寫入前的快照：{ [key]: 原值 }，storage 裡沒有的鍵不列（還原時要刪掉）。
+ * 只讀不寫；還原經 restoreImportKeys，每個鍵在自己的鎖內重讀再覆寫。
+ */
+export async function snapshotImportKeys() {
+  const res = (await chrome.storage.local.get(IMPORT_KEYS)) || {}
+  const snap = {}
+  for (const key of IMPORT_KEYS) {
+    if (res[key] !== undefined) snap[key] = structuredClone(res[key])
+  }
+  return snap
+}
+
+/**
+ * 把設定匯入會動到的鍵整鍵覆寫回快照（快照裡沒有的鍵刪掉）。
+ * 逐鍵在各自的鎖內做，一次只持有一把；某鍵還原失敗不中斷其他鍵，最後丟出第一個錯誤。
+ */
+export async function restoreImportKeys(snapshot) {
+  const snap = asObject(snapshot)
+  let firstError = null
+  for (const key of IMPORT_KEYS) {
+    try {
+      await mutateKey(key, () => Object.prototype.hasOwnProperty.call(snap, key) ? structuredClone(snap[key]) : REMOVE)
+    } catch (err) {
+      if (!firstError) firstError = err
+    }
+  }
+  if (firstError) throw firstError
+}
+
 // 匯出設定與架構資料（不含任何抓取紀錄）
 export async function exportAll() {
   const [schemaVersion, tasks, sites, settings, rawLayout] = await Promise.all([
@@ -703,6 +762,7 @@ export async function importRecords(input) {
 
   let added = 0
   let skipped = 0
+  const invalid = []
 
   // 逐日在各自的鎖內併入（同一天的舊鍵與小時鍵共用一把）；
   // 去重要對鎖內讀到的「該日所有既有鍵」做，新紀錄依自己的小時寫進 rec2: 鍵
@@ -721,6 +781,14 @@ export async function importRecords(input) {
         for (const taskData of Object.values(day.tasks)) {
           if (!taskData || !Array.isArray(taskData.records)) continue
           for (const rec of taskData.records) {
+            const reason = invalidRecordReason(rec)
+            if (reason) {
+              skipped++
+              if (invalid.length < INVALID_REPORT_MAX) {
+                invalid.push({ date, taskId: typeof rec?.taskId === 'string' ? rec.taskId : '', reason })
+              }
+              continue
+            }
             const id = `${rec.taskId}::${rec.capturedAt}`
             if (seen.has(id)) {
               skipped++
@@ -740,7 +808,28 @@ export async function importRecords(input) {
     })
   }
 
-  return { added, skipped }
+  // invalid 只在有不合格紀錄時才帶（既有呼叫端與 za2 以 deepEqual 比對 { added, skipped }）
+  return invalid.length > 0 ? { added, skipped, invalid } : { added, skipped }
+}
+
+// 匯入時回報幾筆不合格紀錄的原因
+const INVALID_REPORT_MAX = 5
+
+// 單筆匯入紀錄不合格的原因（合格回空字串）：
+// taskId 的保留分隔字元多於一個就拆不出父任務與值 key，寫進去會變成永遠刪不掉的孤兒
+function invalidRecordReason(rec) {
+  if (!rec || typeof rec !== 'object') return '紀錄不是物件'
+  if (typeof rec.taskId !== 'string' || rec.taskId.trim() === '') return 'taskId 必須是非空字串'
+  if (rec.taskId.split(SERIES_SEP).length > 2) return `taskId 的保留字元 ${SERIES_SEP} 最多只能出現一次`
+  if (typeof rec.capturedAt !== 'string' || !Number.isFinite(Date.parse(rec.capturedAt))) return 'capturedAt 不是可解析的時間'
+  if (rec.status !== undefined && !isKnownRecordStatus(rec)) return `未知的狀態：${String(rec.status)}`
+  return ''
+}
+
+// 沒有 status 鍵的舊紀錄照收（za2 的既有匯入測試就是這種形狀）；有帶但不認得才拒絕
+// 已知的紀錄狀態：成功／警示／紅燈清單（record-status.js）＋ interrupted
+function isKnownRecordStatus(rec) {
+  return isSuccess(rec) || isWarn(rec) || isRed(rec) || rec.status === 'interrupted'
 }
 
 // 取得儲存用量與統計資訊
