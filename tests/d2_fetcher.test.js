@@ -24,22 +24,19 @@ const task = (over = {}) => ({
   ...over
 })
 
-test('成功路徑:開背景分頁、擷取、寫紀錄、關掉自己開的分頁', async () => {
+// AF-20 推翻「在使用者的視窗開背景分頁」:改在專用視窗抓(參數細節見 z4_fetch_tab)
+test('成功路徑:在專用視窗抓、擷取、寫紀錄、抓完關掉專用視窗', async () => {
   const { c, st, fe } = await fresh()
   await st.saveTask(task())
   const rec = await fe.runTask(task(), { slot: '2026-09-05T09:00', ...FAST })
   assert.equal(rec.status, 'ok')
   assert.equal(rec.value, 12)
   assert.equal(rec.slot, '2026-09-05T09:00')
-  const created = c.__calls.find(x => x.api === 'tabs.create')
-  assert.equal(created.args[0].active, false, '必須是背景分頁')
-  // AF-13：`autoDiscardable` 不是 `tabs.create` 的屬性，Chrome 會擋下整個呼叫。
-  // 原本的斷言把這個 bug 寫死了，反而讓「排程抓取一律失敗」在單元測試裡完全看不出來。
-  assert.equal(created.args[0].autoDiscardable, undefined,
-    'tabs.create 不吃 autoDiscardable，帶了它整個呼叫會被 Chrome 擋下')
+  assert.equal(c.__calls.filter(x => x.api === 'windows.create').length, 1)
+  assert.equal(c.__calls.filter(x => x.api === 'tabs.create').length, 0, '不在使用者的視窗開分頁')
   const upd = c.__calls.find(x => x.api === 'tabs.update' && x.args[1]?.autoDiscardable === false)
-  assert.ok(upd, '省電模式仍會卸載背景分頁，要改用 tabs.update 設')
-  assert.equal(c.__calls.filter(x => x.api === 'tabs.remove').length, 1, '自己開的分頁要關掉')
+  assert.ok(upd, '省電模式仍會卸載背景頁面，要改用 tabs.update 設')
+  assert.equal(c.__calls.filter(x => x.api === 'windows.remove').length, 1, '自己開的視窗要關掉')
   assert.equal((await st.getRecordsByDate('2026-09-05')).length, 1)
 })
 
@@ -47,10 +44,10 @@ test('冪等:同一個 slot 第二次呼叫直接略過,不開分頁不寫紀錄
   const { c, st, fe } = await fresh()
   await st.saveTask(task())
   await fe.runTask(task(), { slot: '2026-09-05T09:00', ...FAST })
-  const before = c.__calls.filter(x => x.api === 'tabs.create').length
+  const before = c.__calls.filter(x => x.api === 'windows.create').length
   const second = await fe.runTask(task(), { slot: '2026-09-05T09:00', ...FAST })
   assert.equal(second, null, '重複觸發應回 null')
-  assert.equal(c.__calls.filter(x => x.api === 'tabs.create').length, before)
+  assert.equal(c.__calls.filter(x => x.api === 'windows.create').length, before)
   assert.equal((await st.getRecordsByDate('2026-09-05')).length, 1)
 })
 
@@ -62,13 +59,13 @@ test('不同 slot 不受冪等影響', async () => {
   assert.equal((await st.getRecordsByDate('2026-09-05')).length, 2)
 })
 
-test('已開著同 URL 的分頁時直接沿用,不另開也不關掉', async () => {
+// AF-20 推翻 SPEC 舊條「已開著同 URL 的分頁優先直接擷取」:會在使用者眼前點按鈕、捲動,而且那一頁可能幾小時沒刷新
+test('已開著同 URL 的分頁時不拿來用,也不關掉它', async () => {
   const { c, st, fe } = await fresh()
   await st.saveTask(task())
-  await c.tabs.create({ url: 'https://a.test/p' })
-  const before = c.__calls.filter(x => x.api === 'tabs.create').length
+  const mine = await c.tabs.create({ url: 'https://a.test/p' })
   await fe.runTask(task(), { slot: '2026-09-05T09:00', ...FAST })
-  assert.equal(c.__calls.filter(x => x.api === 'tabs.create').length, before, '不得另開分頁')
+  assert.ok(!c.__calls.some(x => x.api === 'tabs.sendMessage' && x.args[0] === mine.id), '不得對使用者的分頁送訊息')
   assert.equal(c.__calls.filter(x => x.api === 'tabs.remove').length, 0, '不得關掉使用者的分頁')
 })
 
@@ -79,14 +76,15 @@ test('沒有任何視窗時先建一個最小化視窗,用完關掉', async () =
   await fe.runTask(task(), { slot: '2026-09-05T09:00', ...FAST })
   const created = c.__calls.find(x => x.api === 'windows.create')
   assert.ok(created, 'macOS 上 Chrome 可在無視窗狀態執行')
-  assert.equal(created.args[0].state, 'minimized')
+  // AF-20:直接以 minimized 建立的頁面 viewport 是 0×0,改成建好再最小化
+  assert.ok(c.__calls.some(x => x.api === 'windows.update' && x.args[1]?.state === 'minimized'))
   assert.equal(c.__calls.filter(x => x.api === 'windows.remove').length, 1)
 })
 
 test('分頁被丟棄(discarded)時先 reload', async () => {
   const { c, st, fe } = await fresh()
-  const t = await c.tabs.create({ url: 'https://a.test/p' })
-  c.__setTabState(t.id, { discarded: true })
+  // AF-20 起不沿用使用者的分頁,改讓抓取自己開的那一頁被卸載
+  c.__onTabCreated = (tab) => c.__setTabState(tab.id, { discarded: true })
   await st.saveTask(task())
   await fe.runTask(task(), { slot: '2026-09-05T09:00', ...FAST })
   assert.equal(c.__calls.filter(x => x.api === 'tabs.reload').length, 1)
@@ -209,7 +207,7 @@ test('同站台兩個任務串行,只開一個分頁', async () => {
     fe.runTask(task({ id: 't1' }), { slot: '2026-09-05T09:00', ...FAST }),
     fe.runTask(task({ id: 't2' }), { slot: '2026-09-05T09:00', ...FAST })
   ])
-  assert.equal(c.__calls.filter(x => x.api === 'tabs.create').length, 1, '同站台共用分頁')
+  assert.equal(c.__calls.filter(x => x.api === 'windows.create').length, 1, '同站台共用專用視窗')
   assert.equal((await st.getRecordsByDate('2026-09-05')).length, 2)
 })
 
