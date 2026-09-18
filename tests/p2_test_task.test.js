@@ -229,5 +229,6 @@ test('B-3 指定的分頁已經不在時，退回原本的找分頁流程', asyn
   c.__setTabResponder(() => ({ ok: true, value: 7, raw: '7', status: 'ok' }))
   const res = await runTask({ ...TEST_TASK_MSG.task }, { dryRun: true, reason: 'manual', tabId: 999999, extraDelayMs: 0 })
   assert.equal(res.ok, true, `分頁不見了要自己開一個，實得 ${JSON.stringify(res)}`)
-  assert.ok(c.__calls.some(x => x.api === 'tabs.create'), '要自己開分頁')
+  // AF-20:退回的流程是專用抓取視窗,不再在使用者的視窗開分頁
+  assert.ok(c.__calls.some(x => x.api === 'windows.create'), '要自己開專用視窗')
 })

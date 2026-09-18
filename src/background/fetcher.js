@@ -11,6 +11,7 @@ import { isSuccess, healthStatusOf } from '../shared/record-status.js'
 import { setTaskHealth, refreshBadge } from './health.js'
 import { ensureLoggedIn } from './login.js'
 import { locateFrame, sameOriginPath } from './frames.js'
+import { acquireFetchTab, openForegroundTab, enqueueForOrigin, waitTabReady } from './fetch-tab.js'
 
 // `locateFrame` 找到才有 frameId；失敗時回的是帶候選清單的物件（給診斷用），不是 null
 function frameFound(loc) {
@@ -265,45 +266,6 @@ async function writeRecord(record, opts = {}) {
   return record
 }
 
-// 同站台 Promise 佇列管理器
-const originQueues = new Map()
-
-// 同站台串行排隊執行
-function enqueueForOrigin(origin, fn) {
-  let entry = originQueues.get(origin)
-  if (!entry) {
-    entry = {
-      chain: Promise.resolve(),
-      pending: 0,
-      createdTabs: new Set(),
-      createdWindows: new Set()
-    }
-    originQueues.set(origin, entry)
-  }
-  entry.pending++
-
-  const run = async () => {
-    try {
-      return await fn(entry)
-    } finally {
-      entry.pending--
-      if (entry.pending === 0) {
-        originQueues.delete(origin)
-        for (const tabId of entry.createdTabs) {
-          try { await chrome.tabs.remove(tabId) } catch {}
-        }
-        for (const winId of entry.createdWindows) {
-          try { await chrome.windows.remove(winId) } catch {}
-        }
-      }
-    }
-  }
-
-  const resultPromise = entry.chain.then(run, run)
-  entry.chain = resultPromise.catch(() => {})
-  return resultPromise
-}
-
 // 執行任務的主要入口函式
 export async function runTask(task, opts = {}) {
   const {
@@ -366,6 +328,8 @@ export async function runTask(task, opts = {}) {
     // （讀分頁實際網址；框架其實找到了、是擷取階段斷線，診斷包不能長得跟「找不到框架」一樣）
     let tabId
     let loc = null
+    let restoreForeground = null
+    let acquiredTab = false
     // 佇列中再次確認冪等，防止併發重複執行（dryRun 與手動抓取略過）
     if (!dryRun && !isManual) {
       const currentLedger = await getLedger()
@@ -377,76 +341,29 @@ export async function runTask(task, opts = {}) {
     await setInflight(inflightKey, { state: 'running', startedAt: new Date().toISOString() })
     await chrome.runtime.getPlatformInfo()
 
-    let originalTabId = null
     try {
-      // 4. 視窗檢查：若目前無視窗則建立最小化視窗
-      const windows = await chrome.windows.getAll()
-      if (windows.length === 0) {
-        const win = await chrome.windows.create({ state: 'minimized' })
-        if (win?.id) queueCtx.createdWindows.add(win.id)
-      }
-
-      // 若為前景抓取，先記住目前作用中的分頁
-      if (task.foreground === true) {
-        try {
-          const currentActive = await chrome.tabs.query({ active: true, currentWindow: true })
-          if (Array.isArray(currentActive) && currentActive[0]?.id != null) {
-            originalTabId = currentActive[0].id
-          }
-        } catch {}
-      }
-
-      // 5. 分頁檢查：指定分頁存在則直接用，無則沿用既有網址分頁或新建
+      // 取得分頁：指定分頁存在則用、否則開前景分頁或走專用抓取分頁
+      let tab = null
       if (opts.tabId !== undefined && opts.tabId !== null) {
         try {
-          const tab = await chrome.tabs.get(opts.tabId)
-          // 那個分頁可能已經被使用者導去別的網站；讀它現在的網址核對過才用，
-          // 否則會在不相干的頁面上定位與擷取（對不上就退回原本的找分頁流程）
-          if (tab !== undefined && tab !== null && sameOriginPath(tab.url, task.url)) {
-            tabId = tab.id
-          }
+          tab = await chrome.tabs.get(opts.tabId)
         } catch {}
       }
 
-      if (tabId === undefined) {
-        const tabs = await chrome.tabs.query({ url: task.url })
-        if (tabs.length > 0) {
-          tabId = tabs[0].id
-          if (task.foreground === true) {
-            try {
-              await chrome.tabs.update(tabId, { active: true })
-            } catch {}
-          }
-        } else {
-          const newTab = await chrome.tabs.create({
-            url: task.url,
-            active: task.foreground === true
-          })
-          tabId = newTab.id
-          // `autoDiscardable` **不是 `tabs.create` 的屬性**，只有 `tabs.update` 吃它。
-          // 放進 create 會讓整個呼叫被 Chrome 擋下（Unexpected property），
-          // 等於「目標頁沒開著」的排程抓取一律失敗——開案就寫錯，AF-13 的煙霧測試才抓到。
-          // 省電模式會卸載背景分頁，所以還是要設，只是要設在對的地方。
-          try {
-            await chrome.tabs.update(tabId, { autoDiscardable: false })
-          } catch {}
-          queueCtx.createdTabs.add(tabId)
-        }
+      if (tab && sameOriginPath(tab.url, task.url)) {
+        tabId = tab.id
+        await waitTabReady(tabId, { pollMs, loadTimeoutMs })
+      } else if (task.foreground === true) {
+        const fg = await openForegroundTab(task.url, { pollMs, loadTimeoutMs })
+        tabId = fg.tabId
+        restoreForeground = fg.restore
+      } else {
+        const freshLoad = queueCtx.pageDirty === true || (Array.isArray(task.preActions) && task.preActions.length > 0)
+        tabId = await acquireFetchTab(queueCtx, task.url, { pollMs, loadTimeoutMs, freshLoad })
+        queueCtx.pageDirty = false
+        acquiredTab = true
       }
 
-      // 6. 檢查分頁是否已被丟棄，若是則重新載入
-      let tabInfo = await chrome.tabs.get(tabId)
-      if (tabInfo?.discarded === true) {
-        await chrome.tabs.reload(tabId)
-        tabInfo = await chrome.tabs.get(tabId)
-      }
-
-      // 7. 等候載入完成：每 pollMs 檢查一次，最多等 loadTimeoutMs（逾時不失敗）
-      const loadStart = Date.now()
-      while (tabInfo?.status !== 'complete' && Date.now() - loadStart < loadTimeoutMs) {
-        await sleep(pollMs)
-        tabInfo = await chrome.tabs.get(tabId)
-      }
       if (extraDelayMs > 0) await sleep(extraDelayMs)
 
       // 8. 確認登入狀態（若停留在登入頁則執行自動登入）
@@ -469,6 +386,10 @@ export async function runTask(task, opts = {}) {
       // 「先點按鈕，iframe 才出現」是常見情境，整批送給同一個 frame 一定失敗。
       const ranPreActions = Array.isArray(task.preActions) && task.preActions.length > 0
       if (ranPreActions) {
+        // 同站台共用分頁，前一個任務的點擊會留在頁面上，開關型按鈕第二次按會收回去
+        if (acquiredTab) {
+          queueCtx.pageDirty = true
+        }
         for (let i = 0; i < task.preActions.length; i++) {
           const action = task.preActions[i]
           const startedAt = Date.now()
@@ -845,10 +766,9 @@ export async function runTask(task, opts = {}) {
         error: shown
       }, { parentId: task.id, skipLedger: isManual })
     } finally {
-      // 若有記錄前景抓取前作用中的分頁，將焦點還原
-      if (originalTabId != null) {
+      if (restoreForeground) {
         try {
-          await chrome.tabs.update(originalTabId, { active: true })
+          await restoreForeground()
         } catch {}
       }
       // 清除 inflight 狀態

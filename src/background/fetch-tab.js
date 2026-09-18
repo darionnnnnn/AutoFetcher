@@ -46,7 +46,15 @@ function unregisterTab(tabId) {
   return registryQueue
 }
 
-async function waitForComplete(tabId, pollMs, loadTimeoutMs) {
+export async function waitTabReady(tabId, opts = {}) {
+  const { pollMs = 250, loadTimeoutMs = 30000 } = opts
+  try {
+    const cur = await chrome.tabs.get(tabId)
+    if (cur && cur.discarded === true) {
+      await chrome.tabs.reload(tabId)
+    }
+  } catch {}
+
   const start = Date.now()
   while (true) {
     let tab = null
@@ -134,14 +142,7 @@ export async function acquireFetchTab(holder, url, opts = {}) {
     holder.fetchTab = { tabId, windowId }
   }
 
-  try {
-    const cur = await chrome.tabs.get(tabId)
-    if (cur && cur.discarded === true) {
-      await chrome.tabs.reload(tabId)
-    }
-  } catch {}
-
-  await waitForComplete(tabId, pollMs, loadTimeoutMs)
+  await waitTabReady(tabId, { pollMs, loadTimeoutMs })
   return tabId
 }
 
@@ -176,14 +177,7 @@ export async function openForegroundTab(url, opts = {}) {
 
   await registerTab(tabId, null)
 
-  try {
-    const cur = await chrome.tabs.get(tabId)
-    if (cur && cur.discarded === true) {
-      await chrome.tabs.reload(tabId)
-    }
-  } catch {}
-
-  await waitForComplete(tabId, pollMs, loadTimeoutMs)
+  await waitTabReady(tabId, { pollMs, loadTimeoutMs })
 
   const restore = async () => {
     if (originalTabId != null) {
@@ -219,4 +213,38 @@ export async function cleanOrphanFetchTabs() {
       await unregisterTab(entry.tabId)
     }
   }
+}
+
+// 同站台 Promise 佇列管理器
+const originQueues = new Map()
+
+// 同站台串行排隊執行
+export function enqueueForOrigin(origin, fn) {
+  let entry = originQueues.get(origin)
+  if (!entry) {
+    entry = {
+      chain: Promise.resolve(),
+      pending: 0
+    }
+    originQueues.set(origin, entry)
+  }
+  entry.pending++
+
+  const run = async () => {
+    try {
+      return await fn(entry)
+    } finally {
+      entry.pending--
+      if (entry.pending === 0) {
+        try {
+          await releaseFetchTab(entry)
+        } catch {}
+        originQueues.delete(origin)
+      }
+    }
+  }
+
+  const resultPromise = entry.chain.then(run, run)
+  entry.chain = resultPromise.catch(() => {})
+  return resultPromise
 }
