@@ -87,6 +87,35 @@
       min-height: 18px;
       white-space: pre-line;
     }
+    .inline-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: var(--space-2, 8px);
+    }
+    .inline-row > input {
+      flex: 1 1 160px;
+      min-width: 0;
+    }
+    .site-hint {
+      font-size: var(--text-xs, 12px);
+      color: var(--text-muted);
+    }
+    .test-steps {
+      margin: 0;
+      padding-left: var(--space-3, 12px);
+      font-size: var(--text-xs, 12px);
+      line-height: 1.5;
+      color: var(--text);
+    }
+    .test-steps > li[data-ok="false"] { color: var(--danger); }
+    .test-result {
+      font-size: var(--text-xs, 12px);
+      color: var(--text);
+      white-space: pre-line;
+    }
+    .test-result[data-ok="true"] { color: var(--ok); }
+    .test-result[data-ok="false"] { color: var(--danger); }
   </style>
   <script type="module" src="./site.js"></script>
 </head>
@@ -114,21 +143,21 @@
           <span class="selector-label">帳號欄位</span>
           <span class="selector-value" data-field="user">尚未選取</span>
         </div>
-        <button type="button" data-action="pick-user">在頁面上選取</button>
+        <button type="button" id="pick-user-btn" data-action="pick-user">在頁面上選取</button>
       </div>
       <div class="selector-row">
         <div class="selector-info">
           <span class="selector-label">密碼欄位</span>
           <span class="selector-value" data-field="pass">尚未選取</span>
         </div>
-        <button type="button" data-action="pick-pass">在頁面上選取</button>
+        <button type="button" id="pick-pass-btn" data-action="pick-pass">在頁面上選取</button>
       </div>
       <div class="selector-row">
         <div class="selector-info">
           <span class="selector-label">送出按鈕</span>
           <span class="selector-value" data-field="submit">尚未選取</span>
         </div>
-        <button type="button" data-action="pick-submit">在頁面上選取</button>
+        <button type="button" id="pick-submit-btn" data-action="pick-submit">在頁面上選取</button>
       </div>
       <label>登入成功判定
         <select id="success-type">
@@ -136,13 +165,25 @@
           <option value="element">元素存在</option>
         </select>
       </label>
-      <label>成功判定值
+      <label for="success-value">成功判定值（登入後才會出現的網址開頭或元素）</label>
+      <div class="inline-row">
         <input type="text" id="success-value">
-      </label>
+        <button type="button" id="use-current-url">用目前這一頁的網址</button>
+      </div>
+      <div class="site-hint">登入後在這一頁按這顆</div>
+      <div class="inline-row">
+        <button type="button" id="site-test-login">測試登入</button>
+        <span class="site-hint">只在這台電腦上測試，不會儲存</span>
+      </div>
+      <ol id="test-login-steps" class="test-steps" hidden></ol>
+      <div id="test-login-result" class="test-result" role="status" hidden></div>
       <div id="site-note" class="site-note"></div>
     </div>
+    <!-- 「還不能儲存」的原因：緊貼固定列上方、在捲動區外（save-guard.js，與 Picker 同一套） -->
+    <div id="site-errors" class="save-guard" role="alert" hidden></div>
     <footer>
       <button type="button" id="site-cancel">取消</button>
+      <span id="site-missing" class="save-guard-count" hidden></span>
       <button type="button" id="site-save" class="btn-primary">儲存</button>
     </footer>
   </form>

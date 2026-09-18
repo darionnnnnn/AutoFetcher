@@ -438,7 +438,8 @@
           <li>打開那個網站的登入頁，在頁面上按右鍵。</li>
           <li>選「<span class="ui" data-ui-label="background/main.js">設定此站台登入</span>」。</li>
           <li>填帳號密碼，帳號、密碼、登入鈕各按一次「<span class="ui" data-ui-label="ui/site/site.html">在頁面上選取</span>」。</li>
-          <li>按「<span class="ui" data-ui-label="ui/site/site.html">儲存</span>」。</li>
+          <li><span class="ui" data-ui-label="ui/site/site.html">成功判定值</span>：登入後在那一頁按「<span class="ui" data-ui-label="ui/site/site.html">用目前這一頁的網址</span>」。</li>
+          <li>按「<span class="ui" data-ui-label="ui/site/site.html">測試登入</span>」，都打勾再按「<span class="ui" data-ui-label="ui/site/site.html">儲存</span>」。</li>
         </ol>
         <figure class="demo" data-help-figure>
           <div class="demo-row" aria-hidden="true">
@@ -456,6 +457,9 @@
           <dl>
             <dt>登入頁在另一個網域（例如用 Google 帳號登入）？</dt><dd>目前不支援，只支援同一個網站的登入表單。</dd>
             <dt>有驗證碼？</dt><dd>無法自動登入。請手動登入並保持登入狀態。</dd>
+            <dt>成功判定值為什麼不能填登入頁的網址？</dt><dd>那樣在登入頁上也會判定成功，帳密錯了也看不出來。請填登入之後才會到的那一頁。</dd>
+            <dt>測試登入說「目前已經是登入狀態」？</dt><dd>瀏覽器已經登入著，打開登入頁會直接被帶走，沒辦法驗證帳密。請先在該網站登出再測。測試只在這台電腦上跑，密碼不會因此被儲存。</dd>
+            <dt>連續登入失敗被自動停用了？</dt><dd>改好設定按「儲存」就會重新啟用，紅燈也會一起清掉。</dd>
             <dt>密碼安全嗎？</dt><dd>密碼加密後只存在這台電腦的瀏覽器裡，不會同步到別台。匯出設定預設不帶密碼；要帶到別台電腦，匯出時勾選「包含站台密碼」並設一組密語。</dd>
           </dl>
         </details>

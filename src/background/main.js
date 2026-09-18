@@ -2,7 +2,7 @@
 import {
   init as initStorage, getTask, updateTasks, getRecordsByDate, updateRepickTabs,
   getPanelCtx, setPanelCtx, mergePanelCtx, clearPanelCtx,
-  getSettings, subscribe, deleteLastValues
+  getSettings, subscribe, deleteLastValues, getSite
 } from '../shared/storage.js'
 import { pruneSeries } from '../shared/layout-store.js'
 import { openPanel, closePanel } from '../shared/panel.js'
@@ -34,6 +34,8 @@ import { isAnchorText, putSkip } from '../shared/table.js'
 import { pickSpecOf, reconcileFields } from '../shared/field-match.js'
 import { withInnerLabel } from '../shared/describe.js'
 import { scheduleSiteCheck, runSiteCheck } from './sitecheck.js'
+import { testLogin } from './login.js'
+import { decryptSecret } from '../shared/crypto.js'
 import { isSuccess, statusTextOf } from '../shared/record-status.js'
 import { parentIdOf, buildSeriesIndex, nameOf, seriesIdOf } from '../shared/series-index.js'
 
@@ -453,6 +455,41 @@ async function isFromContentScript(sender) {
   return !String(sender.url ?? '').startsWith(origin)
 }
 
+// 站台面板的「測試登入」（AF-21 批次 4）：表單上尚未儲存的設定＋明文密碼（或 useSaved 由這裡解密已存密文）。
+// 密碼只活在這則訊息與函式參數裡：不寫 diag、紀錄、storage；失敗不累加站台的失敗計數
+async function handleTestLogin(msg, runOpts = {}) {
+  const src = msg.site && typeof msg.site === 'object' ? msg.site : {}
+  const loginUrl = typeof src.loginUrl === 'string' ? src.loginUrl.trim() : ''
+  let origin = ''
+  try { origin = new URL(loginUrl).origin } catch {}
+  if (!origin || !/^https?:/.test(loginUrl)) return { ok: false, error: '登入頁網址不是合法的網址' }
+  const sel = src.selectors || {}
+  if (!sel.user || !sel.pass || !sel.submit) return { ok: false, error: '帳號欄位、密碼欄位、送出按鈕都要先選好' }
+  const successCheck = src.successCheck && typeof src.successCheck === 'object' ? src.successCheck : {}
+  if (!['urlPrefix', 'element'].includes(successCheck.type) || typeof successCheck.value !== 'string' || !successCheck.value) {
+    return { ok: false, error: '沒有設定成功判定值' }
+  }
+  let password = typeof msg.password === 'string' ? msg.password : ''
+  if (!password && msg.useSaved === true) {
+    const saved = await getSite(origin)
+    if (!saved?.passwordEnc) return { ok: false, error: '沒有已儲存的密碼，請填入密碼再測' }
+    try {
+      password = await decryptSecret(saved.passwordEnc)
+    } catch {
+      return { ok: false, error: '已儲存的密碼解不開，請重新填入密碼' }
+    }
+  }
+  if (!password) return { ok: false, error: '請填入密碼再測' }
+  const site = {
+    loginUrl,
+    selectors: { user: sel.user, pass: sel.pass, submit: sel.submit },
+    loginCheck: { type: 'urlPrefix', value: loginUrl },
+    successCheck: { type: successCheck.type, value: successCheck.value },
+    username: typeof src.username === 'string' ? src.username : ''
+  }
+  return await testLogin(site, password, runOpts)
+}
+
 export async function handleMessage(msg, sender, runOpts = {}) {
   const contentMs = runOpts.contentTimeoutMs ?? CONTENT_MESSAGE_TIMEOUT_MS
   try {
@@ -718,6 +755,10 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         preselect: msg.preselect || preselectOf(task)
       }, frameId, contentMs, 'Enter pick')
       return { ok: true }
+    }
+
+    if (msg.type === MSG.TEST_LOGIN) {
+      return await handleTestLogin(msg, runOpts)
     }
 
     if (msg.type === 'MARK_READ') {

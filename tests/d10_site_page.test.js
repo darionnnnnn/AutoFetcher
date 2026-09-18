@@ -89,7 +89,8 @@ test('三個欄位沒選完不得存檔,並顯示原因', async () => {
   doc.getElementById('password').value = 'hunter2'
   await sp.handleSave()
   assert.equal(await st.getSite(ORIGIN), null, '選擇器不齊全的設定存了也不能用')
-  assert.ok(doc.getElementById('site-note').textContent.length > 0, '要告訴使用者缺什麼')
+  // AF-21 批次 4：原因改列在固定列正上方的守門區（#site-errors），不再是捲動區內的 #site-note 紅字
+  assert.ok(doc.getElementById('site-errors').textContent.length > 0, '要告訴使用者缺什麼')
 })
 
 test('編輯既有站台時帶出現況,密碼欄留空表示不變更', async () => {

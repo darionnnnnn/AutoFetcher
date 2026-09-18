@@ -21,7 +21,9 @@ export const MSG = {
   // AF-10 作業 B：side panel 的生命週期
   RESOLVE_PANEL_TAB: 'RESOLVE_PANEL_TAB',
   PANEL_CLOSING: 'PANEL_CLOSING',
-  CLOSE_PANEL: 'CLOSE_PANEL'
+  CLOSE_PANEL: 'CLOSE_PANEL',
+  // AF-21 批次 4：站台面板用尚未儲存的設定測一次登入（只給擴充功能頁送，不進 CONTENT_ALLOWED）
+  TEST_LOGIN: 'TEST_LOGIN'
 }
 
 // content script（跑在任意網頁上）可以送給 background 的型別（AF-21 批次 3 定案 3）。
