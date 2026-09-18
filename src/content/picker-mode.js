@@ -1,7 +1,7 @@
 // 豁免說明：此檔案在網頁 isolated world 執行，網頁未載入 ui/theme.css，
 // 因此為全專案唯一允許寫色碼字面值之檔案。所有色碼集中在下方 COLORS 常數，
 // 其餘程式碼一律引用 COLORS 的屬性。
-import { MSG } from '../shared/messages.js'
+import { MSG, MAX_BATCH_TASKS } from '../shared/messages.js'
 import { describe } from '../shared/selector.js'
 import { detectKind } from '../shared/block-detect.js'
 import { parseNumber, resolveByPosition, locateByHeader } from '../shared/extract.js'
@@ -60,7 +60,25 @@ function footerNotice(added) {
 // 非表格元素被「點一下鎖定」後不再跟著滑鼠跑（檔案總管點一下選取的習慣）
 let lockedEl = null
 // 換到另一張不相干表格時（已選 ≥2），第一次只提示、再點一次才真的換掉
-let replaceConfirmPending = null
+let replaceConfirmPending
+// 取消選取的二段確認狀態（形狀：{ at, count }）
+let cancelConfirmPending = null
+// Ctrl+A 全選截斷提示狀態（形狀：{ scanned, taken }）
+let selectAllNotice = null
+
+// 工具列四段之設定（作用中模式與預告提示共用）
+const TOOLS_DEF = [
+  { key: 'cell', label: '單格', title: '只選這一格' },
+  { key: 'col', label: '整欄→一個值', title: '整欄合成一個數字（加總、平均…）' },
+  { key: 'colEach', label: '整欄→每格', title: '這一欄每一格各自是一個值' },
+  { key: 'row', label: '整列→一個值', title: '整列合成一個數字' }
+]
+
+// 清除表格切換確認與取消確認的暫存狀態
+function clearPendingConfirms() {
+  replaceConfirmPending = null
+  cancelConfirmPending = null
+}
 // 工具列被點到停用的那一段時要說原因（點不動卻沒訊息是最容易被當成壞掉的）
 let toolbarNotice = null
 // 這一格內含表格時的警語（面板唯一一份）
@@ -101,8 +119,8 @@ let originalUserSelect = '', dragStart = null, isDragging = false, suppressClick
 let batchMode = false, batchGroups = [], currentGroupIdx = -1
 // 各表最後一次 hover 的列欄（送出時非目前這張表的組要用它組 blockInfo，與非批次送出同一口徑）
 const batchHover = new Map()
-const MAX_BATCH_GROUPS = 20
-const BATCH_LIMIT_NOTICE = '一次最多建立 20 個任務；要再加請先完成這一批'
+const MAX_BATCH_GROUPS = MAX_BATCH_TASKS
+const BATCH_LIMIT_NOTICE = `一次最多建立 ${MAX_BATCH_GROUPS} 個任務；要再加請先完成這一批`
 const BATCH_FRAME_NOTICE = '進入框架會離開這一頁的選取；請先完成這一批，再對框架內的內容另開一批'
 
 // detectKind 會掃整棵子樹，而滑鼠每移動一格都要問一次，因此記住最後一次的結果
@@ -533,7 +551,7 @@ function loadBatchGroup(i) {
   currentGroupIdx = i
   limitReached = selectedList.length >= maxPicks
   trimReady = false
-  replaceConfirmPending = null
+  clearPendingConfirms()
 }
 
 /**
@@ -577,7 +595,7 @@ function batchFollowTarget(tableEl) {
   currentGroupIdx = -1
   limitReached = false
   trimReady = false
-  replaceConfirmPending = null
+  clearPendingConfirms()
   return true
 }
 
@@ -768,6 +786,17 @@ function clearHeldMarks(doc, purpose) {
 function clearPickedMarks(doc) {
   const d = doc || (typeof document !== 'undefined' ? document : null)
   if (!d || typeof d.querySelectorAll !== 'function') return
+  for (const cell of d.querySelectorAll('[data-af-chip-hover]')) {
+    if (cell._afHoverTimer) {
+      clearTimeout(cell._afHoverTimer)
+      delete cell._afHoverTimer
+    }
+    cell.removeAttribute('data-af-chip-hover')
+    if (cell._afPrevOutline !== undefined) {
+      cell.style.outline = cell._afPrevOutline
+      delete cell._afPrevOutline
+    }
+  }
   // 保留中的標示（送出後留給面板旁邊看的那些）不在這裡清，
   // 它們的出口是 EXIT_PICK 或下一次同用途的 ENTER_PICK
   for (const cell of d.querySelectorAll('[data-af-picked]:not([data-af-held])')) {
@@ -808,48 +837,53 @@ function applyPickedMarks(tableEl) {
   }
 }
 
+// 取得一個 pick 所涵蓋的所有格子元素
+function cellsOfPick(tableEl, pick) {
+  if (!tableEl || !isTableMode(tableEl) || !pick) return []
+  const dataRows = resolveDataRows(tableEl)
+  const cells = []
+  if (pick.cell) {
+    const row = dataRows[pick.cell.row.index]
+    if (row) {
+      const cell = targetAtGrid(row, pick.cell.col.index, pick.cell.inner)
+      if (cell && !isHeaderCell(cell)) {
+        cells.push(cell)
+      }
+    }
+  } else if (pick.block) {
+    if (pick.block.axis === 'col') {
+      for (let r = 0; r < dataRows.length; r++) {
+        if (isExcludedCell(pick.block, r, pick.block.index)) continue
+        const cell = targetAtGrid(dataRows[r], pick.block.index, pick.block.inner)
+        if (cell && !isHeaderCell(cell)) {
+          cells.push(cell)
+        }
+      }
+    } else if (pick.block.axis === 'row') {
+      const row = dataRows[pick.block.index]
+      if (row) {
+        for (const c of getRowCells(row)) {
+          const idx = gridIndexOf(row, c)
+          if (isExcludedCell(pick.block, pick.block.index, idx)) continue
+          const cell = targetAtGrid(row, idx, pick.block.inner)
+          if (cell && !isHeaderCell(cell)) {
+            cells.push(cell)
+          }
+        }
+      }
+    }
+  }
+  return cells
+}
+
 function drawPicksOn(tableEl, picks) {
   if (!tableEl || !isTableMode(tableEl)) return
   const dataRows = resolveDataRows(tableEl)
   for (const pick of picks) {
-    if (pick.cell) {
-      const row = dataRows[pick.cell.row.index]
-      if (row) {
-        const cell = targetAtGrid(row, pick.cell.col.index, pick.cell.inner)
-        if (cell && !isHeaderCell(cell)) {
-          cell.setAttribute('data-af-picked', '')
-          if (!cell.hasAttribute('data-af-cell')) {
-            cell.style.outline = `2px solid ${COLORS.primary}`
-          }
-        }
-      }
-    } else if (pick.block) {
-      if (pick.block.axis === 'col') {
-        for (let r = 0; r < dataRows.length; r++) {
-          if (isExcludedCell(pick.block, r, pick.block.index)) continue
-          const cell = targetAtGrid(dataRows[r], pick.block.index, pick.block.inner)
-          if (cell && !isHeaderCell(cell)) {
-            cell.setAttribute('data-af-picked', '')
-            if (!cell.hasAttribute('data-af-cell')) {
-              cell.style.outline = `2px solid ${COLORS.primary}`
-            }
-          }
-        }
-      } else if (pick.block.axis === 'row') {
-        const row = dataRows[pick.block.index]
-        if (row) {
-          for (const c of getRowCells(row)) {
-            const idx = gridIndexOf(row, c)
-            if (isExcludedCell(pick.block, pick.block.index, idx)) continue
-            const cell = targetAtGrid(row, idx, pick.block.inner)
-            if (cell && !isHeaderCell(cell)) {
-              cell.setAttribute('data-af-picked', '')
-              if (!cell.hasAttribute('data-af-cell')) {
-                cell.style.outline = `2px solid ${COLORS.primary}`
-              }
-            }
-          }
-        }
+    for (const cell of cellsOfPick(tableEl, pick)) {
+      cell.setAttribute('data-af-picked', '')
+      if (!cell.hasAttribute('data-af-cell')) {
+        cell.style.outline = `2px solid ${COLORS.primary}`
       }
     }
   }
@@ -1138,6 +1172,19 @@ function removeLastPick(saveSnapshot = true) {
   updatePanel(panelEl, currentTargetEl)
 }
 
+// 取得一個 chip 所對應的頁面格子或元素
+function cellsOfChip(chip) {
+  if (chip._afEl) return [chip._afEl]
+  if (chip._afTable && chip._afPick) return cellsOfPick(chip._afTable, chip._afPick)
+  return []
+}
+
+// 取得元素文字作為名稱提示（連續空白縮減為單一空白，最多 20 字）
+function elementNameHint(el) {
+  if (!el) return ''
+  return (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 20)
+}
+
 // 已選值的 chip（× 移除那一個值）；批次模式各組共用同一份建法
 function buildPickChip(i, name) {
   const chip = document.createElement('div')
@@ -1152,6 +1199,29 @@ function buildPickChip(i, name) {
   chip.style.fontSize = '12px'
   chip.style.minHeight = '28px'
   chip.style.transition = reduceMotion ? '' : 'background-color 150ms ease'
+
+  chip.addEventListener('mouseenter', () => {
+    for (const cell of cellsOfChip(chip)) {
+      if (cell._afPrevOutline === undefined) {
+        cell._afPrevOutline = cell.style.outline
+      }
+      cell.setAttribute('data-af-chip-hover', '')
+      cell.style.outline = `3px solid ${COLORS.primary}`
+    }
+  })
+  chip.addEventListener('mouseleave', () => {
+    for (const cell of cellsOfChip(chip)) {
+      if (cell._afHoverTimer) {
+        clearTimeout(cell._afHoverTimer)
+        delete cell._afHoverTimer
+      }
+      cell.removeAttribute('data-af-chip-hover')
+      if (cell._afPrevOutline !== undefined) {
+        cell.style.outline = cell._afPrevOutline
+        delete cell._afPrevOutline
+      }
+    }
+  })
 
   const nameSpan = document.createElement('span')
   nameSpan.textContent = name
@@ -1181,7 +1251,7 @@ function renderBatchGroups(panel, groups, el) {
     head.style.gap = '6px'
     head.style.fontWeight = 'bold'
     const title = document.createElement('span')
-    const nameHint = g.el ? (g.el.textContent || '').trim().slice(0, 20) : (computeNameHint(g.tableEl) || '')
+    const nameHint = g.el ? elementNameHint(g.el) : (computeNameHint(g.tableEl) || '')
     const n = g.el ? 1 : g.picks.length
     title.textContent = `任務 ${gi + 1}：${nameHint}（${n} 個值）`
     head.appendChild(title)
@@ -1194,13 +1264,23 @@ function renderBatchGroups(panel, groups, el) {
     box.appendChild(head)
 
     const listDiv = document.createElement('div')
+    listDiv.setAttribute('data-af-chip-list', '')
     listDiv.style.display = 'flex'
     listDiv.style.flexWrap = 'wrap'
     listDiv.style.gap = '4px'
+    listDiv.style.maxHeight = '40vh'
+    listDiv.style.overflowY = 'auto'
     if (g.el) {
-      listDiv.appendChild(buildPickChip(0, nameHint || '這個元素'))
+      const chip = buildPickChip(0, nameHint || '這個元素')
+      chip._afEl = g.el
+      listDiv.appendChild(chip)
     } else {
-      g.picks.forEach((pick, i) => listDiv.appendChild(buildPickChip(i, getPickName(pick))))
+      g.picks.forEach((pick, i) => {
+        const chip = buildPickChip(i, getPickName(pick))
+        chip._afTable = g.tableEl
+        chip._afPick = pick
+        listDiv.appendChild(chip)
+      })
     }
     box.appendChild(listDiv)
     panel.appendChild(box)
@@ -1209,9 +1289,24 @@ function renderBatchGroups(panel, groups, el) {
   const noticeLines = []
   if (limitReached) noticeLines.push('（已達選取上限）')
   if (headerChangedNotice) noticeLines.push('（位置已變）')
+  if (cancelConfirmPending) {
+    noticeLines.push(`再按一次 Esc（或再點「取消」）才會取消，會丟掉 ${cancelConfirmPending.count} 個已選值`)
+  }
+  if (selectAllNotice) {
+    if (selectedList.length === selectAllNotice.taken) {
+      noticeLines.push(`這張表有 ${selectAllNotice.scanned} 格，只選到前 ${selectAllNotice.taken} 格（上限）`)
+    } else {
+      selectAllNotice = null
+    }
+  }
   if (undoSnapshot) noticeLines.push('可按復原或 Ctrl／⌘＋Z 還原上一步')
   if (cellWrapsTable(currentCellEl) && !currentInner) noticeLines.push(NESTED_CELL_NOTICE)
   if (toolbarNotice) noticeLines.push(toolbarNotice)
+  const hoverCell = currentCellEl || (currentHoverEl && cellOf(currentHoverEl))
+  if ((currentPurpose === 'task' || currentPurpose === 'repick') && selectedCount() > 0 &&
+      hoverCell && !hoverCell.hasAttribute('data-af-picked') && !hoverCell.closest?.('[data-af-picked]') && !hoverCell.querySelector?.('[data-af-picked]')) {
+    noticeLines.push(`Enter＝完成，只送已選的 ${selectedCount()} 個；要加這一格請先點它`)
+  }
   noticeLines.push(instructionLine(el))
   appendPanelText(panel, noticeLines)
   updatePanelActions(el)
@@ -1248,13 +1343,19 @@ function updatePanel(panel, el) {
     panel.appendChild(headerDiv)
 
     const listDiv = document.createElement('div')
+    listDiv.setAttribute('data-af-chip-list', '')
     listDiv.style.display = 'flex'
     listDiv.style.flexWrap = 'wrap'
     listDiv.style.gap = '4px'
     listDiv.style.marginBottom = '6px'
+    listDiv.style.maxHeight = '40vh'
+    listDiv.style.overflowY = 'auto'
 
     for (let i = 0; i < selectedList.length; i++) {
-      listDiv.appendChild(buildPickChip(i, getPickName(selectedList[i])))
+      const chip = buildPickChip(i, getPickName(selectedList[i]))
+      chip._afTable = pickedTableEl || currentTargetEl
+      chip._afPick = selectedList[i]
+      listDiv.appendChild(chip)
     }
     panel.appendChild(listDiv)
 
@@ -1285,6 +1386,16 @@ function updatePanel(panel, el) {
     if (replaceConfirmPending) {
       noticeLines.push(`再點一次才會換到這張表（會取代 ${selectedList.length} 個已選值）`)
     }
+    if (cancelConfirmPending) {
+      noticeLines.push(`再按一次 Esc（或再點「取消」）才會取消，會丟掉 ${cancelConfirmPending.count} 個已選值`)
+    }
+    if (selectAllNotice) {
+      if (selectedList.length === selectAllNotice.taken) {
+        noticeLines.push(`這張表有 ${selectAllNotice.scanned} 格，只選到前 ${selectAllNotice.taken} 格（上限）`)
+      } else {
+        selectAllNotice = null
+      }
+    }
     if (undoSnapshot) {
       noticeLines.push(undoSnapshot.tableEl && pickedTableEl && undoSnapshot.tableEl !== pickedTableEl
         ? '已換到另一張表格（可按復原或 Ctrl／⌘＋Z 回上一張）'
@@ -1292,6 +1403,11 @@ function updatePanel(panel, el) {
     }
     if (cellWrapsTable(currentCellEl) && !currentInner) noticeLines.push(NESTED_CELL_NOTICE)
     if (toolbarNotice) noticeLines.push(toolbarNotice)
+    const hoverCell = currentCellEl || (currentHoverEl && cellOf(currentHoverEl))
+    if ((currentPurpose === 'task' || currentPurpose === 'repick') && selectedList.length > 0 &&
+        hoverCell && !hoverCell.hasAttribute('data-af-picked') && !hoverCell.closest?.('[data-af-picked]') && !hoverCell.querySelector?.('[data-af-picked]')) {
+      noticeLines.push(`Enter＝完成，只送已選的 ${selectedList.length} 個；要加這一格請先點它`)
+    }
     noticeLines.push(instructionLine(el))
     const footerDiv = document.createElement('div')
     footerDiv.textContent = noticeLines.join('\n')
@@ -1504,6 +1620,20 @@ function updatePanelActions(el) {
     panelTrimHeadEl.style.opacity = trimDisabled ? '0.5' : '1'
     panelTrimTailEl.style.opacity = trimDisabled ? '0.5' : '1'
   }
+
+  if (toolbarEl) {
+    const lastName = selectedList.length > 0 ? getPickName(selectedList[selectedList.length - 1]) : null
+    for (const def of TOOLS_DEF) {
+      if (def.key === 'cell') continue
+      const btn = toolbarEl.querySelector(`[data-af-tool="${def.key}"]`)
+      if (!btn) continue
+      if (lastName) {
+        btn.setAttribute('title', `會把最後選的「${lastName}」換成${def.label}`)
+      } else {
+        btn.setAttribute('title', def.title)
+      }
+    }
+  }
 }
 
 // 設定當前目標元素
@@ -1602,6 +1732,7 @@ function markTransition() {
 
 function handleTableMouseMove(target) {
   if (!currentTargetEl || !isTableMode(currentTargetEl)) return
+  const prevCell = currentCellEl
   currentHoverEl = target
   // 滑鼠在表頭上：先讓使用者看到點下去會選到整欄（或整列），再決定點不點
   const head = resolveHeaderTarget(target, currentTargetEl)
@@ -1626,7 +1757,10 @@ function handleTableMouseMove(target) {
     } else {
       applyPickedMarks(currentTargetEl)
     }
-    syncNestedNotice()
+    const updated = syncNestedNotice()
+    if (!updated && prevCell !== currentCellEl) {
+      if (panelEl) updatePanel(panelEl, currentTargetEl)
+    }
     return
   }
   const info = resolveCell(target, currentTargetEl)
@@ -1645,7 +1779,10 @@ function handleTableMouseMove(target) {
     } else {
       applyPickedMarks(currentTargetEl)
     }
-    syncNestedNotice()
+    const updated = syncNestedNotice()
+    if (!updated && prevCell !== currentCellEl) {
+      if (panelEl) updatePanel(panelEl, currentTargetEl)
+    }
     return
   }
   setCursor('cell')
@@ -1674,7 +1811,10 @@ function handleTableMouseMove(target) {
         } else {
           applyPickedMarks(currentTargetEl)
         }
-        syncNestedNotice()
+        const updated = syncNestedNotice()
+        if (!updated && prevCell !== currentCellEl) {
+          if (panelEl) updatePanel(panelEl, currentTargetEl)
+        }
         return
       }
     }
@@ -1685,7 +1825,10 @@ function handleTableMouseMove(target) {
   } else {
     applyPickedMarks(currentTargetEl)
   }
-  syncNestedNotice()
+  const updated = syncNestedNotice()
+  if (!updated && prevCell !== currentCellEl) {
+    if (panelEl) updatePanel(panelEl, currentTargetEl)
+  }
 }
 
 // 批次模式：記下這張表最後一次 hover 的列欄（滑鼠移到別張表後 setTarget 會把它們清掉）
@@ -1706,9 +1849,10 @@ function blockHintFor(tableEl) {
 // hover 的格子是否內含表格且無子單位，改變時才重畫面板（每次 mousemove 都重畫會把按鈕從指尖換掉）
 function syncNestedNotice() {
   const on = Boolean(cellWrapsTable(currentCellEl) && !currentInner)
-  if (on === nestedNoticeOn) return
+  if (on === nestedNoticeOn) return false
   nestedNoticeOn = on
   if (panelEl) updatePanel(panelEl, currentTargetEl)
+  return true
 }
 
 // 取得表格 caption 文字
@@ -2024,9 +2168,16 @@ function confirmPick() {
     // 恰好一組而且就是目前這組：走下面的單任務流程，送出與非批次模式逐欄相同
     const onlyLive = batchGroups.length === 1 && currentGroupIdx === 0
     if (batchGroups.length > 0 && !onlyLive) {
-      const payloads = batchGroups.map(g => g.el
-        ? buildPickPayload(g.el, [{ locator: describe(g.el) }], null)
-        : buildPickPayload(g.tableEl, g.picks.slice(), blockHintFor(g.tableEl)))
+      const payloads = batchGroups.map(g => {
+        if (g.el) {
+          const payload = buildPickPayload(g.el, [{ locator: describe(g.el) }], null)
+          // 只有真的送出 batch 陣列時才補名稱提示：恰好一組走單任務訊息，要與非批次模式逐欄相同
+          const hint = batchGroups.length >= 2 ? elementNameHint(g.el) : ''
+          if (hint) payload.nameHint = hint
+          return payload
+        }
+        return buildPickPayload(g.tableEl, g.picks.slice(), blockHintFor(g.tableEl))
+      })
       const msg = batchGroups.length === 1
         ? { type: MSG.PICKED, purpose: currentPurpose, ...payloads[0] }
         : { type: MSG.PICKED, purpose: currentPurpose, batch: payloads }
@@ -2165,6 +2316,27 @@ function confirmPick() {
   exitPickMode(currentPurpose === 'repick' ? {} : { hold: currentPurpose })
 }
 
+// 請求取消選取模式（已選 2 個以上需二段確認）
+function requestCancel() {
+  const count = selectedCount()
+  const needConfirm = (currentPurpose === 'task' || currentPurpose === 'repick') && count >= 2
+  if (needConfirm) {
+    // 「是不是同一次確認」比的是清單內容，不是數量：工具列把最後一格換成整欄、右鍵排除／取消排除
+    // 都不改數量，只比數量的話這些變動之後的 Esc 會被當成第二次而直接取消
+    const sig = JSON.stringify(batchMode
+      ? batchGroupsView().map(g => (g.el ? describe(g.el) : g.picks))
+      : selectedList)
+    if (!cancelConfirmPending || cancelConfirmPending.sig !== sig) {
+      cancelConfirmPending = { at: Date.now(), count, sig }
+      if (panelEl) updatePanel(panelEl, currentTargetEl)
+      return
+    }
+    // 太快的第二下（習慣性連按）不算；**不得重設計時**——重設的話每 300 毫秒按一次就永遠取消不了
+    if (Date.now() - cancelConfirmPending.at < 400) return
+  }
+  cancelPick()
+}
+
 // 送出取消訊息並離開
 function cancelPick() {
   const msg = { type: MSG.PICKED, purpose: currentPurpose, cancelled: true }
@@ -2291,7 +2463,7 @@ function handleMenuAction(action) {
     return
   }
   if (action === 'cancel') {
-    cancelPick()
+    requestCancel()
     return
   }
   if (action === 'element') {
@@ -2759,8 +2931,13 @@ function onMouseMove(event) {
 function onKeyDown(event) {
   if (!active) return
   if (event.key === 'Escape') {
-    event.preventDefault(); cancelPick()
-  } else if (event.key === 'Backspace') {
+    event.preventDefault()
+    if (event.repeat) return
+    requestCancel()
+    return
+  }
+  cancelConfirmPending = null
+  if (event.key === 'Backspace' || event.key === 'Delete') {
     // 沒有東西可移除就放給頁面：選取模式可能開在有輸入框的頁面上（例如站台登入設定）
     if (selectedList.length > 0) {
       event.preventDefault()
@@ -2814,6 +2991,7 @@ function onKeyDown(event) {
     pickedTableEl = null
     // 全選的是整格：hover 時算出的子單位路徑要清掉，否則接著 Tab／Shift＋方向鍵會沿它框子元素
     currentInner = null
+    let scanned = 0
     for (let r = 0; r < dataRows.length; r++) {
       const row = dataRows[r]
       const cells = getRowCells(row)
@@ -2823,14 +3001,16 @@ function onKeyDown(event) {
         if (isHeaderCell(cell)) continue
         const cIdx = gridIndexOf(row, cell)
         if (cIdx >= 0) {
-          addPick(makeCellPick(r, cIdx, currentTargetEl, dataRows))
+          scanned++
+          if (!limitReached) {
+            addPick(makeCellPick(r, cIdx, currentTargetEl, dataRows))
+          }
         }
-        if (limitReached) break
       }
-      if (limitReached) break
     }
+    selectAllNotice = scanned > selectedList.length ? { scanned, taken: selectedList.length } : null
     undoSnapshot = previous
-    replaceConfirmPending = null
+    clearPendingConfirms()
     if (selectedList.length > 0 && pickedTableEl) {
       applyPickedMarks(pickedTableEl)
     } else {
@@ -3173,7 +3353,35 @@ function onClick(event) {
   }
   const cancelBtn = event.target && event.target.closest ? event.target.closest('[data-af-cancel]') : null
   if (cancelBtn) {
-    cancelPick()
+    requestCancel()
+    return
+  }
+
+  // 4c. 點 chip 本體（捲進畫面並加粗外框提示 1 秒）
+  const chipEl = event.target && event.target.closest ? event.target.closest('[data-af-chip]') : null
+  if (chipEl) {
+    const cells = cellsOfChip(chipEl)
+    if (cells.length > 0) {
+      if (typeof cells[0].scrollIntoView === 'function') {
+        cells[0].scrollIntoView({ block: 'nearest' })
+      }
+      for (const cell of cells) {
+        if (cell._afPrevOutline === undefined) {
+          cell._afPrevOutline = cell.style.outline
+        }
+        cell.setAttribute('data-af-chip-hover', '')
+        cell.style.outline = `3px solid ${COLORS.primary}`
+        if (cell._afHoverTimer) clearTimeout(cell._afHoverTimer)
+        cell._afHoverTimer = setTimeout(() => {
+          cell.removeAttribute('data-af-chip-hover')
+          if (cell._afPrevOutline !== undefined) {
+            cell.style.outline = cell._afPrevOutline
+            delete cell._afPrevOutline
+          }
+          delete cell._afHoverTimer
+        }, 1000)
+      }
+    }
     return
   }
 
@@ -3283,6 +3491,7 @@ function onClick(event) {
         const key = pickKey(candidate)
         if (selectedList.length >= 2 && replaceConfirmPending !== key) {
           replaceConfirmPending = key
+          cancelConfirmPending = null
           applyPickedMarks(pickedTableEl)
           updatePanel(panelEl, currentTargetEl)
           return
@@ -3312,7 +3521,7 @@ function onClick(event) {
         }
       }
       if (cIdx !== null) {
-        replaceConfirmPending = null
+        clearPendingConfirms()
         expandColEach(currentTargetEl, cIdx, inner, targetEl, { toggle: true })
         return
       }
@@ -3329,7 +3538,7 @@ function onClick(event) {
       }
 
       const snapToPreserve = (justPromoted ? undoSnapshot : null)
-      replaceConfirmPending = null
+      clearPendingConfirms()
 
       if (event.shiftKey && lastCellPick() && candidate.cell) {
         // Shift 點：從上一個已選的格子拉出矩形範圍
@@ -3678,7 +3887,7 @@ function onMouseUp(event) {
     suppressClick = true
     setTimeout(() => { suppressClick = false }, 0)
     lastDragEndAt = Date.now()
-    replaceConfirmPending = null
+    clearPendingConfirms()
     if (selectedList.length > 0 && pickedTableEl) {
       applyPickedMarks(pickedTableEl)
     } else {
@@ -3716,7 +3925,8 @@ export function enterPickMode(opts) {
   menuTargetContext = null
   backStack = []
   lockedEl = null
-  replaceConfirmPending = null
+  clearPendingConfirms()
+  selectAllNotice = null
   lastDragEndAt = 0
   currentHint = opts?.hint || null
   // 下鑽之後要把原本要勾回的值一起帶過去
@@ -3753,14 +3963,7 @@ export function enterPickMode(opts) {
   toolbarEl.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.4)'
   toolbarEl.style.overflow = 'hidden'
 
-  const toolsDef = [
-    { key: 'cell', label: '單格', title: '只選這一格' },
-    { key: 'col', label: '整欄→一個值', title: '整欄合成一個數字（加總、平均…）' },
-    { key: 'colEach', label: '整欄→每格', title: '這一欄每一格各自是一個值' },
-    { key: 'row', label: '整列→一個值', title: '整列合成一個數字' }
-  ]
-
-  for (const def of toolsDef) {
+  for (const def of TOOLS_DEF) {
     const btn = document.createElement('button')
     btn.type = 'button'
     btn.setAttribute('data-af-tool', def.key)
@@ -3789,9 +3992,11 @@ export function enterPickMode(opts) {
   panelEl.style.border = `1px solid ${COLORS.border}`
   panelEl.style.padding = '8px 12px'; panelEl.style.borderRadius = '8px'; panelEl.style.fontSize = '12px'; panelEl.style.lineHeight = '1.4'; panelEl.style.whiteSpace = 'pre-line'
   panelEl.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.4)'
+  panelEl.style.maxHeight = 'calc(100vh - 32px)'
   panelBodyEl = document.createElement('div')
   panelBodyEl.setAttribute('data-af-panel-body', '')
   panelBodyEl.style.whiteSpace = 'pre-line'
+  panelBodyEl.style.overflowY = 'auto'
   panelEl.appendChild(panelBodyEl)
   panelEl.appendChild(buildPanelActions())
   overlayEl.appendChild(panelEl)
@@ -3901,7 +4106,8 @@ export function exitPickMode(opts = {}) {
   menuTargetContext = null
   // 這幾個漏清會讓下一次選取還鎖在上一個元素、或還停在「再點一次才取代」的半途
   lockedEl = null
-  replaceConfirmPending = null
+  clearPendingConfirms()
+  selectAllNotice = null
   lastDragEndAt = 0
   // AF-9 新增的狀態：漏清會讓下一次選取沿用上一次的復原快照、提示與面板位置
   undoSnapshot = null

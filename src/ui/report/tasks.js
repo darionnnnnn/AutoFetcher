@@ -1,4 +1,4 @@
-import { getTask, saveTask, deleteTask, getTasks, countRecordsForTask, listDates, setPanelCtx } from '../../shared/storage.js'
+import { getTask, saveTasks, deleteTasks, getTasks, countRecordsForTasks, listDates, setPanelCtx } from '../../shared/storage.js'
 import { openPanel } from '../../shared/panel.js'
 import { MSG } from '../../shared/messages.js'
 import { buildExport, download } from '../../shared/export.js'
@@ -8,6 +8,16 @@ let currentTasks = []
 let currentHealth = {}
 let currentMissed = []
 let currentCtx = {}
+const selectedIds = new Set()
+let lastPickedId = null
+let renaming = null
+let isSavingRename = false
+// 改名中又按了另一列的「改名」：上一列失焦存檔會整份重畫，那顆按鈕節點跟著被換掉、click 不會來；
+// 在 pointerdown（比 blur 早）先記下意圖，存檔完成後兌現
+let pendingRenameId = null
+// 整批刪除對話框是依哪一組選取開的（單列刪除為 null）；選取一變就收掉，確認鈕刪的永遠是訊息說的那幾個
+let dialogSelectionSig = null
+const selectionSig = () => [...selectedIds].sort().join('|')
 
 // 純函式：依關鍵字與健康狀態篩選任務
 export function filterTasks(tasks, { q, failedOnly } = {}, health = {}) {
@@ -51,24 +61,39 @@ export function duplicateTask(task) {
 // 依 id 陣列順序重新編號 order 並存入 storage
 export async function applyOrder(ids) {
   if (!Array.isArray(ids)) return
-  for (let i = 0; i < ids.length; i++) {
-    const t = await getTask(ids[i])
+  const tasks = await getTasks()
+  const map = new Map(tasks.map(t => [t.id, t]))
+  const toUpdate = []
+  let nextOrder = 0
+  for (const id of ids) {
+    const t = map.get(id)
     if (t) {
-      await saveTask({ ...t, order: i })
+      toUpdate.push({ ...t, order: nextOrder++ })
     }
+  }
+  if (toUpdate.length > 0) {
+    await saveTasks(toUpdate)
   }
 }
 
 // 開啟刪除確認對話框並計算關聯紀錄數
-async function openDeleteDialog(taskId) {
+async function openDeleteDialog(ids, fromSelection = false) {
+  if (!Array.isArray(ids) || ids.length === 0) return
   const dlg = document.getElementById('task-delete-dialog')
   if (!dlg) return
+  dialogSelectionSig = fromSelection ? selectionSig() : null
 
-  const count = await countRecordsForTask(taskId)
+  const { total } = await countRecordsForTasks(ids)
+  const count = total || 0
 
-  const taskObj = currentTasks.find((t) => t.id === taskId)
-  const taskName = taskObj?.name || taskId
-  const msgText = `確定要刪除「${taskName}」嗎？此操作將一併刪除 ${count} 筆歷史紀錄。`
+  let msgText = ''
+  if (ids.length === 1) {
+    const taskObj = currentTasks.find((t) => t.id === ids[0])
+    const taskName = taskObj?.name || ids[0]
+    msgText = `確定要刪除「${taskName}」嗎？此操作將一併刪除 ${count} 筆歷史紀錄。`
+  } else {
+    msgText = `確定要刪除這 ${ids.length} 個任務嗎？此操作將一併刪除合計 ${count} 筆歷史紀錄。`
+  }
 
   const msgEl = dlg.querySelector('.dialog-message')
   if (msgEl) {
@@ -94,7 +119,10 @@ async function openDeleteDialog(taskId) {
   const confirmBtn = dlg.querySelector('[data-action="confirm"]')
   if (confirmBtn) {
     confirmBtn.onclick = async () => {
-      await deleteTask(taskId)
+      await deleteTasks(ids)
+      for (const id of ids) {
+        selectedIds.delete(id)
+      }
       dlg.hidden = true
       const remaining = await getTasks()
       renderTasks(remaining, currentHealth, currentMissed, currentCtx)
@@ -114,14 +142,199 @@ async function openDeleteDialog(taskId) {
       const from = dates[0] || today
       const to = today
 
-      const exp = await buildExport({ from, to, format: 'csv' })
-      await download(exp)
-      await deleteTask(taskId)
+      // 下載沒成功（使用者在另存視窗按取消、配額）就不刪：說出來，對話框留著讓他改選「確定刪除」或取消
+      try {
+        const exp = await buildExport({ from, to, format: 'csv' })
+        await download(exp)
+      } catch (e) {
+        if (msgEl) msgEl.textContent = `${msgText}匯出沒有完成（${e?.message || e}），所以還沒有刪除。`
+        return
+      }
+      await deleteTasks(ids)
+      for (const id of ids) {
+        selectedIds.delete(id)
+      }
       dlg.hidden = true
       const remaining = await getTasks()
       renderTasks(remaining, currentHealth, currentMissed, currentCtx)
     }
   }
+}
+
+// 整批切換選取任務的啟用狀態並重建排程
+async function setBulkEnabled(enabled) {
+  const bar = document.getElementById('task-bulk-bar')
+  const buttons = bar ? bar.querySelectorAll('button') : []
+  const actionBtn = bar ? bar.querySelector(`[data-action="bulk-${enabled ? 'enable' : 'disable'}"]`) : null
+  const origText = actionBtn ? actionBtn.textContent : ''
+
+  buttons.forEach((btn) => { btn.disabled = true })
+  if (actionBtn) {
+    actionBtn.textContent = enabled ? '啟用中…' : '停用中…'
+  }
+
+  try {
+    const tasks = await getTasks()
+    const targetTasks = tasks.filter((t) => selectedIds.has(t.id))
+    const updated = targetTasks.map((t) => ({ ...t, enabled }))
+    if (updated.length > 0) {
+      await saveTasks(updated)
+      await chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS })
+    }
+    const note = document.getElementById('task-note')
+    if (note) {
+      note.textContent = `已${enabled ? '啟用' : '停用'} ${updated.length} 個任務。`
+    }
+    const freshTasks = await getTasks()
+    renderTasks(freshTasks, currentHealth, currentMissed, currentCtx)
+  } catch (e) {
+    // 整批寫入是全有全無（saveTasks 先驗證再寫）：失敗就是一個都沒改，要說出來，不能靜默
+    const note = document.getElementById('task-note')
+    if (note) note.textContent = `${enabled ? '啟用' : '停用'}失敗，沒有任何任務被改動：${e?.message || e}`
+  } finally {
+    buttons.forEach((btn) => { btn.disabled = false })
+    if (actionBtn) {
+      actionBtn.textContent = origText
+    }
+  }
+}
+
+// 開啟側邊面板以整批修改排程
+async function openBulkSchedule(ids) {
+  let tabId
+  try { tabId = (await chrome.tabs.getCurrent())?.id } catch {}
+  if (tabId === undefined) {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
+    tabId = tabs?.[0]?.id
+  }
+  if (tabId === undefined) {
+    const note = document.getElementById('task-note')
+    if (note) note.textContent = '找不到這個報表所在的分頁，開不了設定面板；請重新整理這一頁再試。'
+    return
+  }
+  await setPanelCtx(tabId, { kind: 'bulk', taskIds: ids })
+  await openPanel(tabId, 'picker')
+}
+
+// 儲存任務就地改名的結果
+async function saveRename(id, val) {
+  if (isSavingRename) return
+  isSavingRename = true
+  try {
+    const trimmed = (val || '').trim()
+    if (!trimmed) {
+      const note = document.getElementById('task-note')
+      if (note) {
+        note.textContent = '名稱不能空白。'
+      }
+      return
+    }
+    const cur = await getTask(id)
+    if (!cur) {
+      renaming = null
+      renderListRows()
+      return
+    }
+    await saveTasks([{ ...cur, name: trimmed }])
+    renaming = null
+    const fresh = await getTasks()
+    // 存檔前使用者已經按了另一列的「改名」：接著開那一列
+    const next = pendingRenameId && fresh.find((x) => x.id === pendingRenameId)
+    pendingRenameId = null
+    if (next) renaming = { id: next.id, value: next.name || '' }
+    renderTasks(fresh, currentHealth, currentMissed, currentCtx)
+  } finally {
+    isSavingRename = false
+  }
+}
+
+// 更新多選工具列與全選勾選框的狀態
+function updateSelectionUI() {
+  const taskList = document.getElementById('task-list')
+  const visibleRows = taskList ? [...taskList.querySelectorAll('[data-task-id]')] : []
+  const visibleIds = visibleRows.map((r) => r.dataset.taskId)
+
+  for (const row of visibleRows) {
+    const id = row.dataset.taskId
+    const box = row.querySelector('[data-action="select"]')
+    const isSelected = selectedIds.has(id)
+    if (box) box.checked = isSelected
+    row.classList.toggle('selected', isSelected)
+  }
+
+  const selectAll = document.getElementById('task-select-all')
+  if (selectAll) {
+    const selectedVisibleCount = visibleIds.filter((id) => selectedIds.has(id)).length
+    if (visibleIds.length > 0 && selectedVisibleCount === visibleIds.length) {
+      selectAll.checked = true
+      selectAll.indeterminate = false
+    } else if (selectedVisibleCount > 0) {
+      selectAll.checked = false
+      selectAll.indeterminate = true
+    } else {
+      selectAll.checked = false
+      selectAll.indeterminate = false
+    }
+  }
+
+  const dlg = document.getElementById('task-delete-dialog')
+  if (dlg && !dlg.hidden && dialogSelectionSig !== null && dialogSelectionSig !== selectionSig()) {
+    dlg.hidden = true
+    dialogSelectionSig = null
+    const note = document.getElementById('task-note')
+    if (note) note.textContent = '選取已經變了，刪除確認已收起；要刪除請再按一次「刪除」。'
+  }
+
+  const bulkBar = document.getElementById('task-bulk-bar')
+  if (bulkBar) {
+    if (selectedIds.size === 0) {
+      bulkBar.hidden = true
+    } else {
+      bulkBar.hidden = false
+      const hiddenCount = [...selectedIds].filter((id) => !visibleIds.includes(id)).length
+      let text = `已選 ${selectedIds.size} 個`
+      if (hiddenCount > 0) {
+        text += `（${hiddenCount} 個不在目前篩選中）`
+      }
+      const countEl = bulkBar.querySelector('[data-bulk-count]')
+      if (countEl) countEl.textContent = text
+    }
+  }
+}
+
+// 重新渲染任務清單的每一列並同步選取與焦點狀態
+function renderListRows() {
+  const taskList = document.getElementById('task-list')
+  if (!taskList) return
+
+  const activeRenameInput = taskList.querySelector('input[data-rename-input]')
+  if (activeRenameInput && renaming) {
+    renaming.value = activeRenameInput.value
+  }
+
+  taskList.textContent = ''
+  const searchInput = document.getElementById('task-search')
+  const failedCheckbox = document.getElementById('task-failed-only')
+  const q = searchInput ? searchInput.value : ''
+  const failedOnly = failedCheckbox ? failedCheckbox.checked : false
+  const filtered = filterTasks(currentTasks, { q, failedOnly }, currentHealth)
+
+  for (const t of filtered) {
+    taskList.appendChild(createTaskRow(t))
+  }
+
+  if (renaming) {
+    const inputEl = taskList.querySelector('input[data-rename-input]')
+    if (inputEl) {
+      try {
+        inputEl.focus()
+        const len = inputEl.value.length
+        inputEl.setSelectionRange(len, len)
+      } catch {}
+    }
+  }
+
+  updateSelectionUI()
 }
 
 // 建立單一任務列元素
@@ -147,6 +360,48 @@ function createTaskRow(t) {
   row.className = 'task-row'
   row.dataset.taskId = t.id
 
+  const selectBox = document.createElement('input')
+  selectBox.type = 'checkbox'
+  selectBox.dataset.action = 'select'
+  selectBox.setAttribute('aria-label', `選取「${t.name || t.id}」`)
+  selectBox.checked = selectedIds.has(t.id)
+  selectBox.addEventListener('click', (e) => {
+    const taskList = document.getElementById('task-list')
+    const visibleRows = taskList ? [...taskList.querySelectorAll('[data-task-id]')] : []
+    const visibleIds = visibleRows.map((r) => r.dataset.taskId)
+    const isShift = e.shiftKey && lastPickedId !== null && visibleIds.includes(lastPickedId)
+    const nextState = !selectedIds.has(t.id)
+
+    if (isShift) {
+      const lastIdx = visibleIds.indexOf(lastPickedId)
+      const curIdx = visibleIds.indexOf(t.id)
+      const [start, end] = lastIdx < curIdx ? [lastIdx, curIdx] : [curIdx, lastIdx]
+      const rangeIds = visibleIds.slice(start, end + 1)
+      if (nextState) {
+        for (const id of rangeIds) {
+          selectedIds.add(id)
+        }
+      } else {
+        for (const id of rangeIds) {
+          selectedIds.delete(id)
+        }
+      }
+    } else {
+      if (nextState) {
+        selectedIds.add(t.id)
+      } else {
+        selectedIds.delete(t.id)
+      }
+    }
+    lastPickedId = t.id
+    updateSelectionUI()
+  })
+  row.appendChild(selectBox)
+
+  if (selectedIds.has(t.id)) {
+    row.classList.add('selected')
+  }
+
   const toggleLabel = document.createElement('label')
   toggleLabel.className = 'task-toggle-label'
   const toggle = document.createElement('input')
@@ -157,17 +412,77 @@ function createTaskRow(t) {
     const current = await getTask(t.id)
     if (current) {
       current.enabled = toggle.checked
-      await saveTask(current)
+      await saveTasks([current])
       await chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS })
     }
   })
   toggleLabel.appendChild(toggle)
   row.appendChild(toggleLabel)
 
-  const nameEl = document.createElement('span')
-  nameEl.className = 'task-name'
-  nameEl.textContent = t.name || t.id
-  row.appendChild(nameEl)
+  if (renaming && renaming.id === t.id) {
+    const nameInput = document.createElement('input')
+    nameInput.type = 'text'
+    nameInput.dataset.renameInput = ''
+    nameInput.setAttribute('aria-label', '任務名稱')
+    nameInput.value = renaming.value
+    nameInput.addEventListener('pointerdown', (e) => e.stopPropagation())
+    nameInput.addEventListener('click', (e) => e.stopPropagation())
+    nameInput.addEventListener('input', () => {
+      if (renaming && renaming.id === t.id) {
+        renaming.value = nameInput.value
+      }
+    })
+    nameInput.addEventListener('keydown', async (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        await saveRename(t.id, nameInput.value)
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        renaming = null
+        renderListRows()
+      }
+    })
+    nameInput.addEventListener('blur', async () => {
+      if (!renaming || renaming.id !== t.id) return
+      await saveRename(t.id, nameInput.value)
+    })
+    row.appendChild(nameInput)
+  } else {
+    const nameEl = document.createElement('span')
+    nameEl.className = 'task-name'
+    nameEl.textContent = t.name || t.id
+    row.appendChild(nameEl)
+  }
+
+  const renameBtn = document.createElement('button')
+  renameBtn.type = 'button'
+  renameBtn.dataset.action = 'rename'
+  renameBtn.textContent = '改名'
+  renameBtn.addEventListener('pointerdown', (e) => {
+    e.stopPropagation()
+    if (renaming && renaming.id !== t.id) pendingRenameId = t.id
+  })
+  renameBtn.addEventListener('click', async (e) => {
+    e.stopPropagation()
+    // 另一列還在改名（沒有失焦存檔就點過來）：先把那一列存掉，畫面上同時只會有一個輸入框
+    if (renaming && renaming.id !== t.id) {
+      const prevInput = document.querySelector('#task-list input[data-rename-input]')
+      pendingRenameId = null
+      await saveRename(renaming.id, prevInput ? prevInput.value : renaming.value)
+      if (renaming && renaming.id !== t.id) return
+    }
+    renaming = { id: t.id, value: t.name || '' }
+    renderListRows()
+    const curInput = document.querySelector('#task-list input[data-rename-input]')
+    if (curInput) {
+      try {
+        curInput.focus()
+        // 剛按「改名」＝全選原值（直接打字就取代）；重畫時還原的是打到一半的字，那時才把游標放結尾
+        curInput.select()
+      } catch {}
+    }
+  })
+  row.appendChild(renameBtn)
 
   if (Array.isArray(t.fields) && t.fields.length > 0) {
     const fieldsEl = document.createElement('span')
@@ -216,12 +531,18 @@ function createTaskRow(t) {
     row.appendChild(preEl)
   }
 
-  const scheduleEl = document.createElement('span')
-  scheduleEl.className = 'task-schedule'
+  const scheduleBtn = document.createElement('button')
+  scheduleBtn.type = 'button'
+  scheduleBtn.className = 'task-link task-schedule'
+  scheduleBtn.dataset.action = 'edit-schedule'
+  scheduleBtn.title = '修改排程'
   // 排程白話一律走 shared/describe.js（Picker 摘要卡與 popup 也用同一份，
   // 各寫一份會讓同一個任務在三個畫面上長得不一樣）
-  scheduleEl.textContent = describeSchedule(t.schedule)
-  row.appendChild(scheduleEl)
+  scheduleBtn.textContent = describeSchedule(t.schedule)
+  scheduleBtn.addEventListener('click', async () => {
+    await openBulkSchedule([t.id])
+  })
+  row.appendChild(scheduleBtn)
 
   const nextEl = document.createElement('span')
   nextEl.className = 'task-next'
@@ -258,7 +579,7 @@ function createTaskRow(t) {
       const current = await getTask(t.id)
       if (current) {
         current.foreground = true
-        await saveTask(current)
+        await saveTasks([current])
         const idx = currentTasks.findIndex((taskItem) => taskItem.id === t.id)
         if (idx !== -1) {
           currentTasks[idx] = current
@@ -337,7 +658,7 @@ function createTaskRow(t) {
   dupBtn.textContent = '複製'
   dupBtn.addEventListener('click', async () => {
     const copy = duplicateTask(t)
-    await saveTask(copy)
+    await saveTasks([copy])
     const freshTasks = await getTasks()
     renderTasks(freshTasks, currentHealth, currentMissed, currentCtx)
   })
@@ -373,7 +694,7 @@ function createTaskRow(t) {
   delBtn.dataset.action = 'delete'
   delBtn.textContent = '刪除'
   delBtn.addEventListener('click', async () => {
-    await openDeleteDialog(t.id)
+    await openDeleteDialog([t.id])
   })
   actionsEl.appendChild(delBtn)
 
@@ -437,6 +758,16 @@ export function renderTasks(tasks, health = {}, missed = [], ctx = {}) {
   currentHealth = health || {}
   currentMissed = missed || []
   currentCtx = ctx || {}
+
+  const currentTaskIds = new Set(currentTasks.map((t) => t.id))
+  for (const id of selectedIds) {
+    if (!currentTaskIds.has(id)) {
+      selectedIds.delete(id)
+    }
+  }
+  if (renaming && !currentTaskIds.has(renaming.id)) {
+    renaming = null
+  }
 
   // 1. 錯過清單橫幅
   const banner = document.getElementById('missed-banner')
@@ -521,21 +852,8 @@ export function renderTasks(tasks, health = {}, missed = [], ctx = {}) {
   }
 
   // 2. 任務列表與搜尋綁定
-  const taskList = document.getElementById('task-list')
   const searchInput = document.getElementById('task-search')
   const failedCheckbox = document.getElementById('task-failed-only')
-
-  function renderListRows() {
-    if (!taskList) return
-    taskList.textContent = ''
-    const q = searchInput ? searchInput.value : ''
-    const failedOnly = failedCheckbox ? failedCheckbox.checked : false
-    const filtered = filterTasks(currentTasks, { q, failedOnly }, currentHealth)
-
-    for (const t of filtered) {
-      taskList.appendChild(createTaskRow(t))
-    }
-  }
 
   if (searchInput && !searchInput.__afBound) {
     searchInput.__afBound = true
@@ -545,6 +863,55 @@ export function renderTasks(tasks, health = {}, missed = [], ctx = {}) {
   if (failedCheckbox && !failedCheckbox.__afBound) {
     failedCheckbox.__afBound = true
     failedCheckbox.addEventListener('change', () => renderListRows())
+  }
+
+  const selectAllBox = document.getElementById('task-select-all')
+  if (selectAllBox && !selectAllBox.__afBound) {
+    selectAllBox.__afBound = true
+    selectAllBox.addEventListener('change', () => {
+      const taskList = document.getElementById('task-list')
+      const visibleRows = taskList ? [...taskList.querySelectorAll('[data-task-id]')] : []
+      const visibleIds = visibleRows.map((r) => r.dataset.taskId)
+      if (selectAllBox.checked) {
+        for (const id of visibleIds) {
+          selectedIds.add(id)
+        }
+      } else {
+        for (const id of visibleIds) {
+          selectedIds.delete(id)
+        }
+      }
+      updateSelectionUI()
+    })
+  }
+
+  const bulkBar = document.getElementById('task-bulk-bar')
+  if (bulkBar && !bulkBar.__afBound) {
+    bulkBar.__afBound = true
+    const enableBtn = bulkBar.querySelector('[data-action="bulk-enable"]')
+    if (enableBtn) {
+      enableBtn.addEventListener('click', () => setBulkEnabled(true))
+    }
+    const disableBtn = bulkBar.querySelector('[data-action="bulk-disable"]')
+    if (disableBtn) {
+      disableBtn.addEventListener('click', () => setBulkEnabled(false))
+    }
+    const scheduleBtn = bulkBar.querySelector('[data-action="bulk-schedule"]')
+    if (scheduleBtn) {
+      scheduleBtn.addEventListener('click', () => openBulkSchedule([...selectedIds]))
+    }
+    const deleteBtn = bulkBar.querySelector('[data-action="bulk-delete"]')
+    if (deleteBtn) {
+      deleteBtn.addEventListener('click', () => openDeleteDialog([...selectedIds], true))
+    }
+    const clearBtn = bulkBar.querySelector('[data-action="bulk-clear"]')
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        selectedIds.clear()
+        lastPickedId = null
+        renderListRows()
+      })
+    }
   }
 
   renderListRows()

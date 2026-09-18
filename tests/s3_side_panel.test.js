@@ -340,7 +340,9 @@ test('B-10 面板有「回頁面重選目標」的入口，而且帶著目前已
   const html = readFileSync(new URL('../src/ui/picker/picker.html', import.meta.url), 'utf8')
   assert.match(html, /id="repick-target"/, '面板要有回頁面重選目標的鈕')
   const js = readFileSync(new URL('../src/ui/picker/picker.js', import.meta.url), 'utf8')
-  const idx = js.indexOf("repick-target")
+  // 鎖定「那顆鈕的點擊處理」這一處，不是檔案裡第一個提到它的地方
+  //（AF-19 起編輯模式會先把它藏起來，那也是一次 `repick-target`）
+  const idx = js.indexOf("getElementById('repick-target')?.addEventListener")
   assert.ok(idx > 0, 'picker.js 要接上那顆鈕')
   const seg = js.slice(idx, idx + 600)
   assert.match(seg, /ENTER_PICK/, '要讓頁面重新進選取模式')

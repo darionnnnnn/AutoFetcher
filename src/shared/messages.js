@@ -23,3 +23,6 @@ export const MSG = {
   PANEL_CLOSING: 'PANEL_CLOSING',
   CLOSE_PANEL: 'CLOSE_PANEL'
 }
+
+// 一批最多建立幾個任務：頁面上的多任務組數上限與面板「拆成每個值一個任務」共用這一個數字
+export const MAX_BATCH_TASKS = 20
