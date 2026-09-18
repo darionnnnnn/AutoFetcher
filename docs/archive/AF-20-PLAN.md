@@ -253,3 +253,7 @@
 
 - 不同時刻到點的同頁任務共用分頁(BACKLOG)。
 - 單任務的無效前置動作列仍是靜默濾掉(既有行為,`buildTask` 層的測試守著);只擋批次。
+
+## 終檢輪
+
+併 dev 後全量 2529 綠。重掃體檢修正 commit 與殘留符號(`updateBatchFrameHint`、`createdTabs`／`createdWindows`、舊的等載入函式)皆零命中;文件與程式碼口徑一致。終檢無新發現。
