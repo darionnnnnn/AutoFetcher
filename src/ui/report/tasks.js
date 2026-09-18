@@ -1,4 +1,4 @@
-import { getTask, saveTask, deleteTask, getTasks, countRecordsForTask, listDates, setPanelCtx } from '../../shared/storage.js'
+import { getTask, saveTasks, deleteTask, getTasks, countRecordsForTask, listDates, setPanelCtx } from '../../shared/storage.js'
 import { openPanel } from '../../shared/panel.js'
 import { MSG } from '../../shared/messages.js'
 import { buildExport, download } from '../../shared/export.js'
@@ -51,11 +51,18 @@ export function duplicateTask(task) {
 // 依 id 陣列順序重新編號 order 並存入 storage
 export async function applyOrder(ids) {
   if (!Array.isArray(ids)) return
-  for (let i = 0; i < ids.length; i++) {
-    const t = await getTask(ids[i])
+  const tasks = await getTasks()
+  const map = new Map(tasks.map(t => [t.id, t]))
+  const toUpdate = []
+  let nextOrder = 0
+  for (const id of ids) {
+    const t = map.get(id)
     if (t) {
-      await saveTask({ ...t, order: i })
+      toUpdate.push({ ...t, order: nextOrder++ })
     }
+  }
+  if (toUpdate.length > 0) {
+    await saveTasks(toUpdate)
   }
 }
 
@@ -157,7 +164,7 @@ function createTaskRow(t) {
     const current = await getTask(t.id)
     if (current) {
       current.enabled = toggle.checked
-      await saveTask(current)
+      await saveTasks([current])
       await chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS })
     }
   })
@@ -258,7 +265,7 @@ function createTaskRow(t) {
       const current = await getTask(t.id)
       if (current) {
         current.foreground = true
-        await saveTask(current)
+        await saveTasks([current])
         const idx = currentTasks.findIndex((taskItem) => taskItem.id === t.id)
         if (idx !== -1) {
           currentTasks[idx] = current
@@ -337,7 +344,7 @@ function createTaskRow(t) {
   dupBtn.textContent = '複製'
   dupBtn.addEventListener('click', async () => {
     const copy = duplicateTask(t)
-    await saveTask(copy)
+    await saveTasks([copy])
     const freshTasks = await getTasks()
     renderTasks(freshTasks, currentHealth, currentMissed, currentCtx)
   })

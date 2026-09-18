@@ -1,5 +1,5 @@
 // AutoFetcher 工具列 popup 控制器 (SPEC §12.2)
-import { getTasks, saveTask, getHealthMap, getMissedList, getLastValues } from '../../shared/storage.js'
+import { getTasks, saveTasks, getHealthMap, getMissedList, getLastValues } from '../../shared/storage.js'
 import { openPanel } from '../../shared/panel.js'
 import { MSG } from '../../shared/messages.js'
 import { applySavedTheme } from '../theme-apply.js'
@@ -241,9 +241,8 @@ export async function handleToggleAll() {
   const tasks = await getTasks()
   const hasActive = tasks.some(t => t.enabled !== false)
   const nextEnabled = !hasActive
-  for (const t of tasks) {
-    await saveTask({ ...t, enabled: nextEnabled })
-  }
+  const updated = tasks.map(t => ({ ...t, enabled: nextEnabled }))
+  await saveTasks(updated)
   chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS })
 }
 

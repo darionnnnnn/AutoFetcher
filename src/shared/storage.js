@@ -112,64 +112,97 @@ export async function getTask(id) {
   return tasks.find(t => t.id === id) || null
 }
 
-// 新增或更新任務（驗證 id, name, url；未指定 order 給目前最大 + 1）
-export async function saveTask(task) {
+// 內部輔助函式：驗證單一任務物件格式
+function validateTask(task, index) {
   const isValidStr = v => typeof v === 'string' && v.trim() !== ''
   if (!task || !isValidStr(task.id) || !isValidStr(task.name) || !isValidStr(task.url)) {
-    throw new Error('任務格式錯誤：id、name 與 url 必須皆為非空字串')
+    const err = new Error('任務格式錯誤：id、name 與 url 必須皆為非空字串')
+    err.index = index
+    throw err
   }
 
   if (task.id.includes(SERIES_SEP)) {
-    throw new Error(`任務 id 不得包含保留字元 ${SERIES_SEP}`)
+    const err = new Error(`任務 id 不得包含保留字元 ${SERIES_SEP}`)
+    err.index = index
+    throw err
   }
 
   if (Array.isArray(task.fields)) {
     const seenKeys = new Set()
     for (const f of task.fields) {
       if (!f || typeof f.key !== 'string' || f.key.trim() === '') {
-        throw new Error('任務欄位 key 必須為非空字串')
+        const err = new Error('任務欄位 key 必須為非空字串')
+        err.index = index
+        throw err
       }
       if (f.key.includes(SERIES_SEP)) {
-        throw new Error(`任務欄位 key 不得包含保留字元 ${SERIES_SEP}`)
+        const err = new Error(`任務欄位 key 不得包含保留字元 ${SERIES_SEP}`)
+        err.index = index
+        throw err
       }
       if (seenKeys.has(f.key)) {
-        throw new Error(`任務欄位 key 重複：${f.key}`)
+        const err = new Error(`任務欄位 key 重複：${f.key}`)
+        err.index = index
+        throw err
       }
       seenKeys.add(f.key)
     }
+  }
+}
+
+// 整批新增或更新任務（先全部驗證，任一筆不合法整批不寫入）
+export async function saveTasks(list) {
+  if (!Array.isArray(list) || list.length === 0) return []
+
+  for (let i = 0; i < list.length; i++) {
+    validateTask(list[i], i)
   }
 
   const res = await chrome.storage.local.get('tasks')
   const tasks = Array.isArray(res.tasks) ? [...res.tasks] : []
 
-  let order = task.order
-  if (order === undefined || order === null) {
-    order = tasks.length === 0 ? 0 : Math.max(...tasks.map(t => t.order ?? 0)) + 1
-  }
+  let nextOrder = tasks.length === 0 ? 0 : Math.max(...tasks.map(t => t.order ?? 0)) + 1
 
-  const taskToSave = { ...task, order }
-  const index = tasks.findIndex(t => t.id === task.id)
-  if (index !== -1) {
-    tasks[index] = taskToSave
-  } else {
-    tasks.push(taskToSave)
+  const savedTasks = []
+  for (const item of list) {
+    let order = item.order
+    if (order === undefined || order === null) {
+      order = nextOrder++
+    }
+    const taskToSave = { ...item, order }
+    const index = tasks.findIndex(t => t.id === item.id)
+    if (index !== -1) {
+      tasks[index] = taskToSave
+    } else {
+      tasks.push(taskToSave)
+    }
+    savedTasks.push(taskToSave)
   }
 
   await chrome.storage.local.set({ tasks })
-  return taskToSave
+  return savedTasks
 }
 
-// 刪除任務並清理所有日期對應的紀錄（剩 0 筆時移除該日期鍵）
-export async function deleteTask(id) {
+// 新增或更新任務（驗證 id, name, url；未指定 order 給目前最大 + 1）
+export async function saveTask(task) {
+  const [saved] = await saveTasks([task])
+  return saved
+}
+
+// 整批刪除任務並清理所有日期對應的紀錄（剩 0 筆時移除該日期鍵）
+export async function deleteTasks(ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return
+
+  const targetIds = new Set(ids)
   const all = await chrome.storage.local.get(null)
-  const tasks = Array.isArray(all.tasks) ? all.tasks.filter(t => t.id !== id) : []
+  const tasks = Array.isArray(all.tasks) ? all.tasks.filter(t => !targetIds.has(t.id)) : []
   const toSet = { tasks }
   const toRemove = []
 
   for (const [key, value] of Object.entries(all)) {
     if (isRecordKey(key)) {
       const records = Array.isArray(value) ? value : []
-      const remaining = records.filter(r => parentIdOf(r.taskId) !== id)
+      const remaining = records.filter(r => !targetIds.has(parentIdOf(r.taskId)))
       if (remaining.length === 0) {
         toRemove.push(key)
       } else if (remaining.length !== records.length) {
@@ -183,7 +216,14 @@ export async function deleteTask(id) {
     await chrome.storage.local.remove(toRemove)
   }
 
-  await pruneCardsForTask(id)
+  for (const id of ids) {
+    await pruneCardsForTask(id)
+  }
+}
+
+// 刪除任務並清理所有日期對應的紀錄（剩 0 筆時移除該日期鍵）
+export async function deleteTask(id) {
+  await deleteTasks([id])
 }
 
 // 取得所有站台設定
@@ -476,6 +516,22 @@ export async function getLastValues() {
   return res.lastValues && typeof res.lastValues === 'object' ? res.lastValues : {}
 }
 
+// 從 lastValues 移除指定的序列鍵
+export async function deleteLastValues(keys) {
+  if (!Array.isArray(keys) || keys.length === 0) return
+  const all = await getLastValues()
+  let changed = false
+  for (const k of keys) {
+    if (Object.prototype.hasOwnProperty.call(all, k)) {
+      delete all[k]
+      changed = true
+    }
+  }
+  if (changed) {
+    await chrome.storage.local.set({ lastValues: all })
+  }
+}
+
 // 取得補抓清單
 export async function getMissedList() {
   const res = await chrome.storage.local.get('missed')
@@ -499,20 +555,43 @@ export async function setAlertLog(log) {
   await chrome.storage.local.set({ alertLog: log })
 }
 
-// 查詢單一任務在所有日期的紀錄總數（使用 listDates + 逐日 getRecordsByDate）
-export async function countRecordsForTask(taskId) {
-  if (!taskId) return 0
-  const dates = await listDates()
-  let count = 0
-  for (const d of dates) {
-    const records = await getRecordsByDate(d)
-    for (const r of records) {
-      if (r && parentIdOf(r.taskId) === taskId) {
-        count++
+// 查詢多個任務在所有日期的紀錄總數與各任務筆數
+export async function countRecordsForTasks(ids) {
+  const byId = {}
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return { total: 0, byId }
+  }
+
+  for (const id of ids) {
+    byId[id] = 0
+  }
+
+  const targetIds = new Set(ids)
+  const all = await chrome.storage.local.get(null)
+  let total = 0
+
+  for (const [key, val] of Object.entries(all)) {
+    if (isRecordKey(key) && Array.isArray(val)) {
+      for (const r of val) {
+        if (r && r.taskId) {
+          const pid = parentIdOf(r.taskId)
+          if (targetIds.has(pid)) {
+            byId[pid] = (byId[pid] || 0) + 1
+            total++
+          }
+        }
       }
     }
   }
-  return count
+
+  return { total, byId }
+}
+
+// 查詢單一任務在所有日期的紀錄總數
+export async function countRecordsForTask(taskId) {
+  if (!taskId) return 0
+  const res = await countRecordsForTasks([taskId])
+  return res.byId[taskId] ?? 0
 }
 
 // 訂閱 storage 變更（去抖 50ms，僅監聽 local 且指定鍵值與 rec: 紀錄鍵）

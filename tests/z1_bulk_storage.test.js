@@ -263,3 +263,57 @@ test('pruneCardsForTask 仍以父任務 id 清掉整個任務的來源', async (
   const cards = (await ls.getLayout()).dashboards[0].cards
   assert.deepEqual(cards[0].source.map(s => s.taskId), ['t2#k1'])
 })
+
+// ---- 既有逐筆迴圈改走整批 API ----
+
+test('applyOrder 一次寫回全部順序（不再逐筆寫）', async () => {
+  const { JSDOM } = await import('jsdom')
+  const { readFileSync } = await import('node:fs')
+  const html = readFileSync(new URL('../src/ui/report/report.html', import.meta.url), 'utf8')
+  const { c, st } = await fresh()
+  await st.saveTasks([task('a'), task('b'), task('d')])
+  const jd = new JSDOM(html, { url: 'chrome-extension://abc/ui/report/report.html' })
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  const ts = await import('../src/ui/report/tasks.js?t=' + Math.random())
+
+  const m = mark(c)
+  await ts.applyOrder(['d', 'a', 'b'])
+  assert.equal(setsAfter(c, 'storage.local.set', m), 1, '重新排序只能寫一次')
+  const all = await st.getTasks()
+  assert.deepEqual(all.map(t => t.id), ['d', 'a', 'b'])
+  assert.deepEqual(all.map(t => t.order), [0, 1, 2])
+})
+
+test('applyOrder 忽略清單中不存在的任務', async () => {
+  const { JSDOM } = await import('jsdom')
+  const { readFileSync } = await import('node:fs')
+  const html = readFileSync(new URL('../src/ui/report/report.html', import.meta.url), 'utf8')
+  const { st } = await fresh()
+  await st.saveTasks([task('a'), task('b')])
+  const jd = new JSDOM(html, { url: 'chrome-extension://abc/ui/report/report.html' })
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  const ts = await import('../src/ui/report/tasks.js?t=' + Math.random())
+  await ts.applyOrder(['b', '不存在', 'a'])
+  assert.deepEqual((await st.getTasks()).map(t => t.id), ['b', 'a'])
+})
+
+test('popup 全部暫停一次寫回，並只送一次重建排程', async () => {
+  const { JSDOM } = await import('jsdom')
+  const { readFileSync } = await import('node:fs')
+  const html = readFileSync(new URL('../src/ui/popup/popup.html', import.meta.url), 'utf8')
+  const { c, st } = await fresh()
+  await st.saveTasks([task('a'), task('b'), task('d')])
+  const jd = new JSDOM(html)
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  const pp = await import('../src/ui/popup/popup.js?t=' + Math.random())
+
+  const m = mark(c)
+  await pp.handleToggleAll()
+  assert.equal(setsAfter(c, 'storage.local.set', m), 1, '三個任務不該寫三次')
+  assert.ok((await st.getTasks()).every(t => t.enabled === false))
+  const rebuilds = c.__calls.slice(m).filter(x => x.api === 'runtime.sendMessage' && x.args[0]?.type === 'REBUILD_ALARMS')
+  assert.equal(rebuilds.length, 1)
+})

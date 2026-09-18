@@ -328,17 +328,14 @@ export async function removeCard(dashId, cardId) {
   await saveLayout(layout)
 }
 
-/**
- * 任務刪除連動：移除包含該任務的卡片來源或篩選，若來源或篩選因此歸零且原先有指定則刪除該卡片
- */
-export async function pruneCardsForTask(taskId) {
-  const layout = await getLayout()
+// 內部輔助函式：清理所有儀表板中的卡片來源與篩選，若來源歸零則移除該卡片
+function pruneCardsInLayout(layout, shouldRemoveSource, shouldRemoveStatusId) {
   for (const dash of layout.dashboards) {
     dash.cards = dash.cards.filter(card => {
       // 處理 source
       const hadSource = Array.isArray(card.source) && card.source.length > 0
       if (hadSource) {
-        card.source = card.source.filter(s => parentIdOf(s.taskId) !== taskId)
+        card.source = card.source.filter(s => !shouldRemoveSource(s))
         if (card.source.length === 0) {
           return false
         }
@@ -348,7 +345,7 @@ export async function pruneCardsForTask(taskId) {
       if (card.options && Array.isArray(card.options.taskIds)) {
         const hadTaskIds = card.options.taskIds.length > 0
         if (hadTaskIds) {
-          card.options.taskIds = card.options.taskIds.filter(id => parentIdOf(id) !== taskId)
+          card.options.taskIds = card.options.taskIds.filter(id => !shouldRemoveStatusId(id))
           if (card.options.taskIds.length === 0) {
             return false
           }
@@ -358,5 +355,30 @@ export async function pruneCardsForTask(taskId) {
       return true
     })
   }
+}
+
+/**
+ * 任務刪除連動：移除包含該任務的卡片來源或篩選，若來源或篩選因此歸零且原先有指定則刪除該卡片
+ */
+export async function pruneCardsForTask(taskId) {
+  const layout = await getLayout()
+  pruneCardsInLayout(
+    layout,
+    s => parentIdOf(s.taskId) === taskId,
+    id => parentIdOf(id) === taskId
+  )
+  await saveLayout(layout)
+}
+
+// 序列刪除連動：移除包含指定完整序列 id 的卡片來源或篩選，若歸零則刪除該卡片
+export async function pruneSeries(seriesIds) {
+  if (!Array.isArray(seriesIds) || seriesIds.length === 0) return
+  const idSet = new Set(seriesIds)
+  const layout = await getLayout()
+  pruneCardsInLayout(
+    layout,
+    s => idSet.has(s.taskId),
+    id => idSet.has(id)
+  )
   await saveLayout(layout)
 }
