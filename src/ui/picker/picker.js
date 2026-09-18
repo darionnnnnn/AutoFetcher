@@ -69,6 +69,46 @@ function currentBlockSpecs() {
     : ((currentBlock && !currentBlock.cell && currentBlock.axis) ? [currentBlock] : [])
 }
 
+function preActionsFromForm() {
+  const preActionRows = document.querySelectorAll('[data-preaction-row]')
+  return Array.from(preActionRows).map(row => {
+    const type = row.querySelector('select')?.value || 'waitFor'
+    const locator = row._locator || null
+    const valInput = row.querySelector('input[type="number"]') || row.querySelector('input')
+    const valStr = valInput?.value?.trim() ?? ''
+    const num = valStr === '' ? NaN : Number(valStr)
+
+    const frame = row._frame || null
+    if (type === 'waitFor') {
+      // 畫面是秒、資料是毫秒；沒填就交給 buildTask 那一份預設值（不要兩層各寫一份）
+      const act = { type, locator }
+      if (valStr !== '' && Number.isFinite(num)) act.timeoutMs = Math.round(num * 1000)
+      const visibleBox = row.querySelector('[data-preaction-visible]')
+      if (visibleBox && !visibleBox.checked) act.visible = false
+      if (frame) act.frame = frame
+      return act
+    }
+    if (type === 'hover') {
+      const act = { type, locator }
+      if (valStr !== '' && Number.isFinite(num)) act.holdMs = num
+      if (frame) act.frame = frame
+      return act
+    }
+    if (type === 'click') {
+      const act = { type, locator }
+      if (frame) act.frame = frame
+      return act
+    }
+    if (type === 'wait') {
+      return {
+        type,
+        sec: valStr === '' ? '' : num
+      }
+    }
+    return { type, locator }
+  })
+}
+
 export function getFormData() {
   const name = document.getElementById('name')?.value ?? ''
   const urlEl = document.getElementById('url')
@@ -109,43 +149,7 @@ export function getFormData() {
     return alertItem
   })
 
-  const preActionRows = document.querySelectorAll('[data-preaction-row]')
-  const preActions = Array.from(preActionRows).map(row => {
-    const type = row.querySelector('select')?.value || 'waitFor'
-    const locator = row._locator || null
-    const valInput = row.querySelector('input[type="number"]') || row.querySelector('input')
-    const valStr = valInput?.value?.trim() ?? ''
-    const num = valStr === '' ? NaN : Number(valStr)
-
-    const frame = row._frame || null
-    if (type === 'waitFor') {
-      // 畫面是秒、資料是毫秒；沒填就交給 buildTask 那一份預設值（不要兩層各寫一份）
-      const act = { type, locator }
-      if (valStr !== '' && Number.isFinite(num)) act.timeoutMs = Math.round(num * 1000)
-      const visibleBox = row.querySelector('[data-preaction-visible]')
-      if (visibleBox && !visibleBox.checked) act.visible = false
-      if (frame) act.frame = frame
-      return act
-    }
-    if (type === 'hover') {
-      const act = { type, locator }
-      if (valStr !== '' && Number.isFinite(num)) act.holdMs = num
-      if (frame) act.frame = frame
-      return act
-    }
-    if (type === 'click') {
-      const act = { type, locator }
-      if (frame) act.frame = frame
-      return act
-    }
-    if (type === 'wait') {
-      return {
-        type,
-        sec: valStr === '' ? '' : num
-      }
-    }
-    return { type, locator }
-  })
+  const preActions = preActionsFromForm()
 
   const aggregateValue = document.getElementById('block-aggregate')?.value || 'sum'
   const rowPos = posValueOf('row-pos')
@@ -880,7 +884,7 @@ function defaultTaskName(ctx) {
 }
 
 // 目標在 iframe 裡時提醒使用者可能要先點個什麼：那個框架常常是點了頁籤或按鈕才出現，
-// 而排程是開一個乾淨的新分頁，不會沿用現在畫面上的狀態。
+// 而排程會自己另外開一份頁面，不會沿用現在畫面上的狀態。
 let frameHintDismissedFor = null
 function updateFrameHint(ctx) {
   const hint = document.getElementById('frame-hint')
@@ -893,18 +897,21 @@ function updateFrameHint(ctx) {
   hint.hidden = !show
   if (!show) return
 
-  let host = ctx.frameUrl
-  try {
-    host = new URL(ctx.frameUrl).hostname || ctx.frameUrl
-  } catch {}
-  if (textEl) {
-    textEl.textContent = `目標在框架（${host}）內。若這個框架要先點頁籤或按鈕才會出現，`
-      + '請加入「點元素」前置動作；排程抓取是開新分頁，不會沿用你現在看到的畫面。'
-  }
+  if (textEl) textEl.textContent = frameHintText(ctx.frameUrl)
   const advSection = document.getElementById('advanced-section')
   if (advSection) advSection.setAttribute('open', '')
 
   bindFrameHintEvents()
+}
+
+// 框架提示那一句:單任務與批次畫面共用這一份
+function frameHintText(frameUrl) {
+  let host = frameUrl
+  try {
+    host = new URL(frameUrl).hostname || frameUrl
+  } catch {}
+  return `目標在框架（${host}）內。若這個框架要先點頁籤或按鈕才會出現，`
+    + '請加入「點元素」前置動作；排程會自己另外開一份頁面，不會沿用你現在看到的畫面。'
 }
 
 function bindFrameHintEvents() {
@@ -924,10 +931,30 @@ function bindFrameHintEvents() {
     dismissBtn.addEventListener('click', () => {
       const hint = document.getElementById('frame-hint')
       if (hint) hint.hidden = true
-      frameHintDismissedFor = currentCtx?.frameUrl || null
+      const batchFrameUrl = (batchItems || []).find(it => it.frameUrl)?.frameUrl
+      frameHintDismissedFor = (batchViewOn && batchFrameUrl) ? batchFrameUrl : (currentCtx?.frameUrl || null)
     })
     dismissBtn._frameHintBound = true
   }
+}
+
+function updateBatchFrameHint() {
+  const hint = document.getElementById('frame-hint')
+  if (!hint) return
+  const textEl = document.getElementById('frame-hint-text')
+  const itemWithFrame = (batchItems || []).find(it => it.frameUrl)
+  const batchFrameUrl = itemWithFrame?.frameUrl || null
+  const preList = document.getElementById('preaction-list')
+  const hasPreActions = Boolean(preList && preList.children.length > 0)
+  const show = Boolean(batchFrameUrl) && !hasPreActions && frameHintDismissedFor !== batchFrameUrl
+  hint.hidden = !show
+  if (!show) return
+
+  if (textEl) textEl.textContent = frameHintText(batchFrameUrl)
+  const advSection = document.getElementById('advanced-section')
+  if (advSection) advSection.setAttribute('open', '')
+
+  bindFrameHintEvents()
 }
 
 // 使用者點的是第一列或最後一列時「建議」改用位置定位，但**不替他改設定**：
@@ -2114,6 +2141,7 @@ function addPreActionRow(data = {}) {
       lastPreActionPickRow = null
     }
     row.remove()
+    if (batchViewOn) updateBatchFrameHint()
   })
 
   row.appendChild(select)
@@ -2138,6 +2166,7 @@ function bindPreActionEvents() {
   if (addBtn && !addBtn._preactionEventsBound) {
     addBtn.addEventListener('click', () => {
       addPreActionRow()
+      if (batchViewOn) updateBatchFrameHint()
     })
     addBtn._preactionEventsBound = true
   }
@@ -2735,7 +2764,7 @@ export async function handleTestNow() {
         ? Object.values(res.fields || {}).some(f => f && f.ok && f.message)
         : Boolean(res.message)
       setPreviewState(warned ? 'warn' : 'ok')
-      // 這次測試是在使用者眼前這個分頁跑的，iframe 已經開著；排程是開新分頁，
+      // 這次測試是在使用者眼前這個分頁跑的，iframe 已經開著；排程會自己另外開一份頁面，
       // 兩者會不一樣，成功不代表排程也會成功
       const noPreActions = !Array.isArray(values.preActions) || values.preActions.length === 0
       const noteEl = document.getElementById('test-note')
@@ -2746,7 +2775,7 @@ export async function handleTestNow() {
         const total = res.preActionTrace.reduce((sum, step) => sum + (Number(step.ms) || 0), 0)
         notes.push(`前置動作 ${res.preActionTrace.length} 步完成（共 ${(total / 1000).toFixed(1)} 秒）`)
       } else if (noteEl && currentCtx?.frameUrl && noPreActions) {
-        notes.push('這次測試在目前分頁執行；排程會開新分頁，若那個框架要先點才會出現，請加入前置動作。')
+        notes.push('這次測試在目前分頁執行；排程會自己另外開一份頁面，若那個框架要先點才會出現，請加入前置動作。')
       }
       if (!values.fields && res.message) {
         notes.push(res.message)
@@ -3190,7 +3219,30 @@ function setBatchView(on) {
     show('add-to-dashboard', true)
   }
   show('preview-section', !on)
-  show('advanced-section', !on)
+  const adv = document.getElementById('advanced-section')
+  if (adv) {
+    adv.hidden = false
+    const summary = adv.querySelector('summary')
+    if (on) {
+      adv.setAttribute('open', '')
+      if (summary) summary.textContent = '前置動作(套用到每一個任務)'
+      for (const child of adv.children) {
+        if (child.id === 'preaction-section' || child.tagName === 'SUMMARY') continue
+        if (!child.hidden) {
+          child.setAttribute('data-batch-hidden', '')
+          child.hidden = true
+        }
+      }
+    } else {
+      if (summary) summary.textContent = '進階設定'
+      for (const child of adv.children) {
+        if (child.hasAttribute('data-batch-hidden')) {
+          child.removeAttribute('data-batch-hidden')
+          child.hidden = false
+        }
+      }
+    }
+  }
   show('repick-target', !on)
   const header = document.querySelector('[data-picker-header]')
   if (header && on) header.hidden = true
@@ -3216,6 +3268,8 @@ function batchRows() {
 }
 
 async function renderBatch(ctx) {
+  const preList = document.getElementById('preaction-list')
+  if (preList) preList.replaceChildren()
   batchItems = ctx.items.slice()
   setBatchView(true)
   await renderDashboardSection(null)
@@ -3226,6 +3280,9 @@ async function renderBatch(ctx) {
   restoreDraft(ctx.draft)
   renderBatchList(ctx.draft?.batchNames)
   setBatchView(true)
+  bindPreActionEvents()
+  bindPreActionMessageListener()
+  updateBatchFrameHint()
 }
 
 function renderBatchList(savedNames) {
@@ -3342,6 +3399,7 @@ function snapshotShared() {
   out.weekdays = Array.from(document.querySelectorAll('#weekdays input[type="checkbox"]')).map(cb => cb.checked)
   out.cardTypes = Array.from(document.querySelectorAll('#card-types input[type="checkbox"]')).map(cb => cb.checked)
   out.aggregate = document.getElementById('batch-aggregate')?.value || 'sum'
+  out.preActions = preActionsFromForm()
   return out
 }
 
@@ -3356,6 +3414,15 @@ function pasteShared(shared) {
   document.querySelectorAll('#card-types input[type="checkbox"]').forEach((cb, i) => { cb.checked = Boolean(shared.cardTypes[i]) })
   const blockAgg = document.getElementById('block-aggregate')
   if (blockAgg) blockAgg.value = shared.aggregate
+  const preList = document.getElementById('preaction-list')
+  if (preList) {
+    preList.replaceChildren()
+    if (Array.isArray(shared.preActions)) {
+      for (const pa of shared.preActions) {
+        addPreActionRow(pa)
+      }
+    }
+  }
 }
 
 // 一項 → 表單值：與單任務同一條「render → 收集」，不從 payload 另組
