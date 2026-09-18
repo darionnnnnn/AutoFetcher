@@ -1,6 +1,6 @@
 // AutoFetcher 擷取流程：開分頁、注入、擷取、寫紀錄、重試
 import { getTask, updateTasks, appendRecord, appendRecords, getRecordsInRange, getSettings, updateAlertLog, setLastValue, setLastValues, getRunStatus, setRunStatus, getRunState, updateRunState, updateMissedList } from '../shared/storage.js'
-import { waitMsOf, timeoutMsOf, preActionFailure, DEFAULT_WAIT_TIMEOUT_MS, messageTimeoutMs } from '../shared/preaction.js'
+import { waitMsOf, timeoutMsOf, preActionFailure, DEFAULT_WAIT_TIMEOUT_MS, messageTimeoutMs, holdMsOf, capStepMs, PRE_ACTION_STEP_MAX_MS, PRE_ACTION_STEP_CAP_NOTE } from '../shared/preaction.js'
 import { seriesIdOf, parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
 import { MSG } from '../shared/messages.js'
 import { slotOf } from './scheduler.js'
@@ -11,8 +11,9 @@ import { evaluateAlerts } from '../shared/alerts.js'
 import { isSuccess, healthStatusOf } from '../shared/record-status.js'
 import { setTaskHealth, refreshBadge } from './health.js'
 import { ensureLoggedIn } from './login.js'
-import { locateFrame, sameOriginPath } from './frames.js'
+import { locateFrame, sameOriginPath, PROBE_TIMEOUT_MS } from './frames.js'
 import { acquireFetchTab, openForegroundTab, enqueueForOrigin, waitTabReady, BOOT } from './fetch-tab.js'
+import { sendToFrame, timeoutError } from './messaging.js'
 
 // `locateFrame` 找到才有 frameId；失敗時回的是帶候選清單的物件（給診斷用），不是 null
 function frameFound(loc) {
@@ -63,27 +64,70 @@ function sleep(ms) {
 const PAGE_GONE_MESSAGE =
   '頁面在抓取途中換頁或重新載入，來不及取值。若有前置動作，請在會換頁的那一步後面加一個「等待」動作（建議 3 秒）；也請確認目標就在換頁後的那一頁。'
 
-// 我們自己丟的逾時要**帶得出身分**：判斷「該不該重試」不得比對 Chrome 的英文錯誤字串，
-// 那串字會隨瀏覽器版本與語系變，比對它就是把契約押在別人的文案上（AF-13）。
-function timeoutError(message) {
-  const err = new Error(message)
-  err.afTimeout = true
+// 送訊息的逾時封裝（sendToFrame／timeoutError）在 messaging.js，background 共用一份
+
+// 續命間隔（AF-21 批次 2 定案 5）：MV3 的 service worker 閒置約 30 秒就被回收，
+// 純等待期間沒有任何 chrome API 呼叫就算閒置
+const KEEP_ALIVE_INTERVAL_MS = 20000
+
+/**
+ * 會續命的等待：每等滿一個間隔、而且還要再等，就呼叫一次 `getPlatformInfo`。
+ * 小於一個間隔的等待不呼叫（沒必要）。fetcher 內的純等待一律走它。
+ * @param {number} ms 要等的毫秒
+ * @param {{intervalMs?: number}} [opts] 間隔只給測試縮短
+ */
+export async function keepAliveSleep(ms, opts = {}) {
+  const intervalMs = opts.intervalMs ?? KEEP_ALIVE_INTERVAL_MS
+  let left = Number.isFinite(ms) && ms > 0 ? ms : 0
+  while (left > 0) {
+    const chunk = Math.min(intervalMs, left)
+    await sleep(chunk)
+    left -= chunk
+    if (left > 0) {
+      try { await chrome.runtime.getPlatformInfo() } catch {}
+    }
+  }
+}
+
+// 單次抓取的總時限（AF-21 批次 2 定案 5，暫定值）：
+// 基本額度＋任務自己宣告的等待總和，上限壓在單一事件約 5 分鐘之內
+const RUN_BUDGET_BASE_MS = 150000
+const RUN_BUDGET_MAX_MS = 270000
+const DEADLINE_MESSAGE = '超過單次抓取時限'
+
+/**
+ * 這次抓取的時限毫秒：基本額度＋前置動作宣告的等待（`wait` 的秒數、`hover` 的停留、`waitFor` 的逾時；
+ * `wait`／`hover` 以執行時上限計），上限 `maxMs`。
+ * @param {object} task 任務
+ * @param {{baseMs?: number, maxMs?: number, stepMaxMs?: number}} [opts] 只給測試縮短
+ * @returns {number}
+ */
+export function runBudgetMsOf(task, opts = {}) {
+  const baseMs = opts.baseMs ?? RUN_BUDGET_BASE_MS
+  const maxMs = opts.maxMs ?? RUN_BUDGET_MAX_MS
+  const stepMaxMs = opts.stepMaxMs ?? PRE_ACTION_STEP_MAX_MS
+  let declared = 0
+  for (const action of Array.isArray(task?.preActions) ? task.preActions : []) {
+    if (action?.type === 'wait') declared += capStepMs(waitMsOf(action), stepMaxMs).ms
+    else if (action?.type === 'hover') declared += capStepMs(holdMsOf(action), stepMaxMs).ms
+    else if (action?.type === 'waitFor') declared += timeoutMsOf(action)
+  }
+  return Math.min(baseMs + declared, maxMs)
+}
+
+// 超過總時限的錯誤：與既有逾時同類（afTimeout），另帶 afDeadline 讓各層不要把它吞成別的失敗
+function deadlineError(budgetMs) {
+  const err = timeoutError(`${DEADLINE_MESSAGE}（${Math.round(budgetMs / 1000)} 秒）`)
+  err.afDeadline = true
   return err
 }
 
-/**
- * 送訊息給 content，並且**一定要有逾時**。
- * 計時器贏了要清、輸了更要清：不清的話每送一次就留一個計時器吊著事件迴圈，
- * MV3 的 service worker 因此遲遲不能閒置回收（AF-12 發現，AF-13 把捲動與前置動作也納入）。
- */
-function sendToFrame(tabId, message, frameId, timeoutMs, label) {
-  let timer = null
-  return Promise.race([
-    chrome.tabs.sendMessage(tabId, message, { frameId }),
-    new Promise((_, reject) => {
-      timer = setTimeout(() => reject(timeoutError(`${label} timeout`)), timeoutMs)
-    })
-  ]).finally(() => { if (timer !== null) clearTimeout(timer) })
+// content 回的錯誤代碼轉成紀錄要寫的字：content 自己丟例外時說中文（AF-21 批次 2 定案 6）
+function contentErrorText(res) {
+  if (res?.error === 'content_exception') {
+    return `頁面上的程式發生錯誤：${res.detail || '未知錯誤'}`
+  }
+  return res?.error ? String(res.error) : ''
 }
 
 // 解析 URL 取得 origin
@@ -377,6 +421,11 @@ export async function runTask(task, opts = {}) {
     // **與排程層的重試是兩件事**：那是「這一輪失敗，隔一段時間整個重跑」，
     // 這是「同一次執行內，文件被換掉就再抓一次」，兩者各自計數。
     reviveDelaysMs = [300, 600, 1200],
+    // 總時限、續命間隔、單步上限：只給測試縮短，正式呼叫不傳
+    budgetBaseMs,
+    budgetMaxMs,
+    keepAliveMs,
+    preActionStepMaxMs = PRE_ACTION_STEP_MAX_MS,
     dryRun = false
   } = opts
   const isManual = reason === 'manual'
@@ -427,6 +476,8 @@ export async function runTask(task, opts = {}) {
       // 前置動作的逐步軌跡：立即測試要說得出「hover 有做、是 click 沒點到」，
       // 只回一句「成功」的話，使用者在調 hover 選單時完全沒有線索
       const preActionTrace = []
+      // 單步上限的註明：成功的紀錄也要帶（排程抓取沒有軌跡可看）
+      const capNotes = []
       // 分頁 id 與框架定位結果在 try 外面宣告：最外層的 catch 要用它們組診斷包
       // （讀分頁實際網址；框架其實找到了、是擷取階段斷線，診斷包不能長得跟「找不到框架」一樣）
       let tabId
@@ -444,8 +495,45 @@ export async function runTask(task, opts = {}) {
       if (runKey) await markRunState(runKey, 'running')
       await chrome.runtime.getPlatformInfo()
 
+      // 總時限從輪到自己才開始算（排隊的時間不算）。**不用 Promise.race 包整段**：
+      // 被拋下的那段會繼續跑、晚一點又寫一次紀錄。改成每個主要步驟開始前檢查，
+      // 每個等待的上限取「自己的逾時」與「剩餘時間」較小者，超過就丟與逾時同類的錯誤走既有失敗處理。
+      const budgetMs = runBudgetMsOf(task, { baseMs: budgetBaseMs, maxMs: budgetMaxMs, stepMaxMs: preActionStepMaxMs })
+      const deadlineAt = Date.now() + budgetMs
+      const remaining = () => Math.max(0, deadlineAt - Date.now())
+      const within = (ms) => Math.min(ms, remaining())
+      const checkDeadline = () => {
+        if (Date.now() >= deadlineAt) throw deadlineError(budgetMs)
+      }
+      const pause = async (ms) => {
+        await keepAliveSleep(within(ms), { intervalMs: keepAliveMs })
+      }
+      // 送訊息：逾時取較小者；是被總時限截短而逾時的，改丟總時限錯誤
+      const send = async (message, frameId, ownMs, label) => {
+        const ms = within(ownMs)
+        try {
+          return await sendToFrame(tabId, message, frameId, ms, label)
+        } catch (err) {
+          if (err?.afTimeout && ms < ownMs) throw deadlineError(budgetMs)
+          throw err
+        }
+      }
+      // 框架定位：輪詢逾時與探測逾時都取較小者；被總時限截斷的失敗不得記成「找不到框架」
+      const locate = async (frame, locator, ownMs) => {
+        const found = await locateFrame(tabId, frame, locator, {
+          pollMs,
+          timeoutMs: within(ownMs),
+          probeTimeoutMs: within(opts.probeTimeoutMs ?? PROBE_TIMEOUT_MS)
+        })
+        if (!frameFound(found) && Date.now() >= deadlineAt) throw deadlineError(budgetMs)
+        return found
+      }
+      // 開頁、等載入的上限也跟著剩餘時間走
+      const loadMs = () => within(loadTimeoutMs)
+
       try {
         // 取得分頁：指定分頁存在則用、否則開前景分頁或走專用抓取分頁
+        checkDeadline()
         let tab = null
         if (opts.tabId !== undefined && opts.tabId !== null) {
           try {
@@ -457,7 +545,7 @@ export async function runTask(task, opts = {}) {
         let fg = null
         if (!(tab && sameOriginPath(tab.url, task.url)) && task.foreground === true) {
           try {
-            fg = await openForegroundTab(task.url, { pollMs, loadTimeoutMs })
+            fg = await openForegroundTab(task.url, { pollMs, loadTimeoutMs: loadMs() })
           } catch {}
         }
 
@@ -465,7 +553,7 @@ export async function runTask(task, opts = {}) {
         let pageLoaded = true
         if (tab && sameOriginPath(tab.url, task.url)) {
           tabId = tab.id
-          await waitTabReady(tabId, { pollMs, loadTimeoutMs })
+          await waitTabReady(tabId, { pollMs, loadTimeoutMs: loadMs() })
         } else if (fg !== null) {
           tabId = fg.tabId
           restoreForeground = fg.restore
@@ -478,11 +566,11 @@ export async function runTask(task, opts = {}) {
           const applied = queueCtx.preApplied
           let canKeep = preSig !== null && applied?.sig === preSig && sameOriginPath(applied.url, task.url)
           const freshLoad = !canKeep && (queueCtx.pageDirty === true || hasPreActions)
-          tabId = await acquireFetchTab(queueCtx, task.url, { pollMs, loadTimeoutMs, freshLoad, keepPage: canKeep })
+          tabId = await acquireFetchTab(queueCtx, task.url, { pollMs, loadTimeoutMs: loadMs(), freshLoad, keepPage: canKeep })
           if (canKeep && queueCtx.fetchTab?.loads !== applied.loads) {
             // 做完前置動作之後頁面被換過(中間插進來的站台檢查導去登入頁、或被卸載而重載當下的網址):
             // 前置動作的狀態沒了——回到任務網址重跑
-            tabId = await acquireFetchTab(queueCtx, task.url, { pollMs, loadTimeoutMs, freshLoad: true })
+            tabId = await acquireFetchTab(queueCtx, task.url, { pollMs, loadTimeoutMs: loadMs(), freshLoad: true })
             canKeep = false
           }
           reusedPreActions = canKeep
@@ -494,23 +582,27 @@ export async function runTask(task, opts = {}) {
           pageLoaded = queueCtx.fetchTab?.loads !== loadsBefore
         }
 
-        if (pageLoaded && extraDelayMs > 0) await sleep(extraDelayMs)
+        checkDeadline()
+        if (pageLoaded && extraDelayMs > 0) await pause(extraDelayMs)
 
         // 8. 確認登入狀態（若停留在登入頁則執行自動登入）
-        const login = await ensureLoggedIn(tabId, task, { pollMs, loadTimeoutMs, extraDelayMs })
+        checkDeadline()
+        const login = await ensureLoggedIn(tabId, task, { pollMs, loadTimeoutMs, extraDelayMs, deadlineAt })
         // 登入流程填了表單、換了頁,入口的載入次數量不到它:自己標記頁面被動過。
         // 本來打算沿用前置動作狀態的(session 剛好在兩個任務之間過期),回任務網址重跑。
         if (login?.attempted === true && acquiredTab) {
           queueCtx.pageDirty = true
           queueCtx.preApplied = null
           if (reusedPreActions && login.ok === true) {
-            tabId = await acquireFetchTab(queueCtx, task.url, { pollMs, loadTimeoutMs, freshLoad: true })
+            tabId = await acquireFetchTab(queueCtx, task.url, { pollMs, loadTimeoutMs: loadMs(), freshLoad: true })
             queueCtx.pageDirty = false
             reusedPreActions = false
-            if (extraDelayMs > 0) await sleep(extraDelayMs)
+            if (extraDelayMs > 0) await pause(extraDelayMs)
           }
         }
         if (login?.ok !== true) {
+          // 登入途中被總時限截斷的，記成超過時限（走重試），不記成登入失敗
+          checkDeadline()
           if (dryRun) return { ok: false, error: 'login_failed' }
           return await writeRecord({
             taskId: task.id,
@@ -536,17 +628,27 @@ export async function runTask(task, opts = {}) {
           }
           for (let i = 0; i < task.preActions.length; i++) {
             const action = task.preActions[i]
+            checkDeadline()
             const startedAt = Date.now()
             if (action?.type === 'wait') {
-              const ms = waitMsOf(action)
-              if (ms > 0) await sleep(ms)
-              preActionTrace.push({ step: i + 1, type: 'wait', ok: true, ms: Date.now() - startedAt })
+              // 執行時上限：使用者存的值不改，超過照上限跑並在軌跡／紀錄註明
+              const step = capStepMs(waitMsOf(action), preActionStepMaxMs)
+              if (step.ms > 0) await pause(step.ms)
+              const entry = { step: i + 1, type: 'wait', ok: true, ms: Date.now() - startedAt }
+              if (step.capped) {
+                entry.error = PRE_ACTION_STEP_CAP_NOTE
+                capNotes.push(`前置動作第 ${i + 1} 步：${PRE_ACTION_STEP_CAP_NOTE}`)
+              }
+              preActionTrace.push(entry)
               continue
             }
+            // hover 的停留由 content 照上限跑；這裡只負責註明
+            const holdCapped = action?.type === 'hover' && capStepMs(holdMsOf(action), preActionStepMaxMs).capped
+            if (holdCapped) capNotes.push(`前置動作第 ${i + 1} 步：${PRE_ACTION_STEP_CAP_NOTE}`)
             const actionTimeout = action?.type === 'waitFor'
               ? timeoutMsOf(action)
               : (opts.frameTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS)
-            let actionLoc = await locateFrame(tabId, action?.frame, action?.locator, { pollMs, timeoutMs: actionTimeout })
+            let actionLoc = await locate(action?.frame, action?.locator, actionTimeout)
             // `locateFrame` 失敗時回的是帶候選清單的物件（診斷用），判定一律看有沒有 frameId
             if (!frameFound(actionLoc)) {
               preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
@@ -564,20 +666,25 @@ export async function runTask(task, opts = {}) {
             let preLiveErr = null
             for (let pa = 0; pa < preAttempts; pa++) {
               if (pa > 0) {
-                await sleep(reviveDelaysMs[pa - 1])
-                const again = await locateFrame(tabId, action?.frame, action?.locator, { pollMs, timeoutMs: actionTimeout })
+                await pause(reviveDelaysMs[pa - 1])
+                checkDeadline()
+                const again = await locate(action?.frame, action?.locator, actionTimeout)
                 if (!frameFound(again)) break
                 actionLoc = again
               }
               try {
                 await injectContent(tabId, { frameId: actionLoc.frameId })
-                preRes = await sendToFrame(tabId, {
+                preRes = await send({
                   type: MSG.RUN_PRE_ACTIONS,
                   actions: [action]
                 }, actionLoc.frameId, opts.preActionTimeoutMs ?? messageTimeoutMs(action), 'Pre-action')
                 preLiveErr = null
                 break
               } catch (err) {
+                if (err?.afDeadline) {
+                  preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
+                  throw err
+                }
                 if (err?.afTimeout) {
                   preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
                   throw new Error(preActionFailure(i, action, 'no_response'))
@@ -594,9 +701,11 @@ export async function runTask(task, opts = {}) {
             if (preRes?.ok !== true) {
               preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
               // 訊息要說得出「第幾步、哪一種動作、怎麼了」，使用者才知道要調哪一列
-              throw new Error(preActionFailure(i, action, preRes?.error))
+              throw new Error(preActionFailure(i, action, contentErrorText(preRes)))
             }
-            preActionTrace.push({ step: i + 1, type: action?.type, ok: true, ms: Date.now() - startedAt })
+            const doneEntry = { step: i + 1, type: action?.type, ok: true, ms: Date.now() - startedAt }
+            if (holdCapped) doneEntry.error = PRE_ACTION_STEP_CAP_NOTE
+            preActionTrace.push(doneEntry)
           }
           if (acquiredTab) {
             queueCtx.preApplied = { sig: JSON.stringify(task.preActions), url: task.url, loads: queueCtx.fetchTab?.loads }
@@ -608,7 +717,7 @@ export async function runTask(task, opts = {}) {
         // 而 locator 剛好在舊頁面上匹配得到，就會回一個成功的錯誤值靜靜寫進紀錄——那比看到錯誤更糟。
         // **這只是縮小窗口，不是關閉窗口**：真實瀏覽器實測，子框架導覽時分頁狀態全程 `complete`，
         // 沒有任何訊號能證明「頁面已經安定」。
-        if (ranPreActions && extraDelayMs > 0) await sleep(extraDelayMs)
+        if (ranPreActions && extraDelayMs > 0) await pause(extraDelayMs)
 
         // 10. 取得目標並擷取：定位 → 注入 → 捲動 → 擷取，四步是一個整體。
         // 中間任何一步「送不到」都代表文件被換掉了（content script 隨舊文件一起消失），
@@ -619,8 +728,9 @@ export async function runTask(task, opts = {}) {
         let lastLiveErr = null
         const maxAttempts = 1 + reviveDelaysMs.length
         for (let a = 0; a < maxAttempts; a++) {
-          if (a > 0) await sleep(reviveDelaysMs[a - 1])
-          loc = await locateFrame(tabId, task.frame, task.locator, { pollMs, timeoutMs: opts.frameTimeoutMs ?? 20000 })
+          if (a > 0) await pause(reviveDelaysMs[a - 1])
+          checkDeadline()
+          loc = await locate(task.frame, task.locator, opts.frameTimeoutMs ?? 20000)
           if (!frameFound(loc)) break
           try {
             await injectContent(tabId, { frameId: loc.frameId })
@@ -628,11 +738,12 @@ export async function runTask(task, opts = {}) {
             // 為它重試就是把 10 秒乘以四卡住同站台佇列，所以逾時就往下走，讓擷取自己去判定。
             // 但捲動「送不到」是另一回事——那是文件被換掉的訊號，要讓它往上冒出去觸發重試。
             try {
-              await sendToFrame(tabId, { type: MSG.SCROLL_INTO_VIEW, locator: task.locator }, loc.frameId, scrollTimeoutMs, 'Scroll')
+              await send({ type: MSG.SCROLL_INTO_VIEW, locator: task.locator }, loc.frameId, scrollTimeoutMs, 'Scroll')
             } catch (err) {
-              if (!err?.afTimeout) throw err
+              // 總時限到了不算「盡力而為」的那種逾時
+              if (!err?.afTimeout || err.afDeadline) throw err
             }
-            res = await sendToFrame(tabId, { type: MSG.EXTRACT, locator: task.locator, spec: task.spec }, loc.frameId, extractTimeoutMs, 'Extract')
+            res = await send({ type: MSG.EXTRACT, locator: task.locator, spec: task.spec }, loc.frameId, extractTimeoutMs, 'Extract')
             lastLiveErr = null
             break
           } catch (err) {
@@ -726,6 +837,9 @@ export async function runTask(task, opts = {}) {
               if (res.partial === true) {
                 rec.partial = true
               }
+              if (capNotes.length > 0) {
+                rec.error = [rec.error, ...capNotes].filter(Boolean).join('；')
+              }
               records.push(slimRecord(rec))
             }
 
@@ -809,6 +923,9 @@ export async function runTask(task, opts = {}) {
           if (res.message !== undefined) {
             record.error = res.message
           }
+          if (capNotes.length > 0) {
+            record.error = [record.error, ...capNotes].filter(Boolean).join('；')
+          }
           if (res.partial === true) {
             record.partial = true
           }
@@ -870,7 +987,7 @@ export async function runTask(task, opts = {}) {
           slot,
           capturedAt: new Date().toISOString(),
           status: 'error',
-          error: String(res?.error || '擷取失敗')
+          error: contentErrorText(res) || '擷取失敗'
         }, { parentId: task.id, skipLedger: isManual })
 
       } catch (err) {

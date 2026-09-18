@@ -28,6 +28,7 @@ import {
   parsePrecheckName
 } from './precheck.js'
 import { injectContent } from './inject.js'
+import { sendToFrame } from './messaging.js'
 import { locateFrame, listFrames, matchFrameByUrl } from './frames.js'
 import { isAnchorText, putSkip } from '../shared/table.js'
 import { pickSpecOf, reconcileFields } from '../shared/field-match.js'
@@ -463,7 +464,12 @@ async function applyPickEntry(tabId, batch) {
   return true
 }
 
+// 選取模式相關訊息送給 content 的逾時（AF-21 批次 2 定案 6，暫定值）：
+// 那幾則都是頁面上立刻完成的動作，回應遺失時不要吊到 worker 被回收
+const CONTENT_MESSAGE_TIMEOUT_MS = 10000
+
 export async function handleMessage(msg, sender, runOpts = {}) {
+  const contentMs = runOpts.contentTimeoutMs ?? CONTENT_MESSAGE_TIMEOUT_MS
   try {
     if (!msg || typeof msg !== 'object') return undefined
 
@@ -653,11 +659,11 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       const matched = matchFrameByUrl(await listFrames(tabId), msg.src)
       if (matched?.frameId !== undefined) {
         await injectContent(tabId, { frameId: matched.frameId })
-        await chrome.tabs.sendMessage(tabId, enter, { frameId: matched.frameId })
+        await sendToFrame(tabId, enter, matched.frameId, contentMs, 'Enter pick')
         return { ok: true }
       }
       const backTo = sender?.frameId ?? 0
-      await chrome.tabs.sendMessage(tabId, { ...enter, hint: 'frame_not_found' }, { frameId: backTo })
+      await sendToFrame(tabId, { ...enter, hint: 'frame_not_found' }, backTo, contentMs, 'Enter pick')
       return { ok: true }
     }
 
@@ -681,7 +687,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
           preselect: msg.preselect || preselectOf(known)
         }
         if (batch) enter.batch = true
-        await chrome.tabs.sendMessage(msg.tabId, enter, { frameId })
+        await sendToFrame(msg.tabId, enter, frameId, contentMs, 'Enter pick')
         return { ok: true }
       }
 
@@ -710,7 +716,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
 
       const frameId = loc.frameId
       await injectContent(tab.id, { frameId })
-      await chrome.tabs.sendMessage(tab.id, {
+      await sendToFrame(tab.id, {
         type: MSG.ENTER_PICK,
         purpose: msg.purpose || 'repick',
         taskId: msg.taskId,
@@ -718,7 +724,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         // 不帶這兩個欄位就沒有預選對象，既有的值也勾不回來
         locator: msg.locator || task.locator,
         preselect: msg.preselect || preselectOf(task)
-      }, { frameId })
+      }, frameId, contentMs, 'Enter pick')
       return { ok: true }
     }
 
@@ -843,7 +849,7 @@ export async function closePanelFor(tabId, opts = {}) {
     }
   } catch {}
   for (const frameId of targets) {
-    try { await chrome.tabs.sendMessage(tabId, { type: MSG.EXIT_PICK }, { frameId }) } catch {}
+    try { await sendToFrame(tabId, { type: MSG.EXIT_PICK }, frameId, opts.contentTimeoutMs ?? CONTENT_MESSAGE_TIMEOUT_MS, 'Exit pick') } catch {}
   }
 }
 
@@ -877,7 +883,7 @@ export async function handleContextMenu(info, tab) {
       await openPanel(tab.id, 'site', `origin=${encodeURIComponent(origin)}&tabId=${tab.id}`)
       await setPanelCtx(tab.id, { kind: 'site', origin, tabId: tab.id })
       await injectContent(tab.id, { frameId: 0 })
-      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'login-user' }, { frameId: 0 })
+      await sendToFrame(tab.id, { type: MSG.ENTER_PICK, purpose: 'login-user' }, 0, CONTENT_MESSAGE_TIMEOUT_MS, 'Enter pick')
       return
     }
 
@@ -891,7 +897,7 @@ export async function handleContextMenu(info, tab) {
       // 蓋成等待態會把草稿一起洗掉，選完也認不出這是「換目標」
       if (!(await applyPickEntry(tab.id, false))) return
       await injectContent(tab.id, { frameId })
-      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'task' }, { frameId })
+      await sendToFrame(tab.id, { type: MSG.ENTER_PICK, purpose: 'task' }, frameId, CONTENT_MESSAGE_TIMEOUT_MS, 'Enter pick')
       return
     }
 
@@ -902,7 +908,7 @@ export async function handleContextMenu(info, tab) {
       await openPanel(tab.id, 'picker', `tabId=${tab.id}`)
       if (!(await applyPickEntry(tab.id, true))) return
       await injectContent(tab.id, { frameId })
-      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'task', batch: true }, { frameId })
+      await sendToFrame(tab.id, { type: MSG.ENTER_PICK, purpose: 'task', batch: true }, frameId, CONTENT_MESSAGE_TIMEOUT_MS, 'Enter pick')
       return
     }
   } catch {}

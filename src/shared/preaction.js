@@ -76,6 +76,36 @@ export function timeoutMsOf(action) {
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_WAIT_TIMEOUT_MS
 }
 
+/**
+ * 前置動作 `wait` 與 `hover` 停留的**執行時**上限（AF-21 批次 2 定案 5）。
+ * 使用者存的值不改；超過就照這個上限跑，並在軌跡／紀錄註明 `PRE_ACTION_STEP_CAP_NOTE`。
+ * 單一事件最長約 5 分鐘，一步等上好幾分鐘會把整次抓取的時限吃光。
+ */
+export const PRE_ACTION_STEP_MAX_MS = 60000
+/** 超過上限時註明的那一句 */
+export const PRE_ACTION_STEP_CAP_NOTE = '等待秒數超過上限，以 60 秒執行'
+
+/**
+ * `hover` 要停留幾毫秒（使用者存的值；非法值用預設）。上限另由呼叫端套 `capStepMs`。
+ * @param {{holdMs?: number|string}} action 動作
+ * @returns {number} 毫秒數
+ */
+export function holdMsOf(action) {
+  const n = Number(action?.holdMs)
+  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_HOVER_HOLD_MS
+}
+
+/**
+ * 套上單步上限：回傳實際要跑的毫秒數與有沒有被截。
+ * @param {number} ms 使用者設定換算出的毫秒數
+ * @param {number} [maxMs] 上限（預設 `PRE_ACTION_STEP_MAX_MS`；只給測試縮短）
+ * @returns {{ms: number, capped: boolean}}
+ */
+export function capStepMs(ms, maxMs = PRE_ACTION_STEP_MAX_MS) {
+  const n = Number.isFinite(Number(ms)) && Number(ms) > 0 ? Number(ms) : 0
+  return n > maxMs ? { ms: maxMs, capped: true } : { ms: n, capped: false }
+}
+
 /** 送 `RUN_PRE_ACTIONS` 之後，等回應的緩衝毫秒 */
 export const PRE_ACTION_MESSAGE_BUFFER_MS = 5000
 
@@ -90,9 +120,8 @@ export function messageTimeoutMs(action) {
   const type = action?.type
   if (type === 'waitFor') return timeoutMsOf(action) + PRE_ACTION_MESSAGE_BUFFER_MS
   if (type === 'hover') {
-    const n = Number(action?.holdMs)
-    const hold = Number.isFinite(n) && n >= 0 ? n : DEFAULT_HOVER_HOLD_MS
-    return hold + PRE_ACTION_MESSAGE_BUFFER_MS
+    // 執行時停留有上限（content 端照上限跑），逾時跟著上限走
+    return capStepMs(holdMsOf(action)).ms + PRE_ACTION_MESSAGE_BUFFER_MS
   }
   return DEFAULT_WAIT_TIMEOUT_MS
 }

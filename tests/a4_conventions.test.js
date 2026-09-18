@@ -192,6 +192,15 @@ test('D13 守門:tabs.sendMessage 一律指名 frameId(否則會廣播給每個 
   assert.deepEqual(offenders, [], `tabs.sendMessage 必須帶第 3 個引數指定 frameId:${offenders.join(', ')}`)
 })
 
+// AF-21 批次 2 定案 6:沒有逾時的送訊息只要回應遺失就吊到 service worker 被回收。
+// background 一律經 messaging.js 的 sendToFrame(帶逾時、會清計時器)。
+test('D13b 守門:background 的 chrome.tabs.sendMessage( 只准出現在 messaging.js', () => {
+  const files = jsFiles().filter(p => rel(p).startsWith('background/'))
+  assert.ok(files.length > 0, '要先掃到 background 的檔案')
+  const hits = files.filter(p => read(p).includes('chrome.tabs.sendMessage(')).map(rel).sort()
+  assert.deepEqual(hits, ['background/messaging.js'], `這些檔案直接呼叫 chrome.tabs.sendMessage:${hits.join(', ')}`)
+})
+
 // AF-12:正式碼不得留測試用的後門。
 // `src/background/main.js` 的 `RUN_TASK` 曾把 `msg.__testOpts` 展開進 `runTask`——
 // 等於任何送得出 runtime 訊息的來源都能改抓取時序、把這次改成 dryRun、或改成 scheduled 去偷排程槽。
