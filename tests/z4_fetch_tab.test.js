@@ -166,6 +166,23 @@ test('建專用視窗失敗:退回背景分頁,並寫診斷(不讓整次抓取�
   assert.equal(callsOf(c, 'windows.remove').length, 0)
 })
 
+test('視窗建好但最小化失敗:照樣用那個視窗,不得再開一個退路分頁(否則視窗沒人關)', async () => {
+  const { c, ft } = await fresh()
+  const origUpdate = c.windows.update
+  c.windows.update = async () => { throw new Error('cannot minimize') }
+  const holder = {}
+  let tabId
+  try {
+    tabId = await ft.acquireFetchTab(holder, URL_A, FAST)
+  } finally {
+    c.windows.update = origUpdate
+  }
+  assert.equal(callsOf(c, 'tabs.create').length, 0)
+  const winId = callsOf(c, 'windows.create').length === 1 ? (await c.tabs.get(tabId)).windowId : null
+  await ft.releaseFetchTab(holder)
+  assert.deepEqual(callsOf(c, 'windows.remove').map(x => x.args[0]), [winId])
+})
+
 // ---- 設定:開在目前視窗的背景分頁 ----
 
 test('fetchTabMode=tab:在目前視窗開背景分頁,不建視窗', async () => {

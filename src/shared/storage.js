@@ -7,7 +7,8 @@ const DEFAULT_SETTINGS = {
   retentionDays: 365,
   notifications: true,
   extraDelaySec: 3,
-  theme: 'system'
+  theme: 'system',
+  fetchTabMode: 'window'
 }
 
 const DEFAULT_LAYOUT = { dashboards: [] }
