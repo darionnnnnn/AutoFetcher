@@ -311,3 +311,14 @@ export function innerLabel(inner) {
 export function withInnerLabel(base, inner) {
   return [base, innerLabel(inner)].filter((x) => typeof x === 'string' && x !== '').join(' · ')
 }
+
+// interval 的空窗項目（休眠期間略過 N 次）：只能「知道了」，不可補抓
+export const isGap = (x) => x?.kind === 'gap'
+
+// gap 的白話（popup、任務頁、儀表板狀態卡共用這一份）：「休眠期間略過 N 次（from～slot）」
+export function gapTextOf(item) {
+  const from = item?.from || item?.slot || ''
+  const to = item?.slot || ''
+  const range = from && to && from !== to ? `${from}～${to}` : (to || from)
+  return `休眠期間略過 ${Number(item?.count) || 0} 次（${range}）`
+}

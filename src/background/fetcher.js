@@ -5,7 +5,7 @@ import { seriesIdOf, parentIdOf, buildSeriesIndex, nameOf } from '../shared/seri
 import { MSG } from '../shared/messages.js'
 import { slotOf } from './scheduler.js'
 import { slotToMs } from '../shared/schedule-math.js'
-import { notify } from './notify.js'
+import { notify, notifySiteFailure, clearNotifyLog } from './notify.js'
 import { injectContent } from './inject.js'
 import { evaluateAlerts } from '../shared/alerts.js'
 import { isSuccess, healthStatusOf } from '../shared/record-status.js'
@@ -266,6 +266,29 @@ async function scheduleRetry(taskId, attempt, isOffline = false, slot = '') {
   await chrome.alarms.create(`${taskId}:retry:${attempt}${suffix}`, { when: Date.now() + delayMs })
 }
 
+// 解析重試 alarm 名稱（格式：<taskId>:retry:<n>；名稱在 scheduleRetry 組，解析也只有這一份：main 與看門狗共用）
+export function parseRetryName(name) {
+  if (typeof name !== 'string') return null
+  // 名稱可能帶原始排程槽:<taskId>:retry:<n>@<slot>
+  let slot = ''
+  const at = name.lastIndexOf('@')
+  if (at !== -1) {
+    slot = name.slice(at + 1)
+    name = name.slice(0, at)
+  }
+  const lastColon = name.lastIndexOf(':')
+  if (lastColon === -1) return null
+  const attemptStr = name.slice(lastColon + 1)
+  if (!/^\d+$/.test(attemptStr)) return null
+  const before = name.slice(0, lastColon)
+  const secondColon = before.lastIndexOf(':')
+  if (secondColon === -1) return null
+  if (before.slice(secondColon + 1) !== 'retry') return null
+  const taskId = before.slice(0, secondColon)
+  if (!taskId) return null
+  return { taskId, attempt: Number(attemptStr), slot }
+}
+
 // 取得本地日期字串（YYYY-MM-DD）
 function getLocalDateStr(d) {
   const y = d.getFullYear()
@@ -389,6 +412,11 @@ function slimRecord(record) {
   return out
 }
 
+// 整組紀錄裡有沒有成功的值（多值任務的「寫入成功紀錄」）
+function hasAnySuccess(records) {
+  return records.some(r => isSuccess(r))
+}
+
 // 寫入抓取紀錄並更新帳本與 health
 async function writeRecord(input, opts = {}) {
   const { parentId, skipLedger } = opts
@@ -402,6 +430,8 @@ async function writeRecord(input, opts = {}) {
   // popup 顯示「最後值」讀的是 lastValues；失敗的紀錄不覆蓋上一次成功的值
   if (isSuccess(record)) {
     await setLastValue(record.taskId, { value: record.value, capturedAt: record.capturedAt })
+    // 恢復正常：清掉失敗通知的冷卻，下次再壞會重新通知
+    await clearNotifyLog(parentId)
   }
   return record
 }
@@ -876,6 +906,7 @@ export async function runTask(task, opts = {}) {
             // health：整個任務只寫一次，寫在父任務 id 上；狀態的算法與單值共用同一份
             const failCount = records.filter(r => !isSuccess(r)).length
             await updateHealth(task.id, healthFromRecords(records, res.partial))
+            if (hasAnySuccess(records)) await clearNotifyLog(task.id)
 
             if (failCount === 0) {
               await clearNotFoundStreak(task.id)
@@ -949,10 +980,8 @@ export async function runTask(task, opts = {}) {
               return t
             })
 
-            await notify(`${task.id}:not_found`, {
-              title: `AutoFetcher: ${task.name}`,
-              message: '擷取失敗：找不到目標元素'
-            })
+            // 冷卻（同狀態 24 小時一次）＋同站台 5 分鐘內合併成一則（AF-21 批次 2 定案 8）
+            await notifySiteFailure(origin, task, 'not_found')
           }
 
           return await writeRecord({

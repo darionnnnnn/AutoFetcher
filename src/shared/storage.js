@@ -382,8 +382,14 @@ function mergeTasksUnlocked(tasks, list) {
     const taskToSave = { ...item, order }
     const index = tasks.findIndex(t => t.id === item.id)
     if (index !== -1) {
+      // Picker 重組整個任務時不會帶 createdAt：沒帶就保留原值（AF-21 2-D）
+      if (taskToSave.createdAt === undefined && tasks[index].createdAt !== undefined) {
+        taskToSave.createdAt = tasks[index].createdAt
+      }
       tasks[index] = taskToSave
     } else {
+      // 新 id 記下建立時間（毫秒）：interval 空窗提示不算建立之前的格子；舊任務沒有這欄就視為很早以前建立
+      if (typeof taskToSave.createdAt !== 'number') taskToSave.createdAt = Date.now()
       tasks.push(taskToSave)
     }
     savedTasks.push(taskToSave)
@@ -857,12 +863,29 @@ export async function updateAlertLog(mutator) {
   return updateValue('alertLog', asObject, mutator)
 }
 
+// 取得失敗通知冷卻帳本（{ [key]: { status, at } }；無資料回傳空物件）
+export async function getNotifyLog() {
+  const res = await chrome.storage.local.get('notifyLog')
+  return asObject(res?.notifyLog)
+}
+
+// 在 notifyLog 鎖內讀失敗通知冷卻帳本 → mutator(副本) 回傳新值 → 寫回（回 undefined 表示不寫）
+export async function updateNotifyLog(mutator) {
+  return updateValue('notifyLog', asObject, mutator)
+}
+
+// 在 session:failMerge 鎖內讀同站台失敗通知的累計（{ [origin]: { at, items:[{ id, name }] } }）→ mutator(副本) → 寫回
+// 放 session：worker 被回收也不丟，瀏覽器關掉就沒了（合併只看 5 分鐘內）
+export async function updateFailMerge(mutator) {
+  return updateValue('failMerge', asObject, mutator, 'session')
+}
+
 // 在 health 鎖內讀健康狀態表 → mutator(副本) 回傳新值 → 寫回（寫入的算法在 background/health.js）
 export async function updateHealthMap(mutator) {
   return updateValue('health', asObject, mutator)
 }
 
-// 清掉 alertLog／lastValues／health 裡已刪任務與站台的項目（AF-21 定案 6；看門狗一天一次呼叫）
+// 清掉 alertLog／lastValues／health／notifyLog 裡已刪任務與站台的項目（AF-21 定案 6；看門狗一天一次呼叫）
 // 以目前的 tasks（父任務 id）與 sites（origin）為準；每個鍵各自在自己的鎖內讀-改-寫，沒有要清的就不寫
 export async function pruneOrphanEntries() {
   const taskIds = new Set((await getTasks()).map(t => t?.id).filter(id => typeof id === 'string'))
@@ -870,7 +893,13 @@ export async function pruneOrphanEntries() {
   const bySeries = (k) => taskIds.has(parentIdOf(k))
   const byHealth = (k) => k.startsWith('site:') ? origins.has(k.slice('site:'.length)) : taskIds.has(k)
   const removed = {}
-  for (const [key, keep] of [['alertLog', bySeries], ['lastValues', bySeries], ['health', byHealth]]) {
+  // notifyLog 的鍵：任務 id、<任務 id>:precheck、site:<origin>
+  const byNotify = (k) => {
+    if (k.startsWith('site:')) return origins.has(k.slice('site:'.length))
+    const id = k.endsWith(':precheck') ? k.slice(0, -':precheck'.length) : k
+    return taskIds.has(id)
+  }
+  for (const [key, keep] of [['alertLog', bySeries], ['lastValues', bySeries], ['health', byHealth], ['notifyLog', byNotify]]) {
     await mutateKey(key, (current) => {
       if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined
       const stale = Object.keys(current).filter(k => !keep(k))

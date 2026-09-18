@@ -3,6 +3,7 @@ import { openPanel } from '../../shared/panel.js'
 import { statusTextOf } from '../../shared/record-status.js'
 import { MSG } from '../../shared/messages.js'
 import { buildExport, download } from '../../shared/export.js'
+import { isGap, gapTextOf } from '../../shared/describe.js'
 import { describeSchedule, describeTarget, targetOfTask, exclusionOfTarget } from '../../shared/describe.js'
 
 let currentTasks = []
@@ -781,73 +782,99 @@ export function renderTasks(tasks, health = {}, missed = [], ctx = {}) {
 
       const taskMap = new Map(currentTasks.map((t) => [t.id, t.name || t.id]))
       const itemRows = []
+      // interval 的空窗（kind:'gap'）不可補抓：自己一列、只有「知道了」，不進勾選清單
+      const slotItems = currentMissed.filter((m) => !isGap(m))
+      const gapItems = currentMissed.filter((m) => isGap(m))
 
-      const header = document.createElement('div')
-      header.className = 'missed-header'
-      header.textContent = `錯過排程（共 ${currentMissed.length} 筆未執行）：`
-      banner.appendChild(header)
+      if (slotItems.length > 0) {
+        const header = document.createElement('div')
+        header.className = 'missed-header'
+        header.textContent = `錯過排程（共 ${slotItems.length} 筆未執行）：`
+        banner.appendChild(header)
 
-      const listContainer = document.createElement('div')
-      listContainer.className = 'missed-items'
+        const listContainer = document.createElement('div')
+        listContainer.className = 'missed-items'
 
-      for (const m of currentMissed) {
-        const label = document.createElement('label')
-        label.className = 'missed-item'
+        for (const m of slotItems) {
+          const label = document.createElement('label')
+          label.className = 'missed-item'
 
-        const checkbox = document.createElement('input')
-        checkbox.type = 'checkbox'
-        checkbox.checked = true
+          const checkbox = document.createElement('input')
+          checkbox.type = 'checkbox'
+          checkbox.checked = true
+
+          const tName = m.taskName || taskMap.get(m.taskId) || m.taskId
+          const textSpan = document.createElement('span')
+          textSpan.textContent = ` ${tName} (${m.slot})`
+
+          label.appendChild(checkbox)
+          label.appendChild(textSpan)
+          listContainer.appendChild(label)
+
+          itemRows.push({ checkbox, item: m })
+        }
+        banner.appendChild(listContainer)
+
+        const actions = document.createElement('div')
+        actions.className = 'missed-actions'
+
+        const catchUpBtn = document.createElement('button')
+        catchUpBtn.type = 'button'
+        catchUpBtn.dataset.action = 'catch-up'
+        catchUpBtn.textContent = '補抓勾選項目'
+        catchUpBtn.addEventListener('click', async () => {
+          for (const { checkbox, item } of itemRows) {
+            if (checkbox.checked) {
+              await chrome.runtime.sendMessage({
+                type: MSG.CATCH_UP_ONE,
+                taskId: item.taskId,
+                slot: item.slot
+              })
+            }
+          }
+        })
+        actions.appendChild(catchUpBtn)
+
+        const skipBtn = document.createElement('button')
+        skipBtn.type = 'button'
+        skipBtn.dataset.action = 'skip'
+        skipBtn.textContent = '略過勾選項目'
+        skipBtn.addEventListener('click', async () => {
+          for (const { checkbox, item } of itemRows) {
+            if (checkbox.checked) {
+              await chrome.runtime.sendMessage({
+                type: MSG.SKIP_ONE,
+                taskId: item.taskId,
+                slot: item.slot
+              })
+            }
+          }
+        })
+        actions.appendChild(skipBtn)
+
+        banner.appendChild(actions)
+      }
+
+      for (const m of gapItems) {
+        const row = document.createElement('div')
+        row.className = 'missed-item missed-gap'
+        row.dataset.taskId = m.taskId
 
         const tName = m.taskName || taskMap.get(m.taskId) || m.taskId
         const textSpan = document.createElement('span')
-        textSpan.textContent = ` ${tName} (${m.slot})`
+        textSpan.textContent = `${tName}：${gapTextOf(m)} `
+        row.appendChild(textSpan)
 
-        label.appendChild(checkbox)
-        label.appendChild(textSpan)
-        listContainer.appendChild(label)
-
-        itemRows.push({ checkbox, item: m })
+        const ackBtn = document.createElement('button')
+        ackBtn.type = 'button'
+        ackBtn.dataset.action = 'ack-gap'
+        ackBtn.textContent = '知道了'
+        ackBtn.addEventListener('click', async () => {
+          await chrome.runtime.sendMessage({ type: MSG.SKIP_ONE, taskId: m.taskId, slot: m.slot })
+        })
+        row.appendChild(ackBtn)
+        banner.appendChild(row)
       }
-      banner.appendChild(listContainer)
-
-      const actions = document.createElement('div')
-      actions.className = 'missed-actions'
-
-      const catchUpBtn = document.createElement('button')
-      catchUpBtn.type = 'button'
-      catchUpBtn.dataset.action = 'catch-up'
-      catchUpBtn.textContent = '補抓勾選項目'
-      catchUpBtn.addEventListener('click', async () => {
-        for (const { checkbox, item } of itemRows) {
-          if (checkbox.checked) {
-            await chrome.runtime.sendMessage({
-              type: MSG.CATCH_UP_ONE,
-              taskId: item.taskId,
-              slot: item.slot
-            })
-          }
-        }
-      })
-      actions.appendChild(catchUpBtn)
-
-      const skipBtn = document.createElement('button')
-      skipBtn.type = 'button'
-      skipBtn.dataset.action = 'skip'
-      skipBtn.textContent = '略過勾選項目'
-      skipBtn.addEventListener('click', async () => {
-        for (const { checkbox, item } of itemRows) {
-          if (checkbox.checked) {
-            await chrome.runtime.sendMessage({
-              type: MSG.SKIP_ONE,
-              taskId: item.taskId,
-              slot: item.slot
-            })
-          }
-        }
-      })
-      actions.appendChild(skipBtn)
-
-      banner.appendChild(actions)
     }
   }
 

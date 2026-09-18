@@ -277,3 +277,10 @@ test('status 顯示錯過筆數', () => {
   const el = CR.renderCard(card({ type: 'status', source: [], options: { taskIds: ['t1'] } }), ctx)
   assert.ok(/錯過\s*2/.test(text(el)) || text(el).includes('2'), `實得：${text(el)}`)
 })
+
+test('status：休眠空窗（gap）不算成「錯過一格」，說休眠期間略過幾次（AF-21）', () => {
+  const ctx = baseCtx({ missed: [{ taskId: 't1', slot: 'x' }, { taskId: 't1', kind: 'gap', count: 7, from: '2026-09-18T01:00', slot: '2026-09-18T02:00' }] })
+  const el = CR.renderCard(card({ type: 'status', source: [], options: { taskIds: ['t1'] } }), ctx)
+  assert.match(text(el), /錯過\s*1/)
+  assert.match(text(el), /休眠期間略過 7 次/)
+})

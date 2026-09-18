@@ -4,7 +4,7 @@ import { setTaskHealth, refreshBadge } from './health.js'
 import { nextDailyRun } from './scheduler.js'
 import { getTasks } from '../shared/storage.js'
 import { log as diagLog } from '../shared/diag.js'
-import { notify } from './notify.js'
+import { notifyFailure, clearNotifyLog } from './notify.js'
 
 // 計算任務下一次抓取時間字串（HH:mm）
 function getNextCaptureTime(task) {
@@ -51,43 +51,63 @@ export function isPrecheckAlarm(name) {
   return parsePrecheckName(name) !== null
 }
 
-// 排定所有啟用中每日任務的預檢 alarm
-export async function schedulePrechecks(nowMs = Date.now()) {
+/**
+ * 一個任務應有的預檢 alarm（名稱與觸發時刻）：排程與看門狗補建共用這一份計算
+ * @param {object} task 任務
+ * @param {number} nowMs 現在（毫秒）
+ * @returns {{ name: string, when: number }[]}
+ */
+export function precheckAlarmsFor(task, nowMs = Date.now()) {
+  const out = []
+  if (!task || task.enabled === false) return out
+  const schedule = task.schedule
+  if (!schedule || schedule.type !== 'daily') return out
+  const times = schedule.times
+  if (!Array.isArray(times) || times.length === 0) return out
+  const weekdays = schedule.weekdays ?? task.weekdays ?? [0, 1, 2, 3, 4, 5, 6]
+  if (!Array.isArray(weekdays) || weekdays.length === 0) return out
+
+  const lead = task.precheckLeadMinutes === undefined ? 30 : task.precheckLeadMinutes
+  if (typeof lead !== 'number' || lead <= 0) return out
+
+  for (let i = 0; i < times.length; i++) {
+    let nextRun = nextDailyRun(nowMs, [times[i]], weekdays)
+    if (nextRun === null) continue
+    let when = nextRun - lead * 60000
+    // 現在剛好落在「預檢時間」與「抓取時間」之間時，when 會是過去的時間點：
+    // Chrome 會立刻觸發、alarm 隨即消失，使用者看到一次沒頭沒尾的預檢警報。
+    // 這種情況跳過這一輪，排到下一次的那一槽。
+    if (when <= nowMs) {
+      nextRun = nextDailyRun(nextRun + 60000, [times[i]], weekdays)
+      if (nextRun === null) continue
+      when = nextRun - lead * 60000
+    }
+    out.push({ name: `${task.id}:pre:${i}`, when })
+  }
+  return out
+}
+
+/**
+ * 排定預檢 alarm。
+ * 不帶 taskId：清光全部預檢 alarm 再依所有任務重建（只給 REBUILD_ALARMS、安裝、啟動用）。
+ * 帶 taskId：只清、只建那個任務的預檢 alarm（預檢 alarm 觸發後用；不動其他任務）。
+ */
+export async function schedulePrechecks(nowMs = Date.now(), opts = {}) {
+  const onlyId = typeof opts?.taskId === 'string' ? opts.taskId : null
   const existing = await chrome.alarms.getAll()
   for (const alarm of existing) {
-    if (parsePrecheckName(alarm.name) !== null) {
-      await chrome.alarms.clear(alarm.name)
-    }
+    const parsed = parsePrecheckName(alarm.name)
+    if (parsed === null) continue
+    if (onlyId !== null && parsed.taskId !== onlyId) continue
+    await chrome.alarms.clear(alarm.name)
   }
 
   const tasks = await getTasks()
-  const now = nowMs
-
   for (const task of tasks) {
-    if (!task || task.enabled === false) continue
-    const schedule = task.schedule
-    if (!schedule || schedule.type !== 'daily') continue
-    const times = schedule.times
-    if (!Array.isArray(times) || times.length === 0) continue
-    const weekdays = schedule.weekdays ?? task.weekdays ?? [0, 1, 2, 3, 4, 5, 6]
-    if (!Array.isArray(weekdays) || weekdays.length === 0) continue
-
-    const lead = task.precheckLeadMinutes === undefined ? 30 : task.precheckLeadMinutes
-    if (typeof lead !== 'number' || lead <= 0) continue
-
-    for (let i = 0; i < times.length; i++) {
-      let nextRun = nextDailyRun(now, [times[i]], weekdays)
-      if (nextRun === null) continue
-      let when = nextRun - lead * 60000
-      // 現在剛好落在「預檢時間」與「抓取時間」之間時，when 會是過去的時間點：
-      // Chrome 會立刻觸發、alarm 隨即消失，使用者看到一次沒頭沒尾的預檢警報。
-      // 這種情況跳過這一輪，排到下一次的那一槽。
-      if (when <= now) {
-        nextRun = nextDailyRun(nextRun + 60000, [times[i]], weekdays)
-        if (nextRun === null) continue
-        when = nextRun - lead * 60000
-      }
-      await chrome.alarms.create(`${task.id}:pre:${i}`, { when })
+    if (!task) continue
+    if (onlyId !== null && task.id !== onlyId) continue
+    for (const { name, when } of precheckAlarmsFor(task, nowMs)) {
+      await chrome.alarms.create(name, { when })
     }
   }
 }
@@ -149,6 +169,8 @@ export async function runPrecheck(task, opts = {}) {
 
     if (status === 'ok') {
       await setTaskHealth(task.id, { status: 'ok' })
+      // 恢復正常：下次預檢再壞會重新通知
+      await clearNotifyLog(`${task.id}:precheck`)
     } else {
       await setTaskHealth(task.id, { status, reason, detail })
 
@@ -158,7 +180,8 @@ export async function runPrecheck(task, opts = {}) {
       const title = `AutoFetcher 預檢失敗：${taskName}（${reason}）`
       const message = `任務「${taskName}」預檢失敗：${reason}。${timeText}，請盡速確認。`
 
-      await notify(`${task.id}:precheck`, {
+      // 同一任務同一狀態 24 小時內只通知一次（燈號照寫，不受冷卻影響）
+      await notifyFailure(`${task.id}:precheck`, status, {
         title,
         message
       })

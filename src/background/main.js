@@ -17,7 +17,7 @@ import {
   nextIntervalRun,
   parseAlarmName
 } from './scheduler.js'
-import { runTask, recoverRunState, isLateStart } from './fetcher.js'
+import { runTask, recoverRunState, isLateStart, parseRetryName } from './fetcher.js'
 import { refreshMissed, catchUpAll, skipAll, catchUpOne, skipOne } from './missed.js'
 import { runWatchdog, selfCheck } from './watchdog.js'
 import { cleanOrphanFetchTabs } from './fetch-tab.js'
@@ -203,29 +203,6 @@ function parseTaskAlarm(name) {
   return { taskId, index: Number(indexStr) }
 }
 
-// 解析重試 alarm 名稱（格式：<taskId>:retry:<n>）
-function parseRetryName(name) {
-  if (typeof name !== 'string') return null
-  // 名稱可能帶原始排程槽:<taskId>:retry:<n>@<slot>
-  let slot = ''
-  const at = name.lastIndexOf('@')
-  if (at !== -1) {
-    slot = name.slice(at + 1)
-    name = name.slice(0, at)
-  }
-  const lastColon = name.lastIndexOf(':')
-  if (lastColon === -1) return null
-  const attemptStr = name.slice(lastColon + 1)
-  if (!/^\d+$/.test(attemptStr)) return null
-  const before = name.slice(0, lastColon)
-  const secondColon = before.lastIndexOf(':')
-  if (secondColon === -1) return null
-  if (before.slice(secondColon + 1) !== 'retry') return null
-  const taskId = before.slice(0, secondColon)
-  if (!taskId) return null
-  return { taskId, attempt: Number(attemptStr), slot }
-}
-
 // 晚超過這麼久才觸發的 daily alarm 不執行（把今天的值寫進好幾天前那格沒有意義），那一格交給錯過清單
 const DAILY_STALE_MS = 24 * 60 * 60 * 1000
 
@@ -340,7 +317,8 @@ export async function handleAlarm(alarm, testOpts = {}) {
       const { task, active } = await getValidTask(precheck.taskId)
       if (!task || !active) return
       await runPrecheck(task, testOpts)
-      await schedulePrechecks()
+      // 只重排自己那個任務；全部重建只留給 REBUILD_ALARMS、安裝、啟動
+      await schedulePrechecks(Date.now(), { taskId: precheck.taskId })
       return
     }
 

@@ -2,7 +2,7 @@
 import { getSites, getSettings } from '../shared/storage.js'
 import { setTaskHealth, refreshBadge } from './health.js'
 import { nextDailyRun } from './scheduler.js'
-import { notify } from './notify.js'
+import { notifyFailure, clearNotifyLog } from './notify.js'
 import { ensureLoggedIn } from './login.js'
 import { enqueueForOrigin, acquireFetchTab } from './fetch-tab.js'
 
@@ -44,10 +44,12 @@ export async function runSiteCheck(opts = {}) {
       })
       if (res?.ok === true) {
         await setTaskHealth('site:' + origin, { status: 'ok' })
+        await clearNotifyLog('site:' + origin)
       } else {
         const reason = res?.reason || '無法登入'
         await setTaskHealth('site:' + origin, { status: 'login_failed', reason })
-        await notify('site:' + origin + ':check', {
+        await notifyFailure('site:' + origin, 'login_failed', {
+          id: 'site:' + origin + ':check',
           title: 'AutoFetcher 站台健康檢查失敗',
           message: `站台「${origin}」登入檢查失敗：${reason}。`
         })
@@ -55,7 +57,8 @@ export async function runSiteCheck(opts = {}) {
     } catch (err) {
       const reason = err?.message || '檢查失敗'
       await setTaskHealth('site:' + origin, { status: 'login_failed', reason })
-      await notify('site:' + origin + ':check', {
+      await notifyFailure('site:' + origin, 'login_failed', {
+        id: 'site:' + origin + ':check',
         title: 'AutoFetcher 站台健康檢查失敗',
         message: `站台「${origin}」檢查過程發生錯誤：${reason}。`
       })

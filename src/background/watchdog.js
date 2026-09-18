@@ -10,7 +10,9 @@ import {
 import { getTasks, trimOldRecords, trimOldRuns, pruneOrphanEntries, runOncePerDay, getLastTimezone, setLastTimezone } from '../shared/storage.js'
 import { ensureSiteCheck } from './sitecheck.js'
 import { cleanOrphanFetchTabs } from './fetch-tab.js'
-import { recoverRunState } from './fetcher.js'
+import { recoverRunState, parseRetryName } from './fetcher.js'
+import { precheckAlarmsFor, parsePrecheckName } from './precheck.js'
+import { refreshMissed } from './missed.js'
 import * as diag from '../shared/diag.js'
 
 
@@ -64,6 +66,14 @@ async function repairMissingAlarms() {
         }
       }
     }
+
+    // 預檢 alarm：與 schedulePrechecks 同一份計算，只補缺少的那幾個
+    for (const { name, when } of precheckAlarmsFor(task, Date.now())) {
+      if (!existingNames.has(name)) {
+        await chrome.alarms.create(name, { when })
+        existingNames.add(name)
+      }
+    }
   }
 }
 
@@ -74,7 +84,8 @@ async function cleanStaleAlarms() {
   const taskMap = new Map(tasks.map((t) => [t.id, t]))
 
   for (const alarm of alarms) {
-    const parsed = parseAlarmName(alarm.name)
+    // 任務 alarm、重試 alarm（<id>:retry:<n>@<slot>）、預檢 alarm（<id>:pre:<i>）都看它的任務還在不在、有沒有停用
+    const parsed = parseAlarmName(alarm.name) ?? parseRetryName(alarm.name) ?? parsePrecheckName(alarm.name)
     if (parsed !== null) {
       const task = taskMap.get(parsed.taskId)
       if (!task || task.enabled === false) {
@@ -130,6 +141,12 @@ export async function runWatchdog() {
   try {
     // 上一個 worker 留下的排隊中／執行中排程槽：續跑或記 interrupted（本 worker 的項目不碰）
     await recoverRunState()
+  } catch {}
+
+  // 喚醒後也算錯過（筆電闔上再打開、瀏覽器沒重啟時 onStartup 不會跑）：
+  // refreshMissed 只算「現在 − 20 分鐘」之前的格子，重複呼叫不重複列、不重複通知
+  try {
+    await refreshMissed(Date.now())
   } catch {}
 
   // 上一個 service worker 被回收時沒關掉的抓取視窗（判定只看登記表，見 fetch-tab.js）

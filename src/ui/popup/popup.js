@@ -6,6 +6,7 @@ import { statusTextOf } from '../../shared/record-status.js'
 import { applySavedTheme } from '../theme-apply.js'
 import { seriesIdOf } from '../../shared/series-index.js'
 import { computeHealth } from '../../background/health.js'
+import { isGap, gapTextOf } from '../../shared/describe.js'
 import { describeSchedule, describeTarget, targetOfTask } from '../../shared/describe.js'
 
 let currentCtx = null
@@ -148,7 +149,8 @@ export function render(ctx) {
     tasks = [],
     lastValues = {},
     nextRuns = {},
-    healthMap = {}
+    healthMap = {},
+    missed = []
   } = ctx || {}
 
   // 1. 燈號摘要文字與顏色類別
@@ -179,6 +181,9 @@ export function render(ctx) {
       }
     }
   }
+
+  // 2b. 休眠期間的空窗（interval 的 gap）：只能「知道了」，不可補抓
+  renderGaps(taskListEl, Array.isArray(missed) ? missed.filter(isGap) : [], tasks)
 
   // 3. 綁定按鈕事件
   const toggleAllBtn = document.getElementById('toggle-all')
@@ -238,6 +243,39 @@ export function render(ctx) {
   }
 }
 
+// 空窗提示列：容器接在任務清單後面（沒有就建一個），每次整份重畫
+function renderGaps(anchorEl, gaps, tasks) {
+  let box = document.getElementById('missed-gaps')
+  if (!box) {
+    if (!anchorEl?.parentNode) return
+    box = document.createElement('div')
+    box.id = 'missed-gaps'
+    anchorEl.parentNode.insertBefore(box, anchorEl.nextSibling)
+  }
+  box.textContent = ''
+  box.hidden = gaps.length === 0
+  const nameOf = new Map((tasks || []).map(t => [t.id, t.name || t.id]))
+  for (const g of gaps) {
+    const row = document.createElement('div')
+    row.className = 'missed-gap'
+    row.dataset.taskId = g.taskId
+    const text = document.createElement('span')
+    text.textContent = `${g.taskName || nameOf.get(g.taskId) || g.taskId}：${gapTextOf(g)} `
+    row.appendChild(text)
+    const ack = document.createElement('button')
+    ack.type = 'button'
+    ack.dataset.action = 'ack-gap'
+    ack.textContent = '知道了'
+    ack.onclick = async () => {
+      await chrome.runtime.sendMessage({ type: MSG.SKIP_ONE, taskId: g.taskId, slot: g.slot })
+      row.remove()
+      if (!box.firstChild) box.hidden = true
+    }
+    row.appendChild(ack)
+    box.appendChild(row)
+  }
+}
+
 // 全部暫停 / 恢復
 export async function handleToggleAll() {
   const tasks = await getTasks()
@@ -290,7 +328,7 @@ if (typeof document !== 'undefined' && globalThis.chrome?.runtime?.id) {
 
       // 取得最後數值
 
-      render({ health, tasks, lastValues, nextRuns, healthMap })
+      render({ health, tasks, lastValues, nextRuns, healthMap, missed })
 
       const abnormalIds = Object.keys(healthMap).filter(id => {
         const h = healthMap[id]

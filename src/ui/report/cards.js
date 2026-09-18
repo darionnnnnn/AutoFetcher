@@ -7,6 +7,7 @@ const DEFAULT_PIVOT_ROWS = 50;
 import { lineChart, barChart, gauge, sparkline } from './charts.js';
 import { isSuccess, isRed, isWarn, statusTextOf } from '../../shared/record-status.js';
 import { parentIdOf } from '../../shared/series-index.js';
+import { isGap, gapTextOf } from '../../shared/describe.js';
 import { openTrendPopover } from './trend-popover.js';
 
 const SUPPORTED_TYPES = new Set(['number', 'line', 'bar', 'table', 'gauge', 'text', 'status']);
@@ -688,7 +689,9 @@ function renderStatusCard(card, ctx, { bodyEl }) {
     const healthCode = ctx?.health?.[id]?.status;
     const healthStatus = healthCode ? statusTextOf(healthCode) : '—';
     const nextRun = ctx?.nextRuns?.[id] || '—';
-    const missedCount = (ctx?.missed || []).filter(m => m && m.taskId === id).length;
+    const mine = (ctx?.missed || []).filter(m => m && m.taskId === id);
+    const missedCount = mine.filter(m => !isGap(m)).length;
+    const gap = mine.find(m => isGap(m));
 
     const item = document.createElement('div');
     item.className = 'status-item';
@@ -714,6 +717,12 @@ function renderStatusCard(card, ctx, { bodyEl }) {
       missedEl.className = 'status-missed';
       missedEl.textContent = `錯過 ${missedCount}`;
       item.appendChild(missedEl);
+    }
+    if (gap) {
+      const gapEl = document.createElement('span');
+      gapEl.className = 'status-missed';
+      gapEl.textContent = gapTextOf(gap);
+      item.appendChild(gapEl);
     }
 
     // 加得進去就要拿得出來
