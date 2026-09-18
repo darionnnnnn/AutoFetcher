@@ -682,11 +682,13 @@ try {
     console.log(`${browserName}:前置動作換子框架後仍抓得到值 (${childRec.value})`)
   }
 
-  // 5h. AF-20:排程抓取在專用視窗進行,不碰使用者開著的同網址分頁,抓完不留任何視窗或分頁。
+  // 5h. AF-20:排程抓取(預設背景分頁、設定可改專用視窗)不碰使用者開著的同網址分頁,抓完不留任何視窗或分頁。
   //     判定「沒碰」:content script 載入時會在隔離環境設 __afContentLoaded,使用者那一頁不得有它。
   const userPage = await browser.newPage()
   await userPage.goto('http://127.0.0.1:48123/?user=1', { waitUntil: 'load' })
-  const af20 = await ext2.evaluate(async () => {
+  const runAf20 = (mode) => ext2.evaluate(async (mode) => {
+    const st = (await chrome.storage.local.get('settings')).settings || {}
+    await chrome.storage.local.set({ settings: { ...st, fetchTabMode: mode } })
     const count = async () => {
       const wins = await chrome.windows.getAll({ populate: true })
       return { wins: wins.length, tabs: wins.reduce((n, w) => n + (w.tabs?.length || 0), 0) }
@@ -720,21 +722,26 @@ try {
     const recs = ((await chrome.storage.local.get(`rec:${day}`))[`rec:${day}`] || []).filter(r => r.taskId === 'af20bg')
     const reg = (await chrome.storage.session.get('fetchTabs')).fetchTabs || []
     return { res, sendErr, before, after, touched, sawWindow, rec: recs[recs.length - 1] || null, reg }
-  })
+  }, mode)
+  for (const mode of ['tab', 'window']) {
+  const af20 = await runAf20(mode)
   if (!af20.rec) {
     errors.push(`AF-20:專用視窗抓取沒有留下紀錄:${JSON.stringify({ res: af20.res, sendErr: af20.sendErr })}`)
   } else if (Number(af20.rec.value) !== 1234) {
     errors.push(`AF-20:專用視窗應抓到 1234,實得 ${JSON.stringify({ v: af20.rec.value, e: af20.rec.error })}`)
   } else if (af20.touched) {
     errors.push('AF-20:排程抓取對使用者開著的同網址分頁注入了 content script')
-  } else if (!af20.sawWindow) {
-    errors.push('AF-20:沒有看到專用抓取視窗被建立')
+  } else if (mode === 'window' && !af20.sawWindow) {
+    errors.push('AF-20:設定成專用視窗卻沒有看到視窗被建立')
+  } else if (mode === 'tab' && af20.sawWindow) {
+    errors.push('AF-20:預設(背景分頁)不該建立視窗')
   } else if (af20.after.wins !== af20.before.wins || af20.after.tabs !== af20.before.tabs) {
     errors.push(`AF-20:抓完視窗/分頁數沒有回到原狀:${JSON.stringify({ before: af20.before, after: af20.after })}`)
   } else if (af20.reg.length !== 0) {
     errors.push(`AF-20:抓完登記表沒有清空:${JSON.stringify(af20.reg)}`)
   } else {
-    console.log(`${browserName}:排程在專用視窗抓到 ${af20.rec.value},使用者的分頁沒被碰,抓完視窗與分頁數回到原狀`)
+    console.log(`${browserName}:排程(${mode === 'tab' ? '背景分頁' : '專用視窗'})抓到 ${af20.rec.value},使用者的分頁沒被碰,抓完視窗與分頁數回到原狀`)
+  }
   }
   await userPage.close()
 

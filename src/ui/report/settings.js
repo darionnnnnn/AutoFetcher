@@ -245,10 +245,10 @@ function setupPreferenceListeners(settings) {
     }
   }
 
-  // 兩種都不會碰使用者開著的分頁；「視窗」建立的瞬間可能閃一下，覺得干擾就改回分頁（AF-20）
+  // 兩種都不會碰使用者開著的分頁；預設背景分頁（不閃）。「視窗」不佔分頁列，但建立的瞬間可能閃一下（AF-20）
   const fetchTabModeEl = document.getElementById('pref-fetch-tab-mode')
   if (fetchTabModeEl) {
-    fetchTabModeEl.value = settings.fetchTabMode === 'tab' ? 'tab' : 'window'
+    fetchTabModeEl.value = settings.fetchTabMode === 'window' ? 'window' : 'tab'
     if (!fetchTabModeEl._afBound) {
       fetchTabModeEl._afBound = true
       fetchTabModeEl.addEventListener('change', async () => {

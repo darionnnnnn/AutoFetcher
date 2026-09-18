@@ -36,9 +36,8 @@ test('預設仍是背景分頁', async () => {
   const { c, st, fe } = await fresh()
   await st.saveTask(task())
   await fe.runTask(task(), { slot: '2026-09-06T09:00', extraDelayMs: 0, ...FAST })
-  // AF-20:背景抓取改在專用視窗,不在使用者的視窗開分頁
-  assert.equal(c.__calls.filter(x => x.api === 'tabs.create').length, 0)
-  assert.equal(c.__calls.filter(x => x.api === 'windows.create').length, 1)
+  assert.equal(c.__calls.find(x => x.api === 'tabs.create').args[0].active, false)
+  assert.equal(c.__calls.filter(x => x.api === 'windows.create').length, 0)
 })
 
 test('foreground 為真時開前景分頁,抓完把焦點還給原本的分頁', async () => {

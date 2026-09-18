@@ -77,9 +77,12 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **抓取頁面只有 `background/fetch-tab.js` 開**(AF-20):排程、預檢、補抓、手動抓取、每日站台檢查都經 `enqueueForOrigin` → `acquireFetchTab`,
   佇列清空才 `releaseFetchTab`;前景抓取經 `openForegroundTab`;等載入(含 `discarded` 重載)只有 `waitTabReady`。
   **不沿用使用者開著的分頁**(只有立即測試帶 `tabId` 例外),「是不是同一頁」只用 `sameOriginPath`,抓取路徑不得 `tabs.query({url})`(`z8` 的 D15 會擋)。
+  **預設是目前視窗的背景分頁**(`fetchTabMode:'tab'`,使用者定案不閃);專用視窗是設定選項。
+  同站台接連的任務若前置動作全等、同一頁、而且入口的載入次數 `loads` 沒變 → `keepPage` 沿用、不重跑前置動作;判定只在 fetcher 一處。
   **專用視窗只有一種建法**:先 `windows.create({ url, focused:false, width, height })`、立刻登記、再 `windows.update({ state:'minimized' })`。
   直接 `state:'minimized'` 建的頁面 viewport 是 0×0;`minimized`＋`focused:false` 會靜默變一般視窗;`popup` 搶焦點;已最小化的視窗裡再開的分頁也是 0×0(探針事實表在 SPEC §4)。
   自建的視窗／分頁登記在 `storage.session.fetchTabs`(帶 `boot`),孤兒只看登記表判定,不得用網址猜。
+- **正式碼不得碰測試替身的 `__calls`**(AF-20 拔掉 fetcher 兩處往裡面塞假紀錄的程式碼,D14 已擋):那等於讓測試斷言正式碼自己寫的東西。
 - **量頁面可見性、計時器節流一類的探針要拿掉 puppeteer 的預設旗標**(AF-20):它預設帶 `--disable-background-timer-throttling` 等三個,
   帶著跑的第一輪探針把背景頁面量成 visible、計時器照跑,結論完全相反。`ignoreDefaultArgs` 列出那三個再量。
 - **health 一律經 `background/health.js` 的 `setTaskHealth` 寫**(fetcher / precheck / sitecheck 三個呼叫端);
@@ -94,7 +97,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 2503 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 2517 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。

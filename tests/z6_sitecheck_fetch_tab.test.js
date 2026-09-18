@@ -14,6 +14,8 @@ async function fresh() {
   globalThis.navigator = { onLine: true }
   const st = await import('../src/shared/storage.js?t=' + Math.random())
   await st.init()
+  // 本檔驗專用視窗與佇列語意(斷言數得到 windows.create)
+  await st.saveSettings({ fetchTabMode: 'window' })
   const cr = await import('../src/shared/crypto.js?t=' + Math.random())
   return { c, st, cr }
 }

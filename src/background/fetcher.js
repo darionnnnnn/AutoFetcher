@@ -114,9 +114,6 @@ async function setInflight(key, stateObj) {
   const inflight = res.inflight || {}
   inflight[key] = stateObj
   await chrome.storage.session.set({ inflight })
-  if (Array.isArray(chrome?.__calls)) {
-    chrome.__calls.push({ api: 'session.set', args: [{ inflight }] })
-  }
 }
 
 // 清除 storage.session 中的 inflight 狀態
@@ -125,9 +122,6 @@ async function removeInflight(key) {
   const inflight = res.inflight || {}
   delete inflight[key]
   await chrome.storage.session.set({ inflight })
-  if (Array.isArray(chrome?.__calls)) {
-    chrome.__calls.push({ api: 'session.set', args: [{ inflight }] })
-  }
 }
 
 // 排定重試 alarm
@@ -330,6 +324,8 @@ export async function runTask(task, opts = {}) {
     let loc = null
     let restoreForeground = null
     let acquiredTab = false
+    let reusedPreActions = false
+    const hasPreActions = Array.isArray(task.preActions) && task.preActions.length > 0
     // 佇列中再次確認冪等，防止併發重複執行（dryRun 與手動抓取略過）
     if (!dryRun && !isManual) {
       const currentLedger = await getLedger()
@@ -358,9 +354,25 @@ export async function runTask(task, opts = {}) {
         tabId = fg.tabId
         restoreForeground = fg.restore
       } else {
-        const freshLoad = queueCtx.pageDirty === true || (Array.isArray(task.preActions) && task.preActions.length > 0)
-        tabId = await acquireFetchTab(queueCtx, task.url, { pollMs, loadTimeoutMs, freshLoad })
-        queueCtx.pageDirty = false
+        // 同一頁、同一組前置動作、而且那之後頁面沒被換掉 → 前置動作留下的狀態就是這個任務要的:
+        // 不重載、不重跑,一個分頁接著抓(使用者定案:同一頁的值一次抓完)。
+        // 頁面有沒有被換掉只看入口的載入次數 `loads`(前置動作可能把網址導去別處,不能比網址)。
+        const preSig = hasPreActions ? JSON.stringify(task.preActions) : null
+        const applied = queueCtx.preApplied
+        let canKeep = preSig !== null && applied?.sig === preSig && sameOriginPath(applied.url, task.url)
+        const freshLoad = !canKeep && (queueCtx.pageDirty === true || hasPreActions)
+        tabId = await acquireFetchTab(queueCtx, task.url, { pollMs, loadTimeoutMs, freshLoad, keepPage: canKeep })
+        if (canKeep && queueCtx.fetchTab?.loads !== applied.loads) {
+          // 做完前置動作之後頁面被換過(中間插進來的站台檢查導去登入頁、或被卸載而重載當下的網址):
+          // 前置動作的狀態沒了——回到任務網址重跑
+          tabId = await acquireFetchTab(queueCtx, task.url, { pollMs, loadTimeoutMs, freshLoad: true })
+          canKeep = false
+        }
+        reusedPreActions = canKeep
+        if (!reusedPreActions) {
+          queueCtx.pageDirty = false
+          queueCtx.preApplied = null
+        }
         acquiredTab = true
       }
 
@@ -384,11 +396,13 @@ export async function runTask(task, opts = {}) {
 
       // 執行前置動作（若有指定）：一次一個，各自定位自己的 frame。
       // 「先點按鈕，iframe 才出現」是常見情境，整批送給同一個 frame 一定失敗。
-      const ranPreActions = Array.isArray(task.preActions) && task.preActions.length > 0
+      const ranPreActions = hasPreActions && !reusedPreActions
       if (ranPreActions) {
-        // 同站台共用分頁，前一個任務的點擊會留在頁面上，開關型按鈕第二次按會收回去
+        // 同站台共用分頁，前一個任務的點擊會留在頁面上，開關型按鈕第二次按會收回去；
+        // 中途失敗也算按過，所以在迴圈前就標記、做完才記下「哪一組做好了」
         if (acquiredTab) {
           queueCtx.pageDirty = true
+          queueCtx.preApplied = null
         }
         for (let i = 0; i < task.preActions.length; i++) {
           const action = task.preActions[i]
@@ -453,6 +467,9 @@ export async function runTask(task, opts = {}) {
             throw new Error(preActionFailure(i, action, preRes?.error))
           }
           preActionTrace.push({ step: i + 1, type: action?.type, ok: true, ms: Date.now() - startedAt })
+        }
+        if (acquiredTab) {
+          queueCtx.preApplied = { sig: JSON.stringify(task.preActions), url: task.url, loads: queueCtx.fetchTab?.loads }
         }
       }
 

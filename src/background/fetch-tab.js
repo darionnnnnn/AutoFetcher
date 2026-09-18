@@ -46,12 +46,15 @@ function unregisterTab(tabId) {
   return registryQueue
 }
 
+// 回傳這次有沒有因為被卸載而重載(呼叫端要知道頁面是不是重新載入過)
 export async function waitTabReady(tabId, opts = {}) {
   const { pollMs = 250, loadTimeoutMs = 30000 } = opts
+  let reloaded = false
   try {
     const cur = await chrome.tabs.get(tabId)
     if (cur && cur.discarded === true) {
       await chrome.tabs.reload(tabId)
+      reloaded = true
     }
   } catch {}
 
@@ -71,10 +74,15 @@ export async function waitTabReady(tabId, opts = {}) {
     }
     await sleep(pollMs)
   }
+  return reloaded
 }
 
+// `holder.fetchTab.loads`:這個分頁載入過幾次(新建算 1,每次導覽或重載加 1)。
+// 呼叫端靠它判斷「上一個任務做完前置動作之後,頁面有沒有被換掉」——比對次數,不比網址
+// (前置動作的點擊可能把頁面導去別處,網址本來就會變)。
+// `keepPage`:分頁還在就完全不動它(不導覽、不重載),給「同一頁、同一組前置動作已經做好」的下一個任務接著抓。
 export async function acquireFetchTab(holder, url, opts = {}) {
-  const { freshLoad = false, pollMs = 250, loadTimeoutMs = 30000 } = opts
+  const { freshLoad = false, keepPage = false, pollMs = 250, loadTimeoutMs = 30000 } = opts
 
   let tab = null
   if (holder.fetchTab) {
@@ -88,20 +96,23 @@ export async function acquireFetchTab(holder, url, opts = {}) {
   let tabId
   if (tab) {
     tabId = holder.fetchTab.tabId
-    if (freshLoad) {
+    if (keepPage) {
+      // 什麼都不做:前置動作留下的狀態就是下一個任務要的
+    } else if (freshLoad) {
       if (tab.url === url) {
         await chrome.tabs.reload(tabId)
       } else {
         await chrome.tabs.update(tabId, { url })
       }
-    } else {
-      if (!sameOriginPath(tab.url, url)) {
-        await chrome.tabs.update(tabId, { url })
-      }
+      holder.fetchTab.loads++
+    } else if (!sameOriginPath(tab.url, url)) {
+      await chrome.tabs.update(tabId, { url })
+      holder.fetchTab.loads++
     }
   } else {
+    // 預設是目前視窗的背景分頁(AF-20 使用者定案:不閃、不切過去);專用視窗要在設定頁選
     const settings = await getSettings()
-    let mode = settings.fetchTabMode === 'tab' ? 'tab' : 'window'
+    let mode = settings.fetchTabMode === 'window' ? 'window' : 'tab'
 
     if (mode === 'tab') {
       const windows = await chrome.windows.getAll()
@@ -139,10 +150,10 @@ export async function acquireFetchTab(holder, url, opts = {}) {
       await chrome.tabs.update(tabId, { autoDiscardable: false })
     } catch {}
 
-    holder.fetchTab = { tabId, windowId }
+    holder.fetchTab = { tabId, windowId, loads: 1 }
   }
 
-  await waitTabReady(tabId, { pollMs, loadTimeoutMs })
+  if (await waitTabReady(tabId, { pollMs, loadTimeoutMs })) holder.fetchTab.loads++
   return tabId
 }
 

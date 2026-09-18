@@ -71,8 +71,8 @@ test('執行檢查:對每個啟用的站台各跑一次,結果寫進健康狀態
   const health = await st.getHealthMap()
   assert.equal(health['site:https://a.test']?.status, 'ok')
   assert.equal(health['site:https://b.test']?.status, 'ok')
-  // AF-20:站台檢查與抓取共用專用視窗入口
-  assert.equal(c.__calls.filter(x => x.api === 'windows.create').length, 2, '兩個站台各開一次')
+  // AF-20:站台檢查與抓取共用同一個入口(預設背景分頁)
+  assert.equal(c.__calls.filter(x => x.api === 'tabs.create').length, 2, '兩個站台各開一次')
 })
 
 test('停用的站台不檢查', async () => {
@@ -102,8 +102,7 @@ test('檢查用的分頁用完要關掉', async () => {
   c.__setTabResponder(() => ({ ok: true }))
   c.__onTabCreated = (tab) => c.__setTabState(tab.id, { url: `${ORIGIN}/home`, status: 'complete' })
   await sc.runSiteCheck({ pollMs: 1, loadTimeoutMs: 50, extraDelayMs: 0 })
-  // AF-20:關的是整個專用視窗
-  assert.equal(c.__calls.filter(x => x.api === 'windows.remove').length, 1)
+  assert.equal(c.__calls.filter(x => x.api === 'tabs.remove').length, 1)
 })
 
 test('__sitecheck 觸發時會跑檢查,而且不會被當成任務 alarm', async () => {

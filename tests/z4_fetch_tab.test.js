@@ -9,7 +9,8 @@ import { installChromeMock, resetChromeMock } from './chrome-mock.js'
 const FAST = { pollMs: 1, loadTimeoutMs: 50 }
 const URL_A = 'https://a.test/p?x=1'
 
-async function fresh(settings) {
+// 本檔大多在驗專用視窗那條路:預設明確指定 window;驗預設值的案例傳 null
+async function fresh(settings = { fetchTabMode: 'window' }) {
   resetChromeMock()
   const c = installChromeMock()
   const st = await import('../src/shared/storage.js?t=' + Math.random())
@@ -22,9 +23,26 @@ async function fresh(settings) {
 const callsOf = (c, api) => c.__calls.filter(x => x.api === api)
 const registry = async (c) => (await c.storage.session.get('fetchTabs')).fetchTabs || []
 
-// ---- 專用視窗(預設) ----
+// ---- 預設:目前視窗的背景分頁(使用者定案:不閃、不切過去) ----
 
-test('預設在專用視窗抓:先不聚焦帶尺寸建立,再最小化', async () => {
+test('沒設定時:在目前視窗開背景分頁,不建視窗、不切過去', async () => {
+  const { c, ft } = await fresh(null)
+  const holder = {}
+  const tabId = await ft.acquireFetchTab(holder, URL_A, FAST)
+  assert.equal(callsOf(c, 'windows.create').length, 0, '預設不建視窗(建立到最小化之間會閃一下)')
+  const tc = callsOf(c, 'tabs.create')
+  assert.equal(tc.length, 1)
+  assert.deepEqual(Object.keys(tc[0].args[0]).sort(), ['active', 'url'])
+  assert.equal(tc[0].args[0].active, false, '不得切過去')
+  assert.ok(callsOf(c, 'tabs.update').some(x => x.args[0] === tabId && x.args[1]?.autoDiscardable === false))
+  assert.equal(callsOf(c, 'tabs.update').some(x => x.args[1]?.active === true), false)
+  await ft.releaseFetchTab(holder)
+  assert.deepEqual(callsOf(c, 'tabs.remove').map(x => x.args[0]), [tabId])
+})
+
+// ---- 專用視窗(設定 fetchTabMode=window) ----
+
+test('專用視窗:先不聚焦帶尺寸建立,再最小化', async () => {
   const { c, ft } = await fresh()
   const holder = {}
   const tabId = await ft.acquireFetchTab(holder, URL_A, FAST)
@@ -206,15 +224,62 @@ test('fetchTabMode=tab 但一個視窗都沒有(macOS 可無視窗執行):改走
   assert.equal(callsOf(c, 'tabs.create').length, 0)
 })
 
-test('fetchTabMode 不認得的值一律當預設(專用視窗)', async () => {
+test('fetchTabMode 不認得的值一律當預設(背景分頁)', async () => {
   const { c, ft } = await fresh({ fetchTabMode: 'bogus' })
   await ft.acquireFetchTab({}, URL_A, FAST)
-  assert.equal(callsOf(c, 'windows.create').length, 1)
+  assert.equal(callsOf(c, 'windows.create').length, 0)
+  assert.equal(callsOf(c, 'tabs.create').length, 1)
 })
 
-test('設定預設值含 fetchTabMode=window(設定頁要顯示得出來)', async () => {
-  const { st } = await fresh()
-  assert.equal((await st.getSettings()).fetchTabMode, 'window')
+test('設定預設值含 fetchTabMode=tab(設定頁要顯示得出來)', async () => {
+  const { st } = await fresh(null)
+  assert.equal((await st.getSettings()).fetchTabMode, 'tab')
+})
+
+// ---- 載入計數 loads 與 keepPage(一個分頁接著抓同一頁的多個任務) ----
+
+test('loads:新建算 1、導覽與重載各加 1、同一頁沿用不加', async () => {
+  const { ft } = await fresh()
+  const h = {}
+  await ft.acquireFetchTab(h, URL_A, FAST)
+  assert.equal(h.fetchTab.loads, 1)
+  await ft.acquireFetchTab(h, 'https://a.test/p?x=2', FAST)
+  assert.equal(h.fetchTab.loads, 1, '同一頁沿用不算重新載入')
+  await ft.acquireFetchTab(h, 'https://a.test/q', FAST)
+  assert.equal(h.fetchTab.loads, 2, '導覽')
+  await ft.acquireFetchTab(h, 'https://a.test/q', { ...FAST, freshLoad: true })
+  assert.equal(h.fetchTab.loads, 3, '重載')
+})
+
+test('loads:沿用的分頁被卸載而重載,也算一次', async () => {
+  const { c, ft } = await fresh()
+  const h = {}
+  const tabId = await ft.acquireFetchTab(h, URL_A, FAST)
+  c.__setTabState(tabId, { discarded: true })
+  await ft.acquireFetchTab(h, URL_A, FAST)
+  assert.equal(h.fetchTab.loads, 2)
+})
+
+test('keepPage:分頁還在就完全不動它(前置動作可能把頁面導去別處,不得導回來)', async () => {
+  const { c, ft } = await fresh()
+  const h = {}
+  const tabId = await ft.acquireFetchTab(h, URL_A, FAST)
+  c.__setTabState(tabId, { url: 'https://a.test/after-click' })
+  const again = await ft.acquireFetchTab(h, URL_A, { ...FAST, keepPage: true, freshLoad: true })
+  assert.equal(again, tabId)
+  assert.equal(callsOf(c, 'tabs.reload').length, 0)
+  assert.equal(callsOf(c, 'tabs.update').filter(x => typeof x.args[1]?.url === 'string').length, 0)
+  assert.equal(h.fetchTab.loads, 1)
+})
+
+test('keepPage:分頁已經不在就照常新建(loads 重新從 1 算)', async () => {
+  const { c, ft } = await fresh()
+  const h = {}
+  const first = await ft.acquireFetchTab(h, URL_A, FAST)
+  await c.tabs.remove(first)
+  const again = await ft.acquireFetchTab(h, URL_A, { ...FAST, keepPage: true })
+  assert.notEqual(again, first)
+  assert.equal(h.fetchTab.loads, 1)
 })
 
 // ---- 前景抓取 ----

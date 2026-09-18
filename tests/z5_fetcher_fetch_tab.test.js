@@ -7,7 +7,8 @@ import { installChromeMock, resetChromeMock } from './chrome-mock.js'
 const FAST = { pollMs: 1, loadTimeoutMs: 50, extraDelayMs: 0, extractTimeoutMs: 200 }
 const OK = { ok: true, value: 12, raw: '12', status: 'ok', strategyUsed: 'auto', layer: 'css' }
 
-async function fresh(settings) {
+// 本檔大多驗專用視窗那條路(斷言數得到 windows.create);驗預設值的案例傳 null
+async function fresh(settings = { fetchTabMode: 'window' }) {
   resetChromeMock()
   const c = installChromeMock()
   globalThis.navigator = { onLine: true }
@@ -47,6 +48,23 @@ test('使用者開著同網址的分頁:排程完全不碰它,在專用視窗抓
   assert.equal(callsOf(c, 'windows.remove').length, 1, '抓完關掉專用視窗')
   assert.ok(!callsOf(c, 'tabs.remove').some(x => x.args[0] === mine.id))
   assert.ok(!callsOf(c, 'tabs.update').some(x => x.args[0] === mine.id), '也不得切換或改動使用者的分頁')
+})
+
+test('沒設定時(預設):在目前視窗開背景分頁抓,不切過去、不碰使用者的分頁,抓完關掉', async () => {
+  const { c, st, fe } = await fresh(null)
+  const mine = await c.tabs.create({ url: 'https://a.test/p', active: true })
+  await st.saveTask(task())
+  const rec = await fe.runTask(task(), { slot: '2026-09-05T09:00', ...FAST })
+  assert.equal(rec.status, 'ok')
+  assert.equal(callsOf(c, 'windows.create').length, 0)
+  const created = callsOf(c, 'tabs.create').slice(1)
+  assert.equal(created.length, 1)
+  assert.equal(created[0].args[0].active, false)
+  assert.equal(touched(c).has(mine.id), false)
+  assert.equal(callsOf(c, 'tabs.update').some(x => x.args[1]?.active === true), false, '全程不切換作用中的分頁')
+  const removed = callsOf(c, 'tabs.remove').map(x => x.args[0])
+  assert.equal(removed.length, 1)
+  assert.notEqual(removed[0], mine.id)
 })
 
 test('抓取路徑不再用網址查分頁(tabs.query 帶 url)', async () => {
@@ -223,4 +241,130 @@ test('前置動作中途失敗也算按過(頁面可能已經被改動):下一�
   const reloads = callsOf(c, 'tabs.reload').length
     + callsOf(c, 'tabs.update').filter(x => typeof x.args[1]?.url === 'string').length
   assert.equal(reloads, 1)
+})
+
+
+// ---- 同一頁、同一組前置動作:一個分頁接著抓,不重載、不重跑前置動作 ----
+
+const PRE = [{ type: 'click', locator: { css: '#tab', path: '', anchor: null, xpath: '' } }]
+const reloadCount = (c) => callsOf(c, 'tabs.reload').length
+  + callsOf(c, 'tabs.update').filter(x => typeof x.args[1]?.url === 'string').length
+const preCount = (c) => callsOf(c, 'tabs.sendMessage').filter(x => x.args[1]?.type === 'RUN_PRE_ACTIONS').length
+const extractCss = (c) => callsOf(c, 'tabs.sendMessage').filter(x => x.args[1]?.type === 'EXTRACT').map(x => x.args[1].locator.css)
+
+async function runSame(tasks, opts = {}) {
+  const { c, st, fe } = await fresh()
+  if (opts.responder) c.__setTabResponder(opts.responder(c))
+  for (const t of tasks) await st.saveTask(t)
+  await Promise.all(tasks.map(t => fe.runTask(t, { slot: '2026-09-05T09:00', attempt: 3, ...FAST })))
+  return { c, st }
+}
+const mkSame = (id, n, over = {}) => task({ id, locator: { css: `#v${n}`, path: '', anchor: null, xpath: '' }, preActions: PRE, ...over })
+
+test('三個任務同一頁、同一組前置動作:只載入一次、前置動作只跑一次、三個值都抓到', async () => {
+  const { c, st } = await runSame([mkSame('t1', 1), mkSame('t2', 2), mkSame('t3', 3)])
+  assert.equal(callsOf(c, 'windows.create').length, 1)
+  assert.equal(reloadCount(c), 0)
+  assert.equal(preCount(c), 1)
+  assert.deepEqual(extractCss(c), ['#v1', '#v2', '#v3'])
+  assert.equal((await st.getRecordsByDate('2026-09-05')).length, 3)
+})
+
+test('前置動作相同但網址是另一頁:導覽並重跑', async () => {
+  const { c } = await runSame([mkSame('t1', 1), mkSame('t2', 2, { url: 'https://a.test/other' })])
+  assert.equal(reloadCount(c), 1)
+  assert.equal(preCount(c), 2)
+})
+
+test('前置動作不同(點的元素不一樣):重載並重跑', async () => {
+  const other = [{ type: 'click', locator: { css: '#tab2', path: '', anchor: null, xpath: '' } }]
+  const { c } = await runSame([mkSame('t1', 1), mkSame('t2', 2, { preActions: other })])
+  assert.equal(reloadCount(c), 1)
+  assert.equal(preCount(c), 2)
+})
+
+test('上一個任務的前置動作失敗:下一個任務不得沿用那個半套狀態(重載並重跑)', async () => {
+  let first = true
+  const { c } = await runSame([mkSame('t1', 1), mkSame('t2', 2)], {
+    responder: () => (tabId, msg) => {
+      if (msg.type === 'RUN_PRE_ACTIONS') {
+        if (first) { first = false; return { ok: false, error: 'not_found' } }
+        return { ok: true }
+      }
+      return OK
+    }
+  })
+  assert.equal(reloadCount(c), 1)
+  assert.equal(preCount(c), 2)
+})
+
+test('同一組前置動作之後接一個沒有前置動作的任務:要重載(它要的是原本的頁面)', async () => {
+  const { c } = await runSame([mkSame('t1', 1), mkSame('t2', 2), task({ id: 't3', locator: { css: '#v3', path: '', anchor: null, xpath: '' } })])
+  assert.equal(preCount(c), 1)
+  assert.equal(reloadCount(c), 1)
+})
+
+test('前置動作把頁面導去別處之後,同組的下一個任務留在那一頁接著抓(不得導回任務網址)', async () => {
+  const { c } = await runSame([mkSame('t1', 1), mkSame('t2', 2)], {
+    responder: (c) => (tabId, msg) => {
+      if (msg.type === 'RUN_PRE_ACTIONS') { c.__setTabState(tabId, { url: 'https://a.test/p/detail' }); return { ok: true } }
+      return OK
+    }
+  })
+  assert.equal(reloadCount(c), 0)
+  assert.equal(preCount(c), 1)
+})
+
+test('沿用期間分頁被卸載而重載:前置動作的狀態沒了,要回到任務網址重跑', async () => {
+  let n = 0
+  const { c } = await runSame([mkSame('t1', 1), mkSame('t2', 2)], {
+    responder: (c) => (tabId, msg) => {
+      // 前置動作把頁面導去 detail;第一個任務擷取完,分頁被卸載
+      if (msg.type === 'RUN_PRE_ACTIONS') { c.__setTabState(tabId, { url: 'https://a.test/p/detail' }); return { ok: true } }
+      if (msg.type === 'EXTRACT' && ++n === 1) c.__setTabState(tabId, { discarded: true })
+      return OK
+    }
+  })
+  assert.equal(preCount(c), 2)
+  const pres = c.__calls.map((x, i) => [x, i]).filter(([x]) => x.api === 'tabs.sendMessage' && x.args[1]?.type === 'RUN_PRE_ACTIONS').map(([, i]) => i)
+  const backToTask = c.__calls.findIndex((x, i) => i > pres[0] && i < pres[1]
+    && x.api === 'tabs.update' && x.args[1]?.url === 'https://a.test/p')
+  assert.ok(backToTask >= 0, '重跑前置動作之前要先回到任務網址(卸載後重載的是 detail 那一頁)')
+})
+
+test('站台檢查插在中間(頁面被導去登入頁):之後同組的任務要重載重跑', async () => {
+  const { c, st, fe } = await fresh()
+  const sc = await import('../src/background/sitecheck.js?t=' + Math.random())
+  const cr = await import('../src/shared/crypto.js?t=' + Math.random())
+  await st.saveSite('https://a.test', {
+    loginUrl: 'https://a.test/login',
+    selectors: { user: { css: '#u' }, pass: { css: '#p' }, submit: { css: '#go' } },
+    loginCheck: { type: 'urlPrefix', value: 'https://a.test/login' },
+    successCheck: { type: 'urlPrefix', value: 'https://a.test/home' },
+    username: 'u', passwordEnc: await cr.encryptSecret('p'), enabled: true, failStreak: 0
+  })
+  const t1 = mkSame('t1', 1)
+  const t2 = mkSame('t2', 2)
+  await st.saveTask(t1)
+  await st.saveTask(t2)
+  // 順序要固定成 t1 → 站台檢查 → t2:讓 t1 卡在擷取,另外兩個依序排進同一條佇列後才放行
+  let open
+  const gate = new Promise((r) => { open = r })
+  c.__setTabResponder(async (tabId, msg) => {
+    if (msg.type === 'EXTRACT' && msg.locator?.css === '#v1') await gate
+    return msg.type === 'RUN_PRE_ACTIONS' ? { ok: true } : OK
+  })
+  const settle = () => new Promise((r) => setTimeout(r, 30))
+  const p1 = fe.runTask(t1, { slot: '2026-09-05T09:00', ...FAST, extractTimeoutMs: 5000 })
+  for (let i = 0; i < 200 && !callsOf(c, 'tabs.sendMessage').some(x => x.args[1]?.type === 'EXTRACT'); i++) await settle()
+  const p2 = sc.runSiteCheck({ ...FAST })
+  await settle()
+  const p3 = fe.runTask(t2, { slot: '2026-09-05T09:00', ...FAST })
+  await settle()
+  open()
+  await Promise.all([p1, p2, p3])
+  const loginNav = c.__calls.findIndex(x => x.api === 'tabs.update' && x.args[1]?.url === 'https://a.test/login')
+  const t2Extract = c.__calls.findIndex(x => x.api === 'tabs.sendMessage' && x.args[1]?.locator?.css === '#v2')
+  assert.ok(loginNav >= 0 && loginNav < t2Extract, '前提:站台檢查排在 t1 與 t2 之間')
+  assert.equal(preCount(c), 2)
 })

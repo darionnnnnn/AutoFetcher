@@ -59,26 +59,26 @@ async function freshSettings(settings) {
   return { c, st, se, doc: jd.window.document, win: jd.window }
 }
 
-test('設定頁有「抓取頁面開在哪裡」:兩個選項,預設顯示專用視窗', async () => {
+test('設定頁有「抓取頁面開在哪裡」:兩個選項,預設顯示背景分頁', async () => {
   const { se, doc } = await freshSettings()
   await se.renderSettings()
   const el = doc.getElementById('pref-fetch-tab-mode')
   assert.ok(el, '要有 #pref-fetch-tab-mode')
-  assert.deepEqual([...el.options].map(o => o.value), ['window', 'tab'])
-  assert.equal(el.value, 'window')
+  assert.deepEqual([...el.options].map(o => o.value), ['tab', 'window'])
+  assert.equal(el.value, 'tab')
   const label = doc.querySelector('label[for="pref-fetch-tab-mode"]')
   assert.ok(label && label.textContent.trim().length > 0, '要有標籤')
 })
 
 test('設定頁回填既有值,改了立即寫入', async () => {
-  const { se, st, doc, win } = await freshSettings({ fetchTabMode: 'tab' })
+  const { se, st, doc, win } = await freshSettings({ fetchTabMode: 'window' })
   await se.renderSettings()
   const el = doc.getElementById('pref-fetch-tab-mode')
-  assert.equal(el.value, 'tab')
-  el.value = 'window'
+  assert.equal(el.value, 'window')
+  el.value = 'tab'
   el.dispatchEvent(new win.Event('change', { bubbles: true }))
   await new Promise(r => setTimeout(r, 20))
-  assert.equal((await st.getSettings()).fetchTabMode, 'window')
+  assert.equal((await st.getSettings()).fetchTabMode, 'tab')
 })
 
 test('連續 render 兩次不重複綁定(改一次只寫一次)', async () => {
@@ -87,10 +87,10 @@ test('連續 render 兩次不重複綁定(改一次只寫一次)', async () => {
   await se.renderSettings()
   const before = callsOf(c, 'storage.local.set').length
   const el = doc.getElementById('pref-fetch-tab-mode')
-  el.value = 'tab'
+  el.value = 'window'
   el.dispatchEvent(new win.Event('change', { bubbles: true }))
   await new Promise(r => setTimeout(r, 20))
-  const writes = callsOf(c, 'storage.local.set').slice(before).filter(x => x.args[0]?.settings?.fetchTabMode === 'tab')
+  const writes = callsOf(c, 'storage.local.set').slice(before).filter(x => x.args[0]?.settings?.fetchTabMode === 'window')
   assert.equal(writes.length, 1)
 })
 

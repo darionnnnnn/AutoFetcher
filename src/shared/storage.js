@@ -8,7 +8,7 @@ const DEFAULT_SETTINGS = {
   notifications: true,
   extraDelaySec: 3,
   theme: 'system',
-  fetchTabMode: 'window'
+  fetchTabMode: 'tab'
 }
 
 const DEFAULT_LAYOUT = { dashboards: [] }
