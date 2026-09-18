@@ -272,14 +272,48 @@ test('keepPage:分頁還在就完全不動它(前置動作可能把頁面導去�
   assert.equal(h.fetchTab.loads, 1)
 })
 
-test('keepPage:分頁已經不在就照常新建(loads 重新從 1 算)', async () => {
+test('keepPage:分頁已經不在就照常新建;loads 接著往上數(從 1 重算會被誤認成沒換過的那一頁),舊登記取消', async () => {
   const { c, ft } = await fresh()
   const h = {}
   const first = await ft.acquireFetchTab(h, URL_A, FAST)
   await c.tabs.remove(first)
   const again = await ft.acquireFetchTab(h, URL_A, { ...FAST, keepPage: true })
   assert.notEqual(again, first)
-  assert.equal(h.fetchTab.loads, 1)
+  assert.equal(h.fetchTab.loads, 2)
+  assert.deepEqual((await registry(c)).map(e => e.tabId), [again], '舊分頁的登記不得殘留(同一個 boot 的殘留項沒有人會清)')
+  await ft.releaseFetchTab(h)
+  assert.deepEqual(await registry(c), [])
+})
+
+test('佇列清空釋放期間排進來的同站台工作:不得與更後面的工作並行', async () => {
+  const { c, ft } = await fresh()
+  // 讓關視窗慢一點,製造「釋放中」的空檔
+  const origRemove = c.windows.remove
+  c.windows.remove = async (id) => { await new Promise(r => setTimeout(r, 30)); return origRemove(id) }
+  const seen = []
+  let running = 0
+  let maxRunning = 0
+  const job = (name, ms) => ft.enqueueForOrigin('https://a.test', async (h) => {
+    running++; maxRunning = Math.max(maxRunning, running)
+    await ft.acquireFetchTab(h, URL_A, FAST)
+    seen.push(name)
+    await new Promise(r => setTimeout(r, ms))
+    running--
+  })
+  try {
+    const a = job('A', 1)
+    // 等 A 的 fn 結束、釋放(關視窗 30ms)進行到一半
+    for (let i = 0; i < 200 && running !== 0 || seen.length === 0; i++) await new Promise(r => setTimeout(r, 2))
+    await new Promise(r => setTimeout(r, 10))
+    const b = job('B', 80)
+    await new Promise(r => setTimeout(r, 50))
+    const d = job('C', 1)
+    await Promise.all([a, b, d])
+  } finally {
+    c.windows.remove = origRemove
+  }
+  assert.deepEqual(seen, ['A', 'B', 'C'])
+  assert.equal(maxRunning, 1, '同站台任何時刻只能有一件工作在跑')
 })
 
 // ---- 前景抓取 ----

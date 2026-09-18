@@ -118,6 +118,8 @@ export async function ensureLoggedIn(tabId, task, opts) {
   if (fillRes?.ok !== true) {
     return await recordLoginFailure(origin, site)
   }
+  // 從這裡開始頁面已經被動過(填了表單、按了送出、多半換了頁):回傳帶 `attempted`,
+  // 呼叫端靠它知道「這一頁不再是剛載入的樣子」
 
   // 7. 等候頁面重新載入完成與額外延遲
   await waitForTabComplete(tabId, pollMs, loadTimeoutMs)
@@ -147,9 +149,9 @@ export async function ensureLoggedIn(tabId, task, opts) {
   if (isSuccess) {
     site.failStreak = 0
     await saveSite(origin, site)
-    return { ok: true }
+    return { ok: true, attempted: true }
   }
 
   // 9. 登入失敗：累計次數並寫回
-  return await recordLoginFailure(origin, site)
+  return { ...(await recordLoginFailure(origin, site)), attempted: true }
 }

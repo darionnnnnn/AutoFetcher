@@ -4,7 +4,7 @@
 // 1. 探針事實：
 //    state:'minimized' 直接建立的視窗，頁面 viewport 是 0×0；
 //    minimized 加 focused:false 會靜默變成一般視窗；
-//    type:'popup' 會搶焦點；已最小化的視窗裡再開的分頁同樣是 0×0——
+//    type:'popup' 會搶焦點；已最小化的視窗裡再開的作用中分頁(與在它之後開的背景分頁)同樣是 0×0——
 //    所以才「先不聚焦帶尺寸建立、再最小化、之後同佇列只導覽不開新分頁」。
 // 2. 為什麼不沿用使用者的分頁：
 //    會在使用者眼前點按鈕、捲動、填登入；而且那一頁可能幾小時沒刷新。
@@ -110,6 +110,13 @@ export async function acquireFetchTab(holder, url, opts = {}) {
       holder.fetchTab.loads++
     }
   } else {
+    // 記著的分頁已經不在(使用者手動關掉之類):舊登記要取消,否則同一個 boot 的殘留項永遠沒人清;
+    // `loads` 接著往上數——從 1 重算的話,呼叫端會把「全新的頁面」誤認成「沒被換過的那一頁」
+    const prevLoads = holder.fetchTab ? holder.fetchTab.loads : 0
+    if (holder.fetchTab) {
+      await unregisterTab(holder.fetchTab.tabId)
+      delete holder.fetchTab
+    }
     // 預設是目前視窗的背景分頁(AF-20 使用者定案:不閃、不切過去);專用視窗要在設定頁選
     const settings = await getSettings()
     let mode = settings.fetchTabMode === 'window' ? 'window' : 'tab'
@@ -150,7 +157,7 @@ export async function acquireFetchTab(holder, url, opts = {}) {
       await chrome.tabs.update(tabId, { autoDiscardable: false })
     } catch {}
 
-    holder.fetchTab = { tabId, windowId, loads: 1 }
+    holder.fetchTab = { tabId, windowId, loads: prevLoads + 1 }
   }
 
   if (await waitTabReady(tabId, { pollMs, loadTimeoutMs })) holder.fetchTab.loads++
@@ -247,10 +254,12 @@ export function enqueueForOrigin(origin, fn) {
     } finally {
       entry.pending--
       if (entry.pending === 0) {
+        // 先從 map 拿掉再釋放:釋放要等瀏覽器關分頁,這段期間排進來的工作若還拿到這個 entry,
+        // 等它被刪掉之後再來的工作就會另建一條佇列,同站台變成兩條並行
+        originQueues.delete(origin)
         try {
           await releaseFetchTab(entry)
         } catch {}
-        originQueues.delete(origin)
       }
     }
   }

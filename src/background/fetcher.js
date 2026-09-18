@@ -346,14 +346,24 @@ export async function runTask(task, opts = {}) {
         } catch {}
       }
 
+      // 前景抓取開不起來(沒有任何一般視窗)就退回背景那條路,不讓整次抓取失敗
+      let fg = null
+      if (!(tab && sameOriginPath(tab.url, task.url)) && task.foreground === true) {
+        try {
+          fg = await openForegroundTab(task.url, { pollMs, loadTimeoutMs })
+        } catch {}
+      }
+
+      // 這次有沒有真的載入頁面:沿用同一頁時不必再等一次「額外等待秒數」
+      let pageLoaded = true
       if (tab && sameOriginPath(tab.url, task.url)) {
         tabId = tab.id
         await waitTabReady(tabId, { pollMs, loadTimeoutMs })
-      } else if (task.foreground === true) {
-        const fg = await openForegroundTab(task.url, { pollMs, loadTimeoutMs })
+      } else if (fg !== null) {
         tabId = fg.tabId
         restoreForeground = fg.restore
       } else {
+        const loadsBefore = queueCtx.fetchTab?.loads
         // 同一頁、同一組前置動作、而且那之後頁面沒被換掉 → 前置動作留下的狀態就是這個任務要的:
         // 不重載、不重跑,一個分頁接著抓(使用者定案:同一頁的值一次抓完)。
         // 頁面有沒有被換掉只看入口的載入次數 `loads`(前置動作可能把網址導去別處,不能比網址)。
@@ -374,12 +384,25 @@ export async function runTask(task, opts = {}) {
           queueCtx.preApplied = null
         }
         acquiredTab = true
+        pageLoaded = queueCtx.fetchTab?.loads !== loadsBefore
       }
 
-      if (extraDelayMs > 0) await sleep(extraDelayMs)
+      if (pageLoaded && extraDelayMs > 0) await sleep(extraDelayMs)
 
       // 8. 確認登入狀態（若停留在登入頁則執行自動登入）
       const login = await ensureLoggedIn(tabId, task, { pollMs, loadTimeoutMs, extraDelayMs })
+      // 登入流程填了表單、換了頁,入口的載入次數量不到它:自己標記頁面被動過。
+      // 本來打算沿用前置動作狀態的(session 剛好在兩個任務之間過期),回任務網址重跑。
+      if (login?.attempted === true && acquiredTab) {
+        queueCtx.pageDirty = true
+        queueCtx.preApplied = null
+        if (reusedPreActions && login.ok === true) {
+          tabId = await acquireFetchTab(queueCtx, task.url, { pollMs, loadTimeoutMs, freshLoad: true })
+          queueCtx.pageDirty = false
+          reusedPreActions = false
+          if (extraDelayMs > 0) await sleep(extraDelayMs)
+        }
+      }
       if (login?.ok !== true) {
         if (dryRun) return { ok: false, error: 'login_failed' }
         return await writeRecord({

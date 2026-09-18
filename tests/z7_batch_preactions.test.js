@@ -162,3 +162,72 @@ test('提示文字不再說「開新分頁」(AF-20 起排程在專用視窗抓)
     assert.equal(/開新分頁/.test(src), false, `${name} 還有「開新分頁」`)
   }
 })
+
+// ---- 體檢輪 ----
+
+const enterPicks = (c) => c.__calls.filter(x => x.api === 'runtime.sendMessage' && x.args[0]?.type === 'ENTER_PICK').map(x => x.args[0])
+
+test('批次畫面的「在頁面上選取」要帶得出 tabId(還沒試抓、沒有單一 ctx 時也一樣;不帶的話 background 靜默無事)', async () => {
+  const { c, pk, doc } = await freshPanel()
+  await pk.renderFromPanelCtx(batchCtx([payloadT2, payloadP]))
+  doc.getElementById('preaction-add').click()
+  doc.querySelector('#preaction-list [data-action="preaction-pick"]').click()
+  const msgs = enterPicks(c)
+  assert.equal(msgs.length, 1)
+  assert.equal(msgs[0].purpose, 'preaction')
+  assert.equal(msgs[0].tabId, 9)
+  assert.equal(msgs[0].frameId, 0)
+  globalThis.window.close = () => {}
+})
+
+test('批次的框架提示按「加入點擊步驟」:新增一列並直接進選取,同樣帶 tabId', async () => {
+  const { c, pk, doc } = await freshPanel()
+  await pk.renderFromPanelCtx(batchCtx([payloadT2, { ...payloadP, frameUrl: FRAME }]))
+  doc.getElementById('frame-hint-add').click()
+  assert.equal(doc.querySelectorAll('#preaction-list [data-preaction-row]').length, 1)
+  assert.equal(enterPicks(c)[0]?.tabId, 9)
+  globalThis.window.close = () => {}
+})
+
+test('共用前置動作有一列沒設定好:整批擋下並說是哪一列(濾掉的話 N 個任務都沒有前置動作)', async () => {
+  const { st, pk, doc } = await freshPanel()
+  await pk.renderFromPanelCtx(batchCtx([payloadT2, payloadP]))
+  addClickRow(doc, '#tab2', null)
+  const bad = addClickRow(doc, '#x', null)
+  bad._locator = null
+  await pk.handleSave()
+  assert.equal((await st.getTasks()).length, 0)
+  assert.match(doc.getElementById('errors').textContent, /前置動作第 2 列/)
+  assert.equal(doc.getElementById('save').disabled, false, '擋下之後按鈕要能再按')
+  globalThis.window.close = () => {}
+})
+
+test('正在頁面上替某一列選元素時按了全部試抓(列被整批重建):選取結果要落在重建後的同一列', async () => {
+  const { c, pk, doc } = await freshPanel()
+  await pk.renderFromPanelCtx(batchCtx([payloadT2, payloadP]))
+  addClickRow(doc, '#first', null)
+  doc.getElementById('preaction-add').click()
+  const rowsBefore = doc.querySelectorAll('#preaction-list [data-preaction-row]')
+  const sel = rowsBefore[1].querySelector('select')
+  sel.value = 'click'
+  sel.dispatchEvent(new window.Event('change', { bubbles: true }))
+  rowsBefore[1].querySelector('[data-action="preaction-pick"]').click()
+  c.__setRuntimeResponder((m) => (m?.type === 'TEST_TASK' ? { ok: true, value: 1 } : undefined))
+  await pk.handleTestNow()
+  const listener = [...c.runtime.onMessage._listeners]
+  for (const fn of listener) fn({ type: 'PICKED', purpose: 'preaction', locator: { css: '#picked' }, frameUrl: null }, {}, () => {})
+  const rows = doc.querySelectorAll('#preaction-list [data-preaction-row]')
+  assert.equal(rows.length, 2)
+  assert.deepEqual(rows[1]._locator, { css: '#picked' })
+  assert.deepEqual(rows[0]._locator?.css, '#first', '不得寫到別列')
+  globalThis.window.close = () => {}
+})
+
+test('單任務也一樣:手動新增一列前置動作後框架提示收起來(判準與批次同一份)', async () => {
+  const { pk, doc } = await freshPanel()
+  pk.render({ ...payloadP, frameUrl: FRAME })
+  assert.ok(visible(doc.getElementById('frame-hint')))
+  doc.getElementById('preaction-add').click()
+  assert.equal(visible(doc.getElementById('frame-hint')), false)
+  globalThis.window.close = () => {}
+})

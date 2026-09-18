@@ -368,3 +368,95 @@ test('站台檢查插在中間(頁面被導去登入頁):之後同組的任務�
   assert.ok(loginNav >= 0 && loginNav < t2Extract, '前提:站台檢查排在 t1 與 t2 之間')
   assert.equal(preCount(c), 2)
 })
+
+
+// ---- 體檢輪:沿用判定的漏洞 ----
+
+test('同組任務之間抓取分頁被關掉:新開的頁面是乾淨的,前置動作要重跑', async () => {
+  let n = 0
+  const { c } = await runSame([mkSame('t1', 1), mkSame('t2', 2)], {
+    responder: (c) => async (tabId, msg) => {
+      if (msg.type === 'EXTRACT' && ++n === 1) await c.tabs.remove(tabId)
+      return msg.type === 'RUN_PRE_ACTIONS' ? { ok: true } : OK
+    }
+  })
+  assert.equal(preCount(c), 2)
+  assert.deepEqual(extractCss(c), ['#v1', '#v2'])
+})
+
+test('同組任務之間 session 過期:第二個任務經過自動登入之後,要回任務網址重跑前置動作', async () => {
+  const { c, st, fe } = await fresh()
+  const cr = await import('../src/shared/crypto.js?t=' + Math.random())
+  await st.saveSite('https://a.test', {
+    loginUrl: 'https://a.test/login',
+    selectors: { user: { css: '#u' }, pass: { css: '#p' }, submit: { css: '#go' } },
+    loginCheck: { type: 'urlPrefix', value: 'https://a.test/login' },
+    successCheck: { type: 'urlPrefix', value: 'https://a.test/home' },
+    username: 'u', passwordEnc: await cr.encryptSecret('p'), enabled: true, failStreak: 0
+  })
+  let n = 0
+  c.__setTabResponder((tabId, msg) => {
+    // 第一個任務擷取完,站台把這一頁踢回登入頁
+    if (msg.type === 'EXTRACT' && ++n === 1) c.__setTabState(tabId, { url: 'https://a.test/login?back=p' })
+    if (msg.type === 'FILL_LOGIN') { c.__setTabState(tabId, { url: 'https://a.test/home' }); return { ok: true } }
+    return msg.type === 'RUN_PRE_ACTIONS' ? { ok: true } : OK
+  })
+  const t1 = mkSame('t1', 1)
+  const t2 = mkSame('t2', 2)
+  await st.saveTask(t1)
+  await st.saveTask(t2)
+  await Promise.all([t1, t2].map(t => fe.runTask(t, { slot: '2026-09-05T09:00', ...FAST })))
+  assert.equal(preCount(c), 2, '登入後的頁面不是前置動作做好的那一頁')
+  const login = c.__calls.findIndex(x => x.api === 'tabs.sendMessage' && x.args[1]?.type === 'FILL_LOGIN')
+  const back = c.__calls.findIndex((x, i) => i > login && x.api === 'tabs.update' && x.args[1]?.url === 'https://a.test/p')
+  assert.ok(login >= 0 && back > login, '登入之後要回到任務網址')
+})
+
+test('登入流程動過頁面之後,下一個沒有前置動作的任務也要重載', async () => {
+  const { c, st, fe } = await fresh()
+  const cr = await import('../src/shared/crypto.js?t=' + Math.random())
+  await st.saveSite('https://a.test', {
+    loginUrl: 'https://a.test/login',
+    selectors: { user: { css: '#u' }, pass: { css: '#p' }, submit: { css: '#go' } },
+    loginCheck: { type: 'urlPrefix', value: 'https://a.test/login' },
+    successCheck: { type: 'urlPrefix', value: 'https://a.test/home' },
+    username: 'u', passwordEnc: await cr.encryptSecret('p'), enabled: true, failStreak: 0
+  })
+  c.__onTabCreated = (tab) => c.__setTabState(tab.id, { url: 'https://a.test/login?back=p' })
+  c.__setTabResponder((tabId, msg) => {
+    if (msg.type === 'FILL_LOGIN') { c.__setTabState(tabId, { url: 'https://a.test/home' }); return { ok: true } }
+    return OK
+  })
+  const t1 = task({ id: 't1' })
+  const t2 = task({ id: 't2' })
+  await st.saveTask(t1)
+  await st.saveTask(t2)
+  await Promise.all([t1, t2].map(t => fe.runTask(t, { slot: '2026-09-05T09:00', ...FAST })))
+  assert.ok(reloadCount(c) >= 1)
+})
+
+test('前景抓取開不起來(沒有一般視窗):退回背景那條路,照樣抓到值', async () => {
+  const { c, st, fe } = await fresh()
+  const orig = c.windows.getLastFocused
+  c.windows.getLastFocused = async () => { throw new Error('No last-focused window') }
+  const t = task({ foreground: true })
+  await st.saveTask(t)
+  let rec
+  try {
+    rec = await fe.runTask(t, { slot: '2026-09-05T09:00', ...FAST })
+  } finally {
+    c.windows.getLastFocused = orig
+  }
+  assert.equal(rec?.status, 'ok')
+  assert.equal(callsOf(c, 'windows.create').length, 1)
+})
+
+test('沿用同一頁(沒有重新載入)時不再等一次額外等待秒數', async () => {
+  const { st, fe } = await fresh()
+  const ts = [task({ id: 't1' }), task({ id: 't2' }), task({ id: 't3' })]
+  for (const t of ts) await st.saveTask(t)
+  const t0 = Date.now()
+  await Promise.all(ts.map(t => fe.runTask(t, { slot: '2026-09-05T09:00', ...FAST, extraDelayMs: 150 })))
+  const ms = Date.now() - t0
+  assert.ok(ms >= 150 && ms < 400, `三個任務只等第一次載入那一次,實得 ${ms}ms`)
+})

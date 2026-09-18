@@ -432,6 +432,48 @@ function withFrame(action, frame) {
   return action
 }
 
+// 前置動作哪些算「設定好了」:沒選元素的點擊、沒填秒數的等待都不算(留著只會在抓取時失敗)。
+// `buildTask` 用它過濾;批次儲存用它擋下沒設定好的共用列(一列錯,N 個任務全都沒有前置動作)。
+function validPreActionsOf(list) {
+  return list
+    .map(a => {
+      if (!a || typeof a !== 'object') return null
+      if (a.type === 'click') {
+        const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
+        if (!hasLoc) return null
+        return withFrame({ type: 'click', locator: a.locator }, a.frame)
+      }
+      if (a.type === 'hover') {
+        const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
+        if (!hasLoc) return null
+        const act = { type: 'hover', locator: a.locator }
+        const hold = Number(a.holdMs)
+        if (Number.isFinite(hold) && hold >= 0) act.holdMs = hold
+        return withFrame(act, a.frame)
+      }
+      if (a.type === 'waitFor') {
+        const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
+        if (!hasLoc) return null
+        const timeoutMs = Number.isFinite(Number(a.timeoutMs)) ? Number(a.timeoutMs) : DEFAULT_WAIT_TIMEOUT_MS
+        const act = { type: 'waitFor', locator: a.locator, timeoutMs }
+        if (a.visible === false) act.visible = false
+        return withFrame(act, a.frame)
+      }
+      if (a.type === 'wait') {
+        // 空字串經 Number() 會變成 0，看起來合法但其實是使用者沒填
+        const raw = a.sec !== undefined ? a.sec : a.ms
+        if (raw === '' || raw === null || raw === undefined) return null
+        const n = Number(raw)
+        if (!Number.isFinite(n)) return null
+        // 舊任務存的是 ms，重存一律寫 sec（讀取端仍相容 ms）
+        return a.sec !== undefined ? { type: 'wait', sec: n } : { type: 'wait', sec: n / 1000 }
+      }
+      return null
+    
+    })
+    .filter(Boolean)
+}
+
 /**
  * 表單值 → task.schedule。**唯一一份**：存檔與觸發預覽都走這裡，
  * 各組一份會讓畫面預告的時刻與實際排的 alarm 不一樣。
@@ -512,42 +554,7 @@ export function buildTask(values, locator, existing, frame) {
     }
   }
   if (Array.isArray(values.preActions)) {
-    const validPreActions = values.preActions
-      .map(a => {
-        if (!a || typeof a !== 'object') return null
-        if (a.type === 'click') {
-          const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
-          if (!hasLoc) return null
-          return withFrame({ type: 'click', locator: a.locator }, a.frame)
-        }
-        if (a.type === 'hover') {
-          const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
-          if (!hasLoc) return null
-          const act = { type: 'hover', locator: a.locator }
-          const hold = Number(a.holdMs)
-          if (Number.isFinite(hold) && hold >= 0) act.holdMs = hold
-          return withFrame(act, a.frame)
-        }
-        if (a.type === 'waitFor') {
-          const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
-          if (!hasLoc) return null
-          const timeoutMs = Number.isFinite(Number(a.timeoutMs)) ? Number(a.timeoutMs) : DEFAULT_WAIT_TIMEOUT_MS
-          const act = { type: 'waitFor', locator: a.locator, timeoutMs }
-          if (a.visible === false) act.visible = false
-          return withFrame(act, a.frame)
-        }
-        if (a.type === 'wait') {
-          // 空字串經 Number() 會變成 0，看起來合法但其實是使用者沒填
-          const raw = a.sec !== undefined ? a.sec : a.ms
-          if (raw === '' || raw === null || raw === undefined) return null
-          const n = Number(raw)
-          if (!Number.isFinite(n)) return null
-          // 舊任務存的是 ms，重存一律寫 sec（讀取端仍相容 ms）
-          return a.sec !== undefined ? { type: 'wait', sec: n } : { type: 'wait', sec: n / 1000 }
-        }
-        return null
-      })
-      .filter(Boolean)
+    const validPreActions = validPreActionsOf(values.preActions)
     if (validPreActions.length > 0) {
       task.preActions = validPreActions
     }
@@ -890,18 +897,25 @@ function updateFrameHint(ctx) {
   const hint = document.getElementById('frame-hint')
   if (!hint) return
   const textEl = document.getElementById('frame-hint-text')
-  const hasPreActions = Array.isArray(ctx?.task?.preActions) && ctx.task.preActions.length > 0
+  // 批次畫面沒有單一的 ctx:任何一項在框架裡就提示(主機名取第一個)
+  const frameUrl = frameHintUrl(ctx)
+  const hasPreActions = (document.getElementById('preaction-list')?.children.length || 0) > 0
   // 編輯既有任務不提示：使用者已經決定過要不要加了
   // 使用者按過「不需要」之後，同一個框架的任何一次 re-render 都不該再跳出來
-  const show = Boolean(ctx?.frameUrl) && !ctx?.task && !hasPreActions && frameHintDismissedFor !== ctx.frameUrl
+  const show = Boolean(frameUrl) && !ctx?.task && !hasPreActions && frameHintDismissedFor !== frameUrl
   hint.hidden = !show
   if (!show) return
 
-  if (textEl) textEl.textContent = frameHintText(ctx.frameUrl)
+  if (textEl) textEl.textContent = frameHintText(frameUrl)
   const advSection = document.getElementById('advanced-section')
   if (advSection) advSection.setAttribute('open', '')
 
   bindFrameHintEvents()
+}
+
+function frameHintUrl(ctx) {
+  if (batchViewOn) return (batchItems || []).find(it => it.frameUrl)?.frameUrl || null
+  return ctx?.frameUrl || null
 }
 
 // 框架提示那一句:單任務與批次畫面共用這一份
@@ -931,30 +945,10 @@ function bindFrameHintEvents() {
     dismissBtn.addEventListener('click', () => {
       const hint = document.getElementById('frame-hint')
       if (hint) hint.hidden = true
-      const batchFrameUrl = (batchItems || []).find(it => it.frameUrl)?.frameUrl
-      frameHintDismissedFor = (batchViewOn && batchFrameUrl) ? batchFrameUrl : (currentCtx?.frameUrl || null)
+      frameHintDismissedFor = frameHintUrl(currentCtx)
     })
     dismissBtn._frameHintBound = true
   }
-}
-
-function updateBatchFrameHint() {
-  const hint = document.getElementById('frame-hint')
-  if (!hint) return
-  const textEl = document.getElementById('frame-hint-text')
-  const itemWithFrame = (batchItems || []).find(it => it.frameUrl)
-  const batchFrameUrl = itemWithFrame?.frameUrl || null
-  const preList = document.getElementById('preaction-list')
-  const hasPreActions = Boolean(preList && preList.children.length > 0)
-  const show = Boolean(batchFrameUrl) && !hasPreActions && frameHintDismissedFor !== batchFrameUrl
-  hint.hidden = !show
-  if (!show) return
-
-  if (textEl) textEl.textContent = frameHintText(batchFrameUrl)
-  const advSection = document.getElementById('advanced-section')
-  if (advSection) advSection.setAttribute('open', '')
-
-  bindFrameHintEvents()
 }
 
 // 使用者點的是第一列或最後一列時「建議」改用位置定位，但**不替他改設定**：
@@ -2080,8 +2074,9 @@ function addPreActionRow(data = {}) {
       chrome.runtime.sendMessage({
         type: MSG.ENTER_PICK,
         purpose: 'preaction',
-        tabId: currentCtx?.tabId,
-        taskId: currentCtx?.task?.id,
+        // 批次畫面沒有單一的 ctx(逐項 render 之前 `currentCtx` 是 null):不帶 tabId 的話 background 靜默回 ok:false
+        tabId: batchViewOn ? batchTabId() : currentCtx?.tabId,
+        taskId: batchViewOn ? undefined : currentCtx?.task?.id,
         // 一律從最上層開始：要點的按鈕跟要抓的值常常不在同一層（值在 iframe 裡、
         // 按鈕是外層的頁籤）。進到值所在的 frame 就選不到外層的按鈕了——
         // 選取模式只能往下鑽、回不去（SPEC §2）。
@@ -2141,7 +2136,7 @@ function addPreActionRow(data = {}) {
       lastPreActionPickRow = null
     }
     row.remove()
-    if (batchViewOn) updateBatchFrameHint()
+    updateFrameHint(batchViewOn ? null : currentCtx)
   })
 
   row.appendChild(select)
@@ -2166,7 +2161,7 @@ function bindPreActionEvents() {
   if (addBtn && !addBtn._preactionEventsBound) {
     addBtn.addEventListener('click', () => {
       addPreActionRow()
-      if (batchViewOn) updateBatchFrameHint()
+      updateFrameHint(batchViewOn ? null : currentCtx)
     })
     addBtn._preactionEventsBound = true
   }
@@ -3282,7 +3277,7 @@ async function renderBatch(ctx) {
   setBatchView(true)
   bindPreActionEvents()
   bindPreActionMessageListener()
-  updateBatchFrameHint()
+  updateFrameHint(null)
 }
 
 function renderBatchList(savedNames) {
@@ -3400,6 +3395,9 @@ function snapshotShared() {
   out.cardTypes = Array.from(document.querySelectorAll('#card-types input[type="checkbox"]')).map(cb => cb.checked)
   out.aggregate = document.getElementById('batch-aggregate')?.value || 'sum'
   out.preActions = preActionsFromForm()
+  out.pickingIndex = lastPreActionPickRow
+    ? Array.from(document.querySelectorAll('[data-preaction-row]')).indexOf(lastPreActionPickRow)
+    : -1
   return out
 }
 
@@ -3422,6 +3420,10 @@ function pasteShared(shared) {
         addPreActionRow(pa)
       }
     }
+    // 列是整批重建的:使用者正在頁面上替某一列選元素時(面板不會關),選取結果要落在重建後的同一列,
+    // 否則 `PICKED` 回來發現舊節點已經不在畫面上,結果就被丟掉。
+    // 第幾列要在抄共用設定時就記下——逐項 `render` 會先把舊列清掉,到這裡已經查不到了
+    if (shared.pickingIndex >= 0) lastPreActionPickRow = preList.children[shared.pickingIndex] || null
   }
 }
 
@@ -3454,6 +3456,13 @@ async function handleBatchSave() {
   const busy = () => { busySave(); busyTest() }
   const shared = snapshotShared()
   const entries = batchEntries()
+  // 沒設定好的前置動作列存檔時會被濾掉(單任務既有行為);批次是共用的,濾掉就是 N 個任務都沒有前置動作、排程全部失敗
+  const badPre = shared.preActions.findIndex(pa => validPreActionsOf([pa]).length === 0)
+  if (badPre >= 0) {
+    if (errorsEl) errorsEl.textContent = `前置動作第 ${badPre + 1} 列還沒設定好（沒選元素或沒填秒數）；請補完或刪掉那一列再儲存`
+    busy()
+    return
+  }
   const saved = []
   let lastValues = null
   let failure = null

@@ -595,6 +595,9 @@
   每項 `render` 完由 `pasteShared` 以 `addPreActionRow` 重建;沒有前置動作時不寫 `preActions` 鍵(同單任務)。
   **進入批次畫面(`renderBatch`)先清空前置動作列**:同一份面板文件可能剛編輯過有前置動作的任務,不清就會被套到每一個新任務;
   不在 `setBatchView` 清(收集時每一項都會呼叫它)。批次裡任何一項有 `frameUrl` 且還沒有前置動作列時顯示同一個框架提示(提示句只有 `frameHintText` 一份)。
+  **批次畫面沒有單一的 ctx**(逐項 `render` 之前 `currentCtx` 是 null):前置動作列的「在頁面上選取」要用 `batchTabId()`,不帶 `tabId` 的話 background 靜默回 `ok:false`。
+  共用列有任何一列沒設定好(沒選元素、沒填秒數)→ 整批擋下並說是第幾列(`validPreActionsOf`,與 `buildTask` 的過濾同一份;單任務照舊靜默濾掉)。
+  列是整批重建的,「正在頁面上選的是第幾列」在 `snapshotShared` 記下、`pasteShared` 接回新節點。框架提示的判準只有 `updateFrameHint` 一份(看畫面上有沒有前置動作列)。
   前置動作**不進草稿**:面板文件重載(切去別的分頁再回來)後前置動作列會消失,與單任務相同(見 BACKLOG)。
 - 編輯用了已移除策略(`attr`/`child`/`label`)的舊任務時,表單顯示一行說明(`#legacy-strategy-note`):
   設定原樣保留,改選其他策略才會換掉。
@@ -726,7 +729,7 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
 | 背景頁面被 Chrome 丟棄(discard)/ 省電模式 | 分頁存在但內容被卸載,注入失敗 | `tabs.get` 檢查 `discarded`,是則 `tabs.reload` 再等 `complete`(只有 `waitTabReady` 一份);自開的分頁設 `autoDiscardable:false` |
 | 頁面永遠不到 `complete` | 有些頁長連線不結束 | 載入等待上限 30 秒,到時仍嘗試注入擷取;擷取本身逾時 15 秒(**計時器在擷取結束時清掉**,不清的話每抓一次都把 service worker 多吊 15 秒不能閒置) |
 | 離線 / 網路錯誤 | 抓到錯誤頁 | `navigator.onLine` 為 false 直接排 10 分鐘後重試;找不到目標元素走重試(2 分鐘、10 分鐘,共兩次;HTTP 錯誤頁的判定見 BACKLOG) |
-| 同時多任務 | 同站台互相干擾、開太多分頁 | 同站台嚴格串行並共用同一個分頁(佇列 `enqueueForOrigin` 在 `fetch-tab.js`,每日站台檢查也進同一條;全域並行佇列見 BACKLOG) |
+| 同時多任務 | 同站台互相干擾、開太多分頁 | 同站台嚴格串行並共用同一個分頁(佇列 `enqueueForOrigin` 在 `fetch-tab.js`,每日站台檢查也進同一條;全域並行佇列見 BACKLOG)。佇列清空時**先從表上拿掉再釋放分頁**:釋放要等瀏覽器,這段期間排進來的工作若還拿到舊佇列,之後再來的工作就會另建一條、同站台變兩條並行 |
 | 時鐘/時區變更 | 排程槽算錯 | 看門狗每次比較 `Intl.DateTimeFormat().resolvedOptions().timeZone`,變了就 `rebuildAlarms()` |
 
 - **診斷紀錄**:環形緩衝 500 筆(`storage.local.diag`),記 alarm 觸發、run 狀態轉移、看門狗結果、錯誤;Report 設定頁「排程健康」區顯示:
@@ -771,9 +774,10 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
   | `state:'minimized'` ＋ `focused:false` | 不搶 | **靜默變成一般視窗**,沒有最小化 |
   | `state:'minimized'` ＋ `type:'popup'` | **搶焦點** | — |
   | 先不聚焦帶尺寸建立,再最小化 | 不搶,零 `onFocusChanged` | viewport 保住;頁面 `hidden`、計時器節流,與背景分頁完全相同 |
-  | 已最小化的視窗裡再 `tabs.create` | 不搶 | 新分頁 viewport **0×0** → 同佇列的下一個任務一律在同一個分頁**導覽**(`tabs.update({url})`) |
+  | 已最小化的視窗裡再 `tabs.create` | 不搶 | 新開的**作用中**分頁 viewport **0×0**,在它之後開的背景分頁也是(只開背景分頁時保得住,但不依賴這個順序)→ 同佇列的下一個任務一律在同一個分頁**導覽**(`tabs.update({url})`) |
   | 畫面外座標 `left:-2000` | — | API 直接拒絕(至少 50% 要在可見範圍) |
 
+  探針腳本:`tests/smoke/probe_fetch_window.mjs`(不進 `npm test`;可見性一欄會隨視窗有沒有被遮住而變,viewport 與視窗狀態兩欄是穩定的)。
   量不到的:建立到最小化之間(約 100~300 毫秒)肉眼看不看得到;Edge 未實測(本機 puppeteer 啟動不了 Edge)。
 - 補抓:Chrome 未開時錯過的排程,啟動時整理成「錯過清單」(任務、應抓時間),以 `notifications`
   按鈕「立即補抓 / 略過」詢問使用者,Report 頁同時顯示橫幅可逐筆勾選;補抓的紀錄標 `status: "late"`。
@@ -786,14 +790,19 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
   **例外——同一頁、同一組前置動作**(AF-20 使用者定案「一個分頁把同一頁的值一次抓完」):上一個任務在這個分頁上**完整跑完**了一組前置動作
   (`JSON` 全等,含 `frame`),這個任務的前置動作與它相同、網址是同一頁(`sameOriginPath`),而且那之後頁面沒被換過 →
   不重載、不重跑前置動作、也不等第二次額外等待,直接擷取(`acquireFetchTab` 的 `keepPage`,前置動作可能把網址導去別處,不得導回來)。
-  「頁面有沒有被換過」只看入口的載入次數 `fetchTab.loads`(新建 1,每次導覽／重載加 1,含被卸載而重載),不比網址。
-  取得分頁後發現次數變了(中間插進站台檢查、或被卸載而重載當下網址)→ 回到任務網址重載、重跑前置動作。
+  「頁面有沒有被換過」只看入口的載入次數 `fetchTab.loads`(新建、導覽、重載各加 1,含被卸載而重載;
+  **記著的分頁不見了而重建時接著往上數**,從 1 重算會把全新的頁面誤認成沒換過的那一頁),不比網址。
+  取得分頁後發現次數變了(中間插進站台檢查、被卸載而重載當下網址、分頁被關掉重建)→ 回到任務網址重載、重跑前置動作。
   前置動作中途失敗不算做好了(迴圈開始前清掉、全部成功才記下)。
+  **自動登入是入口量不到的換頁**:`ensureLoggedIn` 真的送出過登入表單時回傳帶 `attempted: true`,fetcher 據此把頁面標成被動過、清掉「做好了」的紀錄;
+  本來打算沿用的(session 剛好在兩個任務之間過期)登入成功後回任務網址重跑。
+- 沿用同一頁(這次沒有任何載入)時不再等「額外等待秒數」;那是等頁面載入後的延遲渲染用的。
 - 前景 vs 背景:`chrome.tabs.create({active:false})` 開的分頁 JS 照常執行,但 `document.visibilityState` 為 `hidden`,
   IntersectionObserver 式的 lazy-load、依可見性才啟動的圖表/輪詢**可能不觸發**。
   策略:預設背景;content script 擷取前先 `scrollIntoView` 目標;若同一任務連續 2 次 `not_found`,
   任務頁顯示提示與一鍵切換,任務可設 `foreground: true`:在使用者**最後聚焦的一般視窗**(`windows.getLastFocused`)開一個作用中的新分頁抓,
   結束後把那個視窗原本的作用分頁切回來、關掉自己的分頁(`openForegroundTab`)。同樣不沿用使用者既有的分頁,也不搶作業系統層級的視窗焦點。
+  開不起來(沒有任何一般視窗)就退回背景那條路,不讓整次抓取失敗。
   成功抓到值一次就把提示清掉。
 - **目標在 iframe 內時,Picker 會提示可能要加前置動作**(`#frame-hint`,`role="status"`):
   新任務、`ctx.frameUrl` 存在、又還沒有任何前置動作時才顯示,並把「進階設定」展開
@@ -1402,6 +1411,7 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
 `downloads` 為 JSON 匯出所需;`notifications` 為失敗/告警/補抓詢問所需;
 `unlimitedStorage` 讓歷史紀錄不受 `storage.local` 預設 10MB 上限限制(保留天數預設 365 天很容易超過)。
 另設 `options_page: "ui/report/report.html"`,可從 `chrome://extensions` 的擴充功能選項開啟報表。
+`chrome.windows`(專用抓取視窗、前景抓取找最後聚焦的視窗,§4)**不需要宣告權限**。
 
 `web_accessible_resources`(`content/*.js`、`shared/*.js`,`matches: ["<all_urls>"]`)是**必要的**:
 content script 是 ES module,`executeScript({files})` 以傳統 script 注入會拋
