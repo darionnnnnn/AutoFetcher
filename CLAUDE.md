@@ -8,7 +8,8 @@ Chrome 擴充功能(Manifest V3):在指定網頁上以右鍵選取元素/區塊,
 
 ```
 src/
-├── manifest.json        ← MV3;permissions 只加有消費端的
+├── manifest.json        ← MV3;permissions 只加有消費端的;web_accessible_resources 只列 content 端 import 閉包
+├── icons/               ← 擴充功能圖示與燈號變體 icon-{green,yellow,red,gray}-{16,32,48}.png(setIcon 路徑以 / 開頭)
 ├── background/          ← service worker:main 總接線 / scheduler 排程 / fetcher 抓取 / login 自動登入
 │                          precheck 預檢 / sitecheck 每日站台檢查 / missed 補抓 / watchdog 看門狗
 │                          health 燈號 / notify 通知唯一入口 / inject 注入唯一入口
@@ -184,7 +185,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - 不要用 `setTimeout`/`setInterval` 做排程(MV3 service worker 會被殺;一律 `chrome.alarms`)。
 - **不要用 `periodInMinutes` 做任務排程**(daily 與 interval 都不行,一律每次觸發後重算對齊的 `when`,
   理由與規則見 SPEC §4);`__watchdog` 自己那個固定 alarm 是唯一例外。
-- 不要在帳本之外直接呼叫 `runTask`(同一排程槽會重複抓;冪等靠 `runs[taskId][slot]`,SPEC §4.1)。
+- 不要在帳本之外直接呼叫 `runTask`(同一排程槽會重複抓;冪等靠按日分鍵的帳本 `runs:<日期>`(`getRunStatus`／`setRunStatus`),SPEC §4.1)。
 - 不要假設抓取時目標分頁已開啟(排程到點由 background 經 `fetch-tab.js` 自己開頁面,SPEC §4)。
 - **不要在 background 用動態 `import()`**(MV3 service worker 規格禁止,會在真實瀏覽器才炸;一律靜態匯入)。
 - **不要在 background 直接呼叫 `chrome.notifications.create`**:一律走 `background/notify.js`
@@ -253,8 +254,8 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   只驗「DOM 元素被移除」的測試抓不到這種殘留,要驗「連續選兩次」的行為。
 - **掃描 + 迴圈型的測試要先斷言掃到的集合不是空的**:對空集合跑 `for` 迴圈一定通過
   (實例:掃 `ui.css` 的 `font-size: Npx`,但它全用 `var(--text-*)`,把 token 改成 8px 也不會紅)。
-- **`ui/ui.css` 不留沒有任何頁面使用的類別**:它只服務 `picker.html`、`site.html` 與 `help/help.html`
-  (Report 有自己那一份、選取模式 overlay 拿不到樣式表),定義了卻沒人掛的類別就是死規則。
+- **`ui/ui.css` 不留沒有任何頁面使用的類別**:所有擴充功能頁都載入它(選取模式 overlay 拿不到樣式表),
+  掃描範圍是 `src/ui/` 全部 HTML 與 JS 動態掛的類別(`p6` E-4、`p4` 守),定義了卻沒人掛的類別就是死規則。
 - **樣式不要用 `content: attr(...)` 指向沒有人設定的屬性**:動態產生的清單不會帶你想像的
   `data-*`,那條規則會永遠是空白的死規則(序號一類用 CSS 計數器)。
 - **跨文件邊界送訊息前不能假設文件還是原來那一個**:前置動作的點擊常常讓頁面換頁,
