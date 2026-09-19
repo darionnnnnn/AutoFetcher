@@ -58,6 +58,25 @@ async function startRepick(t) {
   }
 }
 
+// 錯過清單與空窗的動作（補抓／略過／知道了）：ok:false 與 sendMessage 被拒都要在 #task-note 說出原因，不得靜默。
+// 橫幅每次資料變動會整份重畫，所以訊息放在橫幅外的 #task-note。回傳是否成功
+async function sendMissedAction(msg, label) {
+  let res
+  try {
+    res = await chrome.runtime.sendMessage(msg)
+  } catch (e) {
+    const note = document.getElementById('task-note')
+    if (note) note.textContent = `${label}沒有完成：${e?.message || e || '背景沒有回應'}`
+    return false
+  }
+  if (res?.ok === false) {
+    const note = document.getElementById('task-note')
+    if (note) note.textContent = `${label}沒有完成：${res.error || '背景處理失敗'}`
+    return false
+  }
+  return true
+}
+
 // 站台的登入頁：有設定站台登入就用它的 loginUrl，否則退回任務網址
 async function openLoginPage(t) {
   let origin = ''
@@ -968,11 +987,8 @@ export function renderTasks(tasks, health = {}, missed = [], ctx = {}) {
         catchUpBtn.addEventListener('click', async () => {
           for (const { checkbox, item } of itemRows) {
             if (checkbox.checked) {
-              await chrome.runtime.sendMessage({
-                type: MSG.CATCH_UP_ONE,
-                taskId: item.taskId,
-                slot: item.slot
-              })
+              const ok = await sendMissedAction({ type: MSG.CATCH_UP_ONE, taskId: item.taskId, slot: item.slot }, '補抓')
+              if (!ok) return
             }
           }
         })
@@ -985,11 +1001,8 @@ export function renderTasks(tasks, health = {}, missed = [], ctx = {}) {
         skipBtn.addEventListener('click', async () => {
           for (const { checkbox, item } of itemRows) {
             if (checkbox.checked) {
-              await chrome.runtime.sendMessage({
-                type: MSG.SKIP_ONE,
-                taskId: item.taskId,
-                slot: item.slot
-              })
+              const ok = await sendMissedAction({ type: MSG.SKIP_ONE, taskId: item.taskId, slot: item.slot }, '略過')
+              if (!ok) return
             }
           }
         })
@@ -1013,7 +1026,7 @@ export function renderTasks(tasks, health = {}, missed = [], ctx = {}) {
         ackBtn.dataset.action = 'ack-gap'
         ackBtn.textContent = '知道了'
         ackBtn.addEventListener('click', async () => {
-          await chrome.runtime.sendMessage({ type: MSG.SKIP_ONE, taskId: m.taskId, slot: m.slot })
+          await sendMissedAction({ type: MSG.SKIP_ONE, taskId: m.taskId, slot: m.slot }, '知道了')
         })
         row.appendChild(ackBtn)
         banner.appendChild(row)

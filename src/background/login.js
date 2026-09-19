@@ -1,5 +1,5 @@
 // AutoFetcher 自動登入流程（SPEC §6）
-import { getSite, saveSite } from '../shared/storage.js'
+import { getSite, updateSite } from '../shared/storage.js'
 import { decryptSecret } from '../shared/crypto.js'
 import { injectContent } from './inject.js'
 import { notify } from './notify.js'
@@ -30,18 +30,26 @@ function getOrigin(url) {
 }
 
 // 處理登入失敗邏輯（累計失敗次數、滿三次停用並通知）
-async function recordLoginFailure(origin, site, deadlineAt = Infinity) {
+// 在 sites 鎖內以最新站台為底，只改 failStreak／enabled（使用者在登入途中存的密碼等欄位不得被舊副本蓋掉）
+async function recordLoginFailure(origin, deadlineAt = Infinity) {
   // 失敗是因為這一次抓取的總時限到了（等待被截短），不是帳密或頁面的問題：不累加、不停用
   if (Date.now() >= deadlineAt) return { ok: false, reason: '超過單次抓取時限' }
-  site.failStreak = (site.failStreak || 0) + 1
-  if (site.failStreak === 3) {
-    site.enabled = false
+  let disabledNow = false
+  await updateSite(origin, (latest) => {
+    latest.failStreak = (latest.failStreak || 0) + 1
+    if (latest.failStreak === 3) {
+      latest.enabled = false
+      disabledNow = true
+    }
+    return latest
+  })
+  // 通知放在鎖外
+  if (disabledNow) {
     await notify(`site:${origin}:disabled`, {
       title: 'AutoFetcher',
       message: `站台「${origin}」連續登入失敗 3 次，已自動停用自動登入。可至設定頁面重新啟用。`
     })
   }
-  await saveSite(origin, site)
   return { ok: false, reason: '無法登入' }
 }
 
@@ -225,7 +233,7 @@ export async function ensureLoggedIn(tabId, task, opts) {
   try {
     plainPassword = await decryptSecret(site.passwordEnc)
   } catch {
-    return await recordLoginFailure(origin, site, t.deadlineAt)
+    return await recordLoginFailure(origin, t.deadlineAt)
   }
 
   // 6～7. 填表、送出、等載入、判定（與測試登入同一份）
@@ -233,13 +241,16 @@ export async function ensureLoggedIn(tabId, task, opts) {
 
   // 8. 登入成功：歸零失敗計數並寫回
   if (res.ok) {
-    site.failStreak = 0
-    await saveSite(origin, site)
+    await updateSite(origin, (latest) => {
+      if (latest.failStreak === 0) return null
+      latest.failStreak = 0
+      return latest
+    })
     return { ok: true, attempted: true }
   }
 
   // 9. 登入失敗：累計次數並寫回（失敗計數、停用、通知只在這一層）
-  const fail = await recordLoginFailure(origin, site, t.deadlineAt)
+  const fail = await recordLoginFailure(origin, t.deadlineAt)
   return res.attempted ? { ...fail, attempted: true } : fail
 }
 

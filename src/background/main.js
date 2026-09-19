@@ -1,6 +1,6 @@
 // AutoFetcher MV3 Background Service Worker 入口總接線
 import {
-  init as initStorage, getTask, updateTasks, getRecordsByDate, updateRepickTabs,
+  init as initStorage, getTask, updateTasks, getRecordsByDate, updateRepickTabs, getRepickTabs,
   getPanelCtx, setPanelCtx, mergePanelCtx, clearPanelCtx,
   getSettings, subscribe, deleteLastValues, getSite
 } from '../shared/storage.js'
@@ -448,6 +448,28 @@ async function applyPickEntry(tabId, batch) {
 // 那幾則都是頁面上立刻完成的動作，回應遺失時不要吊到 worker 被回收
 const CONTENT_MESSAGE_TIMEOUT_MS = 10000
 
+// forbidden 診斷節流（AF-21 終檢）：同一來源（sender.url 的 origin）＋同一型別 60 秒內只寫一筆。
+// 網頁若一直送，diag 環形緩衝會被洗掉；計數放模組層即可（worker 重啟歸零無妨）
+const FORBIDDEN_LOG_WINDOW_MS = 60 * 1000
+const forbiddenLoggedAt = new Map()
+
+function originOfUrl(url) {
+  try { return new URL(String(url ?? '')).origin } catch { return String(url ?? '') }
+}
+
+async function logForbidden(sender, type, detail) {
+  const key = `${originOfUrl(sender?.url)}|${type}`
+  const now = Date.now()
+  const last = forbiddenLoggedAt.get(key)
+  if (typeof last === 'number' && now - last < FORBIDDEN_LOG_WINDOW_MS) return
+  forbiddenLoggedAt.set(key, now)
+  // 過期的鍵順手清掉，Map 不會越長越大
+  for (const [k, at] of forbiddenLoggedAt) {
+    if (now - at >= FORBIDDEN_LOG_WINDOW_MS) forbiddenLoggedAt.delete(k)
+  }
+  await diag.log('forbidden', detail)
+}
+
 // 本擴充功能的來源取自 getURL('')（＝ chrome-extension://<runtime.id>/）
 async function isFromContentScript(sender) {
   if (!sender?.tab) return false
@@ -498,7 +520,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
     // sender 守門（AF-21 批次 3 定案 3）：有 tab 且網址不是本擴充功能頁 → content script，
     // 只准送 CONTENT_ALLOWED 內的型別。Report 開在分頁裡也有 tab，所以要連網址一起看
     if (await isFromContentScript(sender) && !CONTENT_ALLOWED.has(msg.type)) {
-      await diag.log('forbidden', `${msg.type} 來自 ${sender.url}`)
+      await logForbidden(sender, msg.type, `${msg.type} 來自 ${sender.url}`)
       return { ok: false, error: 'forbidden' }
     }
 
@@ -608,8 +630,10 @@ export async function handleMessage(msg, sender, runOpts = {}) {
 
       if (msg.cancelled === true) {
         // 取消也要收掉「為了重選而開的那個分頁」，否則每取消一次殘留一個
+        // 只有那個重選分頁自己送的取消才收掉它（任何網頁送一個取消就能關掉我們開的分頁，AF-21 終檢）
         if (msg.purpose === 'repick' && msg.taskId !== undefined) {
-          await closeRepickTab(msg.taskId)
+          const expected = (await getRepickTabs())[msg.taskId]
+          if (!sender?.tab || sender.tab.id === expected) await closeRepickTab(msg.taskId)
         }
         return { ok: true }
       }
@@ -644,6 +668,14 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       }
 
       if (msg.purpose === 'repick') {
+        // 只認「為了重選而開的那個分頁」送來的（AF-21 終檢）：別的網頁的 content script 也送得出 PICKED，
+        // 不核對分頁的話任何頁面都能改掉任意任務的定位
+        const expectedTab = (await getRepickTabs())[msg.taskId]
+        const senderTab = sender?.tab?.id
+        if (typeof expectedTab !== 'number' || senderTab !== expectedTab) {
+          await logForbidden(sender, 'PICKED:repick', `重選 ${msg.taskId} 來自分頁 ${senderTab}（${sender?.url}），不是重選開的分頁 ${expectedTab}`)
+          return { ok: false, error: 'forbidden' }
+        }
         // 鎖內讀最新的任務再套用重選，不會把同時寫入的 notFoundStreak 之類洗掉
         let orphanSeries = []
         const [task] = await updateTasks([msg.taskId], (t) => {

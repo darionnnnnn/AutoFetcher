@@ -54,7 +54,7 @@ test('清單外的每一種型別從 content script 送來都被拒（新增型�
 test('content script 送允許的型別照常處理', async () => {
   const { bg } = await fresh()
   const res = await bg.handleMessage({ type: MSG.PICKED, purpose: 'task', cancelled: true }, CONTENT)
-  assert.notDeepEqual(res, { ok: false, error: 'forbidden' })
+  assert.deepEqual(res, { ok: true }, '允許的型別要真的被處理（PICKED 取消回 ok:true）')
 })
 
 test('Report 分頁（有 sender.tab，但網址是擴充功能頁）送 RUN_TASK 不被當成 content script', async () => {
@@ -62,7 +62,7 @@ test('Report 分頁（有 sender.tab，但網址是擴充功能頁）送 RUN_TAS
   await st.saveTask(task)
   c.__setTabResponder(() => ({ ok: true, value: 3, raw: '3', status: 'ok', strategyUsed: 'auto', layer: 'css' }))
   const res = await bg.handleMessage({ type: MSG.RUN_TASK, taskId: 't1' }, REPORT_TAB, { pollMs: 1, loadTimeoutMs: 100, extraDelayMs: 0, extractTimeoutMs: 100 })
-  assert.notDeepEqual(res, { ok: false, error: 'forbidden' })
+  assert.equal(res?.ok, true, `RUN_TASK 要照常處理：${JSON.stringify(res)}`); assert.equal(res.outcome, 'done', '抓取要真的跑完')
 })
 
 test('沒有 sender（side panel、popup 或既有測試）照常處理', async () => {

@@ -144,6 +144,9 @@ function getOrigin(url) {
 const LATE_AFTER_MS = 30 * 60 * 1000
 // 別的 worker 留下的 runState 項目：這麼久以內續跑，超過就記 interrupted（定案 4，暫定值）
 const RECOVER_WITHIN_MS = 10 * 60 * 1000
+// 同一個 worker 自己的 running 項目：跑超過「單次總時限上限＋30 秒」一定是卡住了（AF-21 終檢），
+// 比照超過 RECOVER_WITHIN_MS 的處理（寫 interrupted、daily 進錯過清單、移除）
+const STUCK_RUNNING_MS = RUN_BUDGET_MAX_MS + 30 * 1000
 
 // 這一次開始抓的時刻比排程槽晚超過 LATE_AFTER_MS（呼叫端用它算出 runTask 的 markLate）
 export function isLateStart(slot, nowMs) {
@@ -162,11 +165,13 @@ async function putRunState(key, entry) {
   await updateRunState((cur) => ({ ...cur, [key]: entry }))
 }
 
-// 只改自己那一項的狀態（項目已被移除就不復活它）
+// 只改自己那一項的狀態（項目已被移除就不復活它）；轉成 running 時記下開始跑的時刻 runningAt
+// （at 是進佇列的時刻，排隊的時間不算進總時限，判定卡住要從開始跑算）
 async function markRunState(key, state) {
+  const runningAt = Date.now()
   await updateRunState((cur) => {
     if (!cur[key]) return undefined
-    cur[key] = { ...cur[key], state }
+    cur[key] = state === 'running' ? { ...cur[key], state, runningAt } : { ...cur[key], state }
     return cur
   })
 }
@@ -200,11 +205,21 @@ function parseRunStateKey(key) {
  * 復原上一個 worker 留下的排隊中／執行中項目（worker 啟動與看門狗每輪呼叫）。
  * 只處理 boot 不是現在這個 worker 的項目；boot 相同的是自己正在跑的，一律不碰。
  * runOpts 只給測試縮短等待，正式呼叫不傳。
+ * `detach: true`（看門狗用）：續跑的 runTask 不 await，同一輪的其他清理不必等它跑完；
+ * 它的例外接住寫診斷（run_state_error）。回傳這一輪續跑的 Promise 陣列（呼叫端可不理）。
  */
-export async function recoverRunState(runOpts = {}) {
+export async function recoverRunState(runOpts = {}, { detach = false } = {}) {
+  const resumed = []
   const state = await getRunState()
   for (const [key, entry] of Object.entries(state)) {
-    if (!entry || entry.boot === BOOT) continue
+    if (!entry) continue
+    // 自己這個 worker 的項目：只有 running 且跑超過 STUCK_RUNNING_MS 的算卡住，其餘不碰
+    let stuck = false
+    if (entry.boot === BOOT) {
+      const startedAt = typeof entry.runningAt === 'number' ? entry.runningAt : (typeof entry.at === 'number' ? entry.at : null)
+      if (entry.state !== 'running' || startedAt === null || Date.now() - startedAt <= STUCK_RUNNING_MS) continue
+      stuck = true
+    }
     const parsed = parseRunStateKey(key)
     if (!parsed) {
       await dropRunState(key)
@@ -215,15 +230,22 @@ export async function recoverRunState(runOpts = {}) {
     const at = typeof entry.at === 'number' ? entry.at : 0
     // 先拿走再處理：續跑會用同一個鍵登記自己（帶現在的 boot）；沒拿到＝另一個復原已經在處理
     if (!(await takeRunState(key))) continue
-    if (Date.now() - at <= RECOVER_WITHIN_MS) {
+    if (!stuck && Date.now() - at <= RECOVER_WITHIN_MS) {
       if (!task || task.enabled === false) continue
-      await runTask(task, {
+      const run = runTask(task, {
         slot,
         attempt: typeof entry.attempt === 'number' ? entry.attempt : 1,
         reason: typeof entry.reason === 'string' ? entry.reason : 'scheduled',
         markLate: isLateStart(slot, Date.now()),
         ...runOpts
       })
+      if (detach) {
+        resumed.push(run.catch(async (err) => {
+          try { await diag.log('run_state_error', `續跑 ${key}：${String(err?.message || err)}`) } catch {}
+        }))
+      } else {
+        await run
+      }
       continue
     }
     if (task) {
@@ -246,6 +268,7 @@ export async function recoverRunState(runOpts = {}) {
       }
     }
   }
+  return resumed
 }
 
 // 清掉「找不到元素」的連續次數與前景建議（抓到了就歸零）；鎖內讀最新任務，沒有要清的就不寫

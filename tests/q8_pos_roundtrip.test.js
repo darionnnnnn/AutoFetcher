@@ -29,6 +29,7 @@ const posTask = (over = {}) => ({
 test('單值任務重選之後，使用者選的定位方式要留著', async () => {
   const { st, bg } = await freshBg()
   await st.saveTask(posTask())
+  await chrome.storage.session.set({ repickTabs: { 't1': 3 } })
   await bg.handleMessage({
     type: 'PICKED', purpose: 'repick', taskId: 't1', locator: { css: '#t' },
     picks: [{ cell: { row: { index: 4, header: '115/09/08' }, col: { index: 2, header: '成交金額' } } }]
@@ -54,6 +55,7 @@ test('多值任務重選之後，既有的值不得換 key（換了歷史紀錄�
   await st.saveTask(multi)
 
   // 重選送回來的 picks 沒有 pos（選取模式不知道使用者設了什麼定位方式）
+  await chrome.storage.session.set({ repickTabs: { 't1': 3 } })
   await bg.handleMessage({
     type: 'PICKED', purpose: 'repick', taskId: 't1', locator: { css: '#t' },
     picks: [
@@ -83,6 +85,7 @@ test('重選新增的值，用位置定位的軸不放會過期的標題', async
   delete multi.spec.block
   await st.saveTask(multi)
 
+  await chrome.storage.session.set({ repickTabs: { 't1': 3 } })
   await bg.handleMessage({
     type: 'PICKED', purpose: 'repick', taskId: 't1', locator: { css: '#t' },
     picks: [

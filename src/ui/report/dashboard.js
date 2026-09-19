@@ -1,8 +1,9 @@
 import {
-  getLayout, saveLayout, addDashboard, renameDashboard,
+  getLayout, addDashboard, renameDashboard,
   deleteDashboard, duplicateDashboard, reorderDashboards,
-  setLastDashboard, addCard, updateCard
+  setLastDashboard, addCard, updateCard, arrangeCards, applyLayoutStep
 } from '../../shared/layout-store.js'
+import { confirmDialog } from '../modal.js'
 import { getRecordsInRange, getTasks, getHealthMap, getMissedList } from '../../shared/storage.js'
 import { renderCard } from './cards.js'
 import { resolvePeriod } from './series.js'
@@ -22,7 +23,6 @@ let currentDashId = null
 const undoStack = []
 const redoStack = []
 let activeOp = null
-let dashIdPendingDelete = null
 let templateKindPending = null
 let tabDrag = null
 let toastTimer = null
@@ -69,18 +69,26 @@ export function isEditing() {
 }
 
 /**
- * 把目前版面推進歷史堆疊（上限 50 步）
+ * 把目前版面推進歷史堆疊（上限 50 步）。每一步記「操作前」，操作寫完後 sealHistory 補上「操作後」；
+ * 復原／重做只把這兩份之間的差異套到最新版面（applyLayoutStep），不整份蓋回
  */
 export async function pushHistory(snapshot) {
   if (!snapshot) {
     const layout = await getLayout()
     snapshot = layout.dashboards
   }
-  undoStack.push(structuredClone(snapshot))
+  undoStack.push({ before: structuredClone(snapshot), after: null })
   if (undoStack.length > 50) {
     undoStack.shift()
   }
   redoStack.length = 0
+}
+
+// 最近一步操作寫完之後記下「操作後」的版面
+async function sealHistory() {
+  const top = undoStack[undoStack.length - 1]
+  if (!top || top.after) return
+  top.after = structuredClone((await getLayout()).dashboards)
 }
 
 /**
@@ -90,17 +98,23 @@ export function historySize() {
   return undoStack.length
 }
 
+// 序列是否還在任務清單裡（復原／重做不讓已刪的序列回到卡片上）
+async function liveSeriesCheck() {
+  let tasks = []
+  try { tasks = await getTasks() } catch {}
+  const idx = buildSeriesIndex(tasks)
+  return (id) => typeof id === 'string' && (Boolean(idx.byId[id]) || Boolean(idx.parents[id]))
+}
+
 /**
  * 復原上一步
  */
 export async function undo() {
   if (undoStack.length === 0) return
-  const layout = await getLayout()
-  redoStack.push(structuredClone(layout.dashboards))
-
-  const prevDashboards = undoStack.pop()
-  layout.dashboards = prevDashboards
-  await saveLayout(layout)
+  const step = undoStack.pop()
+  if (!step.after) step.after = structuredClone((await getLayout()).dashboards)
+  redoStack.push(step)
+  await applyLayoutStep(step.after, step.before, await liveSeriesCheck())
   await renderDashboard(currentDashId)
 }
 
@@ -109,15 +123,12 @@ export async function undo() {
  */
 export async function redo() {
   if (redoStack.length === 0) return
-  const layout = await getLayout()
-  undoStack.push(structuredClone(layout.dashboards))
+  const step = redoStack.pop()
+  undoStack.push(step)
   if (undoStack.length > 50) {
     undoStack.shift()
   }
-
-  const nextDashboards = redoStack.pop()
-  layout.dashboards = nextDashboards
-  await saveLayout(layout)
+  await applyLayoutStep(step.before, step.after, await liveSeriesCheck())
   await renderDashboard(currentDashId)
 }
 
@@ -308,25 +319,27 @@ async function onPointerUp(e) {
   const dash = layout.dashboards.find(d => d.id === currentDashId) || layout.dashboards[0]
   if (!dash) return
 
-  let changed = false
   const snapshot = structuredClone(layout.dashboards)
 
+  // 在 layout 鎖內以最新卡片重排，只寫位置與大小（背景同時修剪掉的來源／卡片不會被這裡的舊副本蓋回）
+  let arrange = null
   if (op.type === 'drag') {
     if (op.targetX !== op.card.x || op.targetY !== op.card.y) {
-      changed = true
-      const target = { ...op.card, x: op.targetX, y: op.targetY }
-      dash.cards = placeCard(dash.cards, target)
+      arrange = (cards) => {
+        const fresh = cards.find(c => c.id === op.card.id)
+        return fresh ? placeCard(cards, { ...fresh, x: op.targetX, y: op.targetY }) : cards
+      }
     }
   } else if (op.type === 'resize') {
     if (op.targetW !== op.card.w || op.targetH !== op.card.h) {
-      changed = true
-      dash.cards = compact(resizeCard(dash.cards, op.card.id, op.targetW, op.targetH))
+      arrange = (cards) => compact(resizeCard(cards, op.card.id, op.targetW, op.targetH))
     }
   }
 
-  if (changed) {
+  if (arrange) {
     await pushHistory(snapshot)
-    await saveLayout(layout)
+    await arrangeCards(dash.id, arrange)
+    await sealHistory()
     await renderDashboard(dash.id)
   }
 }
@@ -393,8 +406,7 @@ function setupEvents(grid) {
       const layout = await getLayout()
       const dash = layout.dashboards.find(d => d.id === currentDashId) || layout.dashboards[0]
       if (dash) {
-        dash.cards = autoArrange(dash.cards)
-        await saveLayout(layout)
+        await arrangeCards(dash.id, (cards) => autoArrange(cards))
         await renderDashboard(dash.id)
       }
     })
@@ -445,33 +457,6 @@ function setupEvents(grid) {
         await renderDashboard(currentDashId)
       }
     })
-  }
-
-  const deleteConfirm = document.getElementById('dashboard-delete-confirm')
-  if (deleteConfirm && !deleteConfirm._dashboardDeleteAttached) {
-    deleteConfirm._dashboardDeleteAttached = true
-    const cancelBtn = deleteConfirm.querySelector('[data-action="cancel"]')
-    if (cancelBtn) {
-      cancelBtn.addEventListener('click', () => {
-        deleteConfirm.hidden = true
-        dashIdPendingDelete = null
-      })
-    }
-    const confirmBtn = deleteConfirm.querySelector('[data-action="confirm"]')
-    if (confirmBtn) {
-      confirmBtn.addEventListener('click', async () => {
-        deleteConfirm.hidden = true
-        if (dashIdPendingDelete) {
-          const targetId = dashIdPendingDelete
-          dashIdPendingDelete = null
-          await deleteDashboard(targetId)
-          const l = await getLayout()
-          const nextId = l.dashboards[0]?.id
-          if (nextId) await setLastDashboard(nextId)
-          await renderDashboard(nextId)
-        }
-      })
-    }
   }
 
   const emptyEl = document.getElementById('dashboard-empty')
@@ -868,6 +853,7 @@ function registerCardDropTarget(cardEl, card, ctx) {
       if (await mergeIntoDraft(currentDashId, card.id, cardPatch)) return
       await pushHistory()
       await updateCard(currentDashId, card.id, cardPatch)
+      await sealHistory()
       await renderDashboard(currentDashId)
     }
   })
@@ -937,6 +923,7 @@ function registerGridDropTarget(grid) {
         if (draft && await mergeIntoDraft(currentDash.id, cardId, patch)) return
         await pushHistory()
         await updateCard(currentDash.id, cardId, patch)
+        await sealHistory()
         await renderDashboard(currentDash.id)
         return
       }
@@ -990,6 +977,7 @@ function registerGridDropTarget(grid) {
 
         await pushHistory()
         await addCard(currentDash.id, newCard)
+        await sealHistory()
         await renderDashboard(currentDash.id)
       }
     }
@@ -1070,11 +1058,22 @@ export async function renderDashboard(dashId) {
       delBtn.type = 'button'
       delBtn.dataset.action = 'delete'
       setIcon(delBtn, 'trash', { label: '刪除儀表板' })
-      delBtn.addEventListener('click', (e) => {
+      delBtn.addEventListener('click', async (e) => {
         e.stopPropagation()
-        dashIdPendingDelete = d.id
-        const confirmDlg = document.getElementById('dashboard-delete-confirm')
-        if (confirmDlg) confirmDlg.hidden = false
+        // 確認一律走共用 modal（AF-21 終檢）
+        const ok = await confirmDialog({
+          title: '刪除儀表板',
+          body: `確定要刪除儀表板「${d.name}」嗎？上面的卡片會一起刪除，紀錄不受影響。`,
+          confirmText: '刪除',
+          cancelText: '取消',
+          danger: true
+        })
+        if (ok !== true) return
+        await deleteDashboard(d.id)
+        const l = await getLayout()
+        const nextId = l.dashboards[0]?.id
+        if (nextId) await setLastDashboard(nextId)
+        await renderDashboard(nextId)
       })
       delBtn.addEventListener('pointerdown', (e) => {
         e.stopPropagation()

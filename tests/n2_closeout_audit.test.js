@@ -41,6 +41,7 @@ const sendTo = (c, msg, sender = {}) => new Promise((resolve, reject) => {
 test('重選時加了一個值、拿掉一個值，任務要跟著變', async () => {
   const { c, st } = await freshBg()
   await st.saveTask(multi())
+  await chrome.storage.session.set({ repickTabs: { 'bank': 3 } })
   await sendTo(c, {
     type: 'PICKED', purpose: 'repick', taskId: 'bank', locator: { css: '#rate2' },
     blockInfo: { kind: 'table' },
@@ -68,6 +69,7 @@ test('單值任務重選另一欄，規格要跟著換', async () => {
     spec: { strategy: 'auto', mode: 'block', block: { axis: 'col', index: 1, headerText: '數量', aggregate: 'avg' } },
     schedule: { type: 'daily', times: ['09:30'] }
   })
+  await chrome.storage.session.set({ repickTabs: { 't1': 3 } })
   await sendTo(c, {
     type: 'PICKED', purpose: 'repick', taskId: 't1', locator: { css: '#t' },
     blockInfo: { kind: 'table' },

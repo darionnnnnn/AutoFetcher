@@ -606,6 +606,7 @@ test('重選存回任務時，pick 上多出來的欄位不得進規格（進了
     schedule: { type: 'daily', times: ['09:30'] }
   }
   await st.saveTask(task)
+  await chrome.storage.session.set({ repickTabs: { 'rp': 5 } })
   await sendTo(c, {
     type: 'PICKED',
     purpose: 'repick',
@@ -634,6 +635,7 @@ test('多值任務的預設值名不得用純數值標題', async () => {
     schedule: { type: 'daily', times: ['09:30'] }
   }
   await st.saveTask(task)
+  await chrome.storage.session.set({ repickTabs: { 'mv': 5 } })
   await sendTo(c, {
     type: 'PICKED',
     purpose: 'repick',

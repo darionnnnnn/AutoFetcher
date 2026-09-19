@@ -188,7 +188,7 @@ test('B-6 重選存檔後要重建排程、更新燈號，並收掉自己開的�
   await bg.handleMessage({
     type: 'PICKED', purpose: 'repick', taskId: 't1',
     locator: { css: '#new', path: '', anchor: null, xpath: '' }, picks: []
-  }, { tab: { id: 99 } })
+  }, { tab: { id: (await chrome.storage.session.get('repickTabs')).repickTabs.t1 } })
 
   assert.ok(api(c, 'alarms.create').length > before, '定位換了要重建排程')
   assert.ok(api(c, 'tabs.remove').length >= 1, '為了重選開的分頁要收掉，不然每次留一個')

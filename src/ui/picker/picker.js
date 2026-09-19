@@ -59,6 +59,22 @@ function showErrorText(text) {
   saveGuard()?.message(text)
 }
 
+// 「在頁面上選取」「回頁面重選目標」送出 ENTER_PICK 之後：ok:false 或被拒都要在守門區說出原因，不得靜默
+async function reportEnterPick(pending) {
+  let res
+  try {
+    res = await pending
+  } catch (e) {
+    showErrorText(`沒有進入選取模式：${e?.message || e || '背景沒有回應'}`)
+    return false
+  }
+  if (res?.ok === false) {
+    showErrorText(`沒有進入選取模式：${res.error || '背景處理失敗'}`)
+    return false
+  }
+  return true
+}
+
 // 批次「全部試抓」進行中：儲存鈕只標 aria-disabled，被按時就地說原因（不得靜默）
 let batchTesting = false
 const BATCH_TESTING_TEXT = '試抓進行中，完成後才能儲存'
@@ -2207,10 +2223,10 @@ function addPreActionRow(data = {}) {
   pickBtn.type = 'button'
   pickBtn.setAttribute('data-action', 'preaction-pick')
   pickBtn.textContent = '在頁面上選取'
-  pickBtn.addEventListener('click', () => {
+  pickBtn.addEventListener('click', async () => {
     lastPreActionPickRow = row
     if (globalThis.chrome?.runtime?.sendMessage) {
-      chrome.runtime.sendMessage({
+      await reportEnterPick(chrome.runtime.sendMessage({
         type: MSG.ENTER_PICK,
         purpose: 'preaction',
         // 批次畫面沒有單一的 ctx(逐項 render 之前 `currentCtx` 是 null):不帶 tabId 的話 background 靜默回 ok:false
@@ -2220,7 +2236,7 @@ function addPreActionRow(data = {}) {
         // 按鈕是外層的頁籤）。進到值所在的 frame 就選不到外層的按鈕了——
         // 選取模式只能往下鑽、回不去（SPEC §2）。
         frameId: 0
-      })
+      }))
     }
   })
 
@@ -3083,7 +3099,7 @@ export async function handleTestNow() {
   if (!values.url && currentCtx?.url) values.url = currentCtx.url
   // buildTask 內部會呼叫 buildSpec(values) 組出規格
   const task = taskFromForm(values, currentCtx)
-  // 這個任務不會被儲存，id 只是讓 runTask 的 inflight 鍵有個名字
+  // 這個任務不會被儲存，id 只是讓 runTask（佇列與診斷）有個名字；試抓不登記 runState、不寫帳本
   task.id = '__preview'
 
   try {
@@ -3506,12 +3522,10 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
   // 守門原因「還沒選要抓的內容」點下去也走這一顆（repickTarget 轉按它），行為只有這一份
   document.getElementById('repick-target')?.addEventListener('click', async () => {
     if (panelTabId === null) return
-    try {
-      await chrome.runtime.sendMessage({
-        type: MSG.ENTER_PICK, purpose: 'task', tabId: panelTabId, frameId: 0,
-        preselect: Array.isArray(currentCtx?.picks) ? currentCtx.picks : undefined
-      })
-    } catch {}
+    await reportEnterPick(chrome.runtime.sendMessage({
+      type: MSG.ENTER_PICK, purpose: 'task', tabId: panelTabId, frameId: 0,
+      preselect: Array.isArray(currentCtx?.picks) ? currentCtx.picks : undefined
+    }))
   })
   document.getElementById('test-now')?.addEventListener('click', () => handleTestNow())
   document.getElementById('export-diag')?.addEventListener('click', () => handleExportDiag())

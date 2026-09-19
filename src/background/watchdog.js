@@ -95,8 +95,8 @@ async function cleanStaleAlarms() {
   }
 }
 
-// 執行看門狗檢查巡迴
-export async function runWatchdog() {
+// 執行看門狗檢查巡迴（runOpts 只給測試縮短續跑的等待，正式接線不傳）
+export async function runWatchdog(runOpts = {}) {
   try {
     await checkWatchdogAlarm()
   } catch {}
@@ -139,8 +139,9 @@ export async function runWatchdog() {
   } catch {}
 
   try {
-    // 上一個 worker 留下的排隊中／執行中排程槽：續跑或記 interrupted（本 worker 的項目不碰）
-    await recoverRunState()
+    // 上一個 worker 留下的排隊中／執行中排程槽：續跑或記 interrupted（本 worker 只處理卡住的 running）。
+    // 續跑不 await（detach）：一次抓取可以跑上數分鐘，不得讓下面的 refreshMissed／孤兒分頁清理等它
+    await recoverRunState(runOpts, { detach: true })
   } catch {}
 
   // 喚醒後也算錯過（筆電闔上再打開、瀏覽器沒重啟時 onStartup 不會跑）：

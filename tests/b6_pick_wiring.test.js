@@ -92,6 +92,7 @@ test('purpose=task:選完才開 Picker 視窗,且帶上 locator 與區塊資訊'
 test('purpose=repick:直接更新任務的 locator,不開視窗', async () => {
   const { c, st, bg } = await fresh()
   await st.saveTask(task())
+  await chrome.storage.session.set({ repickTabs: { 't1': 7 } })
   await bg.handleMessage({
     type: 'PICKED', purpose: 'repick', taskId: 't1',
     locator: { css: '#new', path: '', anchor: null, xpath: '' },
@@ -104,6 +105,7 @@ test('purpose=repick:直接更新任務的 locator,不開視窗', async () => {
 
 test('purpose=repick 指到不存在的任務時安靜略過,不丟例外也不建任務', async () => {
   const { st, bg } = await fresh()
+  await chrome.storage.session.set({ repickTabs: { 'nope': 7 } })
   await assert.doesNotReject(() => bg.handleMessage({
     type: 'PICKED', purpose: 'repick', taskId: 'nope',
     locator: { css: '#new' }, blockInfo: { kind: 'number' }

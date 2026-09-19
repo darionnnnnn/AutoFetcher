@@ -341,7 +341,7 @@ test('6 設定頁兩顆匯出鈕是次要；report.css 不再用 id／屬性選�
     assert.ok(!css.includes(sel), `report.css 還有 ${sel}`)
   }
   // 刪除類確認一律 danger，不當主要按鈕
-  for (const id of ['dashboard-delete-confirm', 'drawer-delete-confirm']) {
+  for (const id of ['drawer-delete-confirm']) {
     const b = doc.querySelector(`#${id} [data-action="confirm"]`)
     assert.ok(b.classList.contains('btn-danger') && !b.classList.contains('btn-primary'), id)
   }

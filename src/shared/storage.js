@@ -523,6 +523,28 @@ export async function saveSites(entries) {
   await mutateKey('sites', (current) => ({ ...asObject(current), ...patch }))
 }
 
+/**
+ * 在 sites 鎖內讀最新的那一個站台 → mutator(副本) 回傳新站台物件或 null（不改）→ 寫回。
+ * 站台不存在就不呼叫 mutator、不寫。只改自己擁有的欄位時用它，不要拿先前讀到的舊副本 saveSite 整筆寫回。
+ * @returns {Promise<object|null>} 寫入後的站台；沒寫時回傳現有站台（不存在則 null）
+ */
+export async function updateSite(origin, mutator) {
+  let result = null
+  await mutateKey('sites', async (current) => {
+    const sites = asObject(current)
+    const site = sites[origin]
+    if (!site || typeof site !== 'object') return undefined
+    const next = await mutator(structuredClone(site))
+    if (!next || typeof next !== 'object') {
+      result = site
+      return undefined
+    }
+    result = next
+    return { ...sites, [origin]: next }
+  })
+  return result
+}
+
 // 刪除單一站台設定
 export async function deleteSite(origin) {
   await mutateKey('sites', (current) => {

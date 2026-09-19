@@ -47,19 +47,31 @@ export async function notify(id, options) {
   }
 }
 
-// 冷卻判定：通過就在同一次鎖內記帳並回 true；被擋回 false（不寫）
+// 冷卻判定：通過就在同一次鎖內記帳並回 { prev, entry }（prev 是記帳前的那一筆，可能是 undefined）；被擋回 null（不寫）
 async function claimFailure(key, status, nowMs) {
-  let pass = false
+  let claim = null
   await updateNotifyLog((logMap) => {
     const prev = logMap[key]
     if (prev && prev.status === status && typeof prev.at === 'number' && nowMs - prev.at < FAILURE_COOLDOWN_MS) {
       return undefined
     }
-    pass = true
-    logMap[key] = { status, at: nowMs }
+    claim = { prev, entry: { status, at: nowMs } }
+    logMap[key] = claim.entry
     return logMap
   })
-  return pass
+  return claim
+}
+
+// 通知沒建成（notify 回 false）：撤回剛記的那筆冷卻，同狀態下一次仍會通知。
+// 只在那一筆還是自己記的時候撤（期間別人記了新的就不動）；原本有舊紀錄就放回舊的
+async function releaseFailure(key, claim) {
+  await updateNotifyLog((logMap) => {
+    const cur = logMap[key]
+    if (!cur || cur.status !== claim.entry.status || cur.at !== claim.entry.at) return undefined
+    if (claim.prev === undefined) delete logMap[key]
+    else logMap[key] = claim.prev
+    return logMap
+  })
 }
 
 // 通知是否開著（關著時連冷卻帳本都不記：之後打開要照常通知）
@@ -78,9 +90,12 @@ async function notificationsOn() {
 export async function notifyFailure(key, status, options = {}) {
   if (!(await notificationsOn())) return false
   const nowMs = typeof options.nowMs === 'number' ? options.nowMs : Date.now()
-  if (!(await claimFailure(key, String(status ?? ''), nowMs))) return false
+  const claim = await claimFailure(key, String(status ?? ''), nowMs)
+  if (!claim) return false
   const { id, nowMs: _omit, ...rest } = options
-  return notify(id ?? key, rest)
+  const shown = await notify(id ?? key, rest)
+  if (!shown) await releaseFailure(key, claim)
+  return shown
 }
 
 // 恢復正常時清掉冷卻紀錄：下次再壞就會重新通知
@@ -118,7 +133,8 @@ export function mergedFailureMessage(origin, names) {
 export async function notifySiteFailure(origin, task, status, opts = {}) {
   if (!(await notificationsOn())) return false
   const nowMs = typeof opts.nowMs === 'number' ? opts.nowMs : Date.now()
-  if (!(await claimFailure(task.id, String(status ?? ''), nowMs))) return false
+  const claim = await claimFailure(task.id, String(status ?? ''), nowMs)
+  if (!claim) return false
 
   const siteKey = String(origin || '')
   let names = []
@@ -136,8 +152,10 @@ export async function notifySiteFailure(origin, task, status, opts = {}) {
     return merge
   })
 
-  return notify(`fail:${siteKey}`, {
+  const shown = await notify(`fail:${siteKey}`, {
     title: opts.title || 'AutoFetcher 抓取失敗',
     message: mergedFailureMessage(siteKey, names)
   })
+  if (!shown) await releaseFailure(task.id, claim)
+  return shown
 }

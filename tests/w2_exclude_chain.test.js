@@ -106,6 +106,7 @@ test('重選一路貫穿：任務規格的 exclude 經 ENTER_PICK 的 preselect 
 test('多值重選：排除清單改了仍是同一個值（key 與名稱不變），exclude 換成新的、skip 留著', async () => {
   const { st, bg } = await freshBg()
   await st.saveTask(multiTask())
+  await chrome.storage.session.set({ repickTabs: { 't1': 3 } })
   await bg.handleMessage({
     type: 'PICKED', purpose: 'repick', taskId: 't1', locator: { css: '#t' },
     picks: [
@@ -128,6 +129,7 @@ test('多值重選：排除清單改了仍是同一個值（key 與名稱不變�
 test('多值重選：新加進來的 block 值也套上任務層級的 skip', async () => {
   const { st, bg } = await freshBg()
   await st.saveTask(multiTask())
+  await chrome.storage.session.set({ repickTabs: { 't1': 3 } })
   await bg.handleMessage({
     type: 'PICKED', purpose: 'repick', taskId: 't1', locator: { css: '#t' },
     picks: [
@@ -144,6 +146,7 @@ test('多值重選：新加進來的 block 值也套上任務層級的 skip', as
 test('單值重選：exclude 換成新的、skip 與聚合方式留著', async () => {
   const { st, bg } = await freshBg()
   await st.saveTask(baseTask())
+  await chrome.storage.session.set({ repickTabs: { 't1': 3 } })
   await bg.handleMessage({
     type: 'PICKED', purpose: 'repick', taskId: 't1', locator: { css: '#t' },
     picks: [{ block: colBlock({ exclude: [TOTAL] }) }]
@@ -157,6 +160,7 @@ test('單值重選：exclude 換成新的、skip 與聚合方式留著', async (
 test('重選：pick 的排除項多帶的欄位不得進 storage', async () => {
   const { st, bg } = await freshBg()
   await st.saveTask(baseTask())
+  await chrome.storage.session.set({ repickTabs: { 't1': 3 } })
   await bg.handleMessage({
     type: 'PICKED', purpose: 'repick', taskId: 't1', locator: { css: '#t' },
     picks: [{ block: colBlock({ exclude: [{ index: 3, header: '合計', label: '顯示用', el: 'x' }] }) }]

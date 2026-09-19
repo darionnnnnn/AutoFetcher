@@ -423,13 +423,25 @@ export function render(ctx) {
         // 面板要在**這個點擊**裡開：手勢不跨 sendMessage，
         // 轉給 background 代開一定會被 Chrome 擋下（B-0 實測）
         await openPanel(tab.id, 'picker', `tabId=${tab.id}`)
-        await chrome.runtime.sendMessage({
-          type: MSG.ENTER_PICK,
-          purpose: 'task',
-          tabId: tab.id,
-          // 一律從最上層開始：iframe 內的目標由選取模式自己往下鑽
-          frameId: 0
-        })
+        let res
+        try {
+          res = await chrome.runtime.sendMessage({
+            type: MSG.ENTER_PICK,
+            purpose: 'task',
+            tabId: tab.id,
+            // 一律從最上層開始：iframe 內的目標由選取模式自己往下鑽
+            frameId: 0
+          })
+        } catch (e) {
+          // 背景沒接到：說出原因、不關 popup（關了使用者只看到什麼都沒發生）
+          if (pickNote) pickNote.textContent = `沒有進入選取模式：${e?.message || e || '背景沒有回應'}`
+          return
+        }
+        if (res?.ok === false) {
+          // 被擋（表單填到一半等）時背景已把說明寫在面板上；popup 也要說，而且不關
+          if (pickNote) pickNote.textContent = `沒有進入選取模式：${res.error || '側邊面板上有說明，請先處理再試'}`
+          return
+        }
         if (typeof window !== 'undefined' && window.close) window.close()
       } catch {
         if (pickNote) pickNote.textContent = '這個頁面無法選取，請切換到一般網頁再試'
@@ -476,7 +488,18 @@ function renderGaps(anchorEl, gaps, tasks) {
     ack.dataset.action = 'ack-gap'
     ack.textContent = '知道了'
     ack.onclick = async () => {
-      await chrome.runtime.sendMessage({ type: MSG.SKIP_ONE, taskId: g.taskId, slot: g.slot })
+      // 失敗不得靜默、也不移除這一列（移除了使用者以為已處理）
+      let res
+      try {
+        res = await chrome.runtime.sendMessage({ type: MSG.SKIP_ONE, taskId: g.taskId, slot: g.slot })
+      } catch (e) {
+        text.textContent = `${g.taskName || nameOf.get(g.taskId) || g.taskId}：知道了沒有完成：${e?.message || e || '背景沒有回應'} `
+        return
+      }
+      if (res?.ok === false) {
+        text.textContent = `${g.taskName || nameOf.get(g.taskId) || g.taskId}：知道了沒有完成：${res.error || '背景處理失敗'} `
+        return
+      }
       row.remove()
       if (!box.firstChild) box.hidden = true
     }

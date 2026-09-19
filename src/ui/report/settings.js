@@ -7,8 +7,7 @@ import {
   importRecords,
   getDiagList,
   getSites,
-  getSite,
-  saveSite,
+  updateSite,
   deleteSite,
   getHealthMap, deleteHealthEntry,
   countRecordsBeyondRetention, getRecordsInRange } from '../../shared/storage.js'
@@ -540,17 +539,19 @@ function setupSitesListListeners() {
     if (!origin) return
     const action = btn.dataset.action
     if (action === 'site-toggle') {
-      const site = await getSite(origin)
-      if (!site) return
-      const nextEnabled = site.enabled === false ? true : false
-      site.enabled = nextEnabled
-      if (nextEnabled) {
-        site.failStreak = 0
-      } else {
+      // 在 sites 鎖內以最新站台切換，只改 enabled／failStreak（背景登入同時累加的計數不得被舊副本蓋掉）
+      let nextEnabled = null
+      await updateSite(origin, (site) => {
+        nextEnabled = site.enabled === false
+        site.enabled = nextEnabled
+        if (nextEnabled) site.failStreak = 0
+        return site
+      })
+      if (nextEnabled === null) return
+      if (!nextEnabled) {
         // 停用後不再檢查，舊的失敗狀態要一併拿掉，否則燈號永遠紅著
         await deleteHealthEntry('site:' + origin)
       }
-      await saveSite(origin, site)
       await renderSitesList()
     } else if (action === 'site-delete') {
       const ok = await confirmDialog({

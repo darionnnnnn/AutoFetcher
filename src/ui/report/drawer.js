@@ -741,6 +741,14 @@ async function applyDraft() {
   if (!currentDashId || !currentCardId) return
   const patch = changedFields()
   const { did, cid } = hideAndReset()
+  // 抽屜開著時背景可能修剪過序列（值被移除、任務被刪）：以寫入當下的任務清單為準，
+  // 草稿來源裡已經不存在的序列丟掉，不讓它復活
+  if (Array.isArray(patch.source)) {
+    let tasks = []
+    try { tasks = await getTasks() } catch {}
+    const idx = buildSeriesIndex(tasks)
+    patch.source = patch.source.filter(s => typeof s?.taskId === 'string' && (Boolean(idx.byId[s.taskId]) || Boolean(idx.parents[s.taskId])))
+  }
   if (Object.keys(patch).length > 0) {
     await updateCard(did, cid, patch)
   }

@@ -108,26 +108,26 @@ async function loadThemeCss() {
   } catch {}
 
   return `:root {
-      --bg: var(--bg, canvas);
-      --surface: var(--surface, canvas);
-      --text: var(--text, canvastext);
-      --text-muted: var(--text-muted, gray);
-      --border: var(--border, currentColor);
-      --primary: var(--primary, currentColor);
-      --danger: var(--danger, currentColor);
-      --danger-bg: var(--danger-bg, canvas);
-      --hover: var(--hover, canvas);
+      --bg: rgb(248, 250, 252);
+      --surface: rgb(255, 255, 255);
+      --text: rgb(15, 23, 42);
+      --text-muted: rgb(100, 116, 139);
+      --border: rgb(226, 232, 240);
+      --primary: rgb(37, 99, 235);
+      --danger: rgb(220, 38, 38);
+      --danger-bg: rgb(254, 242, 242);
+      --hover: rgb(241, 245, 249);
       --radius: 6px;
-      --ok: var(--ok, currentColor);
-      --warn: var(--warn, currentColor);
-      --chart-1: var(--chart-1, currentColor);
-      --chart-2: var(--chart-2, currentColor);
-      --chart-3: var(--chart-3, currentColor);
-      --chart-4: var(--chart-4, currentColor);
-      --chart-5: var(--chart-5, currentColor);
-      --chart-6: var(--chart-6, currentColor);
-      --chart-7: var(--chart-7, currentColor);
-      --chart-8: var(--chart-8, currentColor);
+      --ok: rgb(22, 163, 74);
+      --warn: rgb(217, 119, 6);
+      --chart-1: rgb(37, 99, 235);
+      --chart-2: rgb(22, 163, 74);
+      --chart-3: rgb(234, 88, 12);
+      --chart-4: rgb(147, 51, 234);
+      --chart-5: rgb(8, 145, 178);
+      --chart-6: rgb(219, 39, 119);
+      --chart-7: rgb(202, 138, 4);
+      --chart-8: rgb(79, 70, 229);
       --surface-2: rgb(241, 245, 249);
       --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.1);
       --shadow-2: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
@@ -148,13 +148,13 @@ async function loadThemeCss() {
       --warn-soft: rgba(217, 119, 6, 0.1);
       --danger-soft: rgba(220, 38, 38, 0.1);
       --radius-lg: 10px;
-      --on-primary: var(--on-primary, canvas);
-      --primary-strong: var(--primary-strong, currentColor);
-      --ok-text: var(--ok-text, currentColor);
-      --warn-text: var(--warn-text, currentColor);
-      --danger-text: var(--danger-text, currentColor);
-      --danger-strong: var(--danger-strong, currentColor);
-      --text-subtle: var(--text-subtle, gray);
+      --on-primary: rgb(255, 255, 255);
+      --primary-strong: rgb(37, 99, 235);
+      --ok-text: rgb(21, 128, 61);
+      --warn-text: rgb(180, 83, 9);
+      --danger-text: rgb(185, 28, 28);
+      --danger-strong: rgb(220, 38, 38);
+      --text-subtle: rgb(148, 163, 184);
       --radius-sm: 4px;
     }`
 }

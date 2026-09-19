@@ -353,6 +353,110 @@ export async function removeCard(dashId, cardId) {
   })
 }
 
+const GEOMETRY_KEYS = ['x', 'y', 'w', 'h']
+
+/**
+ * 只改卡片位置與大小（拖曳移動／縮放放開、自動排列）：在 layout 鎖內讀最新版面，
+ * arrange(最新卡片的副本) 回傳排好的卡片陣列，只取回**仍存在**的卡片的 x/y/w/h 套上去；
+ * 來源、選項、卡片增刪一律不動（背景同時修剪掉的來源與卡片不會被舊副本蓋回）。
+ * 回傳是否有寫入。
+ */
+export async function arrangeCards(dashId, arrange) {
+  return editLayout((layout) => {
+    const dash = layout.dashboards.find(d => d.id === dashId)
+    if (!dash) return unchanged(false)
+    const arranged = arrange(structuredClone(dash.cards))
+    if (!Array.isArray(arranged)) return unchanged(false)
+    const geo = new Map(arranged.filter(c => c && typeof c.id === 'string').map(c => [c.id, c]))
+    let changed = false
+    for (const card of dash.cards) {
+      const next = geo.get(card.id)
+      if (!next) continue
+      for (const k of GEOMETRY_KEYS) {
+        if (typeof next[k] === 'number' && next[k] !== card[k]) {
+          card[k] = next[k]
+          changed = true
+        }
+      }
+    }
+    return changed ? true : unchanged(false)
+  })
+}
+
+// 復原／重做：只把「from → to 這一步」的差異套到最新版面上。
+// 卡片：to 有 from 沒有＝這一步加的（重做時補回，來源要全都還在才補）；from 有 to 沒有＝這一步拿掉的（從最新版面移除）；
+// 兩邊都有：只改這一步動過的欄位，而且卡片要還在最新版面上（背景刪掉的卡片不復活）。
+// 來源：from 就有、最新版面卻沒有的＝別人（背景修剪）拿掉的，不放回；這一步自己加回的也要序列還在（isLive）。
+function sourceIdsOf(card) {
+  return new Set((Array.isArray(card?.source) ? card.source : []).map(s => s?.taskId))
+}
+
+function restoredSource(toList, fromCard, latestCard, isLive) {
+  const inFrom = sourceIdsOf(fromCard)
+  const inLatest = sourceIdsOf(latestCard)
+  return (Array.isArray(toList) ? toList : []).filter(s => {
+    const id = s?.taskId
+    if (inFrom.has(id)) return inLatest.has(id)
+    return isLive(id)
+  })
+}
+
+function restoredStatusIds(toIds, fromCard, latestCard, isLive) {
+  const inFrom = new Set(Array.isArray(fromCard?.options?.taskIds) ? fromCard.options.taskIds : [])
+  const inLatest = new Set(Array.isArray(latestCard?.options?.taskIds) ? latestCard.options.taskIds : [])
+  return toIds.filter(id => inFrom.has(id) ? inLatest.has(id) : isLive(id))
+}
+
+function applyCardStep(latestCard, fromCard, toCard, isLive) {
+  for (const k of GEOMETRY_KEYS) {
+    if (fromCard[k] !== toCard[k]) latestCard[k] = toCard[k]
+  }
+  if (JSON.stringify(fromCard.source) !== JSON.stringify(toCard.source)) {
+    latestCard.source = restoredSource(toCard.source, fromCard, latestCard, isLive)
+  }
+  if (JSON.stringify(fromCard.options) !== JSON.stringify(toCard.options)) {
+    const options = structuredClone(toCard.options || {})
+    if (Array.isArray(options.taskIds)) options.taskIds = restoredStatusIds(options.taskIds, fromCard, latestCard, isLive)
+    latestCard.options = options
+  }
+}
+
+/**
+ * 復原／重做的唯一寫入（AF-21 終檢）：from、to 是這一步前後的 dashboards 快照，
+ * 在 layout 鎖內以最新版面為底只套這一步的差異。isLive(序列 id) 判定序列是否還在任務清單裡。
+ */
+export async function applyLayoutStep(from, to, isLive = () => true) {
+  const fromDashes = new Map((Array.isArray(from) ? from : []).map(d => [d?.id, d]))
+  const toDashes = new Map((Array.isArray(to) ? to : []).map(d => [d?.id, d]))
+  return editLayout((layout) => {
+    let changed = false
+    for (const dash of layout.dashboards) {
+      const f = fromDashes.get(dash.id)
+      const t = toDashes.get(dash.id)
+      if (!f || !t) continue
+      const fCards = new Map((f.cards || []).map(c => [c.id, c]))
+      const tCards = new Map((t.cards || []).map(c => [c.id, c]))
+      const before = JSON.stringify(dash.cards)
+      // 這一步拿掉的卡片
+      dash.cards = dash.cards.filter(c => !(fCards.has(c.id) && !tCards.has(c.id)))
+      for (const card of dash.cards) {
+        const fc = fCards.get(card.id)
+        const tc = tCards.get(card.id)
+        if (fc && tc) applyCardStep(card, fc, tc, isLive)
+      }
+      // 這一步加的卡片（重做建卡）：最新版面還沒有、來源都還在才補回
+      for (const tc of t.cards || []) {
+        if (fCards.has(tc.id) || dash.cards.some(c => c.id === tc.id)) continue
+        const src = Array.isArray(tc.source) ? tc.source : []
+        if (!src.every(s => isLive(s?.taskId))) continue
+        dash.cards.push(structuredClone(tc))
+      }
+      if (JSON.stringify(dash.cards) !== before) changed = true
+    }
+    return changed ? true : unchanged(false)
+  })
+}
+
 // 內部輔助函式：清理所有儀表板中的卡片來源與篩選，若來源歸零則移除該卡片
 function pruneCardsInLayout(layout, shouldRemoveSource, shouldRemoveStatusId) {
   for (const dash of layout.dashboards) {
