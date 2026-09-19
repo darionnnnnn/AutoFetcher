@@ -432,7 +432,8 @@ button.has-icon { display: inline-flex; align-items: center; gap: var(--space-1)
 /* 圖表要填滿卡片，否則會縮在角落 */
 .report-card .card-body > svg { width: 100%; flex: 1 1 auto; min-height: 0; display: block; }
 /* 數值卡的迷你走勢圖只是輔助：單欄滿寬時不得撐成整張卡高、線條被放大成粗棒 */
-.report-card[data-card-type="number"] .card-body > svg { flex: 0 0 auto; max-height: 48px; margin-top: auto; }
+.report-card[data-card-type="number"] .card-body { overflow: hidden; }
+.report-card[data-card-type="number"] .card-body > svg { flex: 1 1 0; min-height: 0; max-height: 48px; margin-top: auto; }
 
 #missed-banner {
   background: var(--danger-bg);
@@ -476,10 +477,7 @@ input[data-rename-input] {
 }
 #task-bulk-bar[hidden] { display: none; }
 #task-list { display: flex; flex-direction: column; gap: var(--space-2); }
-/* 任務列（AF-21 8-B）：DOM 順序不動，用 order 排成三層——
-   第一行：勾選、啟用、名稱（字重 500）、改名、狀態 chip ……（靠右）動作按鈕
-   第二行：原因（--text-muted；紅黃燈換狀態文字色）
-   第三行：下次時間、排程、其餘中繼資訊（小字） */
+/* 任務列（AF-21 8-B；8-C 改成照 DOM 順序排，不用 order） */
 .task-row {
   display: flex;
   flex-wrap: wrap;
@@ -499,24 +497,11 @@ input[data-rename-input] {
 .task-row.selected { border-color: var(--primary); }
 .task-row.warn { border-left-color: var(--warn); }
 .task-row.failed { border-left-color: var(--danger); }
-.task-row > * { order: 30; }
-.task-row > [data-action="select"] { order: 1; }
-.task-row > .task-toggle-label { order: 6; }
-.task-row > .task-name,
-.task-row > [data-rename-input] { order: 2; }
-.task-row > [data-action="rename"] { order: 3; }
-.task-row > .task-status { order: 4; }
-.task-row > .task-actions { order: 5; }
-/* 換行點：兩個 flex-basis 100% 的空項目，把原因與中繼資訊各推到下一行 */
-.task-row::before,
-.task-row::after { content: ""; flex-basis: 100%; height: 0; }
-.task-row::before { order: 10; }
-.task-row:not(:has(> .task-reason))::before { display: none; }
-.task-row > .task-reason { order: 11; }
-.task-row::after { order: 20; }
-.task-row > .task-next { order: 21; }
-.task-row > .task-schedule { order: 22; }
-.task-row > .task-suggest-foreground { order: 40; flex-basis: 100%; }
+/* 版面照 DOM 順序（tasks.js 的 createTaskRow 決定），不用 order：鍵盤 Tab 的順序就是畫面順序。
+   第一行：勾選、名稱、改名、狀態 chip；原因獨佔一行（有才出現）；
+   其後：下次時間、排程與其餘中繼資訊；動作與啟用開關排在最後、靠右 */
+.task-row > .task-actions { margin-left: auto; }
+.task-row > .task-suggest-foreground { flex-basis: 100%; }
 .task-toggle-label { display: inline-flex; align-items: center; min-height: 32px; padding-left: var(--space-2); cursor: pointer; }
 /* 啟用開關：switch 外觀（不是核取方塊），一眼分得出「選取這列」與「啟用這個任務」 */
 .task-toggle-label input[role="switch"] {
@@ -749,8 +734,10 @@ input[data-rename-input] {
   left: 0;
   background: inherit;
 }
-.card-table th:not(:first-child),
-.card-table td:not(:first-child) {
+.card-table th,
+.card-table td { text-align: left; padding: var(--space-1) var(--space-2); }
+.card-table th.num,
+.card-table td.num {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }

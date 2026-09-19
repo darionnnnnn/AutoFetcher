@@ -328,17 +328,26 @@
       color: var(--text);
     }
     #alert-add { align-self: flex-start; }
-    #preaction-section {
+    details#preaction-section {
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: var(--space-2, 8px);
       margin: 0;
+      background: var(--surface);
+    }
+    details#preaction-section summary {
+      font-size: var(--text-sm, 13px);
+      font-weight: 600;
+      cursor: pointer;
+      color: var(--text);
+    }
+    details#preaction-section[open] {
       display: flex;
       flex-direction: column;
       gap: var(--space-2, 8px);
-      background: var(--surface);
     }
-    .preaction-title { font-size: var(--text-xs, 12px); font-weight: 600; padding: 0 var(--space-1, 4px); color: var(--text); }
+    #test-preaction-hint { display: flex; flex-direction: column; gap: 6px; margin-top: var(--space-2, 8px); }
+    #test-preaction-hint button { align-self: flex-start; }
     .preaction-desc { font-size: var(--text-xs, 12px); color: var(--text-muted); line-height: 1.4; }
     #preaction-list { display: flex; flex-direction: column; gap: 6px; }
     [data-preaction-row] { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -424,7 +433,7 @@
         <legend>要建立的任務</legend>
         <div id="batch-list"></div>
         <div id="batch-note">每個任務各自命名；多久抓一次與抓完放哪裡共用。要個別調整的，存完到任務頁按編輯。</div>
-        <label id="batch-aggregate-label" hidden>整欄／整列的合成方式
+        <label id="batch-aggregate-label" hidden><span data-term="aggregate"></span>
           <select id="batch-aggregate">
             <option value="max">最大值</option>
             <option value="min">最小值</option>
@@ -467,7 +476,7 @@
           </select>
         </label>
         <div id="pos-hint" class="field-hint"></div>
-        <label>聚合方式
+        <label><span data-term="aggregate"></span>
           <select id="block-aggregate">
             <option value="max">最大值</option>
             <option value="min">最小值</option>
@@ -482,10 +491,31 @@
           <label for="skip-blank"><input type="checkbox" id="skip-blank" checked>自動略過頭尾空白</label>
         </div>
       </fieldset>
+      <details id="preaction-section">
+        <summary><span data-preaction-ask></span> <span id="preaction-count" class="chip" hidden></span></summary>
+        <div class="preaction-desc">抓取前依序執行，例如先關掉彈窗、或等圖表載入完成。<br>
+          要抓「滑鼠移過去才出現的選單」，用「移到元素上」→「等元素出現」→「點擊元素」三步。
+          <strong>純用 CSS <code>:hover</code> 展開的選單無法用這個方式打開</strong>（程式送出的滑鼠事件不是真的游標）；
+          這種站台通常選單項目本來就在頁面裡，把「等元素出現」的「要看得見」取消再直接點它即可。</div>
+        <div id="frame-hint" class="banner is-info" role="status" hidden>
+          <div id="frame-hint-text"></div>
+          <div id="frame-hint-actions">
+            <button type="button" id="frame-hint-add">加入點擊步驟</button>
+            <button type="button" id="frame-hint-dismiss">不需要</button>
+          </div>
+        </div>
+        <div id="preaction-list"></div>
+        <button type="button" id="preaction-add">新增動作</button>
+      </details>
       <fieldset id="preview-section">
-        <legend>先試抓看看</legend>
+        <legend data-term="testResult">試抓結果</legend>
         <div id="preview"></div>
         <div id="test-note" role="status"></div>
+        <!-- 試抓失敗而且沒有前置動作時才出現：指向「抓之前要先點什麼嗎？」那一列 -->
+        <div id="test-preaction-hint" class="banner is-info" role="status" hidden>
+          <div data-test-preaction-hint-text></div>
+          <button type="button" id="test-preaction-goto">去加一步</button>
+        </div>
         <details id="test-detail" hidden>
           <summary></summary>
           <div data-test-detail-body></div>
@@ -578,29 +608,10 @@
           <div id="alert-list"></div>
           <button type="button" id="alert-add">新增條件</button>
         </fieldset>
-        <div id="preaction-section">
-          <div class="preaction-title">前置動作</div>
-          <div class="preaction-desc">抓取前依序執行，例如先關掉彈窗、或等圖表載入完成。<br>
-            要抓「滑鼠移過去才出現的選單」，用「移到元素上」→「等元素出現」→「點擊元素」三步。
-            <strong>純用 CSS <code>:hover</code> 展開的選單無法用這個方式打開</strong>（程式送出的滑鼠事件不是真的游標）；
-            這種站台通常選單項目本來就在頁面裡，把「等元素出現」的「要看得見」取消再直接點它即可。</div>
-          <div id="frame-hint" class="banner is-info" role="status" hidden>
-            <div id="frame-hint-text"></div>
-            <div id="frame-hint-actions">
-              <button type="button" id="frame-hint-add">加入點擊步驟</button>
-              <button type="button" id="frame-hint-dismiss">不需要</button>
-            </div>
-          </div>
-          <div id="preaction-list"></div>
-          <button type="button" id="preaction-add">新增動作</button>
-        </div>
       </details>
     </div>
-    <label class="checkbox-label">
-      <input type="checkbox" id="pin-defaults">將此次設定固定為預設值
-    </label>
     <div id="save-summary" hidden></div>
-    <!-- 「還不能儲存」的原因、存檔失敗、立即測試的錯誤都在這裡：緊貼固定列上方、在捲動區外，
+    <!-- 「還不能儲存」的原因、存檔失敗、試抓的錯誤都在這裡：緊貼固定列上方、在捲動區外，
          使用者在底部按儲存時一定看得到（save-guard.js） -->
     <div id="errors" class="save-guard" role="alert" hidden></div>
     <footer class="action-bar">
@@ -610,7 +621,7 @@
         <span id="paused-badge" class="chip is-off" title="這個任務停用中：存檔後也不會排程，到任務頁啟用後才會抓。" hidden>停用中</span>
       </div>
       <div class="action-bar-secondary">
-        <button type="button" id="test-now">立即測試</button>
+        <button type="button" id="test-now" data-term="test">試抓</button>
         <button type="button" id="repick-target" title="回頁面重選目標"><span class="label-full">回頁面重選目標</span><span class="label-short" aria-hidden="true">重選目標</span></button>
         <button type="button" id="cancel">取消</button>
       </div>

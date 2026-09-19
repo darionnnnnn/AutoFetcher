@@ -55,7 +55,7 @@ test('C 整批檢視只露出「多久抓一次」，其餘區塊全部收起來
   assert.equal(doc.getElementById('setup-summary').hidden, true)
   assert.equal(doc.getElementById('picker-title').closest('[data-picker-header]').hidden, false,
     '標題列要留著：「整批修改 N 個任務的排程」就寫在那裡（AF-19 終檢：整列藏起來就看不到標題）')
-  assert.equal(doc.getElementById('pin-defaults').closest('label').hidden, true,
+  assert.equal(doc.getElementById('saved-pin-defaults'), null,
     '整批修改不得寫進預設值')
 })
 

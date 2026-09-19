@@ -208,7 +208,8 @@ function walk(dir, out = []) {
 // 加上抽屜上下移的 ↑／↓ 按鈕各 2——一律歸零。
 // ↑／↓ 另有數值卡的漲跌文字（資料，不是圖示）所以不列進字元集，改用「按鈕文字只有箭頭」的寫法擋。
 const ICON_CHARS = /[⚙✕✖×☰⋮⧉▾▸▴◂«»‹›\u{1F514}\u{1F5D1}⚙️]/u
-const SCOPES = ['report', 'popup']
+// 段 8-C：掃描範圍擴大到整個 src/ui/（picker、site、help 等也不得用符號字元當圖示）
+const SCOPES = ['']
 
 test('report／popup 的 JS／HTML 不再用符號字元當圖示（基準數量歸零）', () => {
   const files = SCOPES.flatMap(s => walk(join(SRC_UI, s)))

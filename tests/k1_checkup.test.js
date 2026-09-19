@@ -51,7 +51,7 @@ test('最近 N 筆的時間欄與排序用有效時刻(UTC 的 capturedAt 要換
     range: { from: '2026-09-01', to: '2026-09-30' }, today: '2026-09-07'
   })
   const times = [...el.querySelectorAll('tbody tr td:first-child')].map(td => td.textContent)
-  assert.deepEqual(times, ['2026-09-07T10:00', '2026-09-07T09:00'],
+  assert.deepEqual(times, ['09/07 10:00', '09/07 09:00'],
     '由新到舊;UTC 字串直接顯示會變成 02:00 而且排到 09:00 前面')
 })
 

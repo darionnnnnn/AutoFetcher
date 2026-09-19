@@ -19,6 +19,7 @@ import * as diag from '../../shared/diag.js'
 import { MSG } from '../../shared/messages.js'
 import { statusTextOf, isRed } from '../../shared/record-status.js'
 import { applyTheme, applySavedTheme } from '../theme-apply.js'
+import { icon } from '../icons.js'
 
 // 重新繪製儲存用量區
 async function renderStorageStats() {
@@ -265,7 +266,7 @@ function setupExportAndImportListeners() {
 // 已儲存提示顯示多久
 const SAVED_HINT_MS = 2000
 
-// 欄位旁的「已儲存 ✓」（role=status）與欄位下方的原因（aria-describedby）；建一次、之後沿用
+// 欄位旁的「已儲存」＋打勾圖示（role=status）與欄位下方的原因（aria-describedby）；建一次、之後沿用
 function feedbackOf(el) {
   if (el._afFeedback) return el._afFeedback
   const row = el.closest('.settings-row') || el.parentElement
@@ -304,7 +305,8 @@ function showFieldSaved(el) {
   const fb = feedbackOf(el)
   clearFieldError(el)
   clearTimeout(fb.timer)
-  fb.status.textContent = '已儲存 ✓'
+  // 打勾是 SVG 圖示（不用符號字元，AF-21 批次 8）；念出來的是文字「已儲存」
+  fb.status.replaceChildren(document.createTextNode('已儲存 '), icon('check', { size: 14 }))
   fb.timer = setTimeout(() => { fb.status.textContent = '' }, SAVED_HINT_MS)
 }
 

@@ -284,3 +284,12 @@ test('status：休眠空窗（gap）不算成「錯過一格」，說休眠期�
   assert.match(text(el), /錯過\s*1/)
   assert.match(text(el), /休眠期間略過 7 次/)
 })
+
+test('status：停用中的任務顯示「停用中」灰色 chip，不沿用上一次的狀態（AF-21）', () => {
+  const ctx = baseCtx({ health: { t1: { status: 'ok' } } })
+  ctx.parentTasksById = { ...ctx.parentTasksById, t1: { ...ctx.parentTasksById.t1, enabled: false } }
+  const el = CR.renderCard(card({ type: 'status', source: [], options: { taskIds: ['t1'] } }), ctx)
+  const chip = el.querySelector('.status-state')
+  assert.equal(chip.textContent, '停用中')
+  assert.ok(chip.classList.contains('is-off'))
+})

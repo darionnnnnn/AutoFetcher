@@ -324,10 +324,11 @@ test('3e 面板：四步結果就地顯示（✓／✗＋原因），成功時�
   pickAll(c)
   fill(doc)
   await sp.handleTestLogin()
-  const items = [...doc.querySelectorAll('#test-login-steps li')].map(li => li.textContent)
+  const lis = [...doc.querySelectorAll('#test-login-steps li')]
+  const items = lis.map(li => (li.querySelector('svg')?.getAttribute('aria-label') || '') + li.textContent)
   assert.equal(items.length, 3)
-  assert.match(items[0], /^✓/)
-  assert.match(items[2], /^✗.*頁面沒有變化/)
+  assert.match(items[0], /^成功/)
+  assert.match(items[2], /^失敗.*頁面沒有變化/)
   assert.doesNotMatch(doc.getElementById('test-login-result').textContent, /登入成功/)
 
   reply = { ok: true, steps: [...steps.slice(0, 2), { step: 'submit', ok: true, detail: '' }, { step: 'verify', ok: true, detail: '' }] }

@@ -104,18 +104,19 @@ test('儲存後記住這次的設定當作下次預設', async () => {
   assert.equal(s.pickerDefaults.pinned, undefined, '沒勾選就不該固定')
 })
 
-test('勾了「固定為預設值」才寫 pinned，且不動到 last', async () => {
+test('按了回饋區「下次新任務沿用」才寫 pinned，且不動到 last', async () => {
   const { st, pk, doc } = await fresh()
   // AF-21 批次 4：沒有目標的新任務會被儲存守門擋下，先以一個單一元素的目標渲染
   pk.render({ locator: { css: '#v' }, url: 'https://x.test/a' })
   doc.getElementById('name').value = '電費'
   doc.getElementById('url').value = 'https://x.test/a'
   doc.getElementById('times').value = '11:20'
-  const pin = doc.getElementById('pin-defaults')
-  assert.ok(pin, '表單要有「將此次設定固定為預設值」的勾選框')
-  pin.checked = true
   doc.getElementById('dashboard-select').innerHTML = '<option value="none">不加入</option>'
   await pk.handleSave()
+  await new Promise(r => setTimeout(r, 30))
+  const pin = doc.getElementById('saved-pin-defaults')
+  assert.ok(pin, '存檔回饋要有「下次新任務沿用這組排程與去處」鈕')
+  pin.click()
   await new Promise(r => setTimeout(r, 30))
   const s = await st.getSettings()
   assert.deepEqual(s.pickerDefaults.pinned.times, ['11:20'])

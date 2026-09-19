@@ -5,7 +5,8 @@ import { DEFAULT_HOVER_HOLD_MS, DEFAULT_WAIT_TIMEOUT_MS } from '../../shared/pre
 import { MSG, MAX_BATCH_TASKS } from '../../shared/messages.js'
 import { getLayout, addCard, pruneSeries } from '../../shared/layout-store.js'
 import { seriesIdOf } from '../../shared/series-index.js'
-import { describeSchedule, describeTarget, describeDashboard, numericHeaderAxis, POS_TEXT, withInnerLabel, skipNote } from '../../shared/describe.js'
+import { describeSchedule, describeTarget, describeDashboard, numericHeaderAxis, POS_TEXT, withInnerLabel, skipNote, TERMS } from '../../shared/describe.js'
+import { icon } from '../icons.js'
 import { nextIntervalRun } from '../../shared/schedule-math.js'
 import { isAnchorText, putInner, skipOf, putSkip, excludeOf, putExclude } from '../../shared/table.js'
 import { reconcileFields } from '../../shared/field-match.js'
@@ -34,7 +35,7 @@ const WAITING_TEXT = {
 const SHARED_IDS = ['schedule-type', 'times', 'every-minutes', 'window-enabled', 'window-from', 'window-to', 'dashboard-select']
 
 // ---- 儲存守門（AF-21 批次 4）----
-// #errors 是守門元件的容器：還不能儲存的原因、存檔失敗、立即測試的錯誤都寫在這裡（緊貼固定列上方）。
+// #errors 是守門元件的容器：還不能儲存的原因、存檔失敗、試抓的錯誤都寫在這裡（緊貼固定列上方）。
 // 容器跟著文件走：存完表單被回饋區換掉之後就沒有容器，寫錯誤變成無事（回饋區有自己的字）
 let guardCache = null
 function saveGuard() {
@@ -198,7 +199,7 @@ export function getFormData() {
       const spec = row._spec || fieldSpecs.get(key) || {}
       const item = { key, name }
       if (spec.cell) item.cell = applyPosToCell(spec.cell, rowPos, colPos)
-      // 整欄／整列的值要聚合，聚合方式來自表單（全任務一份）；
+      // 整欄／整列的值要合計，合計方式來自表單（全任務一份）；
       // 少了這一行，抓取端會拿不到設定而預設成加總，下拉等於裝飾品
       if (spec.block) {
         const block = { ...spec.block, aggregate: aggregateValue }
@@ -363,7 +364,7 @@ export function hasTarget(ctx, values) {
 }
 
 const NO_TARGET_TEXT = '還沒選要抓的內容'
-const PREVIEW_HINT = '按下方「立即測試」看看現在會抓到什麼'
+const PREVIEW_HINT = `按下方「${TERMS.test}」看看現在會抓到什麼`
 
 // 星期是一組勾選框、沒有單一 id：捲到那一組、焦點給第一個
 function focusWeekdays() {
@@ -720,6 +721,8 @@ function fillSchedule(schedule) {
 
 export function render(ctx) {
   currentCtx = ctx || {}
+  applyTerms()
+  setTestPreActionHint(false)
   // 位置定位要最先決定：預設名稱會用到它，而且同一個視窗可能 render 第二次
   //（下鑽 iframe 回來、重選回填），殘留在下拉裡的舊值會算出錯的名稱
   applyPositionDefaults(currentCtx)
@@ -747,7 +750,7 @@ export function render(ctx) {
     if (typeof ctx?.previewSamples === 'string' && ctx.previewSamples) {
       previewEl.textContent += `：${ctx.previewSamples}`
     }
-    // 還沒試抓、也沒有選取當下的值：放一句引導，不留一個空白方框（編輯既有任務沒有立即測試，不放）
+    // 還沒試抓、也沒有選取當下的值：放一句引導，不留一個空白方框（編輯既有任務沒有試抓，不放）
     if (previewEl.textContent === '' && !ctx?.task) {
       previewEl.textContent = PREVIEW_HINT
       previewEl.setAttribute('data-empty', '')
@@ -946,9 +949,9 @@ export function render(ctx) {
       const hasRegex = Boolean(t.spec?.regex)
       const hasWindow = Boolean(t.schedule?.window)
       const hasAlerts = Array.isArray(t.alerts) && t.alerts.length > 0
-      const hasPreActions = Array.isArray(t.preActions) && t.preActions.length > 0
 
-      if (hasStrategy || hasRegex || hasWindow || hasAlerts || hasPreActions) {
+      // 前置動作已不在進階區（AF-21 批次 8）：它有自己那一列，展開與否由 updatePreActionCount 決定
+      if (hasStrategy || hasRegex || hasWindow || hasAlerts) {
         advSection.setAttribute('open', '')
       } else {
         advSection.removeAttribute('open')
@@ -957,6 +960,9 @@ export function render(ctx) {
       advSection.removeAttribute('open')
     }
   }
+
+  // 已有前置動作的任務一打開就展開那一列並顯示數量；沒有的收合（新建也收合）
+  updatePreActionCount({ syncOpen: true })
 
   bindModeEvents()
   syncScheduleFields()
@@ -1040,8 +1046,8 @@ function updateFrameHint(ctx) {
   if (!show) return
 
   if (textEl) textEl.textContent = frameHintText(frameUrl)
-  const advSection = document.getElementById('advanced-section')
-  if (advSection) advSection.setAttribute('open', '')
+  // 前置動作已在主區自己那一列（AF-21 批次 8），展開它就好；不再順手打開進階設定
+  document.getElementById('preaction-section')?.setAttribute('open', '')
 
   bindFrameHintEvents()
 }
@@ -1330,7 +1336,7 @@ function updateBlockSection() {
   const hasFields = document.querySelectorAll('#field-list [data-field-row]').length > 0
   if (hasFields) {
     const base = (currentBlock && currentBlock.rows !== undefined && currentBlock.cols !== undefined)
-      ? `表格 ${currentBlock.rows} 列 × ${currentBlock.cols} 欄`
+      ? `表格 ${currentBlock.rows} 列、${currentBlock.cols} 欄`
       : ''
     summaryEl.textContent = [base, posNote].filter(Boolean).join('\n')
     return
@@ -1365,7 +1371,7 @@ function updateBlockSection() {
       : `第 ${Number(currentBlock.index) + 1} ${isRow ? '列' : '欄'}`
 
     const prefix = (currentBlock.rows !== undefined && currentBlock.cols !== undefined)
-      ? `表格 ${currentBlock.rows} 列 × ${currentBlock.cols} 欄，`
+      ? `表格 ${currentBlock.rows} 列、${currentBlock.cols} 欄，`
       : '表格，'
     summaryEl.textContent = `${prefix}取${targetDesc}`
   } else {
@@ -1493,7 +1499,7 @@ export function renderTimeChips() {
     rm.type = 'button'
     rm.setAttribute('data-time-remove', t)
     rm.setAttribute('aria-label', `移除 ${t}`)
-    rm.textContent = '×'
+    rm.appendChild(icon('close', { size: 12 }))
     rm.onclick = () => {
       writeTimes(readTimes().filter(x => x !== t))
     }
@@ -1609,7 +1615,7 @@ function bindModeEvents() {
     })
     cb._summaryBound = true
   })
-  // 摘要卡的第一行吃的是定位、模式與聚合方式，這些欄位一動就要重算，
+  // 摘要卡的第一行吃的是定位、模式與合計方式，這些欄位一動就要重算，
   // 否則畫面會拿舊事實回答「抓什麼」——比不寫還糟
   for (const id of ['row-pos', 'col-pos', 'mode', 'block-aggregate', 'skip-head', 'skip-tail']) {
     const el = document.getElementById(id)
@@ -1735,7 +1741,7 @@ function updateFieldListState() {
     setFieldRowHint(r, '')
   })
 
-  // 一格就是一個值，沒有東西要聚合；有整欄／整列的值時才需要選聚合方式。
+  // 一格就是一個值，沒有東西要合計；有整欄／整列的值時才需要選合計方式。
   // 值的數量也決定預設建哪幾張卡，移除／上下移之後都要重算
   const aggLabel = document.getElementById('block-aggregate')?.closest('label')
   const skipRow = document.querySelector('[data-skip-row]')
@@ -1804,7 +1810,7 @@ function fieldWhereText(spec) {
 }
 
 /**
- * 立即測試的逐值結果就地顯示在該列。
+ * 試抓的逐值結果就地顯示在該列。
  * 名稱重複時依序對應（fields 的順序就是列的順序）。
  */
 export function applyFieldResults(fields, res) {
@@ -1901,7 +1907,7 @@ function createFieldRow({ key, name, spec }) {
   whereEl.textContent = fieldWhereText(spec)
   whereEl.title = whereEl.textContent
 
-  // 立即測試回來的逐值結果就地顯示，不必到別的地方對照
+  // 試抓回來的逐值結果就地顯示，不必到別的地方對照
   const resultEl = document.createElement('span')
   resultEl.setAttribute('data-field-result', '')
   resultEl.className = 'field-result'
@@ -2269,6 +2275,7 @@ function addPreActionRow(data = {}) {
       lastPreActionPickRow = null
     }
     row.remove()
+    updatePreActionCount()
     updateFrameHint(batchViewOn ? null : currentCtx)
   })
 
@@ -2283,7 +2290,68 @@ function addPreActionRow(data = {}) {
   updatePreActionRowVisibility(row)
 
   list.appendChild(row)
+  updatePreActionCount()
   return row
+}
+
+// ---- 「抓之前要先點什麼嗎？」那一列（AF-21 批次 8 定案 5）----
+// 前置動作編輯器只有一份 DOM（#preaction-section），單任務與批次共用；這裡只管摘要文字、數量與展開。
+
+// 詞彙表 → 畫面上的固定字（Picker 單任務與批次的合計方式標籤、試抓按鈕與結果區標題都從 TERMS 來）
+function applyTerms() {
+  for (const el of document.querySelectorAll('[data-term]')) {
+    const text = TERMS[el.getAttribute('data-term')]
+    if (typeof text === 'string') el.textContent = text
+  }
+  // 試抓鈕在批次畫面是「全部試抓」
+  const testNow = document.getElementById('test-now')
+  if (testNow && batchViewOn) testNow.textContent = TERMS.testAll
+  const ask = document.querySelector('[data-preaction-ask]')
+  if (ask) ask.textContent = TERMS.preActionAsk + (batchViewOn ? TERMS.preActionShared : TERMS.preActionAskExample)
+}
+
+/**
+ * 更新前置動作列的數量；syncOpen 時依「有沒有前置動作」決定展開（開啟任務、換目標時用，使用者手動展開後不再收）。
+ */
+function updatePreActionCount({ syncOpen = false } = {}) {
+  const section = document.getElementById('preaction-section')
+  if (!section) return
+  const n = document.querySelectorAll('#preaction-list [data-preaction-row]').length
+  const countEl = document.getElementById('preaction-count')
+  if (countEl) {
+    countEl.textContent = n > 0 ? `已設定 ${n} 步` : ''
+    countEl.hidden = n === 0
+  }
+  if (syncOpen) {
+    if (n > 0) section.setAttribute('open', '')
+    else section.removeAttribute('open')
+  } else if (n > 0) {
+    section.setAttribute('open', '')
+  }
+}
+
+// 試抓失敗且沒有前置動作時的提示＋跳轉鈕（成功、有前置動作、重新開始試抓時都收起來）
+const TEST_PREACTION_HINT = `如果要先點開什麼才看得到，可以在『${TERMS.preActionAsk}』加一步`
+function setTestPreActionHint(show) {
+  const box = document.getElementById('test-preaction-hint')
+  if (!box) return
+  box.hidden = !show
+  const text = box.querySelector('[data-test-preaction-hint-text]')
+  if (text) text.textContent = show ? TEST_PREACTION_HINT : ''
+  const btn = document.getElementById('test-preaction-goto')
+  if (btn && !btn._afBound) {
+    btn._afBound = true
+    btn.addEventListener('click', () => gotoPreActions())
+  }
+}
+
+function gotoPreActions() {
+  const section = document.getElementById('preaction-section')
+  if (!section) return
+  section.setAttribute('open', '')
+  try { section.scrollIntoView?.({ block: 'nearest' }) } catch {}
+  const add = document.getElementById('preaction-add')
+  try { add?.focus() } catch {}
 }
 
 /**
@@ -2372,7 +2440,7 @@ export async function renderDashboardSection(task) {
   }
 }
 
-// 表單值＋目前 ctx → 任務物件（儲存、立即測試、批次的全部試抓／全部儲存都走這一份）
+// 表單值＋目前 ctx → 任務物件（儲存、試抓、批次的全部試抓／全部儲存都走這一份）
 function taskFromForm(values, ctx) {
   return buildTask(values, ctx?.locator, ctx?.task, ctx?.frameUrl ? { url: ctx.frameUrl } : undefined)
 }
@@ -2439,8 +2507,14 @@ async function addCardsForTask(task, ctx) {
   }
 }
 
-// 新建任務存完記住這次的排程與去處（pickerDefaults.last；勾了固定就一併寫 pinned）
-async function rememberPickerDefaults(values) {
+// 新建任務存完記住這次的排程與去處（pickerDefaults.last）；回傳這一組，
+// 存檔回饋的「下次新任務沿用」要固定的就是它（表單那時已換成回饋區，讀不到畫面）
+async function rememberPickerDefaults(values, { pin = null } = {}) {
+  // pin：回饋區按了「下次新任務沿用」→ 只把當時那一組寫進 pinned，不動 last
+  if (pin) {
+    await writePickerDefaults({ pinned: pin })
+    return pin
+  }
   const currentDefaults = {
     scheduleType: values.scheduleType || 'daily',
     times: values.times || [],
@@ -2452,14 +2526,15 @@ async function rememberPickerDefaults(values) {
     dashboardId: (document.getElementById('dashboard-select')?.value !== 'none' ? document.getElementById('dashboard-select')?.value : '') || '',
     cardTypes: Array.from(document.querySelectorAll('#card-types input[type="checkbox"]:checked')).map(cb => cb.value)
   }
+  await writePickerDefaults({ last: currentDefaults })
+  return currentDefaults
+}
+
+// saveSettings 是淺層合併：pickerDefaults 一律讀改寫，否則寫 last 會洗掉 pinned（反之亦然）
+async function writePickerDefaults(patch) {
   const settings = await getSettings()
   const existingDefaults = settings?.pickerDefaults || {}
-  const newDefaults = { ...existingDefaults, last: currentDefaults }
-  const pinChecked = document.getElementById('pin-defaults')?.checked
-  if (pinChecked) {
-    newDefaults.pinned = currentDefaults
-  }
-  await saveSettings({ pickerDefaults: newDefaults })
+  await saveSettings({ pickerDefaults: { ...existingDefaults, ...patch } })
 }
 
 export async function handleSave() {
@@ -2486,6 +2561,7 @@ export async function handleSave() {
   let cardError = null
   let prunedCount = 0
   let pruneError = null
+  let pinCandidate = null
   try {
   const task = await saveTaskFromForm(values, currentCtx)
   savedTask = task
@@ -2499,9 +2575,9 @@ export async function handleSave() {
     } catch {}
   }
 
-  // 只有新建任務才記住預設值
+  // 只有新建任務才記住預設值；這一組也跟著回饋區走，給「下次新任務沿用」用
   if (!currentCtx?.task) {
-    await rememberPickerDefaults(values)
+    pinCandidate = await rememberPickerDefaults(values)
   }
   // 編輯時被移除的值：清掉它們在儀表板上的來源與最後一次的值（紀錄一律保留到保留天數到期）。
   // 不清的話卡片會一直指著不存在的序列，使用者只看得到一張永遠空白的卡
@@ -2535,6 +2611,7 @@ export async function handleSave() {
   await showSavedFeedback(savedTask, {
     nextRunMs: savedNextRun,
     hint: isNew,
+    ...(pinCandidate ? { pin: pinCandidate } : {}),
     // 新建任務不自動關：等第一筆結果出來再決定（成功 4 秒後關、失敗不關）
     ...(isNew ? { closeDelayMs: null, first: { state: 'pending', text: FIRST_PENDING_TEXT } } : {}),
     ...(prunedCount > 0 ? { note: `移除了 ${prunedCount} 個值；它們的歷史紀錄會保留到保留天數到期。` } : {}),
@@ -2549,7 +2626,7 @@ export async function handleSave() {
 // 經 RUN_TASK：background 固定當成手動（不寫帳本、不佔排程槽），同站台經既有佇列依序抓。
 const FIRST_PENDING_TEXT = '已儲存，正在抓第一筆…'
 const FIRST_INTERRUPTED_TEXT = '抓取被中斷，請再試一次'
-// 存檔後表單已換成回饋區，面板上沒有「立即測試」可按：指向回饋區的「開啟報表」與任務頁的「立即抓取」
+// 存檔後表單已換成回饋區，面板上沒有「試抓」可按：指向回饋區的「開啟報表」與任務頁的「立即抓取」
 const FIRST_NEXT_STEP = '任務已經存好；可以按下方「開啟報表」，到任務頁用「立即抓取」再試一次'
 const FIRST_OK_CLOSE_MS = 4000
 
@@ -2635,7 +2712,7 @@ function setFirstLine(first) {
  * 儲存成功之後不要無聲關窗：說出「存好了、下次什麼時候抓」，
  * 並給一條去看結果的路。1.5 秒後自動關，使用者也可以自己點。
  */
-export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs = 1500, tabId = panelTabId, count = null, hint = false, warning = '', note = '', text = null, first = null } = {}) {
+export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs = 1500, tabId = panelTabId, count = null, hint = false, warning = '', note = '', text = null, first = null, pin = null } = {}) {
   const form = document.getElementById('picker-form')
   if (!form || !task) return
   let when = ''
@@ -2654,7 +2731,8 @@ export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs =
       : (when ? `${head}下次抓取：${when}` : `${head}${describeSchedule(task.schedule)}`))
   // 提示（新建的單任務才給）與警告都跟著 saved ctx 走：session 一寫面板就會照 ctx 重畫回饋區，
   // 只 append 在 DOM 上的會被洗掉（體檢實測：提示行在側邊面板永遠看不到）
-  const saved = { kind: 'saved', text: finalText, ...(hint && count === null ? { hint: true } : {}), ...(warning ? { warning } : {}), ...(note ? { note } : {}), ...(first ? { first } : {}) }
+  // pin：新建任務這一次的排程與去處（「下次新任務沿用」按下去要寫的那一組）；按過之後 pinned: true
+  const saved = { kind: 'saved', text: finalText, ...(hint && count === null ? { hint: true } : {}), ...(warning ? { warning } : {}), ...(note ? { note } : {}), ...(first ? { first } : {}), ...(pin ? { pin, pinned: false } : {}) }
   buildSavedFeedback(form, saved)
 
   // 存好了就不再是「填到一半的表單」：草稿不得再寫回，session 收成 saved，
@@ -2736,6 +2814,7 @@ function buildSavedFeedback(form, saved) {
     hintEl.textContent = '同一頁還要抓別的？下次在右鍵選「一次建立多個任務」'
     box.appendChild(hintEl)
   }
+  if (saved?.pin) box.appendChild(buildPinButton(saved))
 
   const openBtn = document.createElement('button')
   openBtn.type = 'button'
@@ -2753,7 +2832,39 @@ function buildSavedFeedback(form, saved) {
   form.replaceChildren(box)
 }
 
-// 上一次「立即測試」失敗時 background 給的診斷包。**只存在記憶體**：
+// 回饋區的「下次新任務沿用這組排程與去處」（取代以前常駐的「固定為預設值」勾選框）。
+// 按過的狀態寫進面板 ctx：session 一寫面板就照 ctx 重畫，只改 DOM 的「已設定」會被洗回按鈕。
+function buildPinButton(saved) {
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.id = 'saved-pin-defaults'
+  const done = saved.pinned === true
+  btn.textContent = done ? TERMS.pinnedDone : TERMS.pinDefaults
+  btn.disabled = done
+  if (done) btn.setAttribute('aria-pressed', 'true')
+  btn.addEventListener('click', async () => {
+    if (btn.disabled) return
+    btn.disabled = true
+    try {
+      await rememberPickerDefaults(null, { pin: saved.pin })
+    } catch (e) {
+      btn.disabled = false
+      btn.textContent = `${TERMS.pinDefaults}（沒有存成：${e?.message || e}）`
+      return
+    }
+    btn.textContent = TERMS.pinnedDone
+    btn.setAttribute('aria-pressed', 'true')
+    if (panelTabId !== null && panelTabId !== undefined) {
+      try {
+        const cur = await getPanelCtx(panelTabId)
+        if (cur?.kind === 'saved') await mergePanelCtx(panelTabId, { pinned: true })
+      } catch {}
+    }
+  })
+  return btn
+}
+
+// 上一次「試抓」失敗時 background 給的診斷包。**只存在記憶體**：
 // 不寫 storage、不進 diag 環形緩衝，使用者按下按鈕才落地成檔案（SPEC §3、§5）。
 let lastDebug = null
 
@@ -2832,7 +2943,7 @@ function resetTestDetail() {
 // 明細表總格數不超過這個數就測完自動展開（多值任務以各值格數加總）
 const DETAIL_AUTO_OPEN_MAX = 30
 
-// 畫出立即測試的「看抓到的格子」明細表（成功與失敗兩條路共用）
+// 畫出試抓的「看抓到的格子」明細表（成功與失敗兩條路共用）
 function renderTestDetail(values, res) {
   const slots = resetTestDetail()
   if (!slots || !res) return
@@ -2938,7 +3049,7 @@ function renderTestDetail(values, res) {
   detailEl.open = totalItems <= DETAIL_AUTO_OPEN_MAX
 }
 
-// 立即測試結束後把「先試抓看看」區捲進可視範圍（按鈕在底部固定列，結果在畫面中段）
+// 試抓結束後把「試抓結果」區捲進可視範圍（按鈕在底部固定列，結果在畫面中段）
 function scrollPreviewIntoView() {
   const section = document.getElementById('preview-section')
   if (!section || typeof section.scrollIntoView !== 'function') return
@@ -2963,9 +3074,10 @@ export async function handleTestNow() {
     delete noteAtStart.dataset.state
   }
   resetTestDetail()
+  setTestPreActionHint(false)
   // 這一次的結果還沒出來，上一次的診斷先收起來
   setDiagAvailable(null)
-  const busy = setBusy('test-now', '測試中…')
+  const busy = setBusy('test-now', TERMS.testing)
 
   const values = getFormData()
   if (!values.url && currentCtx?.url) values.url = currentCtx.url
@@ -3054,6 +3166,9 @@ export async function handleTestNow() {
         const done = res.preActionTrace.filter(step => step.ok).length
         noteEl.textContent = `前置動作走到第 ${res.preActionTrace.length} 步（前 ${done} 步成功）`
       }
+      // 抓不到而且沒有任何前置動作：很多站台要先關彈窗、點頁籤才看得到，指一條路過去
+      const noPreActions = !Array.isArray(values.preActions) || values.preActions.length === 0
+      setTestPreActionHint(noPreActions)
       renderTestDetail(values, res)
     }
   } catch (e) {
@@ -3345,7 +3460,7 @@ function scheduleDraftSave() {
     draftTimer = null
     const draft = snapshotForm()
     if (batchItems) {
-      // 批次畫面：各列名稱以穩定鍵記、共用的合成方式另記（單任務草稿的形狀不變）
+      // 批次畫面：各列名稱以穩定鍵記、共用的合計方式另記（單任務草稿的形狀不變）
       draft.batchNames = batchNamesFromDom()
       const agg = document.getElementById('batch-aggregate')
       if (agg) draft['batch-aggregate'] = agg.value
@@ -3482,37 +3597,18 @@ function setBatchView(on) {
     show('add-to-dashboard', true)
   }
   show('preview-section', !on)
-  const adv = document.getElementById('advanced-section')
-  if (adv) {
-    adv.hidden = false
-    const summary = adv.querySelector('summary')
-    if (on) {
-      adv.setAttribute('open', '')
-      if (summary) summary.textContent = '前置動作(套用到每一個任務)'
-      for (const child of adv.children) {
-        if (child.id === 'preaction-section' || child.tagName === 'SUMMARY') continue
-        if (!child.hidden) {
-          child.setAttribute('data-batch-hidden', '')
-          child.hidden = true
-        }
-      }
-    } else {
-      if (summary) summary.textContent = '進階設定'
-      for (const child of adv.children) {
-        if (child.hasAttribute('data-batch-hidden')) {
-          child.removeAttribute('data-batch-hidden')
-          child.hidden = false
-        }
-      }
-    }
-  }
+  // 批次只有前置動作是共用的（逐任務進階設定不做）：進階區整塊收起，前置動作列本來就在主區
+  show('advanced-section', !on)
+  const pre = document.getElementById('preaction-section')
+  if (pre && on) pre.setAttribute('open', '')
+  applyTerms()
   show('repick-target', !on)
   const header = document.querySelector('[data-picker-header]')
   if (header && on) header.hidden = true
   const save = document.getElementById('save')
   if (save) save.textContent = on ? '全部儲存' : '儲存'
   const testNow = document.getElementById('test-now')
-  if (testNow) testNow.textContent = on ? '全部試抓' : '立即測試'
+  if (testNow) testNow.textContent = on ? TERMS.testAll : TERMS.test
   // 錯誤訊息區（#errors）固定在固定列正上方、捲動區外，批次畫面也看得到，不必再搬（AF-21 批次 4）
 }
 
@@ -3606,7 +3702,8 @@ function createBatchRow(item, name, auto) {
   remove.type = 'button'
   remove.setAttribute('data-batch-remove', '')
   remove.title = '移除這個任務'
-  remove.textContent = '×'
+  remove.setAttribute('aria-label', '移除這個任務')
+  remove.appendChild(icon('close'))
   remove.addEventListener('click', () => removeBatchItems([item.key]))
 
   row.append(input, remove, where, result)
@@ -3646,7 +3743,7 @@ function removeBatchItems(keys) {
 }
 
 
-// 共用設定（排程各欄、儀表板、卡片型別、合成方式）抄下來，每一項 render 完再貼回
+// 共用設定（排程各欄、儀表板、卡片型別、合計方式）抄下來，每一項 render 完再貼回
 function snapshotShared() {
   const out = { fields: {}, weekdays: [], cardTypes: [] }
   for (const id of SHARED_IDS) {
@@ -3766,6 +3863,7 @@ async function handleBatchSave() {
   setBatchView(true)
 
   let nextRunMs = null
+  let pinCandidate = null
   try {
     if (saved.length > 0 && globalThis.chrome?.runtime?.sendMessage) {
       await chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS })
@@ -3779,7 +3877,7 @@ async function handleBatchSave() {
         } catch {}
       }
     }
-    if (!failure && lastValues) await rememberPickerDefaults(lastValues)
+    if (!failure && lastValues) pinCandidate = await rememberPickerDefaults(lastValues)
   } catch (e) {
     // 任務都已經存好、之後的排程重建或記預設值才失敗：不是某一項存檔失敗——
     // 當成失敗會把清單全部移除、清單變空就關面板，錯誤訊息寫在一個看不到的面板上（AF-18 終檢）
@@ -3805,6 +3903,7 @@ async function handleBatchSave() {
     // 批次新建也立刻抓第一筆：等結果出來再決定關不關
     closeDelayMs: null,
     first: { state: 'pending', text: FIRST_PENDING_TEXT },
+    ...(pinCandidate ? { pin: pinCandidate } : {}),
     ...(warnings.length > 0 ? { warning: warnings.join(' ') } : {})
   })
   await fetchFirstValues(saved.map(s => s.task), { keepOpen: warnings.length > 0 })
@@ -3918,6 +4017,7 @@ function setBulkView(on) {
     show('preview-section', false)
     show('add-to-dashboard', false)
     show('advanced-section', false)
+    show('preaction-section', false)
     show('repick-target', false)
     show('test-now', false)
     show('batch-section', false)
@@ -3925,6 +4025,7 @@ function setBulkView(on) {
     show('add-to-dashboard', true)
     show('preview-section', true)
     show('advanced-section', true)
+    show('preaction-section', true)
     show('repick-target', true)
     show('test-now', true)
   }
@@ -3937,8 +4038,6 @@ function setBulkView(on) {
   show('setup-summary', !on)
   const statusNote = document.getElementById('task-status-note')
   if (statusNote && on) statusNote.hidden = true
-  const pinLabel = document.getElementById('pin-defaults')?.closest('label')
-  if (pinLabel) pinLabel.hidden = on
   const save = document.getElementById('save')
   if (save) {
     save.textContent = on ? `套用到 ${bulkCount} 個任務` : '儲存'

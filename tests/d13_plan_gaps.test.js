@@ -55,7 +55,7 @@ test('沒有表頭文字時退而顯示第幾欄', async () => {
 test('一般數值任務的顯示不受影響', async () => {
   const { ts, doc } = await tasksPage()
   ts.renderTasks([task()], {}, [])
-  assert.equal(doc.querySelector('[data-task-id="t1"] .task-mode').textContent, 'number')
+  assert.equal(doc.querySelector('[data-task-id="t1"] .task-mode').textContent, '數字')
 })
 
 // ---- 批次 E 改動 5:任務列要看得出有設告警 ----

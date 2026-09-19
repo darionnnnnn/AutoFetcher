@@ -33,7 +33,7 @@ const baseCtx = (over = {}) => ({
 
 // ---------- D-1 顯示條件 ----------
 
-test('D-1 目標在框架內且還沒有前置動作時顯示提示，並把進階設定展開', async () => {
+test('D-1 目標在框架內且還沒有前置動作時顯示提示，並把前置動作那一列展開', async () => {
   const { pk, doc } = await fresh()
   pk.render(baseCtx({ frameUrl: 'https://widget.example/chart.html?token=abc' }))
   const hint = $(doc, 'frame-hint')
@@ -43,7 +43,8 @@ test('D-1 目標在框架內且還沒有前置動作時顯示提示，並把進�
   assert.ok(/widget\.example/.test(hint.textContent), `要說出是哪個框架，實得 ${JSON.stringify(hint.textContent)}`)
   // AF-20:排程改在專用視窗抓,文案不再綁「分頁」
   assert.ok(/另外開一份頁面/.test(hint.textContent), '要說明排程自己另開頁面，不會沿用現在的畫面')
-  assert.equal($(doc, 'advanced-section').hasAttribute('open'), true, '藏在收合區裡等於沒提示')
+  assert.equal($(doc, 'preaction-section').hasAttribute('open'), true, '藏在收合區裡等於沒提示')
+  assert.equal($(doc, 'advanced-section').hasAttribute('open'), false, '前置動作已不在進階區，不必打開它（AF-21）')
 })
 
 test('D-1 目標不在框架內時不顯示', async () => {
@@ -126,9 +127,9 @@ test('D-3 按下立即測試會停用按鈕並顯示進行中，結果回來才�
   }
   await pk.handleTestNow()
   assert.equal(sawDisabled, true, '送出中不得讓使用者連按')
-  assert.ok(/測試中/.test(sawLabel), `按鈕要說出正在做事，實得 ${JSON.stringify(sawLabel)}`)
+  assert.ok(/試抓中/.test(sawLabel), `按鈕要說出正在做事，實得 ${JSON.stringify(sawLabel)}`)
   assert.equal(btn.disabled, false, '結果回來要還原')
-  assert.equal(btn.textContent, '立即測試')
+  assert.equal(btn.textContent, '試抓')
 })
 
 test('D-3 目標在框架內且沒有前置動作時，測試成功要說明排程是開新分頁', async () => {

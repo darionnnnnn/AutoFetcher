@@ -4,6 +4,7 @@ import { encryptSecret } from '../../shared/crypto.js'
 import { MSG } from '../../shared/messages.js'
 import { applySavedTheme } from '../theme-apply.js'
 import { createSaveGuard, setFieldError } from '../save-guard.js'
+import { icon } from '../icons.js'
 
 let currentOrigin = ''
 let currentTabId = null
@@ -201,7 +202,12 @@ function renderTestResult(res, errorText) {
       li.dataset.step = String(s.step || '')
       li.dataset.ok = s.ok === true ? 'true' : 'false'
       const label = STEP_LABELS[s.step] || String(s.step || '')
-      li.textContent = `${s.ok === true ? '✓' : '✗'} ${label}${s.detail ? `：${s.detail}` : ''}`
+      // 成敗用 SVG 圖示（不用符號字元）；圖示本身帶名稱，螢幕閱讀器念得出這一步成功或失敗
+      const mark = icon(s.ok === true ? 'check' : 'close', { size: 14 })
+      mark.removeAttribute('aria-hidden')
+      mark.setAttribute('role', 'img')
+      mark.setAttribute('aria-label', s.ok === true ? '成功' : '失敗')
+      li.replaceChildren(mark, document.createTextNode(` ${label}${s.detail ? `：${s.detail}` : ''}`))
       return li
     }))
     list.hidden = steps.length === 0
@@ -212,7 +218,7 @@ function renderTestResult(res, errorText) {
     if (errorText) text = `測試沒有完成：${errorText}`
     else if (res?.alreadyLoggedIn === true) text = ALREADY_LOGGED_IN
     else if (res?.ok === true) { text = '登入成功：這組設定可以用（記得按儲存）'; ok = true }
-    else if (res && Array.isArray(res.steps) && res.steps.length > 0) text = '登入失敗：看上面打 ✗ 的那一步'
+    else if (res && Array.isArray(res.steps) && res.steps.length > 0) text = '登入失敗：看上面打叉的那一步'
     else text = `測試沒有完成：${res?.error || '背景沒有回應'}`
     resultEl.textContent = text
     resultEl.dataset.ok = ok ? 'true' : 'false'

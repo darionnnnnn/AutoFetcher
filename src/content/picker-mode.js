@@ -5,7 +5,7 @@ import { MSG, MAX_BATCH_TASKS } from '../shared/messages.js'
 import { describe } from '../shared/selector.js'
 import { detectKind } from '../shared/block-detect.js'
 import { parseNumber, resolveByPosition, locateByHeader } from '../shared/extract.js'
-import { withInnerLabel } from '../shared/describe.js'
+import { withInnerLabel, TERMS } from '../shared/describe.js'
 import {
   columnHeaders, rowHeader, innermostTable,
   // 「哪些列／格屬於這張表」的判準只有 shared/table.js 一份（AF-10 作業 D）：
@@ -79,9 +79,9 @@ let selectAllNotice = null
 // 工具列四段之設定（作用中模式與預告提示共用）
 const TOOLS_DEF = [
   { key: 'cell', label: '單格', title: '只選這一格' },
-  { key: 'col', label: '整欄→一個值', title: '整欄合成一個數字（加總、平均…）' },
+  { key: 'col', label: '整欄→一個值', title: `整欄${TERMS.aggregateVerb}成一個數字（加總、平均…）` },
   { key: 'colEach', label: '整欄→每格', title: '這一欄每一格各自是一個值' },
-  { key: 'row', label: '整列→一個值', title: '整列合成一個數字' }
+  { key: 'row', label: '整列→一個值', title: `整列${TERMS.aggregateVerb}成一個數字` }
 ]
 
 // 清除表格切換確認與取消確認的暫存狀態

@@ -85,6 +85,30 @@ const AGG_TEXT = {
   count: '筆數'
 }
 
+/**
+ * 全站詞彙表（AF-21 批次 8 定案 4）：Picker、Report、選取模式三端都從這裡取，不得各寫一份。
+ * 規則：一個「任務」可以有多個「值」；整欄／整列算成一個數字的方式叫「合計方式」；
+ * 存檔前先抓一次看看叫「試抓」（批次為「全部試抓」，結果區叫「試抓結果」）。
+ */
+export const TERMS = Object.freeze({
+  task: '任務',
+  value: '值',
+  aggregate: '合計方式',
+  aggregateVerb: '合計',
+  aggregateOptions: Object.freeze({ ...AGG_TEXT }),
+  test: '試抓',
+  testAll: '全部試抓',
+  testResult: '試抓結果',
+  testing: '試抓中…',
+  // 任務的數值類型（任務頁模式欄）：不得把 number／block 這類代碼直接給使用者看
+  modes: Object.freeze({ number: '數字', text: '文字', block: '表格／清單區塊' }),
+  preActionAsk: '抓之前要先點什麼嗎？',
+  preActionAskExample: '（例如關閉彈窗、切換頁籤）',
+  preActionShared: '（套用到每一個任務）',
+  pinDefaults: '下次新任務沿用這組排程與去處',
+  pinnedDone: '已設定'
+})
+
 // 位置定位的白話（Picker 的值清單也用這一份，不要再抄一張）
 export const POS_TEXT = {
   first: '第一筆',

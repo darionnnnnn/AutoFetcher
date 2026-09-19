@@ -151,6 +151,7 @@
   .lamp-warn { background: var(--warn); }
   .lamp-bad { background: var(--danger); }
   .lamp-off { background: var(--text-muted); }
+  .demo-x { vertical-align: -1px; }
   .arrow { align-self: center; color: var(--text-muted); font-size: 1.1rem; }
 
   .help-foot { max-width: 72ch; color: var(--text-muted); font-size: 0.9rem; margin-top: var(--space-5); }
@@ -175,9 +176,9 @@
     <section class="news" aria-labelledby="news-title">
       <h2 id="news-title">這一版改了什麼</h2>
       <ul>
-        <li>任務管理可以勾好幾個任務，一起「<span class="ui" data-ui-label="ui/report/report.html">改排程</span>」、停用或刪除。</li>
-        <li>已經選了好幾格時，Esc 要按兩次才會全部取消，不怕手滑。</li>
-        <li>好幾個值想分開存，按「<span class="ui" data-ui-label="ui/picker/picker.html">拆成每個值一個任務</span>」。</li>
+        <li>用詞統一：存檔前先抓一次叫「<span class="ui" data-ui-label="ui/picker/picker.html">試抓</span>」，整欄算成一個數字的方式叫「<span class="ui" data-ui-label="shared/describe.js">合計方式</span>」。</li>
+        <li>要先點頁籤、關彈窗的頁面，在「抓什麼」下方的「<span class="ui" data-ui-label="shared/describe.js">抓之前要先點什麼嗎？</span>」加一步，不必再翻進階設定。</li>
+        <li>想讓新任務都用同一組時間與去處，存檔後按「<span class="ui" data-ui-label="shared/describe.js">下次新任務沿用這組排程與去處</span>」。</li>
         <li>新任務存好會馬上抓第一筆給你看；還不能存時，「儲存」正上方會說還差什麼。</li>
       </ul>
     </section>
@@ -223,7 +224,7 @@
       <!-- 1 -->
       <section class="topic" id="one-number" data-help-section>
         <h2>我想抓一個數字</h2>
-        <p class="purpose" data-help-purpose>例如匯率表裡「美金 × 即期買入」那一格。</p>
+        <p class="purpose" data-help-purpose>例如匯率表裡「美金 · 即期買入」那一格。</p>
         <ol class="steps" data-help-steps>
           <li>在那一格上按右鍵，選「<span class="ui" data-ui-label="background/main.js">選取要抓的內容</span>」。</li>
           <li>滑鼠移過去會出現橘框，點一下變藍框就是選好了。</li>
@@ -237,7 +238,7 @@
               <tr><td>美金</td><td class="is-picked">31.52</td><td>31.62</td></tr>
               <tr><td>日圓</td><td class="is-hover">0.2051</td><td>0.2101</td></tr>
             </table>
-            <div class="demo-panel"><div>已選 1 個值</div><span class="demo-chip">美金 · 即期買入 ×</span><div class="line">好了按完成</div></div>
+            <div class="demo-panel"><div>已選 1 個值</div><span class="demo-chip">美金 · 即期買入 <svg class="demo-x" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg></span><div class="line">好了按完成</div></div>
           </div>
           <figcaption>橘框＝滑鼠正停在這裡；藍框＝已經選好。</figcaption>
         </figure>
@@ -247,8 +248,10 @@
             <dt>選錯了？</dt><dd>再點一次那一格就取消；或按面板上的「<span class="ui" data-ui-label="content/picker-mode.js">復原</span>」、Ctrl＋Z。</dd>
             <dt>不是表格裡的數字（例如頁首的總量）？</dt><dd>一樣右鍵選取，點那個數字；整個元素的文字裡第一個數字就是抓到的值。</dd>
             <dt>面板沒有出現？</dt><dd>舊版瀏覽器沒有側邊面板，會改開一個小視窗。</dd>
-            <dt>按了「<span class="ui" data-ui-label="ui/picker/picker.html">儲存</span>」卻沒存進去？</dt><dd>按鈕正上方會列出還差什麼（例如還沒選要抓的內容、名稱空白），點那一條就會跳到要補的地方。</dd>
-            <dt>存好之後怎麼知道抓不抓得到？</dt><dd>新任務存好會馬上抓第一筆，結果就寫在面板上；沒抓到時照面板的說明先按「<span class="ui" data-ui-label="ui/picker/picker.html">立即測試</span>」看看。</dd>
+            <dt>面板底部的按鈕？</dt><dd>固定在底部、分兩層：上層是「<span class="ui" data-ui-label="ui/picker/picker.html">儲存</span>」；下層是「<span class="ui" data-ui-label="ui/picker/picker.html">試抓</span>」、「<span class="ui" data-ui-label="ui/picker/picker.html">回頁面重選目標</span>」與「<span class="ui" data-ui-label="ui/picker/picker.html">取消</span>」。捲到哪裡都按得到。</dd>
+            <dt>按了「<span class="ui" data-ui-label="ui/picker/picker.html">儲存</span>」卻沒存進去？</dt><dd>按鈕正上方會出現「<span class="ui" data-ui-label="ui/save-guard.js">還不能儲存：</span>」並列出還差什麼（例如還沒選要抓的內容、名稱空白），點那一條就會跳到要補的地方。</dd>
+            <dt>存好之後怎麼知道抓不抓得到？</dt><dd>新任務存好會馬上抓第一筆，面板先寫「<span class="ui" data-ui-label="ui/picker/picker.js">已儲存，正在抓第一筆…</span>」，抓到就換成那個值；沒抓到時照面板的說明處理。存檔前也可以先按「<span class="ui" data-ui-label="ui/picker/picker.html">試抓</span>」看看。</dd>
+            <dt>每次新任務都要重設時間與儀表板？</dt><dd>存好之後，面板上按「<span class="ui" data-ui-label="shared/describe.js">下次新任務沿用這組排程與去處</span>」，之後新建的任務就從這一組開始（按過會顯示「<span class="ui" data-ui-label="shared/describe.js">已設定</span>」）。不想沿用了，到報表「設定」清除固定的預設值。</dd>
             <dt>面板很窄時看到「<span class="ui" data-ui-label="ui/picker/picker.html">重選目標</span>」？</dt><dd>就是「<span class="ui" data-ui-label="ui/picker/picker.html">回頁面重選目標</span>」：回到頁面重新點要抓的內容。</dd>
           </dl>
         </details>
@@ -282,7 +285,7 @@
         <details data-help-more>
           <summary>遇到這些狀況</summary>
           <dl>
-            <dt>「一個值」跟「每格」差在哪？</dt><dd>「一個值」把整欄加總（或平均、最大…，在面板選）成一個數字；「每格」是每一格各自一條紀錄，報表上是好幾條線。</dd>
+            <dt>「一個值」跟「每格」差在哪？</dt><dd>「一個值」把整欄加總（或平均、最大…，在面板的「<span class="ui" data-ui-label="shared/describe.js">合計方式</span>」選）成一個數字；「每格」是每一格各自一條紀錄，報表上是好幾條線。</dd>
             <dt>合計列被算進去了？</dt><dd>在那一格按右鍵，選「<span class="ui" data-ui-label="content/picker-mode.js">從整欄聚合排除這一列</span>」。只有網頁本來就把合計放在表尾區塊（tfoot）時才會自動排除；一般的「合計」列要自己排除一次。</dd>
             <dt>開頭或結尾有幾列不要？</dt><dd>面板「抓什麼」裡有「<span class="ui" data-ui-label="ui/picker/picker.html">略過開頭</span>」與「略過結尾」可以填列數。</dd>
             <dt>之後表格多了一列，會自動抓嗎？</dt><dd>「整欄→一個值」會（每次都算整欄）；「整欄→每格」不會，它記的是選取當下那幾格，新的那一列要重選。</dd>
@@ -307,7 +310,7 @@
               <tr><td>美金</td><td class="is-picked">31.52</td><td class="is-picked">31.62</td></tr>
               <tr><td>歐元</td><td class="is-picked">34.10</td><td>34.50</td></tr>
             </table>
-            <div class="demo-panel"><div>已選 3 個值</div><span class="demo-chip">美金 · 即期買入 ×</span><span class="demo-chip">美金 · 即期賣出 ×</span><span class="demo-chip">歐元 · 即期買入 ×</span></div>
+            <div class="demo-panel"><div>已選 3 個值</div><span class="demo-chip">美金 · 即期買入 <svg class="demo-x" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg></span><span class="demo-chip">美金 · 即期賣出 <svg class="demo-x" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg></span><span class="demo-chip">歐元 · 即期買入 <svg class="demo-x" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg></span></div>
           </div>
           <figcaption>點幾格就選幾格，面板列出每一個。</figcaption>
         </figure>
@@ -366,15 +369,15 @@
           <li>右鍵選「<span class="ui" data-ui-label="background/main.js">一次建立多個任務</span>」。</li>
           <li>每張表點你要的格子，頁面上的數字直接點；不同的表會各自成為一個任務。</li>
           <li>按「<span class="ui" data-ui-label="content/picker-mode.js">完成</span>」，在面板幫每個任務取名。</li>
-          <li>設定共用的抓取時間，按「<span class="ui" data-ui-label="ui/picker/picker.js">全部試抓</span>」看看。</li>
+          <li>設定共用的抓取時間，按「<span class="ui" data-ui-label="shared/describe.js">全部試抓</span>」看看。</li>
           <li>沒問題就按「<span class="ui" data-ui-label="ui/picker/picker.js">全部儲存</span>」。</li>
         </ol>
         <figure class="demo" data-help-figure>
           <div class="demo-row" aria-hidden="true">
             <div class="demo-panel">
               <div>已選 2 個任務、共 3 個值</div>
-              <div class="demo-group">任務 1：匯率（2 個值）<br><span class="demo-chip">美金 · 即期買入 ×</span><span class="demo-chip">歐元 · 即期買入 ×</span></div>
-              <div class="demo-group">任務 2：庫存（1 個值）<br><span class="demo-chip">數量 ×</span></div>
+              <div class="demo-group">任務 1：匯率（2 個值）<br><span class="demo-chip">美金 · 即期買入 <svg class="demo-x" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg></span><span class="demo-chip">歐元 · 即期買入 <svg class="demo-x" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg></span></div>
+              <div class="demo-group">任務 2：庫存（1 個值）<br><span class="demo-chip">數量 <svg class="demo-x" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg></span></div>
             </div>
             <span class="arrow">→</span>
             <div class="demo-panel">
@@ -390,7 +393,7 @@
           <summary>遇到這些狀況</summary>
           <dl>
             <dt>每個任務想要不同的設定？</dt><dd>多任務共用時間、去處與前置動作。先全部存好，再到報表的「<span class="ui" data-ui-label="ui/report/report.html">任務管理</span>」一個一個編輯。</dd>
-            <dt>要先點選單才出現的頁面？</dt><dd>在面板下方的「<span class="ui" data-ui-label="ui/picker/picker.js">前置動作(套用到每一個任務)</span>」加一步就好，這一批的每個任務都會照做；同一時間要抓時只會做一次。</dd>
+            <dt>要先點選單才出現的頁面？</dt><dd>在「<span class="ui" data-ui-label="shared/describe.js">抓之前要先點什麼嗎？</span>」那一列加一步就好（多任務時它寫著「<span class="ui" data-ui-label="shared/describe.js">（套用到每一個任務）</span>」），這一批的每個任務都會照做；同一時間要抓時只會做一次。</dd>
             <dt>存到一半失敗？</dt><dd>面板會說存好了幾個、哪一個失敗；已存的會從清單拿掉，修好再按一次不會重複建立。</dd>
             <dt>內嵌在頁面裡的框架？</dt><dd>一批只能在同一個框架裡選。框架裡的內容請另外開一批。</dd>
             <dt>最多幾個？</dt><dd>一次最多 20 個任務。</dd>
@@ -403,8 +406,8 @@
         <h2>怎麼確認抓到了什麼</h2>
         <p class="purpose" data-help-purpose>存檔前先試一次，看每一格有沒有算進去。</p>
         <ol class="steps" data-help-steps>
-          <li>選完之後，在面板底部按「<span class="ui" data-ui-label="ui/picker/picker.html">立即測試</span>」。</li>
-          <li>面板會自動捲到「<span class="ui" data-ui-label="ui/picker/picker.html">先試抓看看</span>」，顯示抓到的值。</li>
+          <li>選完之後，在面板底部按「<span class="ui" data-ui-label="ui/picker/picker.html">試抓</span>」。</li>
+          <li>面板會自動捲到「<span class="ui" data-ui-label="ui/picker/picker.html">試抓結果</span>」，顯示抓到的值。</li>
           <li>整欄或整列時，點「<span class="ui" data-ui-label="ui/picker/picker.js">查看抓到的</span>」看每一格。</li>
           <li>表裡「採用」的才有算進去，其他會寫原因。</li>
         </ol>
@@ -426,9 +429,10 @@
         <details data-help-more>
           <summary>遇到這些狀況</summary>
           <dl>
-            <dt>立即測試過了，排程卻失敗？</dt><dd>立即測試用的是你眼前這個分頁；排程會自己另外開一份頁面。頁面要先點什麼才出現的，請加「前置動作」。</dd>
+            <dt>試抓失敗？</dt><dd>如果還沒設任何前置動作，結果下面會提示可以先加一步，按「<span class="ui" data-ui-label="ui/picker/picker.html">去加一步</span>」會跳到「<span class="ui" data-ui-label="shared/describe.js">抓之前要先點什麼嗎？</span>」並展開。</dd>
+            <dt>試抓過了，排程卻失敗？</dt><dd>試抓用的是你眼前這個分頁；排程會自己另外開一份頁面。頁面要先點什麼才出現的，請加前置動作。</dd>
             <dt>測試失敗，想請人幫忙看？</dt><dd>按「<span class="ui" data-ui-label="ui/picker/picker.html">匯出診斷</span>」存成檔案。檔案裡有那張表的內容與網址，給別人前先自己看一下。</dd>
-            <dt>編輯既有任務時沒有立即測試？</dt><dd>目前只有新建任務時有。</dd>
+            <dt>編輯既有任務時沒有試抓？</dt><dd>目前只有新建任務時有。</dd>
           </dl>
         </details>
       </section>
@@ -474,9 +478,10 @@
         <p class="purpose" data-help-purpose>例如要先點頁籤、關掉彈窗，數字才會出來。</p>
         <ol class="steps" data-help-steps>
           <li>先照平常把數字選好，打開面板。</li>
-          <li>展開「<span class="ui" data-ui-label="ui/picker/picker.html">進階設定</span>」，找到「<span class="ui" data-ui-label="ui/picker/picker.html">前置動作</span>」。</li>
-          <li>加一步「點擊元素」，按「<span class="ui" data-ui-label="ui/picker/picker.js">在頁面上選取</span>」點那個頁籤。</li>
-          <li>按「<span class="ui" data-ui-label="ui/picker/picker.html">立即測試</span>」確認，再儲存。</li>
+          <li>在「抓什麼」下方點開「<span class="ui" data-ui-label="shared/describe.js">抓之前要先點什麼嗎？</span>」。</li>
+          <li>按「<span class="ui" data-ui-label="ui/picker/picker.html">新增動作</span>」，選「點擊元素」。</li>
+          <li>按「<span class="ui" data-ui-label="ui/picker/picker.js">在頁面上選取</span>」，點那個頁籤。</li>
+          <li>按「<span class="ui" data-ui-label="ui/picker/picker.html">試抓</span>」確認，再儲存。</li>
         </ol>
         <figure class="demo" data-help-figure>
           <div class="demo-row" aria-hidden="true">
@@ -494,6 +499,7 @@
             <dt>滑鼠移過去才出現的選單？</dt><dd>用三步：「移到元素上」→「等元素出現」→「點擊元素」。</dd>
             <dt>只靠 CSS 滑過去展開的選單？</dt><dd>程式送的滑鼠動作不是真的游標，打不開這種選單。通常選單項目本來就在頁面裡，把「等元素出現」的「要看得見」取消、直接點它。</dd>
             <dt>點了之後整個頁面換掉？</dt><dd>沒關係，它會等新頁面載入再抓。</dd>
+            <dt>已經設過前置動作的任務？</dt><dd>打開編輯時那一列會自動展開，並寫著已設定幾步。</dd>
           </dl>
         </details>
       </section>
@@ -518,14 +524,14 @@
           <summary>遇到這些狀況</summary>
           <dl>
             <dt>想一次改好幾個任務的時間？</dt><dd>在任務管理勾選它們（或按「<span class="ui" data-ui-label="ui/report/report.html">全選</span>」），按「<span class="ui" data-ui-label="ui/report/report.html">改排程</span>」，在面板設好時間後按「<span class="ui" data-ui-label="ui/picker/picker.js">套用到</span> N 個任務」。只改一個的話，直接點那一列的排程文字。</dd>
-            <dt>任務管理的狀態顏色？</dt><dd>綠＝正常、黃＝有警示、紅＝抓不到、灰＝停用中；紅黃兩種的原因直接寫在那一列下面。紅色的列最前面有下一步：「<span class="ui" data-ui-label="ui/report/tasks.js">重選目標</span>」、「<span class="ui" data-ui-label="ui/report/tasks.js">前往登入頁</span>」，其他狀況直接按「<span class="ui" data-ui-label="ui/report/tasks.js">立即抓取</span>」。搜尋不到任務時按「<span class="ui" data-ui-label="ui/report/tasks.js">清除篩選</span>」。</dd>
+            <dt>任務管理的狀態顏色？</dt><dd>綠＝正常、黃＝有警示、紅＝抓不到、灰＝「<span class="ui" data-ui-label="ui/report/tasks.js">停用中</span>」；紅黃兩種的原因直接寫在狀態下面，再下面是下次抓取時間與排程。紅色的列，動作區最前面就是下一步：「<span class="ui" data-ui-label="ui/report/tasks.js">重選目標</span>」、「<span class="ui" data-ui-label="ui/report/tasks.js">前往登入頁</span>」，其他狀況直接按「<span class="ui" data-ui-label="ui/report/tasks.js">立即抓取</span>」。已經有「重選目標」的列不會再多一顆「<span class="ui" data-ui-label="ui/report/tasks.js">重選</span>」。每列最右邊的開關是啟用／停用。搜尋不到任務時按「<span class="ui" data-ui-label="ui/report/tasks.js">清除篩選</span>」。</dd>
             <dt>歷史紀錄的「只看失敗」與「只看告警」？</dt><dd>「<span class="ui" data-ui-label="ui/report/report.js">只看失敗</span>」留下沒抓成功的紀錄；「<span class="ui" data-ui-label="ui/report/report.js">只看告警</span>」留下觸發告警條件的紀錄（抓成功也算）。兩個都勾＝兩個條件都要符合。</dd>
             <dt>上方的日期範圍管什麼？</dt><dd>只出現在儀表板與歷史紀錄：歷史紀錄照它查；儀表板卡片的時間範圍選「全局區間」時也照它。任務管理與設定頁用不到，所以不顯示。</dd>
             <dt>只想改名字？</dt><dd>按名稱旁的「<span class="ui" data-ui-label="ui/report/tasks.js">改名</span>」，改完按 Enter。</dd>
-            <dt>想調整卡片？</dt><dd>儀表板按「編輯版面」，可以拖曳、改大小，點卡片右上的齒輪開設定；設定改完按「套用」才會存，按「取消」就回到原樣。</dd>
+            <dt>想調整卡片？</dt><dd>儀表板按「<span class="ui" data-ui-label="ui/report/report.html">編輯版面</span>」，可以拖曳、改大小；點卡片右上的齒輪開設定。設定改完按「套用」才會存，按「<span class="ui" data-ui-label="ui/report/report.html">取消</span>」就回到原樣。</dd>
             <dt>要把資料帶走？</dt><dd>歷史紀錄可以匯出；設定頁可以匯出匯入全部任務（密碼預設不帶，勾選並設密語才會帶出）。匯出按鈕旁會說「<span class="ui" data-ui-label="ui/report/settings.js">已開始下載</span>」；在另存視窗按取消的話會說匯出沒有完成。</dd>
             <dt>刪除任務前想留一份紀錄？</dt><dd>刪除時跳出的確認框裡按「<span class="ui" data-ui-label="ui/report/tasks.js">先匯出再刪除</span>」；下載沒有完成就不會刪。</dd>
-            <dt>設定改了有沒有存？</dt><dd>設定頁改完就生效，欄位旁會出現「<span class="ui" data-ui-label="ui/report/settings.js">已儲存 ✓</span>」。空白或超出範圍的值不會存，離開欄位後恢復原值。把紀錄保留天數調低時會先問一次，因為更早的紀錄會被刪掉、無法復原。</dd>
+            <dt>設定改了有沒有存？</dt><dd>設定頁改完就生效，欄位旁會出現「<span class="ui" data-ui-label="ui/report/settings.js">已儲存</span>」和一個勾。空白或超出範圍的值不會存，離開欄位後恢復原值。把紀錄保留天數調低時會先問一次，因為更早的紀錄會被刪掉、無法復原。</dd>
             <dt>不想在右鍵看到「使用教學」？</dt><dd>在「<span class="ui" data-ui-label="ui/report/report.html">設定</span>」的「<span class="ui" data-ui-label="ui/report/report.html">診斷</span>」區關掉；那裡也留著開啟教學的連結。</dd>
             <dt>設定頁的東西在哪一區？</dt><dd>分成五區：「<span class="ui" data-ui-label="ui/report/report.html">排程與抓取</span>」（頁面開在哪、載入等多久）、「<span class="ui" data-ui-label="ui/report/report.html">通知與告警</span>」、「<span class="ui" data-ui-label="ui/report/report.html">資料與備份</span>」（匯出匯入、保留天數、用量）、「<span class="ui" data-ui-label="ui/report/report.html">站台</span>」（登入檢查時間與帳號）、「<span class="ui" data-ui-label="ui/report/report.html">診斷</span>」（排程健康、外觀主題、隱私說明）。</dd>
             <dt>只用鍵盤操作報表？</dt><dd>上方四個分頁用 ← → 切換。歷史紀錄的日曆日期、紀錄列最前面的展開鈕都可以用 Tab 移過去，按 Enter 或空白鍵選日期、展開明細（用滑鼠點整列一樣會展開）。</dd>
@@ -559,6 +565,7 @@
             <dt>黃燈常見原因</dt><dd>找元素時用了備用方式、表格只讀到一部分、補抓的紀錄、或要排除的合計列找不到。</dd>
             <dt>紅燈常見原因</dt><dd>網站改版找不到元素、登入失敗、數字解析不出來、連續失敗。</dd>
             <dt>看過了，不想再被數字提醒？</dt><dd>在圖示的清單上按那一列的「<span class="ui" data-ui-label="ui/popup/popup.js">知道了</span>」，或上方的「<span class="ui" data-ui-label="ui/popup/popup.html">全部知道了</span>」。黃燈按了就消，狀態再變才會重新亮；紅燈會留著並標「<span class="ui" data-ui-label="ui/popup/popup.js">已知悉・尚未修復</span>」，不想管它就按「<span class="ui" data-ui-label="ui/popup/popup.js">停用這個任務</span>」。只打開圖示看一眼不算知道了。</dd>
+            <dt>清單最上面有一列網址？</dt><dd>那是站台列：這個網站登不進去，底下的任務都會跟著失敗。照它寫的「<span class="ui" data-ui-label="ui/popup/popup.js">在登入頁按右鍵 → AutoFetcher → 設定此站台登入</span>」重設，或按「<span class="ui" data-ui-label="ui/popup/popup.js">前往登入頁</span>」；看過了一樣可以按「<span class="ui" data-ui-label="ui/popup/popup.js">知道了</span>」。</dd>
             <dt>紅燈要怎麼修？</dt><dd>找不到元素或解析不出數字，按「<span class="ui" data-ui-label="ui/popup/popup.js">重選目標</span>」到任務管理重選；登入失敗按「<span class="ui" data-ui-label="ui/popup/popup.js">前往登入頁</span>」，在登入頁按右鍵選「<span class="ui" data-ui-label="background/main.js">設定此站台登入</span>」；其他狀況先按「<span class="ui" data-ui-label="ui/popup/popup.js">立即重試</span>」。</dd>
             <dt>找不到這份教學？</dt><dd>點工具列圖示，最下面一列有「<span class="ui" data-ui-label="ui/popup/popup.html">開啟報表</span>」、「<span class="ui" data-ui-label="ui/popup/popup.html">使用教學</span>」。</dd>
             <dt>想全部先停下來？</dt><dd>點圖示，按最下面一列的「<span class="ui" data-ui-label="ui/popup/popup.html">全部暫停 / 恢復</span>」。</dd>
@@ -573,7 +580,7 @@
         <ol class="steps" data-help-steps>
           <li>打開那個任務的網頁，確認數字還在。</li>
           <li>到「<span class="ui" data-ui-label="ui/report/report.html">任務管理</span>」按重選，重新點一次那一格。</li>
-          <li>還是不行，建新任務時按「<span class="ui" data-ui-label="ui/picker/picker.html">立即測試</span>」，失敗就「<span class="ui" data-ui-label="ui/picker/picker.html">匯出診斷</span>」。</li>
+          <li>還是不行，建新任務時按「<span class="ui" data-ui-label="ui/picker/picker.html">試抓</span>」，失敗就「<span class="ui" data-ui-label="ui/picker/picker.html">匯出診斷</span>」。</li>
         </ol>
         <figure class="demo" data-help-figure>
           <div class="demo-row" aria-hidden="true">

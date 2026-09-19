@@ -6,7 +6,7 @@ import { buildExport, download } from '../../shared/export.js'
 import { confirmDialog, dismissDialog, isDialogOpen } from '../modal.js'
 import { icon } from '../icons.js'
 import { isGap, gapTextOf } from '../../shared/describe.js'
-import { describeSchedule, describeTarget, targetOfTask, exclusionOfTarget, EMPTY_GUIDE } from '../../shared/describe.js'
+import { describeSchedule, describeTarget, targetOfTask, exclusionOfTarget, EMPTY_GUIDE, TERMS } from '../../shared/describe.js'
 
 let currentTasks = []
 let currentHealth = {}
@@ -419,21 +419,18 @@ function createNoMatchState(searchInput, failedCheckbox) {
   return box
 }
 
-// 建立單一任務列元素
-const AGGREGATE_TEXT = { max: '最大值', min: '最小值', avg: '平均', sum: '加總', count: '筆數' }
-
-// 描述抓取模式；區塊任務要看得出取哪一欄／列與聚合方式
+// 描述抓取模式；區塊任務要看得出取哪一欄／列與合計方式（白話與選項文字都取自 describe.js 的 TERMS）
 function describeMode(t) {
   const mode = t.mode || 'number'
   const block = t.spec?.block
-  if (mode !== 'block' || !block) return mode
+  if (mode !== 'block' || !block) return TERMS.modes[mode] || mode
 
   const axisText = block.axis === 'row' ? '列' : '欄'
   // index 是 0 起算，顯示給人看用 1 起算
   const target = block.headerText
     ? `「${block.headerText}」`
     : (Number.isFinite(Number(block.index)) ? `第 ${Number(block.index) + 1} ${axisText}` : `某一${axisText}`)
-  const agg = AGGREGATE_TEXT[block.aggregate] || block.aggregate || '加總'
+  const agg = TERMS.aggregateOptions[block.aggregate] || block.aggregate || TERMS.aggregateOptions.sum
   return `區塊 ${target}${block.headerText ? `這一${axisText}` : ''} ${agg}`
 }
 
@@ -478,7 +475,6 @@ function createTaskRow(t) {
     lastPickedId = t.id
     updateSelectionUI()
   })
-  row.appendChild(selectBox)
 
   if (selectedIds.has(t.id)) {
     row.classList.add('selected')
@@ -501,8 +497,8 @@ function createTaskRow(t) {
     }
   })
   toggleLabel.appendChild(toggle)
-  row.appendChild(toggleLabel)
 
+  let nameNode
   if (renaming && renaming.id === t.id) {
     const nameInput = document.createElement('input')
     nameInput.type = 'text'
@@ -530,12 +526,12 @@ function createTaskRow(t) {
       if (!renaming || renaming.id !== t.id) return
       await saveRename(t.id, nameInput.value)
     })
-    row.appendChild(nameInput)
+    nameNode = nameInput
   } else {
     const nameEl = document.createElement('span')
     nameEl.className = 'task-name'
     nameEl.textContent = t.name || t.id
-    row.appendChild(nameEl)
+    nameNode = nameEl
   }
 
   const renameBtn = document.createElement('button')
@@ -566,10 +562,10 @@ function createTaskRow(t) {
       } catch {}
     }
   })
-  row.appendChild(renameBtn)
 
+  let fieldsEl = null
   if (Array.isArray(t.fields) && t.fields.length > 0) {
-    const fieldsEl = document.createElement('span')
+    fieldsEl = document.createElement('span')
     fieldsEl.className = 'task-fields'
     const fieldNames = t.fields.map(f => (f && f.name) ? f.name : (f?.key || '')).filter(Boolean)
     let text = ''
@@ -579,13 +575,11 @@ function createTaskRow(t) {
       text = fieldNames.join('、')
     }
     fieldsEl.textContent = text
-    row.appendChild(fieldsEl)
   }
 
   const urlEl = document.createElement('span')
   urlEl.className = 'task-url'
   urlEl.textContent = t.url || ''
-  row.appendChild(urlEl)
 
   const modeEl = document.createElement('span')
   modeEl.className = 'task-mode'
@@ -595,25 +589,24 @@ function createTaskRow(t) {
   // 只給區塊任務：數值／文字任務的完整句（「抓 a.test 頁面上的數字」）沒有新資訊，
   // 而且列上的 title 已經有人用（連續失敗的最後錯誤放在 title）
   if (target.mode === 'block') modeEl.title = describeTarget(target)
-  row.appendChild(modeEl)
 
   // 有設告警 / 前置動作的任務要一眼看得出來，否則只能逐一點進去看
   const activeAlerts = Array.isArray(t.alerts) ? t.alerts.filter((a) => a && a.enabled !== false) : []
+  let alertEl = null
   if (activeAlerts.length > 0) {
-    const alertEl = document.createElement('span')
+    alertEl = document.createElement('span')
     alertEl.className = 'task-alerts'
     alertEl.appendChild(icon('alert'))
     alertEl.appendChild(document.createTextNode(` 告警 ${activeAlerts.length}`))
     alertEl.title = `${activeAlerts.length} 條告警條件`
-    row.appendChild(alertEl)
   }
 
+  let preEl = null
   if (Array.isArray(t.preActions) && t.preActions.length > 0) {
-    const preEl = document.createElement('span')
+    preEl = document.createElement('span')
     preEl.className = 'task-preactions'
     preEl.textContent = `前置 ${t.preActions.length}`
     preEl.title = `抓取前會先執行 ${t.preActions.length} 個動作`
-    row.appendChild(preEl)
   }
 
   const scheduleBtn = document.createElement('button')
@@ -627,46 +620,45 @@ function createTaskRow(t) {
   scheduleBtn.addEventListener('click', async () => {
     await openBulkSchedule([t.id])
   })
-  row.appendChild(scheduleBtn)
 
   const nextEl = document.createElement('span')
   nextEl.className = 'task-next'
   const nextVal = currentCtx?.nextRuns?.[t.id]
   nextEl.textContent = nextVal ? new Date(nextVal).toLocaleString() : '—'
-  row.appendChild(nextEl)
 
   const healthInfo = currentHealth?.[t.id]
   const statusEl = document.createElement('span')
   statusEl.className = `task-status chip ${CHIP_OF_ROW_STATE[rowStateOf(t, healthInfo)] || 'is-ok'}`
   // 顯示白話；代碼放 data-status 給配色用
   const statusCode = healthInfo?.status || 'ok'
-  statusEl.textContent = statusTextOf(statusCode)
+  // 停用中的任務不會抓：chip 說「停用中」，不沿用上一次的「成功」（灰色配「成功」自相矛盾）
+  statusEl.textContent = t.enabled === false ? '停用中' : statusTextOf(statusCode)
   statusEl.dataset.status = statusCode
   if (healthInfo && healthInfo.reason) {
     statusEl.setAttribute('title', healthInfo.reason)
   }
-  row.appendChild(statusEl)
 
   const rowState = rowStateOf(t, healthInfo)
   if (rowState) row.classList.add(rowState)
   // 紅／黃燈的原因直接顯示成一行小字，不必 hover；title 留完整內容
+  let reasonEl = null
   if ((isRed(healthInfo) || isWarn(healthInfo)) && healthInfo.reason) {
-    const reasonEl = document.createElement('span')
+    reasonEl = document.createElement('span')
     reasonEl.className = 'task-reason'
     reasonEl.textContent = healthInfo.reason
     reasonEl.title = healthInfo.reason
-    row.appendChild(reasonEl)
   }
 
+  let streakEl = null
   if (typeof t.notFoundStreak === 'number' && t.notFoundStreak > 0) {
-    const streakEl = document.createElement('span')
+    streakEl = document.createElement('span')
     streakEl.className = 'task-streak'
     streakEl.textContent = `連續失敗 ${t.notFoundStreak} 次`
-    row.appendChild(streakEl)
   }
 
+  let suggestEl = null
   if (t.suggestForeground === true && !t.foreground) {
-    const suggestEl = document.createElement('span')
+    suggestEl = document.createElement('span')
     suggestEl.className = 'task-suggest-foreground'
     suggestEl.textContent = '連續抓不到，建議改用前景抓取'
 
@@ -687,7 +679,6 @@ function createTaskRow(t) {
       }
     })
     suggestEl.appendChild(useFgBtn)
-    row.appendChild(suggestEl)
   }
 
   const actionsEl = document.createElement('div')
@@ -750,6 +741,7 @@ function createTaskRow(t) {
   }
 
   // 失敗列的下一步：依狀態挑一顆，放在動作區最前面
+  let hasNextRepick = false
   if (rowState === 'failed') {
     const status = healthInfo.status
     if (status === 'selector_lost' || status === 'parse_error') {
@@ -760,6 +752,7 @@ function createTaskRow(t) {
       btn.textContent = '重選目標'
       btn.addEventListener('click', () => startRepick(t))
       actionsEl.prepend(btn)
+      hasNextRepick = true
     } else if (status === 'login_failed') {
       const btn = document.createElement('button')
       btn.type = 'button'
@@ -810,7 +803,8 @@ function createTaskRow(t) {
   repickBtn.dataset.action = 'repick'
   repickBtn.textContent = '重選'
   repickBtn.addEventListener('click', () => startRepick(t))
-  actionsEl.appendChild(repickBtn)
+  // 同一件事不放兩顆：失敗列最前面已經有「重選目標」
+  if (!hasNextRepick) actionsEl.appendChild(repickBtn)
 
   const delBtn = document.createElement('button')
   delBtn.type = 'button'
@@ -821,7 +815,12 @@ function createTaskRow(t) {
   })
   actionsEl.appendChild(delBtn)
 
-  row.appendChild(actionsEl)
+  // DOM 順序就是畫面順序（鍵盤 Tab 跟著走）：選取、名稱、狀態、原因、下次時間與其餘資訊、動作、啟用開關
+  row.append(...[
+    selectBox, nameNode, renameBtn, statusEl, reasonEl,
+    nextEl, scheduleBtn, modeEl, fieldsEl, urlEl, alertEl, preEl, streakEl, suggestEl,
+    actionsEl, toggleLabel
+  ].filter(Boolean))
 
   // 拖曳排序事件綁定
   let isDragging = false

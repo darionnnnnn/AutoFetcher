@@ -62,6 +62,18 @@ function getCardSourceName(card, ctx) {
   return names.length > 0 ? names.join('、') : '';
 }
 
+const STATUS_CARD_TITLE = '任務狀態';
+
+/**
+ * 表格卡時間欄的畫面格式「MM/DD HH:mm」（只給畫面用；複製 TSV 與匯出維持原本的完整時間）。
+ * 認不得的格式原樣回傳。
+ */
+export function shortTimeText(t) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(String(t ?? ''));
+  if (!m) return t ?? '';
+  return m[4] !== undefined ? `${m[2]}/${m[3]} ${m[4]}:${m[5]}` : `${m[2]}/${m[3]}`;
+}
+
 /**
  * 取得卡片標題（自訂標題優先；否則以來源名稱為主，
  * 若同一儀表板內排在前面已有同名但不同型別的卡片，就補上型別後綴以便分辨）
@@ -72,7 +84,8 @@ function getCardTitle(card, ctx) {
   }
   const baseName = getCardSourceName(card, ctx);
   if (!baseName) {
-    return '';
+    // 狀態清單卡的來源在 options.taskIds、不在 source：沒有標題時給預設標題，不留一條空白標頭
+    return card.type === 'status' ? STATUS_CARD_TITLE : '';
   }
 
   if (Array.isArray(ctx?.cards)) {
@@ -440,6 +453,7 @@ function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
 
     for (const id of columns) {
       const th = document.createElement('th');
+      th.className = 'num';
       const titleSpan = document.createElement('span');
       titleSpan.textContent = seriesLabel(columns, id, ctx);
       th.setAttribute('title', ctx?.tasksById?.[id]?.name || id);
@@ -468,7 +482,8 @@ function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
       const r = rows[rowIndex];
       const tr = document.createElement('tr');
       const timeTd = document.createElement('td');
-      timeTd.textContent = r.t ?? '';
+      timeTd.textContent = shortTimeText(r.t ?? '');
+      if (r.t) timeTd.title = String(r.t);
       tr.appendChild(timeTd);
 
       const rowTsv = [r.t ?? ''];
@@ -476,6 +491,7 @@ function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
       for (const col of columns) {
         const val = r.values?.[col];
         const td = document.createElement('td');
+        td.className = 'num';
         // 這一格由多筆合併而來時說明來源筆數，避免使用者以為只抓了一次
         const mergedCount = r.merged?.[col];
         if (typeof mergedCount === 'number' && mergedCount > 1) {
@@ -535,6 +551,7 @@ function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
     for (const h of tsvHeaders) {
       const th = document.createElement('th');
       th.textContent = h;
+      if (h === '值') th.className = 'num';
       headTr.appendChild(th);
     }
     thead.appendChild(headTr);
@@ -543,7 +560,9 @@ function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
       const tr = document.createElement('tr');
 
       const timeTd = document.createElement('td');
-      timeTd.textContent = effectiveTimeOf(r);
+      const fullTime = effectiveTimeOf(r);
+      timeTd.textContent = shortTimeText(fullTime);
+      if (fullTime) timeTd.title = fullTime;
       tr.appendChild(timeTd);
 
       const taskTd = document.createElement('td');
@@ -552,6 +571,7 @@ function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
       tr.appendChild(taskTd);
 
       const valTd = document.createElement('td');
+      valTd.className = 'num';
       let valDisplay = '—';
       let valRaw = '';
       if (typeof r.value === 'number' && Number.isFinite(r.value)) {
@@ -710,7 +730,9 @@ function renderStatusCard(card, ctx, { bodyEl }) {
     const task = parents[id] || { id, name: id };
     const taskName = task.name || id;
     const healthCode = ctx?.health?.[id]?.status;
-    const healthStatus = healthCode ? statusTextOf(healthCode) : '—';
+    // 停用中的任務不會抓：說「停用中」（與任務頁同一句），不沿用上一次的狀態
+    const paused = task.enabled === false;
+    const healthStatus = paused ? '停用中' : (healthCode ? statusTextOf(healthCode) : '—');
     const nextRun = ctx?.nextRuns?.[id] || '—';
     const mine = (ctx?.missed || []).filter(m => m && m.taskId === id);
     const missedCount = mine.filter(m => !isGap(m)).length;
@@ -728,7 +750,7 @@ function renderStatusCard(card, ctx, { bodyEl }) {
     const stateEl = document.createElement('span');
     // 顏色跟著 health 走（判定只經 record-status.js）；以前不論成敗都是綠色
     const health = ctx?.health?.[id];
-    const chipCls = !healthCode ? 'is-off' : (isRed(health) ? 'is-bad' : (isWarn(health) ? 'is-warn' : 'is-ok'));
+    const chipCls = (paused || !healthCode) ? 'is-off' : (isRed(health) ? 'is-bad' : (isWarn(health) ? 'is-warn' : 'is-ok'));
     stateEl.className = `status-state chip ${chipCls}`;
     stateEl.textContent = healthStatus;
     item.appendChild(stateEl);

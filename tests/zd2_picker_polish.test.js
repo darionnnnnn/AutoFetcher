@@ -262,7 +262,7 @@ test('還沒試抓時預覽區有一句引導；按了立即測試就換成結�
   const { c, pk, doc } = await fresh()
   pk.render({ locator: LOCATOR, url: URL_ })
   const preview = doc.getElementById('preview')
-  assert.equal(preview.textContent, '按下方「立即測試」看看現在會抓到什麼')
+  assert.equal(preview.textContent, '按下方「試抓」看看現在會抓到什麼')
   c.__setRuntimeResponder((msg) => msg?.type === 'TEST_TASK' ? { ok: true, value: 42, raw: '42' } : undefined)
   await pk.handleTestNow()
   assert.equal(preview.textContent, '42')
