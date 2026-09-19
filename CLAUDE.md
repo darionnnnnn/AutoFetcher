@@ -103,12 +103,12 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 
 - 改任何行為 → `docs/SPEC.md`(現況規格,§編號會被程式碼註解引用,勿拆檔)
 - 想做但刻意沒做 → `docs/BACKLOG.md`(每項附觸發條件)
-- 本輪規劃 → `docs/AF-<N>-PLAN.md`;完工搬 `docs/archive/`(按需讀,勿全掃)。AF-1~AF-20 已歸檔。
+- 本輪規劃 → `docs/AF-<N>-PLAN.md`;完工搬 `docs/archive/`(按需讀,勿全掃)。AF-1~AF-21 已歸檔。
 
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 2914 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test` **基線 2973 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
   併回前另做兩份獨立終檢(程式碼 + 文件)。
@@ -277,6 +277,15 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - 不要用一般 Chrome 跑煙霧測試:152 起已封鎖 `--load-extension`,必須用 Chrome for Testing(見 `run_smoke.sh`)。
 - 不要用 `worker.evaluate` 做端到端斷言(service worker 閒置會被回收);從擴充功能頁面做。
 - **用 `git worktree` 量改動前基準時,不要用 junction 把主專案的 `node_modules` 接過去**(AF-21:`git worktree remove --force` 順著 junction 刪光了主專案的 `node_modules`,要 `npm ci` 復原)。
+- **面板的「畫面切換入口」要清的東西又多一份**(AF-21 體檢):`render`／`setBatchView`／`setBulkView` 都要清守門區、欄位錯誤、「還差 N 項」與前置動作計數——與 `pickedTableEl`、`undoSnapshot`、`#test-detail` 同型,新增任何「掛在面板上的狀態」時先問它在這三個入口有沒有被清。
+- **面板重畫簽章要含每一種 ctx 的內容鍵**(AF-21 體檢):`bulk` 的 `taskIds` 有進簽章、`batch` 的 `items` 漏了,第二輪批次選取被當成沒變、存的是舊目標。新增 ctx 種類時把它的內容鍵加進 `sig`。
+- **「只加不減」的清單要有對帳的出口**(AF-21 體檢):錯過清單在格子真的跑完、任務被刪之後都留著。任何累積型的鍵,寫入點旁邊就要想好誰在什麼時候把它拿掉;以會變的欄位(gap 的 `slot`)當刪除鍵,畫面拿舊值就刪不到。
+- **同一份守衛寫在兩個兄弟函式時兩邊都要有**(AF-21 體檢):`computeIntervalGaps` 有 `createdAt` 守衛、`computeMissedSlots` 沒有,新任務一建立就被回溯 7 天錯過。
+- **每條失敗路徑的重試都要有上限**:離線分支少了 `attempt < 3`,alarm 每 10 分鐘自我延續。
+- **拖曳類的 pointer 監聽一定要接 `pointercancel`**;「忙碌中」旗標只在 `pointerup` 歸零的話,一次取消就讓之後的重畫永遠被延後。
+- **先寫入成功才關閉／才清草稿**(抽屜套用):順序反了,寫入失敗時畫面留著沒存的值而且零提示。
+- **在 MutationObserver 回呼裡做全文件掃描要合併**(擷取短等待:會自己重繪的頁面 3 秒內掃上百次)。
+- **測試用 `?t=` 載入模組時,它 import 的相依是另一個實例**:要佔住某把鎖或共用模組狀態的測試,兩邊必須拿到同一個實例(AF-21 體檢的突變因此一度不紅)。
 - **動到 background 的批次,單元測試全綠之後一定要跑煙霧測試**(AF-21 兩次回歸都只有煙霧抓得到:setIcon 相對路徑、煙霧腳本讀舊紀錄鍵)。
 - 不要在 UI 模組載入時就讀 storage 或渲染(測試要能自己呼叫 render)。
 - 不要用 `innerHTML` 塞入紀錄內容或任務名稱(用 `textContent`)。
