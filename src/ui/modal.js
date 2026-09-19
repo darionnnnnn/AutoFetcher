@@ -27,8 +27,17 @@ function makeButton(doc, text, action, className) {
  * @param {{confirm?: string, cancel?: string}} [opts.ids] 兩顆按鈕的 id（呼叫端既有的 id 契約）
  * @returns {Promise<boolean|any>} 確認 true、取消／Esc false、extra 回傳 extra.value
  */
+// 目前這個對話框的元素被別人從文件上移掉了（例如掛在某個結果區裡、那一區被 textContent 覆寫）：
+// 沒有人會再按到它的按鈕，當作取消結束掉，否則 current 永遠不為 null、isDialogOpen() 恆真
+function dropDetached() {
+  if (current && current.dlg && current.dlg.isConnected === false) {
+    current.finish(false)
+  }
+}
+
 export function confirmDialog({ title, body, confirmText = '確定', cancelText = '取消', danger = false, extra = null, container = null, ids = null } = {}) {
   const doc = globalThis.document
+  dropDetached()
   if (current) current.finish(false)
 
   const trigger = doc.activeElement
@@ -75,6 +84,7 @@ export function confirmDialog({ title, body, confirmText = '確定', cancelText 
   return new Promise((resolve) => {
     const state = {
       done: false,
+      dlg,
       finish(value) {
         if (state.done) return
         state.done = true
@@ -118,5 +128,6 @@ export function dismissDialog() {
 
 // 目前有沒有確認框開著
 export function isDialogOpen() {
+  dropDetached()
   return current !== null
 }

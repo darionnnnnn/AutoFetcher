@@ -104,6 +104,9 @@ export async function exportSettings({ includePasswords = false, passphrase } = 
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 
+// 匯入同 id 任務時，匯入檔沒帶就沿用本機既有值的執行期欄位（表單／匯出檔管不到的那些）
+const PRESERVED_TASK_FIELDS = ['enabled', 'foreground', 'suggestForeground', 'notFoundStreak', 'createdAt']
+
 // 設定白名單與數值域：鍵＝storage.js 的 DEFAULT_SETTINGS 鍵＋程式裡實際有讀的其他設定鍵；
 // 值回傳空字串＝合格，否則是拒絕原因
 const inRange = (min, max, integer = false) => (v) => {
@@ -117,6 +120,15 @@ const isBool = (v) => typeof v === 'boolean' ? '' : '必須是 true 或 false'
 const isObj = (v) => isPlainObject(v) ? '' : '必須是物件'
 const isTime = (v) => typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v) ? '' : '必須是 HH:MM'
 const isDateText = (v) => typeof v === 'string' && Number.isFinite(Date.parse(v)) ? '' : '必須是可解析的時間'
+// pickerDefaults：本體是物件，裡面的 pinned／last 有帶就必須也是物件（不是就整個 pickerDefaults 不收）
+const isPickerDefaults = (v) => {
+  const problem = isObj(v)
+  if (problem) return problem
+  for (const k of ['pinned', 'last']) {
+    if (v[k] !== undefined && !isPlainObject(v[k])) return `${k} 必須是物件`
+  }
+  return ''
+}
 
 // 數值設定的值域：匯入白名單與設定頁欄位驗證共用這一份（AF-21 4-D）
 export const NUMERIC_SETTING_RANGES = Object.freeze({
@@ -144,7 +156,7 @@ const SETTINGS_RULES = {
   alertCooldownMin: numericRule('alertCooldownMin'),
   siteCheckTime: isTime,
   showHelpMenu: isBool,
-  pickerDefaults: isObj,
+  pickerDefaults: isPickerDefaults,
   history: isObj,
   lastSettingsExportAt: isDateText,
   lastRecordsExportAt: isDateText
@@ -177,11 +189,18 @@ async function parseSettingsFile(json, passphrase) {
     const { salt, iv, ct } = parsed.secrets
     if (!salt || !iv || !ct) throw new Error('加密資料欄位不完整')
 
-    const key = await deriveAesKey(passphrase, base64ToBytes(salt), ['decrypt'])
-    const decryptedBuf = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: base64ToBytes(iv) }, key, base64ToBytes(ct)
-    )
-    const decoded = JSON.parse(new TextDecoder().decode(decryptedBuf))
+    // WebCrypto 的失敗訊息是英文原文（而且常常是空字串），直接顯示等於沒說明；
+    // 解密之後的 JSON.parse 也一起包起來（解錯密語時內容會是亂碼）
+    let decoded
+    try {
+      const key = await deriveAesKey(passphrase, base64ToBytes(salt), ['decrypt'])
+      const decryptedBuf = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: base64ToBytes(iv) }, key, base64ToBytes(ct)
+      )
+      decoded = JSON.parse(new TextDecoder().decode(decryptedBuf))
+    } catch {
+      throw new Error('密語錯誤或加密資料已損毀，請確認密語')
+    }
     passwords = isPlainObject(decoded) ? decoded : {}
   }
   return { data, passwords }
@@ -205,7 +224,7 @@ export async function previewSettingsImport(json, { passphrase } = {}) {
 
   // 任務：沿用寫入口的 validateTask；外來檔另拒 file:
   if (Array.isArray(data.tasks)) {
-    const existing = new Set((await getTasks()).map(t => t.id))
+    const existing = new Map((await getTasks()).map(t => [t.id, t]))
     const planned = new Set()
     for (const t of data.tasks) {
       const name = typeof t?.name === 'string' && t.name.trim() !== '' ? t.name
@@ -223,7 +242,16 @@ export async function previewSettingsImport(json, { passphrase } = {}) {
       if (existing.has(t.id) || planned.has(t.id)) summary.tasks.update++
       else summary.tasks.add++
       planned.add(t.id)
-      plan.tasks.push(structuredClone(t))
+      // 同 id 是「更新」不是「整筆換掉」：匯入檔沒帶的執行期欄位沿用本機既有值
+      // （否則匯入一次就把停用中的任務復活、前景設定與建立時間洗掉）
+      const next = structuredClone(t)
+      const prior = existing.get(t.id)
+      if (prior) {
+        for (const field of PRESERVED_TASK_FIELDS) {
+          if (next[field] === undefined && prior[field] !== undefined) next[field] = prior[field]
+        }
+      }
+      plan.tasks.push(next)
     }
   }
 

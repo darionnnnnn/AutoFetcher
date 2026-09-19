@@ -931,6 +931,12 @@ export function renderTasks(tasks, health = {}, missed = [], ctx = {}) {
   if (renaming && !currentTaskIds.has(renaming.id)) {
     renaming = null
   }
+  // 手動抓取的結果也跟著任務刪除清掉（模組層的東西不會被重畫洗掉）
+  for (const id of [...runResults.keys()]) {
+    if (!currentTaskIds.has(id)) {
+      runResults.delete(id)
+    }
+  }
 
   // 1. 錯過清單橫幅
   const banner = document.getElementById('missed-banner')
@@ -1026,7 +1032,8 @@ export function renderTasks(tasks, health = {}, missed = [], ctx = {}) {
         ackBtn.dataset.action = 'ack-gap'
         ackBtn.textContent = '知道了'
         ackBtn.addEventListener('click', async () => {
-          await sendMissedAction({ type: MSG.SKIP_ONE, taskId: m.taskId, slot: m.slot }, '知道了')
+          // 空窗列要說清楚略過的是哪一種（背景據此找 kind:'gap' 那一筆，找不到會回 ok:false）
+          await sendMissedAction({ type: MSG.SKIP_ONE, taskId: m.taskId, slot: m.slot, kind: 'gap' }, '知道了')
         })
         row.appendChild(ackBtn)
         banner.appendChild(row)

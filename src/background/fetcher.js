@@ -211,6 +211,14 @@ function parseRunStateKey(key) {
 export async function recoverRunState(runOpts = {}, { detach = false } = {}) {
   const resumed = []
   const state = await getRunState()
+  // 已經排著重試 alarm 的格子不要再續跑一次：同一格兩條重試鏈會互相搶帳本、各寫一筆紀錄
+  const pendingRetries = new Set()
+  try {
+    for (const alarm of (await chrome.alarms.getAll()) || []) {
+      const parsed = parseRetryName(alarm?.name)
+      if (parsed?.slot) pendingRetries.add(runStateKeyOf(parsed.taskId, parsed.slot))
+    }
+  } catch {}
   for (const [key, entry] of Object.entries(state)) {
     if (!entry) continue
     // 自己這個 worker 的項目：只有 running 且跑超過 STUCK_RUNNING_MS 的算卡住，其餘不碰
@@ -232,6 +240,8 @@ export async function recoverRunState(runOpts = {}, { detach = false } = {}) {
     if (!(await takeRunState(key))) continue
     if (!stuck && Date.now() - at <= RECOVER_WITHIN_MS) {
       if (!task || task.enabled === false) continue
+      // 這一格已經有重試 alarm 在等：項目拿掉就好，續跑交給那個 alarm
+      if (pendingRetries.has(key)) continue
       const run = runTask(task, {
         slot,
         attempt: typeof entry.attempt === 'number' ? entry.attempt : 1,
@@ -259,6 +269,8 @@ export async function recoverRunState(runOpts = {}, { detach = false } = {}) {
       }
       await appendRecord(slot.slice(0, 10), record)
       await updateHealth(taskId, healthFromRecords([record]))
+      // 設定頁的「被中斷」次數改從 diag 數，不再掃 7 天紀錄；這是罕見事件，不會洗掉環形緩衝
+      try { await diag.log('interrupted', `${taskId}@${slot}`) } catch {}
       if (task.schedule?.type === 'daily') {
         await updateMissedList((list) => {
           if (list.some(m => m?.taskId === taskId && m?.slot === slot)) return undefined
@@ -511,8 +523,18 @@ export async function runTask(task, opts = {}) {
         error: '目前離線'
       }, { parentId: task.id, skipLedger: true })
     }
-    await scheduleRetry(task.id, attempt, true, slot)
-    return null
+    // 重試也有上限：沒有上限的話 alarm 會自己無限接力下去，一直離線就永遠不留紀錄
+    if (attempt < 3) {
+      await scheduleRetry(task.id, attempt, true, slot)
+      return null
+    }
+    return await writeRecord({
+      taskId: task.id,
+      slot,
+      capturedAt: new Date().toISOString(),
+      status: 'error',
+      error: '目前離線'
+    }, { parentId: task.id })
   }
 
   // 同站台串行佇列執行
@@ -796,7 +818,10 @@ export async function runTask(task, opts = {}) {
               // 總時限到了不算「盡力而為」的那種逾時
               if (!err?.afTimeout || err.afDeadline) throw err
             }
-            res = await send({ type: MSG.EXTRACT, locator: task.locator, spec: task.spec }, loc.frameId, extractTimeoutMs, 'Extract')
+            // 已知找不到元素的任務不必每次再多等短等待（3 秒）：連一次都沒抓到過，等了也是白等
+            const extractMsg = { type: MSG.EXTRACT, locator: task.locator, spec: task.spec }
+            if ((task.notFoundStreak || 0) >= 1) extractMsg.settleMs = 0
+            res = await send(extractMsg, loc.frameId, extractTimeoutMs, 'Extract')
             lastLiveErr = null
             break
           } catch (err) {

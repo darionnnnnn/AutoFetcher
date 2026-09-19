@@ -7,7 +7,7 @@ import { installChromeMock, resetChromeMock } from './chrome-mock.js'
 
 const html = readFileSync(new URL('../src/ui/report/report.html', import.meta.url), 'utf8')
 
-test('countGuardEvents：只算 7 天內、依 kind 分類；中斷看紀錄狀態', async () => {
+test('countGuardEvents：只算 7 天內、依 kind 分類（中斷也從 diag 數）', async () => {
   const jd = new JSDOM(html)
   globalThis.window = jd.window
   globalThis.document = jd.window.document
@@ -19,11 +19,11 @@ test('countGuardEvents：只算 7 天內、依 kind 分類；中斷看紀錄狀�
   const diag = [
     { at: now - 1000, kind: 'lock_timeout' }, { at: old, kind: 'lock_timeout' },
     { at: now - 1000, kind: 'forbidden' }, { at: now - 2000, kind: 'forbidden' },
-    { at: now - 1000, kind: 'alarm_error' }, { at: now - 1000, kind: 'message_error' }, { at: now - 1000, kind: 'watchdog' }
+    { at: now - 1000, kind: 'alarm_error' }, { at: now - 1000, kind: 'message_error' }, { at: now - 1000, kind: 'watchdog' },
+    { at: now - 1000, kind: 'interrupted' }, { at: now - 2000, kind: 'interrupted' }, { at: old, kind: 'interrupted' }
   ]
-  const records = [{ status: 'interrupted' }, { status: 'ok' }, { status: 'interrupted' }]
-  assert.deepEqual(se.countGuardEvents(diag, records, now), { interrupted: 2, lockTimeout: 1, forbidden: 2, errors: 2 })
-  assert.deepEqual(se.countGuardEvents([], [], now), { interrupted: 0, lockTimeout: 0, forbidden: 0, errors: 0 })
+  assert.deepEqual(se.countGuardEvents(diag, now), { interrupted: 2, lockTimeout: 1, forbidden: 2, errors: 2 })
+  assert.deepEqual(se.countGuardEvents([], now), { interrupted: 0, lockTimeout: 0, forbidden: 0, errors: 0 })
 })
 
 test('設定頁畫出近 7 天的保護次數', async () => {
@@ -34,9 +34,12 @@ test('設定頁畫出近 7 天的保護次數', async () => {
   const c = installChromeMock()
   const st = await import('../src/shared/storage.js?t=' + Math.random())
   await st.init()
-  await c.storage.local.set({ diag: [{ at: Date.now() - 1000, kind: 'forbidden', detail: 'x' }] })
-  const d = new Date(); const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  await st.appendRecords(day, [{ taskId: 't1', slot: `${day}T09:00`, capturedAt: new Date().toISOString(), status: 'interrupted' }])
+  // 中斷改成從 diag 數（背景寫 interrupted 紀錄時同時寫一筆 kind:'interrupted' 的 diag）
+  await c.storage.local.set({ diag: [
+    { at: Date.now() - 1000, kind: 'forbidden', detail: 'x' },
+    { at: Date.now() - 1000, kind: 'interrupted', detail: 't1' }
+  ] })
+  assert.ok(st)
   const se = await import('../src/ui/report/settings.js?t=' + Math.random())
   await se.renderSettings()
   const text = jd.window.document.getElementById('health-guards').textContent

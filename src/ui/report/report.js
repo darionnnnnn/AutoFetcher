@@ -17,6 +17,7 @@ import { confirmDialog } from '../modal.js'
 import { renderTasks, focusTaskRow } from './tasks.js'
 import { renderSettings } from './settings.js'
 import { renderDashboard, refreshDashboard, dashboardDataRange } from './dashboard.js'
+import { closeDrawer, isDrawerOpen } from './drawer.js'
 import { isSuccess, statusTextOf } from '../../shared/record-status.js'
 import { MSG } from '../../shared/messages.js'
 import { buildSeriesIndex, nameOf } from '../../shared/series-index.js'
@@ -451,7 +452,21 @@ export async function loadAndRenderTasks() {
   }
 }
 
+/**
+ * 換頁籤。離開儀表板前先請抽屜關閉（有未套用的變更照既有流程問）；
+ * 使用者選「繼續編輯」就不切頁——抽屜藏在隱藏的 panel 裡、卻還算開著，是最糟的狀態。
+ * 需要問的時候回傳 Promise，其餘情況同步完成（既有呼叫端不受影響）
+ */
 export function showTab(name) {
+  if (name !== 'dashboard' && isDrawerOpen()) {
+    return closeDrawer().then((closed) => {
+      if (closed) return applyTab(name)
+    })
+  }
+  return applyTab(name)
+}
+
+function applyTab(name) {
   state.view = name
   for (const tab of TABS) {
     const panel = document.getElementById(`panel-${tab}`)
@@ -489,10 +504,22 @@ export function showTab(name) {
  * 用 onclick／onkeydown 指派，重複呼叫不會累加監聽
  */
 export function setupTabs() {
-  const go = (tab, focus) => {
-    showTab(tab)
+  const finish = (tab, focus) => {
     if (typeof window !== 'undefined') window.location.hash = buildHash(state)
     if (focus) document.getElementById(`tab-${tab}`)?.focus()
+  }
+  const go = (tab, focus) => {
+    // 抽屜開著時要先問「要套用嗎」：沒切成頁就不改網址、不移焦點（其餘情況照舊同步做完）
+    if (tab !== 'dashboard' && isDrawerOpen()) {
+      closeDrawer().then((closed) => {
+        if (!closed) return
+        applyTab(tab)
+        finish(tab, focus)
+      }).catch(() => {})
+      return
+    }
+    showTab(tab)
+    finish(tab, focus)
   }
   for (const tab of TABS) {
     const btn = document.getElementById(`tab-${tab}`)

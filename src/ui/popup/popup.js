@@ -72,11 +72,36 @@ function nextStepButton(task, status, sites) {
   return null
 }
 
+// 「知道了」沒有完成時就地說原因：寫在按鈕所在的那一列，不移除按鈕、不做本地重算
+// （與空窗列的「知道了」同一套寫法）
+function showAckError(reportEl, text) {
+  if (!reportEl) return
+  let note = reportEl.querySelector('[data-ack-error]')
+  if (!note) {
+    note = reportEl.ownerDocument.createElement('span')
+    note.dataset.ackError = ''
+    reportEl.appendChild(note)
+  }
+  note.textContent = text
+  note.hidden = false
+}
+
 // 「知道了」：只標指定的 health 項目已讀，燈號由 background 重算；畫面就地更新（紅燈維持紅）
-export async function acknowledge(ids) {
+export async function acknowledge(ids, { reportEl = null } = {}) {
   const list = (ids || []).filter(Boolean)
   if (list.length === 0) return
-  await markAllSeen(list)
+  // 背景沒回應或回 ok:false 時不得靜默、也不得本地重算（畫面會顯示成已知悉，實際沒存成）
+  let res
+  try {
+    res = await markAllSeen(list)
+  } catch (e) {
+    showAckError(reportEl, `知道了沒有完成：${e?.message || e || '背景沒有回應'}`)
+    return
+  }
+  if (res?.ok === false) {
+    showAckError(reportEl, `知道了沒有完成：${res.error || '背景處理失敗'}`)
+    return
+  }
   if (!currentCtx) return
   const healthMap = { ...(currentCtx.healthMap || {}) }
   for (const id of list) {
@@ -104,7 +129,7 @@ function appendAckControls(container, id, record, { onDisable } = {}) {
     ack.className = 'ack'
     ack.dataset.action = 'ack'
     ack.textContent = '知道了'
-    ack.onclick = () => acknowledge([id])
+    ack.onclick = () => acknowledge([id], { reportEl: container })
     container.appendChild(ack)
     return
   }
@@ -382,7 +407,7 @@ export function render(ctx) {
   if (ackAllBtn) {
     const unreadIds = unreadAbnormalIds(tasks, healthMap)
     ackAllBtn.hidden = unreadIds.length === 0
-    ackAllBtn.onclick = () => acknowledge(unreadAbnormalIds(currentCtx?.tasks, currentCtx?.healthMap))
+    ackAllBtn.onclick = () => acknowledge(unreadAbnormalIds(currentCtx?.tasks, currentCtx?.healthMap), { reportEl: ackAllBtn.parentElement })
   }
 
   const helpLink = document.getElementById('open-help')
@@ -491,7 +516,8 @@ function renderGaps(anchorEl, gaps, tasks) {
       // 失敗不得靜默、也不移除這一列（移除了使用者以為已處理）
       let res
       try {
-        res = await chrome.runtime.sendMessage({ type: MSG.SKIP_ONE, taskId: g.taskId, slot: g.slot })
+        // kind:'gap' 讓背景分得出這是休眠空窗的「知道了」（與錯過補抓的略過不同）
+        res = await chrome.runtime.sendMessage({ type: MSG.SKIP_ONE, taskId: g.taskId, slot: g.slot, kind: 'gap' })
       } catch (e) {
         text.textContent = `${g.taskName || nameOf.get(g.taskId) || g.taskId}：知道了沒有完成：${e?.message || e || '背景沒有回應'} `
         return

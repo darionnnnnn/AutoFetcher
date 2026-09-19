@@ -589,9 +589,11 @@ export async function handleMessage(msg, sender, runOpts = {}) {
     }
 
     if (msg.type === MSG.SKIP_ONE) {
-      await skipOne(msg.taskId, msg.slot)
+      const removed = await skipOne(msg.taskId, msg.slot)
       await refreshBadge()
-      return { ok: true }
+      // 比不到就不能靜默成功：畫面上那一筆已經過期（gap 的 slot 每輪會延），要請使用者重新整理
+      if (removed === 0) return { ok: false, error: '這一筆已經不在清單裡，請重新整理' }
+      return { ok: true, removed }
     }
 
     // 面板無法自己判斷歸屬：它的 sender.tab 永遠是 null、網址參數重載後會被丟掉，

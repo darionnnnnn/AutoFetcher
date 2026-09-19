@@ -769,8 +769,14 @@ try {
       const all = await chrome.storage.local.get(null)
       rec = Object.keys(all).filter(k => k.startsWith(`rec2:${day}:`)).flatMap(k => all[k] || []).find(r => r.taskId === t.id) || null
     }
+    // 紀錄寫入之後 runTask 還有收尾（帳本、health、通知帳）才移除登記：等它清空，最多 10 秒
+    let left = {}
+    for (let i = 0; i < 20; i++) {
+      left = (await chrome.storage.session.get('runState')).runState || {}
+      if (Object.keys(left).length === 0) break
+      await new Promise(r => setTimeout(r, 500))
+    }
     const runs = (await chrome.storage.local.get(`runs:${day}`))[`runs:${day}`] || {}
-    const left = (await chrome.storage.session.get('runState')).runState || {}
     const wd = await chrome.alarms.get('__watchdog')
     return { rec, slot, ledger: runs[t.id]?.[slot] ?? null, left: Object.keys(left), watchdogBack: Boolean(wd) }
   })

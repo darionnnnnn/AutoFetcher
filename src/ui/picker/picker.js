@@ -77,7 +77,34 @@ async function reportEnterPick(pending) {
 
 // 批次「全部試抓」進行中：儲存鈕只標 aria-disabled，被按時就地說原因（不得靜默）
 let batchTesting = false
+// 批次「全部儲存」進行中：與試抓一樣是「逐項 render 同一份表單」，重畫要延後（AF-21 體檢 C P3）
+let batchSaving = false
 const BATCH_TESTING_TEXT = '試抓進行中，完成後才能儲存'
+
+// 批次的兩條流程正在逐項 render 同一份表單：這段期間不得被 session 重畫，
+// 也不得把守門區當成「換畫面」清掉
+function batchBusy() {
+  return batchTesting || batchSaving
+}
+
+// 守門區殘留（原因、aria-invalid、欄位下的錯誤字、「還差 N 項」）：
+// 畫面一換就不再成立，render／setBatchView／setBulkView 每個入口都清（AF-21 體檢 C P1）
+function clearGuardState() {
+  // 批次逐項 render 不是換畫面：清掉會把「試抓進行中」那句話一起抹掉
+  if (batchBusy()) return
+  saveGuard()?.clear()
+  for (const errEl of Array.from(document.querySelectorAll('.field-error'))) {
+    const id = typeof errEl.id === 'string' && errEl.id.endsWith('-error') ? errEl.id.slice(0, -'-error'.length) : ''
+    const field = id ? document.getElementById(id) : null
+    if (field) setFieldError(field, '')
+    else {
+      errEl.textContent = ''
+      errEl.hidden = true
+    }
+  }
+  // 守門元件只清自己標的；批次清單那幾列是直接標上去的（batchSaveReasons）
+  for (const el of Array.from(document.querySelectorAll('[aria-invalid]'))) el.removeAttribute('aria-invalid')
+}
 
 // 驗證錯誤鍵 → 要跳過去的欄位（星期沒有單一欄位，交給動作處理）
 const ERROR_FIELDS = { name: 'name', times: 'time-input', everyMinutes: 'every-minutes', window: 'window-from', regex: 'regex' }
@@ -738,6 +765,7 @@ function fillSchedule(schedule) {
 export function render(ctx) {
   currentCtx = ctx || {}
   applyTerms()
+  clearGuardState()
   setTestPreActionHint(false)
   // 位置定位要最先決定：預設名稱會用到它，而且同一個視窗可能 render 第二次
   //（下鑽 iframe 回來、重選回填），殘留在下拉裡的舊值會算出錯的名稱
@@ -2911,14 +2939,40 @@ export function focusPositionSelect(id) {
   if (typeof el.focus === 'function') el.focus()
 }
 
+// 診斷包說明列的原文（失敗訊息寫在同一個地方，成功或使用者取消就放回這一句）
+const DIAG_NOTE_TEXT = '內含目標表格的 HTML 片段與頁面網址，請自行確認後再提供給他人。'
+
+// 使用者在「另存新檔」視窗按取消不算失敗（Chrome 丟的是 canceled/USER_CANCELED）
+function isDownloadCanceled(err) {
+  return /cancel/i.test(String(err?.message || err || ''))
+}
+
 export async function handleExportDiag() {
   if (!lastDebug) return
+  const note = document.getElementById('export-diag-note')
+  const resetNote = () => {
+    if (!note) return
+    note.textContent = DIAG_NOTE_TEXT
+    delete note.dataset.error
+  }
   try {
     await download({
       filename: diagFilename(document.getElementById('name')?.value),
       content: JSON.stringify(lastDebug, null, 2)
     })
-  } catch {}
+    resetNote()
+  } catch (e) {
+    // 靜默的 catch 讓使用者按了沒反應、也不知道檔案沒存成（AF-21 體檢 B）
+    if (isDownloadCanceled(e)) {
+      resetNote()
+      return
+    }
+    if (note) {
+      note.textContent = `診斷包沒有存成：${e?.message || e || '瀏覽器沒有回應'}`
+      note.dataset.error = 'true'
+      note.hidden = false
+    }
+  }
 }
 
 function blockCountsText(res) {
@@ -3223,6 +3277,17 @@ let draftTimer = null
 // 面板會再收到同一份 ctx（只多了 draft）——這時不能重畫，使用者正在打字
 let lastPanelSig = null
 
+// 批次進行中被擋下來的那一份 ctx（只留最後一份：它已經是最新狀態），結束後補畫
+let pendingPanelCtx = null
+
+// 補畫延後的重畫；沒有被延後過就什麼都不做
+async function flushPendingPanelCtx() {
+  const pending = pendingPanelCtx
+  pendingPanelCtx = null
+  if (!pending) return
+  await renderFromPanelCtx(pending.ctx, pending.opts)
+}
+
 /**
  * 問 background：這個視窗現在的作用分頁是哪個。
  * @returns {Promise<number|null>}
@@ -3249,9 +3314,17 @@ export async function renderFromPanelCtx(ctx, { reload = () => globalThis.locati
     noticeEl.hidden = !notice
     noticeEl.textContent = notice
   }
-  // saved 的第一筆結果（first）也算進簽章：它換了要照 ctx 重畫回饋區（沒有它的 ctx 簽章與以前相同）
-  const sig = ctx ? JSON.stringify({ kind: ctx.kind, ctx: ctx.ctx, taskId: ctx.taskId, retarget: ctx.retarget, batch: ctx.batch, taskIds: ctx.taskIds, first: ctx.first }) : 'null'
+  // saved 的第一筆結果（first）也算進簽章：它換了要照 ctx 重畫回饋區（沒有它的 ctx 簽章與以前相同）。
+  // 批次的 items 與 bulk 的 taskIds 同口徑：漏了它，第二輪批次選取會被當成沒變，
+  // 畫面不更新、「全部儲存」存的是舊目標（AF-21 體檢 C P1）
+  const sig = ctx ? JSON.stringify({ kind: ctx.kind, ctx: ctx.ctx, taskId: ctx.taskId, retarget: ctx.retarget, batch: ctx.batch, taskIds: ctx.taskIds, items: ctx.items, first: ctx.first }) : 'null'
   if (sig === lastPanelSig) return { rendered: false }
+  // 批次「全部試抓」「全部儲存」進行中：兩條流程都在同一份表單上逐項 render，
+  // 這時重畫會把清單整份換掉、結果寫進孤兒節點。只延後、不丟：結束後補畫一次（AF-21 體檢 C P3）
+  if (batchBusy()) {
+    pendingPanelCtx = { ctx, opts: { reload } }
+    return { rendered: false, deferred: true }
+  }
   // 剛存完、表單已被回饋區換掉，使用者又開始下一輪（等待態／新表單）：表單節點與綁在上面的監聽都不在了，
   // 在這份文件上 render 會畫不出來——重載面板文件，重載後照 session 畫（AF-18 批次 D 實作回報抓到）
   if (ctx && ctx.kind !== 'saved' && document.getElementById('saved-feedback')) {
@@ -3598,8 +3671,11 @@ function setWaitingText(isBatch) {
 // render(item) 會把「抓什麼」區打開，所以收集每一項之後都要再套一次
 function setBatchView(on) {
   if (!on && !batchViewOn) return
+  const switching = batchViewOn !== on
   batchViewOn = on
   if (!on) batchItems = null
+  // 單任務 ↔ 批次：上一個畫面的守門原因跟著清掉（同一次畫面裡的重複呼叫不清）
+  if (switching) clearGuardState()
   const show = (id, visible) => {
     const el = document.getElementById(id)
     if (el) el.hidden = !visible
@@ -3649,6 +3725,10 @@ async function renderBatch(ctx) {
   setBatchView(true)
   bindPreActionEvents()
   bindPreActionMessageListener()
+  // 前置動作列剛被整批清掉（批次是共用的一份）：「已設定 N 步」要跟著重算，
+  // 不然單任務帶過來的計數會留在批次畫面上（AF-21 體檢 C P2）
+  // 批次的前置動作列一律展開（setBatchView 已設 open），這裡只重算數字
+  updatePreActionCount()
   updateFrameHint(null)
 }
 
@@ -3833,6 +3913,17 @@ async function handleBatchSave() {
     saveGuard()?.show(preReasons)
     return
   }
+  // 進行中不接受 session 重畫（會把清單換成孤兒節點），結束後補畫一次
+  batchSaving = true
+  try {
+    await runBatchSave()
+  } finally {
+    batchSaving = false
+    await flushPendingPanelCtx()
+  }
+}
+
+async function runBatchSave() {
   showErrorText('')
   const busySave = setBusy('save', '儲存中…')
   const busyTest = setBusy('test-now', '全部試抓')
@@ -4007,6 +4098,8 @@ async function handleBatchTest() {
     if (saveBtn) saveBtn.removeAttribute('aria-disabled')
     // 試抓中按過儲存留下的說明：試抓完就不成立了
     if (document.getElementById('errors')?.textContent === BATCH_TESTING_TEXT) showErrorText('')
+    // 試抓途中被擋下來的重畫：補畫一次（只延後、不丟）
+    await flushPendingPanelCtx()
   }
 }
 
@@ -4015,11 +4108,14 @@ async function handleBatchTest() {
 // 切換整批改排程檢視模式
 function setBulkView(on) {
   if (!on && !bulkViewOn) return
+  const switching = bulkViewOn !== on
   bulkViewOn = on
   if (!on) {
     bulkTaskIds = null
     bulkCount = 0
   }
+  // 單任務／批次 ↔ 整批改排程：上一個畫面的守門原因跟著清掉
+  if (switching) clearGuardState()
   const show = (id, visible) => {
     const el = document.getElementById(id)
     if (el) el.hidden = !visible
@@ -4057,6 +4153,9 @@ function setBulkView(on) {
     save.textContent = on ? `套用到 ${bulkCount} 個任務` : '儲存'
     save.hidden = false
   }
+  // 前置動作區在整批改排程裡整塊藏起來、回單任務時又露出來：
+  // 兩側都重算「已設定 N 步」，不讓上一個畫面的計數殘留（AF-21 體檢 C P2）
+  updatePreActionCount()
   // #errors 固定在固定列正上方，整批畫面也看得到，不必再搬（AF-21 批次 4）
 }
 

@@ -191,6 +191,16 @@ export async function useCurrentUrl() {
 // ---- 測試登入 ----
 
 let testing = false
+// 測試登入鈕的原文（site.html）：切站台時按鈕文字要回到這一句
+const TEST_LOGIN_LABEL = '測試登入'
+// 測試登入的輪次：測試途中切到另一個分頁（面板會自癒重畫成別的站台）時，
+// 回來的結果不屬於畫面上這個站台，不得寫上去（AF-21 體檢 C P2）
+let testRunId = 0
+
+// 這一輪的結果還算不算數：輪次沒被重置、而且畫面上還是同一個站台
+function isCurrentTestRun(runId, origin) {
+  return runId === testRunId && origin === currentOrigin
+}
 
 function renderTestResult(res, errorText) {
   const list = document.getElementById('test-login-steps')
@@ -258,6 +268,8 @@ export async function handleTestLogin() {
   else msg.useSaved = true
 
   testing = true
+  const runId = ++testRunId
+  const runOrigin = currentOrigin
   const label = btn?.textContent
   if (btn) {
     btn.textContent = '測試中…'
@@ -266,14 +278,19 @@ export async function handleTestLogin() {
   clearTestResult()
   try {
     const res = await chrome.runtime.sendMessage(msg)
+    if (!isCurrentTestRun(runId, runOrigin)) return
     renderTestResult(res, '')
   } catch (err) {
+    if (!isCurrentTestRun(runId, runOrigin)) return
     renderTestResult(null, String(err?.message || err || '背景沒有回應'))
   } finally {
-    testing = false
-    if (btn) {
-      btn.textContent = label || '測試登入'
-      btn.removeAttribute('aria-busy')
+    // 已經不是這一輪了：旗標與按鈕早就被 render() 重設過，別再蓋回去
+    if (isCurrentTestRun(runId, runOrigin)) {
+      testing = false
+      if (btn) {
+        btn.textContent = label || TEST_LOGIN_LABEL
+        btn.removeAttribute('aria-busy')
+      }
     }
   }
 }
@@ -312,6 +329,15 @@ export async function render() {
   }
   saveGuard()?.clear()
   clearTestResult()
+  // 上一輪測試登入（可能還在跑）的結果不屬於現在畫面上的站台：作廢它，旗標與按鈕文字一起重設，
+  // 否則切回來會卡在「測試中…」而且永遠按不動（testing 擋住）
+  testRunId++
+  testing = false
+  const testBtn0 = document.getElementById('site-test-login')
+  if (testBtn0) {
+    testBtn0.textContent = TEST_LOGIN_LABEL
+    testBtn0.removeAttribute('aria-busy')
+  }
   // 判斷不出目前分頁時不能讓人存：存出去的是鍵為空字串的站台，永遠不會被任何網址命中
   const saveBtn = document.getElementById('site-save')
   if (saveBtn) saveBtn.disabled = !currentOrigin

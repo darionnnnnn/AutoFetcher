@@ -48,10 +48,6 @@ const SHAPES = {
     ['rect', { x: 9, y: 9, width: 12, height: 12, rx: 2 }],
     ['path', { d: 'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' }]
   ],
-  plus: [
-    ['path', { d: 'M12 5v14' }],
-    ['path', { d: 'M5 12h14' }]
-  ],
   'chevron-left': [['path', { d: 'm15 18-6-6 6-6' }]],
   'chevron-right': [['path', { d: 'm9 18 6-6-6-6' }]],
   'chevron-up': [['path', { d: 'm18 15-6-6-6 6' }]],

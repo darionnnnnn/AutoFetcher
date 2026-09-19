@@ -98,12 +98,25 @@ export async function notifyFailure(key, status, options = {}) {
   return shown
 }
 
-// 恢復正常時清掉冷卻紀錄：下次再壞就會重新通知
+// 恢復正常時清掉冷卻紀錄：下次再壞就會重新通知。
+// 同站台合併的待辦名單也要把它拿掉——恢復正常的任務不該出現在下一則合併通知裡
 export async function clearNotifyLog(key) {
   await updateNotifyLog((logMap) => {
     if (!(key in logMap)) return undefined
     delete logMap[key]
     return logMap
+  })
+  await updateFailMerge((merge) => {
+    let changed = false
+    for (const [site, entry] of Object.entries(merge)) {
+      if (!entry || !Array.isArray(entry.items)) continue
+      const kept = entry.items.filter(x => x && x.id !== key)
+      if (kept.length === entry.items.length) continue
+      changed = true
+      if (kept.length === 0) delete merge[site]
+      else merge[site] = { ...entry, items: kept }
+    }
+    return changed ? merge : undefined
   })
 }
 

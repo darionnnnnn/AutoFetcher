@@ -315,7 +315,8 @@ test('CATCH_UP_ONE 與 SKIP_ONE 訊息在 background 有處理', async () => {
   await c.storage.local.set({ missed: [{ taskId: 'a', slot: '2026-09-05T09:00' }] })
   const bg = await import('../src/background/main.js?t=' + Math.random())
   const res = await bg.handleMessage({ type: 'SKIP_ONE', taskId: 'a', slot: '2026-09-05T09:00' })
-  assert.deepEqual(res, { ok: true })
+  // 回應多帶 removed（比不到那一筆時要回 ok:false，UI 才不會靜默無事）
+  assert.deepEqual(res, { ok: true, removed: 1 })
   const ms = await import('../src/background/missed.js?t=' + Math.random())
   assert.equal((await ms.getMissed()).length, 0)
   const res2 = await bg.handleMessage({ type: 'CATCH_UP_ONE', taskId: 'a', slot: '2026-09-05T11:00' })

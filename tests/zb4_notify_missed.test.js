@@ -349,7 +349,7 @@ test('喚醒：lastSeenAt 9 小時前、沒有 onStartup → 看門狗一輪後�
   const now = at(2026, 9, 18, 12, 0)
   const { c, st } = await fresh(now)
   const wd = await import('../src/background/watchdog.js?t=' + Math.random())
-  await st.saveTask(daily('d1', ['04:00', '11:50']))
+  await st.saveTask(daily('d1', ['04:00', '11:50'], { createdAt: now - 10 * 24 * HOUR }))
   await st.setLastSeenAt(now - 9 * HOUR)
   await wd.runWatchdog()
   let list = await st.getMissedList()
@@ -482,7 +482,8 @@ test('popup：gap 列沒有補抓鈕、文字含「休眠期間略過」、只�
   buttons[0].click()
   await new Promise(r => setTimeout(r, 10))
   const sent = c.__calls.filter(x => x.api === 'runtime.sendMessage').map(x => x.args[0])
-  assert.deepEqual(sent.filter(m => m.type === 'SKIP_ONE'), [{ type: 'SKIP_ONE', taskId: 'i1', slot: '2026-09-18T12:00' }])
+  // 空窗的「知道了」要帶 kind:'gap'（AF-21 體檢 A：背景據此找 kind 為 gap 的那一筆）
+  assert.deepEqual(sent.filter(m => m.type === 'SKIP_ONE'), [{ type: 'SKIP_ONE', taskId: 'i1', slot: '2026-09-18T12:00', kind: 'gap' }])
   assert.ok(!sent.some(m => m.type === 'CATCH_UP_ONE'))
 })
 
@@ -510,7 +511,8 @@ test('任務頁：gap 列沒有補抓鈕與勾選框、文字含「休眠期間�
   await new Promise(r => setTimeout(r, 10))
   const sent = c.__calls.filter(x => x.api === 'runtime.sendMessage').map(x => x.args[0])
   assert.deepEqual(sent.filter(m => m.type === 'CATCH_UP_ONE').map(m => m.taskId), ['d1'], 'gap 不得被補抓')
-  assert.deepEqual(sent.filter(m => m.type === 'SKIP_ONE'), [{ type: 'SKIP_ONE', taskId: 'i1', slot: '2026-09-18T10:30' }])
+  // AF-21 體檢 Z-9：空窗列的「知道了」要說明略過的是哪一種（kind:'gap'）
+  assert.deepEqual(sent.filter(m => m.type === 'SKIP_ONE'), [{ type: 'SKIP_ONE', taskId: 'i1', slot: '2026-09-18T10:30', kind: 'gap' }])
 })
 
 test('燈號：gap 算在錯過（黃燈）', async () => {

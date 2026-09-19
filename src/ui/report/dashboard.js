@@ -345,6 +345,29 @@ async function onPointerUp(e) {
 }
 
 /**
+ * 指標取消（觸控被瀏覽器接管、視窗失焦）：不套用這次移動、清掉 ghost，
+ * 與 pointerup 同樣收尾。沒有它 activeOp 永不歸零，儀表板就永遠算忙碌。
+ */
+function onPointerCancel(e) {
+  if (!activeOp) return
+  if (e && e.pointerId !== undefined && activeOp.pointerId !== undefined && e.pointerId !== activeOp.pointerId) return
+
+  const op = activeOp
+  activeOp = null
+
+  if (op.ghost) {
+    op.ghost.remove()
+    op.ghost = null
+  }
+
+  if (e?.target && typeof e.target.releasePointerCapture === 'function') {
+    try { e.target.releasePointerCapture(op.pointerId) } catch {}
+  }
+
+  flushDashboardRefresh()
+}
+
+/**
  * 確保事件監聽器只綁定一次
  */
 function setupEvents(grid) {
@@ -371,6 +394,7 @@ function setupEvents(grid) {
     grid._dashboardPointerAttached = true
     grid.addEventListener('pointermove', onPointerMove)
     grid.addEventListener('pointerup', onPointerUp)
+    grid.addEventListener('pointercancel', onPointerCancel)
   }
 
   if (typeof window !== 'undefined' && !window._dashboardResizeAttached) {
@@ -999,6 +1023,12 @@ export async function renderDashboard(dashId) {
   }
   if (!dash) return
 
+  // 換儀表板就清復原歷史：堆疊裡的步驟屬於上一個儀表板，Ctrl+Z 會默默改到沒在看的那一個
+  if (currentDashId && dash.id !== currentDashId) {
+    undoStack.length = 0
+    redoStack.length = 0
+  }
+
   currentDashId = dash.id
 
   const note = document.getElementById('layout-version-note')
@@ -1150,6 +1180,23 @@ export async function renderDashboard(dashId) {
         if (dragInfo.moved) {
           const ids = [...tabsContainer.querySelectorAll('[data-dash-id]')].map(el => el.dataset.dashId)
           await reorderDashboards(ids)
+        }
+        flushDashboardRefresh()
+      })
+
+      // 指標取消：這次拖曳不算數（順序不寫回），但 tabDrag 一定要歸零
+      tabEl.addEventListener('pointercancel', (e) => {
+        if (!tabDrag || tabDrag.id !== d.id) return
+        if (e && e.pointerId !== undefined && tabDrag.pointerId !== undefined && e.pointerId !== tabDrag.pointerId) return
+        const dragInfo = tabDrag
+        tabDrag = null
+        if (e?.target && typeof e.target.releasePointerCapture === 'function') {
+          try { e.target.releasePointerCapture(dragInfo.pointerId) } catch {}
+        }
+        // 拖到一半被取消：頁籤 DOM 可能已被搬動過，整份重畫回到存起來的順序
+        if (dragInfo.moved) {
+          renderDashboard(currentDashId).catch(() => {})
+          return
         }
         flushDashboardRefresh()
       })

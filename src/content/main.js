@@ -113,17 +113,26 @@ function pageDebugOf(el, spec) {
  * 呼叫端要自己先判一次 `hit()`；這裡只負責「之後的變化」。
  * @param {() => boolean} hit 判定
  * @param {number} timeoutMs 最多等多久
+ * @param {{ throttleMs?: number }} [opts] throttleMs > 0 時，變動回呼最多每這麼久才檢查一次
+ *   （逾時前一定會再檢查最後一次）；擷取的短等待用它，`hit()` 是全文件掃描，
+ *   會自己重繪的監控頁一秒能觸發上百次變動
  * @returns {Promise<boolean>} 等到了回 true、逾時回 false
  */
-function waitUntil(hit, timeoutMs) {
+function waitUntil(hit, timeoutMs, { throttleMs = 0 } = {}) {
   return new Promise((resolvePromise) => {
     let timer = null
     let observer = null
+    let throttleTimer = null
+    let lastCheckAt = 0
 
     const cleanup = () => {
       if (timer) {
         clearTimeout(timer)
         timer = null
+      }
+      if (throttleTimer) {
+        clearTimeout(throttleTimer)
+        throttleTimer = null
       }
       if (observer) {
         observer.disconnect()
@@ -131,18 +140,41 @@ function waitUntil(hit, timeoutMs) {
       }
     }
 
+    // 檢查一次：成立就收工回 true，並回報有沒有成立
+    const check = () => {
+      lastCheckAt = Date.now()
+      if (!hit()) return false
+      cleanup()
+      resolvePromise(true)
+      return true
+    }
+
     timer = setTimeout(() => {
+      // 合併模式下逾時前再檢查一次，免得最後那次變動正好落在節流窗裡
+      if (throttleMs > 0 && check()) return
       cleanup()
       resolvePromise(false)
     }, timeoutMs)
 
-    const Observer = globalThis.MutationObserver || document.defaultView?.MutationObserver
-    observer = new Observer(() => {
-      if (hit()) {
-        cleanup()
-        resolvePromise(true)
+    const onMutation = () => {
+      if (throttleMs <= 0) {
+        check()
+        return
       }
-    })
+      if (throttleTimer) return
+      const wait = throttleMs - (Date.now() - lastCheckAt)
+      if (wait <= 0) {
+        check()
+        return
+      }
+      throttleTimer = setTimeout(() => {
+        throttleTimer = null
+        check()
+      }, wait)
+    }
+
+    const Observer = globalThis.MutationObserver || document.defaultView?.MutationObserver
+    observer = new Observer(onMutation)
 
     // 只監聽 childList 的話，「早就在 DOM 裡、靠 class/style 切換顯示」的選單永遠等不到
     observer.observe(document, {
@@ -158,16 +190,22 @@ function waitUntil(hit, timeoutMs) {
 // 前端延遲渲染的頁面常常晚幾百毫秒才把表格插進來，一次就判失敗要等 2 分鐘後的重試。
 // 不要求可見；背景的擷取逾時 15 秒不變
 const EXTRACT_SETTLE_MS = 3000
+// 短等待期間，DOM 變動最多這麼久檢查一次（hit 是全文件掃描）
+const EXTRACT_SETTLE_THROTTLE_MS = 100
 
 // 處理 EXTRACT 訊息：依 locator 尋找元素並擷取數值
 async function handleExtract(msg, sendResponse) {
   let resolved = resolve(document, msg.locator)
-  if (resolved.error) {
+  // 呼叫端可以指定短等待要等多久（已知找不到元素的任務帶 0，不必每次白等）
+  const settleMs = typeof msg.settleMs === 'number' ? msg.settleMs : EXTRACT_SETTLE_MS
+  if (resolved.error && settleMs > 0) {
     const found = () => {
       const r = resolve(document, msg.locator)
       return !r?.error && !!r?.el
     }
-    if (await waitUntil(found, EXTRACT_SETTLE_MS)) resolved = resolve(document, msg.locator)
+    if (await waitUntil(found, settleMs, { throttleMs: EXTRACT_SETTLE_THROTTLE_MS })) {
+      resolved = resolve(document, msg.locator)
+    }
   }
   if (resolved.error) {
     sendResponse({ ok: false, error: resolved.error, snippet: resolved.snippet })

@@ -10,10 +10,10 @@ import {
   updateSite,
   deleteSite,
   getHealthMap, deleteHealthEntry,
-  countRecordsBeyondRetention, getRecordsInRange } from '../../shared/storage.js'
+  countRecordsBeyondRetention } from '../../shared/storage.js'
 import { buildExport, download } from '../../shared/export.js'
 import { exportSettings, previewSettingsImport, applySettingsImport, numericSettingProblem } from '../../shared/settings-io.js'
-import { confirmDialog } from '../modal.js'
+import { confirmDialog, dismissDialog } from '../modal.js'
 import * as diag from '../../shared/diag.js'
 import { MSG } from '../../shared/messages.js'
 import { statusTextOf, isRed } from '../../shared/record-status.js'
@@ -68,12 +68,13 @@ async function renderDiag() {
 // 近 7 天本輪新增的靜默保護各發生幾次（AF-21）：它們平常不打擾使用者，管理的人要看得到有沒有在發生。
 // 純函式，測試直接呼叫：diag 取 kind 計數、中斷取紀錄的 interrupted 狀態
 export const GUARD_WINDOW_MS = 7 * 86400000
-export function countGuardEvents(diagEntries, records, nowMs) {
+export function countGuardEvents(diagEntries, nowMs) {
   const since = nowMs - GUARD_WINDOW_MS
   const recent = (Array.isArray(diagEntries) ? diagEntries : []).filter(e => e && typeof e.at === 'number' && e.at >= since)
   const kinds = (list) => recent.filter(e => list.includes(e.kind)).length
   return {
-    interrupted: (Array.isArray(records) ? records : []).filter(r => r?.status === 'interrupted').length,
+    // 中斷也從 diag 數：只為了數這個就把 7 天的紀錄整批讀進來太貴（背景寫 interrupted 紀錄時同時寫一筆 diag）
+    interrupted: kinds(['interrupted']),
     lockTimeout: kinds(['lock_timeout']),
     forbidden: kinds(['forbidden']),
     errors: kinds(['alarm_error', 'message_error', 'startup_error'])
@@ -84,12 +85,9 @@ async function renderGuards() {
   const el = document.getElementById('health-guards')
   if (!el) return
   const now = Date.now()
-  const day = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
   let entries = []
-  let records = []
   try { entries = await diag.getAll() } catch {}
-  try { records = await getRecordsInRange(day(now - GUARD_WINDOW_MS), day(now)) } catch {}
-  const c = countGuardEvents(entries, records, now)
+  const c = countGuardEvents(entries, now)
   el.textContent = `近 7 天：被瀏覽器中斷 ${c.interrupted} 次、取鎖逾時 ${c.lockTimeout} 次、擋下網頁送來的訊息 ${c.forbidden} 次、背景錯誤 ${c.errors} 次`
 }
 
@@ -753,6 +751,9 @@ function renderImportSummary(resultEl, summary) {
 export async function handleSettingsImport(jsonText) {
   const resultEl = document.getElementById('settings-import-result')
   pendingSettingsImport = null
+  // 上一次選檔的確認框還開著（它掛在結果區底下）：先當成取消收掉。
+  // 直接覆寫結果區會把 <dialog> 從文件上丟掉，modal 的狀態卻還留著，isDialogOpen() 從此恆真
+  dismissDialog()
   try {
     const passphraseEl = document.getElementById('settings-passphrase')
     const passphrase = passphraseEl?.value || ''

@@ -193,6 +193,8 @@ test('取鎖逾時：照做並記一筆 lock_timeout 診斷，不會永遠卡住
   let ran = false
   await withLock('probe-lock', async () => { ran = true }, { timeoutMs: 30 })
   assert.equal(ran, true)
+  // 診斷不擋 fn（體檢輪：diag 鎖也塞住時不得讓等待加倍），所以稍等它寫完
+  await new Promise(r => setTimeout(r, 30))
   const diag = await import('../src/shared/diag.js?t=' + Math.random())
   const all = await diag.getAll()
   assert.ok(all.some(e => e.kind === 'lock_timeout' && String(e.detail).includes('probe-lock')), '要有 lock_timeout 紀錄')

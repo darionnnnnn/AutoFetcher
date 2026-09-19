@@ -1800,8 +1800,8 @@ function setTarget(el) {
   // 目標是代理層時先重算一次位置（鍵盤 ↓ 回到代理層也走這裡），
   // 不然藍框會畫在版面重排前的舊矩形上
   if (frameOfProxy(el)) syncProxyRect(el)
-  // 已經移到新的內容上了，「頁面剛剛更新過」的提示功成身退
-  staleNotice = false
+  // 「頁面剛剛更新過，請重新點選」不在這裡清：滑鼠一動就消失的話，使用者根本來不及讀。
+  // 真的重新加選了一格（addPick）或離開選取模式時才收（AF-21 體檢 E）
   if (highlightEl) {
     highlightEl.style.display = 'block'
     updateHighlight(highlightEl, el)
@@ -2305,12 +2305,23 @@ function buildPickPayload(targetEl, picks, hint) {
 }
 
 /**
+ * 這個元素是不是已經離開文件了。
+ * iframe 代理層自己永遠連在 `<body>` 底下（是我們貼上去的），
+ * 要判的是它代表的那個 iframe 還在不在——不然 SPA 把 iframe 換掉了也看不出來（AF-21 體檢 E）。
+ */
+function gone(el) {
+  if (!el) return false
+  const frame = frameOfProxy(el)
+  if (frame) return frame.isConnected === false
+  return el.isConnected === false
+}
+
+/**
  * 已選的東西還在不在文件裡（完成鈕、雙擊、Enter 三條送出路徑都經 confirmPick 呼叫這一份）。
  * SPA 在選取途中重繪時，已選的格子與表格會離開文件；拿脫離的節點去產生定位，
  * 在新的 DOM 裡剛好唯一命中別的元素，任務就靜默綁錯（AF-21 定案 7-3）。
  */
 function selectionGone() {
-  const gone = (el) => Boolean(el) && el.isConnected === false
   if (gone(pickedTableEl)) return true
   if (batchMode && batchGroups.some(g => gone(g.el) || gone(g.tableEl))) return true
   // 有已選時送出以已選那張表為準（confirmPick 會先切過去），滑鼠停過的舊目標不算數
@@ -2320,7 +2331,6 @@ function selectionGone() {
 
 // 清掉已失效的選取：沿用換表／全選的清空寫法，連「已選屬於哪張表」、復原快照、鎖定一起清
 function dropGoneSelection() {
-  const gone = (el) => Boolean(el) && el.isConnected === false
   if (batchMode) {
     syncBatch()
     batchGroups = batchGroups.filter(g => !gone(g.el) && !gone(g.tableEl))
@@ -4071,11 +4081,17 @@ function onMouseDown(event) {
     }
     return
   }
-  if (event.button !== 0) return
   // overlay 自己的按鈕（工具列、完成／取消、chip）要讓瀏覽器照常處理這一下 mousedown，
   // 否則它們永遠拿不到焦點，焦點環就是畫了也沒人看得到的死規則
   const onOwnControl = overlayEl && overlayEl.contains(event.target) && !frameOfProxy(event.target)
   if (onOwnControl) return
+  // 中鍵：不擋的話會開始自動捲動（那個圓形游標），選取模式的高亮跟著亂跑。
+  // 右鍵（button 2）不擋——選取模式的選單是在 contextmenu 事件裡開的，這裡少一層風險（AF-21 體檢 E）
+  if (event.button === 1) {
+    event.preventDefault()
+    return
+  }
+  if (event.button !== 0) return
   event.preventDefault()
   if (currentTargetEl && isTableMode(currentTargetEl)) {
     const info = resolveCell(event.target, currentTargetEl)
@@ -4136,7 +4152,8 @@ function onMouseUp(event) {
 // 中鍵點到頁面上的連結會開新分頁、把使用者帶走；overlay 自己的元素不擋（AF-21 定案 7-4）
 function onAuxClick(event) {
   if (!active) return
-  if (event.button !== 1) return
+  // 中鍵（1）＝新分頁開連結／自動捲動，上一頁（3）與下一頁（4）＝整頁跑掉：選取模式裡都要擋
+  if (event.button !== 1 && event.button !== 3 && event.button !== 4) return
   if (overlayEl && overlayEl.contains(event.target) && !frameOfProxy(event.target)) return
   event.preventDefault()
   event.stopPropagation()

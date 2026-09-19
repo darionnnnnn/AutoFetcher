@@ -734,13 +734,48 @@ function hideAndReset() {
   return { did, cid }
 }
 
+// 抽屜裡的錯誤訊息區（套用寫不進去時要說原因；沒有就建一個放在動作列之前）
+function drawerErrorEl() {
+  const drawer = document.getElementById('card-drawer')
+  if (!drawer) return null
+  let el = document.getElementById('drawer-error')
+  if (!el) {
+    el = drawer.ownerDocument.createElement('div')
+    el.id = 'drawer-error'
+    el.className = 'banner is-bad'
+    el.setAttribute('role', 'alert')
+    el.hidden = true
+    const footer = drawer.querySelector('.drawer-footer')
+    if (footer) drawer.insertBefore(el, footer)
+    else drawer.appendChild(el)
+  }
+  return el
+}
+
+function showDrawerError(msg) {
+  const el = drawerErrorEl()
+  if (!el) return
+  el.textContent = msg
+  el.hidden = false
+}
+
+function clearDrawerError() {
+  const el = document.getElementById('drawer-error')
+  if (el) {
+    el.textContent = ''
+    el.hidden = true
+  }
+}
+
 /**
- * 套用：一次 updateCard 寫入草稿（只寫有變的欄位）、關抽屜
+ * 套用：一次 updateCard 寫入草稿（只寫有變的欄位）；**寫成功才關抽屜**。
+ * 寫不進去時抽屜留著、草稿留著、在抽屜裡說出原因，回傳 false。
  */
 async function applyDraft() {
-  if (!currentDashId || !currentCardId) return
+  if (!currentDashId || !currentCardId) return false
   const patch = changedFields()
-  const { did, cid } = hideAndReset()
+  const did = currentDashId
+  const cid = currentCardId
   // 抽屜開著時背景可能修剪過序列（值被移除、任務被刪）：以寫入當下的任務清單為準，
   // 草稿來源裡已經不存在的序列丟掉，不讓它復活
   if (Array.isArray(patch.source)) {
@@ -750,16 +785,25 @@ async function applyDraft() {
     patch.source = patch.source.filter(s => typeof s?.taskId === 'string' && (Boolean(idx.byId[s.taskId]) || Boolean(idx.parents[s.taskId])))
   }
   if (Object.keys(patch).length > 0) {
-    await updateCard(did, cid, patch)
+    try {
+      await updateCard(did, cid, patch)
+    } catch (err) {
+      showDrawerError(`套用失敗，設定還留在這裡：${err?.message || err || '未知原因'}`)
+      return false
+    }
   }
+  clearDrawerError()
+  hideAndReset()
   await rerenderCard(did, cid)
   flushDashboardRefresh()
+  return true
 }
 
 /**
  * 取消：丟掉草稿、把畫面上的卡重畫回 storage 的樣子、關抽屜
  */
 async function discardDraft() {
+  clearDrawerError()
   if (!currentDashId || !currentCardId) {
     hideAndReset()
     return
@@ -790,8 +834,8 @@ async function requestClose() {
         extra: { text: '捨棄', value: 'discard' }
       })
       if (answer === true) {
-        await applyDraft()
-        return true
+        // 套用寫不進去時抽屜要留著（與「套用」鈕同一條路）
+        return await applyDraft()
       }
       if (answer === 'discard') {
         await discardDraft()
@@ -962,6 +1006,7 @@ export async function openDrawer(dashId, cardId) {
   }
 
   setupDrawerEvents()
+  clearDrawerError()
   populateFields(currentCard)
 
   const deleteConfirm = document.getElementById('drawer-delete-confirm')

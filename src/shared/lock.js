@@ -75,7 +75,8 @@ export async function withLock(name, fn, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}
     } catch (err) {
       // 只有「還沒拿到鎖就被逾時中止」才退回不帶鎖照做；fn 自己丟的例外照原樣往外丟
       if (granted) throw err
-      await reportTimeout(name)
+      // 不 await：diag 自己的鎖也塞住時，等待會加倍（10 秒變 20 秒）
+      reportTimeout(name).catch(() => {})
       return await fn()
     }
   }
@@ -83,7 +84,7 @@ export async function withLock(name, fn, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}
   const { acquired, release } = await acquireLocal(name, timeoutMs)
   try {
     if (acquired) return await runHeld(name, fn)
-    await reportTimeout(name)
+    reportTimeout(name).catch(() => {})
     return await fn()
   } finally {
     release()

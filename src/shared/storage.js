@@ -27,6 +27,8 @@ const LEGACY_RUNS_KEY = 'runs'
 const RUNS_KEEP_DAYS = 14
 // 範圍讀取：天數在這以內由日期列舉鍵，超過先取鍵名再篩〔暫定〕
 const RANGE_ENUM_MAX_DAYS = 62
+// 日期字串的形狀（範圍讀取用）
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 // 需要「所有鍵」的操作每批最多取幾個鍵的值
 const BATCH_SIZE = 50
 
@@ -435,6 +437,8 @@ export async function updateTasks(ids, mutator) {
       if (!found) continue
       const next = await mutator(structuredClone(found))
       if (next === null || next === undefined) continue
+      // 改了 id 就不是「更新這一筆」而是憑空多一筆（舊的那筆還留著）
+      if (next.id !== found.id) throw new Error('不得在 mutator 內改任務 id')
       changed.push({ next, keptUrl: found.url })
     }
     if (changed.length === 0) return undefined
@@ -492,6 +496,10 @@ export async function deleteTasks(ids) {
   for (const id of ids) {
     await pruneCardsForTask(id)
   }
+
+  // alertLog／notifyLog／health／missed 裡的殘留也立刻清掉（鎖都放掉之後才做，它自己會逐鍵取鎖）：
+  // 不清的話要等看門狗一天一次的清理，刪掉的任務還會在錯過清單與燈號上待一整天
+  await pruneOrphanEntries()
 }
 
 // 刪除任務並清理所有日期對應的紀錄（剩 0 筆時移除該日期鍵）
@@ -592,15 +600,14 @@ export async function deleteRecord(date, taskId, capturedAt) {
   await withLock(lockNameOf(legacyRecordKey(date)), async () => {
     const store = chrome.storage.local
     const data = (await store.get(dayRecordKeys(date))) || {}
+    // 同一筆可能同時在舊日鍵與小時鍵裡（遷移中的資料）：掃完當天所有鍵逐鍵刪，
+    // 只刪第一個命中的話畫面上那一筆會刪不掉
     for (const key of dayRecordKeys(date)) {
       const list = asArray(data[key])
-      const index = list.findIndex(r => r.taskId === taskId && r.capturedAt === capturedAt)
-      if (index === -1) continue
-      const next = [...list]
-      next.splice(index, 1)
+      const next = list.filter(r => !(r.taskId === taskId && r.capturedAt === capturedAt))
+      if (next.length === list.length) continue
       if (next.length === 0) await store.remove(key)
       else await store.set({ [key]: next })
-      return
     }
   })
 }
@@ -620,6 +627,8 @@ export async function listDates() {
 // 取得指定日期範圍內的所有紀錄（扁平陣列，含 date 欄位；先依日期、同日依 capturedAt 由舊到新）
 // 抓取路徑（告警評估）也會呼叫：範圍不大時由日期列舉鍵直接取，不掃整個 storage
 export async function getRecordsInRange(from, to) {
+  // 不是 YYYY-MM-DD 就直接回空：日期算不出來時會退去掃整個 storage（紀錄可能有 MB 級）
+  if (!ISO_DATE_RE.test(from) || !ISO_DATE_RE.test(to)) return []
   if (!(from <= to)) return []
   const byDate = new Map()
   const collect = (data) => {
@@ -1020,6 +1029,13 @@ export async function pruneOrphanEntries() {
       return next
     })
   }
+  // 錯過清單是陣列，另外清（含 gap 項目）
+  await updateMissedList((list) => {
+    const stale = list.filter(m => !taskIds.has(m?.taskId))
+    if (stale.length === 0) return undefined
+    removed.missed = stale.map(m => m?.taskId)
+    return list.filter(m => taskIds.has(m?.taskId))
+  })
   return removed
 }
 

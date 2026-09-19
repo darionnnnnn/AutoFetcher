@@ -116,8 +116,9 @@ test('預檢失敗的通知走統一入口', async () => {
 test('錯過清單的通知走統一入口且保留兩個按鈕', async () => {
   const { c, st } = await fresh()
   const ms = await import('../src/background/missed.js?t=' + Math.random())
-  await st.saveTask(task())
   const now = new Date('2026-09-05T12:00:00+08:00').getTime()
+  // createdAt 要早於這條假時間軸：錯過的格子不算任務建立之前的
+  await st.saveTask(task({ createdAt: now - 30 * 86400000 }))
   await ms.refreshMissed(now, now - 6 * 3600 * 1000)
   const call = c.__calls.find(x => x.api === 'notifications.create')
   assert.ok(call, '有錯過的槽要通知')

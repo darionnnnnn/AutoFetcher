@@ -44,6 +44,10 @@ export function computeMissedSlots(tasks, ledger, fromMs, toMs) {
     const times = task.schedule.times
     if (!Array.isArray(times) || times.length === 0) continue
 
+    // 比照 computeIntervalGaps：早於任務建立時刻的格子不算錯過
+    // （不然剛建好的 daily 任務第一次 refreshMissed 就被回溯成 7 天錯過）；
+    // 沒有 createdAt 的舊任務視為很早以前建立
+    const createdAt = typeof task.createdAt === 'number' ? task.createdAt : -Infinity
     const seenSlots = new Set()
     let cur = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate())
 
@@ -55,6 +59,7 @@ export function computeMissedSlots(tasks, ledger, fromMs, toMs) {
           const slotDate = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate(), h, m, 0, 0)
           const slotMs = slotDate.getTime()
 
+          if (slotMs < createdAt) continue
           if (slotMs > fromMs && slotMs <= toMs) {
             const slot = slotOf(slotMs)
             if (!seenSlots.has(slot)) {
@@ -131,11 +136,20 @@ export async function refreshMissed(nowMs = Date.now(), sinceMs) {
   const computed = computeMissedSlots(tasks, ledger, fromMs, toMs)
   const gaps = computeIntervalGaps(tasks, ledger, fromMs, toMs)
 
+  // 目前還存在的任務（清單只加不減的話，刪掉的任務會一直留在錯過清單上）
+  const liveIds = new Set(tasks.map((t) => t?.id).filter((id) => typeof id === 'string'))
+
   // 合併要對鎖內讀到的最新清單做，否則同時的補抓／略過會被舊清單蓋回來
   let newCount = 0
   const merged = await updateMissedList((existing) => {
-    const existingKeys = new Set(existing.map(itemKey))
-    const next = [...existing]
+    // 既有項目先清：任務已經不存在（含 gap）、或帳本已經有那一格（補抓完成／後來自己跑了）
+    const kept = existing.filter((m) => {
+      if (!m || !liveIds.has(m.taskId)) return false
+      if (isGap(m)) return true
+      return ledger?.[m.taskId]?.[m.slot] === undefined
+    })
+    const existingKeys = new Set(kept.map(itemKey))
+    const next = [...kept]
     for (const item of computed) {
       const key = itemKey(item)
       if (!existingKeys.has(key)) {
@@ -225,7 +239,22 @@ export async function skipAll() {
   await updateMissedList(() => [])
 }
 
-// 略過單一項目：從清單移除指定任務與排程槽
+/**
+ * 略過單一項目：從清單移除指定任務與排程槽。
+ * gap 項目的 slot 每輪會往後延，UI 拿到的一定是舊的，所以 gap 只比 taskId
+ * （同一個任務不會同時有 gap 與排程槽項目：gap 只來自 interval、排程槽只來自 daily）。
+ * @returns {Promise<number>} 實際移除幾筆（0 筆代表這一筆已經不在清單裡了）
+ */
 export async function skipOne(taskId, slot) {
-  await removeMissed([{ taskId, slot }])
+  let removed = 0
+  await updateMissedList((list) => {
+    removed = 0
+    const next = list.filter((m) => {
+      const hit = !!m && m.taskId === taskId && (isGap(m) || m.slot === slot)
+      if (hit) removed++
+      return !hit
+    })
+    return removed > 0 ? next : undefined
+  })
+  return removed
 }
