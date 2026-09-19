@@ -14,16 +14,20 @@ src/
 │                          health 燈號 / notify 通知唯一入口 / inject 注入唯一入口
 │                          frames 目標所在 iframe 的定位唯一入口
 │                          fetch-tab 抓取頁面(專用視窗／分頁)與同站台佇列的唯一入口
+│                          messaging 送給 content 的訊息唯一入口(sendToFrame,帶逾時)
 ├── content/             ← 注入頁面:main.js 訊息路由/擷取/填登入/前置動作(hover/等/點/等待)
 │                          picker-mode.js 選取模式(高亮 overlay、↑↓、右上角工具列四段
 │                          「單格(預設)/整欄→一個值/整欄→每格/整列→一個值」、可互動的已選 chip 面板、完成/取消鈕;
 │                          點一下加選／再點取消、Shift 拉範圍、雙擊送出;巢狀小表升到外層;批次模式的「組」)
 ├── ui/theme.css         ← **顏色的唯一來源**(亮/暗雙軌 + --chart-1~8 圖表調色盤)
 ├── ui/theme-apply.js    ← **套用使用者主題設定的唯一一份**(`applyTheme`/`applySavedTheme`;Report、Picker、站台、popup、教學頁都用)
-├── ui/help/             ← 使用教學頁(help.html 文案由 Claude 寫;寫法契約見 SPEC §2〈使用教學頁〉)
-├── ui/ui.css            ← 擴充功能頁的**共用元件樣式**(按鈕三級/卡片/表單/chip/sticky footer/
-│                          [hidden]/焦點/reduced-motion);只吃 theme.css 變數,零色碼。
-│                          picker、site、help(教學頁)載入它;report/popup 尚未沿用
+├── ui/help/             ← 使用教學頁(help.html＋help.js;文案由 Claude 寫;寫法契約見 SPEC §2〈使用教學頁〉)
+├── ui/ui.css            ← 擴充功能頁的**共用元件樣式**(按鈕四種/狀態 chip/橫幅/空狀態/就地回饋/表單/固定動作列/
+│                          還不能儲存/對話框/[hidden]/焦點/reduced-motion);只吃 theme.css 變數,零色碼。
+│                          **所有擴充功能頁都載入它**(Report 另有 report.css、popup 另有 popup.css,只放版面)
+├── ui/save-guard.js     ← 「還不能儲存」原因區的唯一一份(Picker、站台設定共用;儲存鈕不 disabled)
+├── ui/modal.js          ← 確認對話框的唯一一份(`confirmDialog`,真正的 `<dialog>` modal)
+├── ui/icons.js          ← 內嵌 SVG 圖示的唯一一份(`icon`／`setIcon`;不用符號字元當圖示)
 ├── ui/picker/           ← 選取完成後的設定視窗;版面只回答三個問題
 │                          (抓什麼／多久抓一次／抓完放哪裡),頂部摘要卡即時說出目前設定,
 │                          網址與數值類型收在進階
@@ -36,7 +40,7 @@ src/
 │   └── DOM 層:report.js 路由與歷史頁 / dashboard.js 儀表板與拖曳 / cards.js 卡片
 │       dnd.js 共用拖曳協定(唯一入口)/ drawer.js 卡片設定抽屜 / tasks.js 任務頁 / settings.js 設定頁
 │       trend-popover.js 趨勢浮層(點欄標或數值卡開啟)
-└── shared/              ← storage(唯一寫入口)、messages(訊息型別)、selector(四層定位)
+└── shared/              ← storage(唯一寫入口)、lock(跨環境鎖)、messages(訊息型別)、selector(四層定位)
                            series-index(序列 id 的唯一入口:組合/拆解/名稱)
                            extract(策略鏈)、export(三種匯出)、settings-io(設定匯出入)、diag(診斷)
                            layout-store(版面唯一入口)、record-status(成功狀態唯一來源)、crypto(站台密碼)
@@ -51,8 +55,11 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 
 
 - **唯一排程入口**:background 的 alarm handler;content script 不得自己排程。
-- **唯一寫入入口**:`shared/storage`;JSON 匯出也從這裡走。UI 不得直接呼叫 `chrome.storage`。
-  例外只有 `shared/diag.js`(診斷環形緩衝)與 `shared/crypto.js`(`cryptoKey`),各自只管自己那一個鍵。
+- **唯一寫入入口**:`shared/storage`;JSON 匯出也從這裡走。`chrome.storage.` 只准出現在 `shared/storage.js`、`shared/diag.js`、`shared/crypto.js`、`background/fetch-tab.js`(`za1` 守)。
+- **讀-改-寫一律在那個鍵的鎖內**(AF-21,`shared/lock.js`):`withLock(lockNameOf(key))`,**鎖不可重入、不得巢狀**——鎖內只呼叫 `*Unlocked` 內部版本、一次 `set` 只寫一個鍵;需要通知或寫 diag 的放到鎖外。新增一個讀-改-寫就用 storage 的 `update*`／`mutateKey`,不要自己 get 再 set。**跨兩次呼叫的「讀任務 → 改 → 存」一律 `updateTasks(ids, mutator)`**(fetcher 回寫 `notFoundStreak`、任務頁整批啟停都曾用舊副本蓋掉別人剛寫的欄位)。
+- **紀錄鍵是 `rec2:<日期>:<時>`、帳本是 `runs:<日期>`**(schemaVersion 3):解析紀錄鍵只在 `storage.js`;任何直接讀 storage 的腳本(煙霧測試曾讀舊的 `rec:<日期>` 而誤報「沒有紀錄」)都要認兩種前綴。抓取路徑的範圍讀不得經 `listDates`／`get(null)`。
+- **排程槽一律取 `alarm.scheduledTime`**(daily 也是);遲到由呼叫端以 `isLateStart` 算好傳 `markLate`,`runTask` 自己不看時鐘(看了會讓所有直接呼叫 runTask 的路徑被時鐘影響)。
+- **`session.runState` 是「到點但還沒做完」的唯一登記**:進佇列前登記、結束(含例外)移除;復原 `recoverRunState` 先在鎖內**拿走**才處理(啟動與看門狗會同時跑)。`interrupted` 紀錄不寫帳本(寫了補抓會被冪等擋掉)。
 - **不要把會掃整個 storage 的操作(`get(null)`)放在抓取寫入路徑上**:紀錄會累積到 MB 級;這類清理放看門狗並自帶一天一次的守衛。
 - **版面的唯一入口**:`shared/layout-store`(儀表板與卡片的增刪改),它自己只經 `shared/storage`。
 - **序列 id 的唯一入口**:`shared/series-index`。一個任務可以抓多個值,紀錄的 `taskId` 會是
@@ -149,7 +156,12 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **顏色一律走 `ui/theme.css` 變數**,任何模組內都不得出現色碼字面值(多序列用 `--chart-1`~`--chart-8`)。
 - **格線數學與資料聚合寫成純函式**(無 DOM、無 `chrome.`),DOM 接線另置,才測得動。
 - **白話描述只有一份**:`shared/describe.js`(Picker 摘要卡與儲存回饋、任務頁的排程欄、
-  popup 任務列的 `title` 都用它)。
+  popup 任務列的 `title` 都用它;介面詞彙表 `TERMS`「試抓／合計方式／模式白話」、空狀態引導 `EMPTY_GUIDE`、休眠空窗 `gapTextOf` 也在這裡)。
+  **狀態代碼的白話只有 `record-status.js` 的 `statusTextOf`**(畫面上不得露出 `selector_lost` 這種代碼;匯出檔維持代碼)。
+- **燈號語意**(AF-21):紅燈不論已讀都計入等級(已讀只不進 badge 數字),黃燈與錯過可「知道了」;popup 開啟不自動標已讀。
+- **每個畫面最多一顆主要按鈕;危險確認用 `btn-danger`、不得是主要按鈕**;狀態當文字用 `--*-text` token(`--warn`／`--ok` 直接當文字對比不到 4.5:1,`zh1` 守)。
+- **卡片設定抽屜是草稿**:抽屜開著時對同一張卡的投放與移除都要併進草稿(`mergeIntoDraft`),不得直接 `updateCard`——兩個寫入者搶同一個欄位。
+- **Report 的重畫看 `subscribe` 的 `{ keys, dates }`**:只有紀錄變動且與檢視範圍沒交集就不動;儀表板輕量重畫不重建側欄與拖曳註冊;編輯／抽屜／浮層／拖曳中延後。
   同一個任務在不同畫面上長得不一樣,比沒有描述更糟。
 - **排程數學只有一份**:`shared/schedule-math.js`(`nextIntervalRun` 等);
   `background/scheduler.js` 只 re-export。Picker 的觸發預覽要用同一份,不得自己算一套。
@@ -176,8 +188,13 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - 不要假設抓取時目標分頁已開啟(排程到點由 background 經 `fetch-tab.js` 自己開頁面,SPEC §4)。
 - **不要在 background 用動態 `import()`**(MV3 service worker 規格禁止,會在真實瀏覽器才炸;一律靜態匯入)。
 - **不要在 background 直接呼叫 `chrome.notifications.create`**:一律走 `background/notify.js`
-  (唯一入口、統一圖示、遵守通知偏好)。`iconUrl` 必須是 `chrome.runtime.getURL()` 的絕對網址。
+  (唯一入口、統一圖示、遵守通知偏好)。`iconUrl` 必須是 `chrome.runtime.getURL()` 的絕對網址;`action.setIcon` 的路徑同理要以 `/` 開頭
+  (AF-21:相對路徑在 `/background/` 解析失敗、丟出的例外讓抓取回報失敗——單元測試的替身不驗路徑,只有煙霧測試抓得到)。
+  失敗類通知走 `notifyFailure`(同 key 同狀態 24 小時一次),同站台失敗走 `notifySiteFailure` 合併。
 - **不要用 `executeScript({files})` 注入 content script**:它是 ES module,一律走 `background/inject.js`。
+- **background 不得直接呼叫 `chrome.tabs.sendMessage`**:一律經 `background/messaging.js` 的 `sendToFrame`(帶逾時、清計時器;a4 D13b 擋)。
+- **新的訊息型別預設不接受 content script 送**:`handleMessage` 只讓 content(有 `sender.tab` 且網址不是本擴充功能)送 `CONTENT_ALLOWED`(`PICKED`、`DESCEND_FRAME`)。
+- **`web_accessible_resources` 只列 content 端 import 閉包**:content 端新增 import 一個 shared 模組時要加進 manifest(a4 D16 以閉包比對)。
 - **不要讓 `chrome.tabs.sendMessage` 少掉第三個參數**:一個分頁可能有多個 frame,不指名 `{ frameId }`
   就是廣播,最上層會搶先回「找不到」而結案(`tests/a4_conventions.test.js` 的 D13 會擋)。
 - **不要用 `matchOriginAsFallback`**:它不是 `executeScript` 的屬性,只用於 `registerContentScripts` 與 manifest。
@@ -258,6 +275,8 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **content script 的擷取/填入不要只設 `value`**:要派發 `input`/`change` 事件,否則 React 表單收不到。
 - 不要用一般 Chrome 跑煙霧測試:152 起已封鎖 `--load-extension`,必須用 Chrome for Testing(見 `run_smoke.sh`)。
 - 不要用 `worker.evaluate` 做端到端斷言(service worker 閒置會被回收);從擴充功能頁面做。
+- **用 `git worktree` 量改動前基準時,不要用 junction 把主專案的 `node_modules` 接過去**(AF-21:`git worktree remove --force` 順著 junction 刪光了主專案的 `node_modules`,要 `npm ci` 復原)。
+- **動到 background 的批次,單元測試全綠之後一定要跑煙霧測試**(AF-21 兩次回歸都只有煙霧抓得到:setIcon 相對路徑、煙霧腳本讀舊紀錄鍵)。
 - 不要在 UI 模組載入時就讀 storage 或渲染(測試要能自己呼叫 render)。
 - 不要用 `innerHTML` 塞入紀錄內容或任務名稱(用 `textContent`)。
 - 不要用絕對 XPath 當唯一選擇器(頁面小改就失效;SPEC §3 要求多重選擇器 + 文字錨定)。
