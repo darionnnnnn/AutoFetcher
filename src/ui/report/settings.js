@@ -151,7 +151,7 @@ async function runExport(btn, work, stampKey) {
     resultEl.textContent = '匯出沒有完成：瀏覽器沒有開始下載'
     return
   }
-  resultEl.className = 'field-saved'
+  resultEl.className = 'inline-status'
   resultEl.textContent = '已開始下載'
   try {
     await saveSettings({ [stampKey]: new Date().toISOString() })
@@ -270,7 +270,7 @@ function feedbackOf(el) {
   if (el._afFeedback) return el._afFeedback
   const row = el.closest('.settings-row') || el.parentElement
   const status = document.createElement('span')
-  status.className = 'field-saved'
+  status.className = 'inline-status'
   status.id = `${el.id}-status`
   status.setAttribute('role', 'status')
   const error = document.createElement('div')
@@ -581,7 +581,7 @@ async function renderSitesList() {
     const isEnabled = site.enabled !== false
 
     const statusEl = document.createElement('span')
-    statusEl.className = 'site-status'
+    statusEl.className = isEnabled ? 'site-status chip is-ok' : 'site-status chip is-off'
     statusEl.textContent = isEnabled ? '啟用中' : '已停用'
     row.appendChild(statusEl)
 

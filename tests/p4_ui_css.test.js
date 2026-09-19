@@ -250,3 +250,73 @@ test('4-A Report 與 popup 的 [hidden] 強制規則來自 ui.css，且自己那
     assert.ok(!/\[hidden\]\s*\{[^}]*display:\s*(?!none)[a-z-]+\s*!important/.test(css), `${name}.css 不得強制顯示 [hidden]`)
   }
 })
+
+// ---------- AF-21 8-A：ui.css 不留死類別、所有樣式零色碼 ----------
+
+import { readdirSync, statSync } from 'node:fs'
+
+function walk(dirUrl, exts, out = []) {
+  for (const name of readdirSync(dirUrl)) {
+    const u = new URL(name, dirUrl)
+    if (statSync(u).isDirectory()) walk(new URL(name + '/', dirUrl), exts, out)
+    else if (exts.some(e => name.endsWith(e))) out.push(u)
+  }
+  return out
+}
+
+const UI_DIR = new URL('../src/ui/', import.meta.url)
+
+function classesOfCss(css) {
+  const noComment = css.replace(/\/\*[\s\S]*?\*\//g, '')
+  // 只看選擇器（大括號外），不看宣告值
+  const selectors = noComment.replace(/\{[^{}]*\}/g, '{}')
+  return new Set([...selectors.matchAll(/\.([a-zA-Z][\w-]*)/g)].map(m => m[1]))
+}
+
+test('8-A ui.css 每個類別至少被一個頁面使用（HTML 的 class 屬性或 JS 字串動態掛的 className）', () => {
+  const classes = classesOfCss(UI_CSS)
+  assert.ok(classes.size >= 10, `要掃得到 ui.css 的類別，實得 ${[...classes]}`)
+  for (const must of ['btn-primary', 'btn-text', 'btn-danger', 'chip', 'is-ok', 'is-warn', 'is-bad', 'is-off',
+    'banner', 'is-info', 'empty-state', 'inline-status', 'field-hint', 'field-error']) {
+    assert.ok(classes.has(must), `ui.css 要定義 .${must}`)
+  }
+  const htmlClassTokens = new Set()
+  for (const u of walk(UI_DIR, ['.html'])) {
+    const html = readFileSync(u, 'utf8')
+    for (const m of html.matchAll(/\bclass=["']([^"']*)["']/g)) m[1].split(/\s+/).forEach(t => t && htmlClassTokens.add(t))
+  }
+  const jsStringTokens = new Set()
+  for (const u of walk(UI_DIR, ['.js'])) {
+    const js = readFileSync(u, 'utf8')
+    for (const m of js.matchAll(/(['"`])([^'"`\n]*)\1/g)) m[2].split(/[\s${}]+/).forEach(t => t && jsStringTokens.add(t))
+  }
+  assert.ok(htmlClassTokens.size > 20 && jsStringTokens.size > 100, '前置：要掃得到頁面的類別與 JS 字串')
+  const unused = [...classes].filter(c => !htmlClassTokens.has(c) && !jsStringTokens.has(c))
+  assert.deepEqual(unused, [], 'ui.css 有沒人掛的類別（死規則）')
+})
+
+test('8-A 所有 CSS 檔與頁面內嵌 <style> 零色碼字面值（theme.css 除外）', () => {
+  const files = [...walk(UI_DIR, ['.css']), ...walk(UI_DIR, ['.html'])]
+    .filter(u => !u.pathname.endsWith('/theme.css'))
+  const cssFiles = files.filter(u => u.pathname.endsWith('.css'))
+  assert.ok(cssFiles.length >= 3, `要掃到 ui/report/popup 等 CSS 檔，實得 ${cssFiles.length}`)
+  const hits = []
+  for (const u of files) {
+    let text = readFileSync(u, 'utf8')
+    if (u.pathname.endsWith('.html')) text = [...text.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)].map(m => m[1]).join('\n')
+    for (const h of text.match(/#[0-9a-fA-F]{3,8}\b(?![\w-])/g) || []) hits.push(`${u.pathname.split('/src/')[1]}: ${h}`)
+  }
+  assert.deepEqual(hits, [])
+})
+
+test('8-A 主要按鈕與危險確認吃新 token', () => {
+  const css = UI_CSS.replace(/\/\*[\s\S]*?\*\//g, '')
+  const primary = css.match(/button\.btn-primary\s*\{([^}]*)\}/)
+  assert.ok(primary, '要有 button.btn-primary')
+  assert.match(primary[1], /background:\s*var\(--primary-strong\)/)
+  assert.match(primary[1], /color:\s*var\(--on-primary\)/)
+  assert.match(primary[1], /font-weight:\s*600/)
+  assert.match(css, /dialog button\.btn-danger[^{]*\{[^}]*background:\s*var\(--danger-strong\)[^}]*color:\s*var\(--on-primary\)/)
+  assert.match(css, /button\[disabled\][^{]*\{[^}]*cursor:\s*not-allowed/)
+  assert.match(css, /button\s*\{[^}]*min-height:\s*32px/)
+})

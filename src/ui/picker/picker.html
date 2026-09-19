@@ -88,7 +88,7 @@
     }
     #task-status-note {
       font-size: var(--text-xs, 12px);
-      color: var(--warn);
+      color: var(--warn-text);
     }
     #target-host {
       font-size: var(--text-xs, 12px);
@@ -127,8 +127,8 @@
       text-align: right;
       flex-shrink: 0;
     }
-    .field-result[data-state="ok"] { color: var(--ok); }
-    .field-result[data-state="error"] { color: var(--danger); }
+    .field-result[data-state="ok"] { color: var(--ok-text); }
+    .field-result[data-state="error"] { color: var(--danger-text); }
     .field-label { font-size: var(--text-xs, 12px); color: var(--text-muted); }
     #setup-summary {
       display: flex;
@@ -146,7 +146,7 @@
     }
     #setup-summary > div:empty { display: none; }
     .chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
-    .chip {
+    .time-chip {
       display: inline-flex;
       align-items: center;
       gap: 4px;
@@ -158,7 +158,7 @@
       font-size: var(--text-xs, 12px);
       color: var(--text);
     }
-    .chip button {
+    .time-chip button {
       background: transparent;
       border: none;
       color: var(--text-muted);
@@ -167,7 +167,7 @@
       line-height: 1;
       cursor: pointer;
     }
-    .chip button:hover { color: var(--text); }
+    .time-chip button:hover { color: var(--text); }
     /* 執行星期看起來也是 chip；DOM 仍是 checkbox，輔助技術才讀得到勾選狀態 */
     #card-types label,
     #weekdays label {
@@ -215,22 +215,20 @@
       font-size: var(--text-xs, 12px);
       color: var(--text-muted);
     }
-    input[aria-invalid="true"] { border-color: var(--danger); }
-    #save[aria-disabled="true"] { opacity: 0.6; cursor: not-allowed; }
     #dashboard-edit-link { color: var(--primary); }
     [data-saved-first] { font-size: var(--text-sm); color: var(--text-muted); }
-    [data-saved-first][data-state="ok"] { color: var(--ok); }
-    [data-saved-first][data-state="error"] { color: var(--danger); }
+    [data-saved-first][data-state="ok"] { color: var(--ok-text); }
+    [data-saved-first][data-state="error"] { color: var(--danger-text); }
     #test-note { color: var(--text-muted); font-size: var(--text-xs, 12px); line-height: 1.4; }
     #block-summary { font-size: var(--text-xs, 12px); color: var(--text-muted); line-height: 1.4; }
-    #preview[data-state="ok"] { border-color: var(--ok); color: var(--ok); }
-    #preview[data-state="error"] { border-color: var(--danger); color: var(--danger); }
-    #preview[data-state="warn"] { border-color: var(--warn); color: var(--warn); }
-    #test-note[data-state="warn"] { color: var(--warn); }
+    #preview[data-state="ok"] { border-color: var(--ok); color: var(--ok-text); }
+    #preview[data-state="error"] { border-color: var(--danger); color: var(--danger-text); }
+    #preview[data-state="warn"] { border-color: var(--warn); color: var(--warn-text); }
+    #test-note[data-state="warn"] { color: var(--warn-text); }
     #test-detail {
       margin-top: var(--space-2);
     }
-    [data-saved-warning] { color: var(--warn); margin: var(--space-2) 0; }
+    [data-saved-warning] { color: var(--warn-text); margin: var(--space-2) 0; }
     [data-saved-hint] { color: var(--text-muted); font-size: var(--text-xs); margin: var(--space-2) 0; }
     #test-detail summary {
       display: block;
@@ -281,7 +279,7 @@
       color: var(--text);
     }
     [data-test-detail-body] tr[data-use="excluded"] {
-      color: var(--warn);
+      color: var(--warn-text);
     }
     #field-list { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; counter-reset: field-row; }
     [data-field-row] { display: flex; align-items: center; gap: 6px; counter-increment: field-row; }
@@ -311,7 +309,6 @@
       color: var(--text);
     }
     #save-summary { font-size: var(--text-xs, 12px); color: var(--text-muted); line-height: 1.4; padding: 4px 0; }
-    #pos-hint { font-size: var(--text-xs, 12px); color: var(--text-muted); line-height: 1.4; }
     .alert-desc { font-size: var(--text-xs, 12px); color: var(--text-muted); line-height: 1.4; }
     #alert-list { display: flex; flex-direction: column; gap: 6px; }
     [data-alert-row] { display: flex; align-items: center; gap: 6px; }
@@ -363,14 +360,9 @@
     .preaction-target { font-size: var(--text-xs, 12px); color: var(--text-muted); font-family: var(--font-mono, monospace); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 90px; }
     #preaction-add { align-self: flex-start; }
     #frame-hint {
-      border: 1px solid var(--border);
-      border-left: 3px solid var(--primary);
-      border-radius: var(--radius);
-      padding: var(--space-2, 8px);
       display: flex;
       flex-direction: column;
       gap: 6px;
-      background: var(--hover);
     }
     #frame-hint-text { font-size: var(--text-xs, 12px); color: var(--text); line-height: 1.5; }
     #frame-hint-actions { display: flex; gap: 6px; }
@@ -474,7 +466,7 @@
             <option value="last-1">倒數第二筆</option>
           </select>
         </label>
-        <div id="pos-hint"></div>
+        <div id="pos-hint" class="field-hint"></div>
         <label>聚合方式
           <select id="block-aggregate">
             <option value="max">最大值</option>
@@ -592,7 +584,7 @@
             要抓「滑鼠移過去才出現的選單」，用「移到元素上」→「等元素出現」→「點擊元素」三步。
             <strong>純用 CSS <code>:hover</code> 展開的選單無法用這個方式打開</strong>（程式送出的滑鼠事件不是真的游標）；
             這種站台通常選單項目本來就在頁面裡，把「等元素出現」的「要看得見」取消再直接點它即可。</div>
-          <div id="frame-hint" role="status" hidden>
+          <div id="frame-hint" class="banner is-info" role="status" hidden>
             <div id="frame-hint-text"></div>
             <div id="frame-hint-actions">
               <button type="button" id="frame-hint-add">加入點擊步驟</button>
@@ -615,7 +607,7 @@
       <div class="action-bar-primary">
         <button type="button" id="save" class="btn-primary">儲存</button>
         <span id="save-missing" class="save-guard-count" hidden></span>
-        <span id="paused-badge" class="status-badge" title="這個任務停用中：存檔後也不會排程，到任務頁啟用後才會抓。" hidden>停用中</span>
+        <span id="paused-badge" class="chip is-off" title="這個任務停用中：存檔後也不會排程，到任務頁啟用後才會抓。" hidden>停用中</span>
       </div>
       <div class="action-bar-secondary">
         <button type="button" id="test-now">立即測試</button>

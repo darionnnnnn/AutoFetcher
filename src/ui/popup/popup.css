@@ -46,13 +46,6 @@ header {
   max-height: 380px;
   overflow-y: auto;
 }
-.empty-hint {
-  color: var(--text-muted);
-  font-size: var(--text-xs, 12px);
-  line-height: 1.6;
-  padding: var(--space-4, 16px) var(--space-2, 8px);
-  text-align: center;
-}
 .task-row {
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -72,7 +65,7 @@ header {
 .task-sub { display: flex; justify-content: space-between; align-items: center; font-size: var(--text-xs, 11px); color: var(--text-muted); gap: var(--space-1, 6px); }
 .task-next { font-variant-numeric: tabular-nums; }
 .task-paused { color: var(--text-muted); font-weight: 500; }
-.task-reason { color: var(--danger); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-reason { color: var(--danger-text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-actions { display: flex; gap: var(--space-1, 6px); margin-top: var(--space-1, 4px); }
 /* 按鈕分三級：基礎樣式在 ui.css，popup 版面較密，字級與行高收小 */
 button {
@@ -80,12 +73,11 @@ button {
   font-family: revert;
   font-size: var(--text-xs, 12px);
   line-height: 1.2;
+  min-height: 28px;
 }
 .retry, .open-page { font-size: var(--text-xs, 11px); padding: 2px 6px; }
 .retry { color: var(--primary); border-color: var(--primary); }
 .retry:hover { background: var(--primary-soft); }
-.open-page { color: var(--text-muted); background: transparent; border: none; }
-.open-page:hover { background: var(--hover); color: var(--text); }
 footer {
   display: flex;
   justify-content: space-between;
@@ -95,16 +87,18 @@ footer {
   flex-shrink: 0;
 }
 #toggle-all, #open-report { flex: 1; padding: var(--space-1, 6px) var(--space-2, 10px); }
-/* 主要按鈕（沒有掛 .btn-primary 類別）：文字色與 ui.css 的 .btn-primary 一致 */
+/* 主要按鈕（popup.html 不在 8-A 白名單、沒有掛 .btn-primary）：token 與 ui.css 的 .btn-primary 一致 */
 #open-report,
 #pick-here {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: var(--bg);
-  font-weight: 500;
+  background: var(--primary-strong);
+  border-color: var(--primary-strong);
+  color: var(--on-primary);
+  font-weight: 600;
 }
-#open-report:hover {
-  filter: brightness(1.1);
+#open-report:hover,
+#pick-here:hover {
+  background: var(--primary-strong);
+  filter: brightness(0.92);
 }
 #pick-here {
   width: 100%;
@@ -122,7 +116,6 @@ footer {
 /* AF-21 批次 5：知道了／下一步／站台列／零任務引導／教學連結 */
 .next-step { font-size: var(--text-xs, 11px); padding: 2px 6px; color: var(--primary); border-color: var(--primary); }
 .ack, .disable-task { font-size: var(--text-xs, 11px); padding: 2px 6px; }
-.disable-task { color: var(--danger); border-color: var(--danger); }
 .ack-note { font-size: var(--text-xs, 11px); color: var(--text-muted); align-self: center; }
 .task-actions { flex-wrap: wrap; }
 .site-row {
@@ -136,7 +129,7 @@ footer {
 }
 .site-hint { font-size: var(--text-xs, 11px); color: var(--text-muted); line-height: 1.4; }
 #ack-all { align-self: flex-end; font-size: var(--text-xs, 11px); padding: 2px 8px; }
-.empty-guide { text-align: left; }
+.empty-guide { text-align: left; align-items: stretch; padding: var(--space-3, 12px) var(--space-2, 8px); }
 .empty-guide ol { margin: var(--space-2, 8px) 0 var(--space-2, 8px) var(--space-4, 18px); }
 .help-link { color: var(--primary); font-size: var(--text-xs, 12px); text-decoration: underline; cursor: pointer; }
 #open-help { align-self: center; }

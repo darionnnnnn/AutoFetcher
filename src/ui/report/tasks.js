@@ -26,6 +26,9 @@ const selectionSig = () => [...selectedIds].sort().join('|')
 const runResults = new Map()
 
 // 狀態四態：停用 → paused、紅燈 → failed、黃燈 → warn；判定只經 record-status.js
+// 列狀態 → ui.css 的狀態 chip 類別（'' 是正常）
+const CHIP_OF_ROW_STATE = { paused: 'is-off', failed: 'is-bad', warn: 'is-warn' }
+
 function rowStateOf(t, h) {
   if (t && t.enabled === false) return 'paused'
   if (isRed(h)) return 'failed'
@@ -367,7 +370,7 @@ function renderListRows() {
 // 完全沒有任務：三步引導（與 popup 同一份文字，來源 describe.js）＋使用教學（本頁唯一的主要按鈕）
 function createEmptyState() {
   const box = document.createElement('div')
-  box.className = 'task-empty empty-guide'
+  box.className = 'task-empty empty-state empty-guide'
   box.dataset.empty = 'none'
   const title = document.createElement('p')
   title.className = 'task-empty-title'
@@ -397,7 +400,7 @@ function createEmptyState() {
 // 有任務但篩選後沒有結果：清除篩選（搜尋字與「只看失敗」）
 function createNoMatchState(searchInput, failedCheckbox) {
   const box = document.createElement('div')
-  box.className = 'task-empty'
+  box.className = 'task-empty empty-state'
   box.dataset.empty = 'filtered'
   const p = document.createElement('p')
   p.textContent = '沒有符合條件的任務'
@@ -628,7 +631,7 @@ function createTaskRow(t) {
 
   const healthInfo = currentHealth?.[t.id]
   const statusEl = document.createElement('span')
-  statusEl.className = 'task-status'
+  statusEl.className = `task-status chip ${CHIP_OF_ROW_STATE[rowStateOf(t, healthInfo)] || 'is-ok'}`
   // 顯示白話；代碼放 data-status 給配色用
   const statusCode = healthInfo?.status || 'ok'
   statusEl.textContent = statusTextOf(statusCode)

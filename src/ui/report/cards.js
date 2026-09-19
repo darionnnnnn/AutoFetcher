@@ -733,13 +733,13 @@ function renderStatusCard(card, ctx, { bodyEl }) {
 
     if (missedCount > 0) {
       const missedEl = document.createElement('span');
-      missedEl.className = 'status-missed';
+      missedEl.className = 'status-missed chip is-bad';
       missedEl.textContent = `錯過 ${missedCount}`;
       item.appendChild(missedEl);
     }
     if (gap) {
       const gapEl = document.createElement('span');
-      gapEl.className = 'status-missed';
+      gapEl.className = 'status-missed chip is-bad';
       gapEl.textContent = gapTextOf(gap);
       item.appendChild(gapEl);
     }

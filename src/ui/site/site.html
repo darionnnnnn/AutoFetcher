@@ -15,13 +15,6 @@
       flex-direction: column;
     }
     .risk-notice {
-      padding: var(--space-2, 8px) var(--space-3, 10px);
-      background: var(--hover);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      font-size: var(--text-xs, 12px);
-      color: var(--text-muted);
-      line-height: 1.5;
       margin-bottom: var(--space-2);
     }
     form {
@@ -83,7 +76,7 @@
     }
     .site-note {
       font-size: var(--text-xs, 12px);
-      color: var(--danger);
+      color: var(--danger-text);
       min-height: 18px;
       white-space: pre-line;
     }
@@ -97,10 +90,6 @@
       flex: 1 1 160px;
       min-width: 0;
     }
-    .site-hint {
-      font-size: var(--text-xs, 12px);
-      color: var(--text-muted);
-    }
     .test-steps {
       margin: 0;
       padding-left: var(--space-3, 12px);
@@ -108,20 +97,20 @@
       line-height: 1.5;
       color: var(--text);
     }
-    .test-steps > li[data-ok="false"] { color: var(--danger); }
+    .test-steps > li[data-ok="false"] { color: var(--danger-text); }
     .test-result {
       font-size: var(--text-xs, 12px);
       color: var(--text);
       white-space: pre-line;
     }
-    .test-result[data-ok="true"] { color: var(--ok); }
-    .test-result[data-ok="false"] { color: var(--danger); }
+    .test-result[data-ok="true"] { color: var(--ok-text); }
+    .test-result[data-ok="false"] { color: var(--danger-text); }
   </style>
   <script type="module" src="./site.js"></script>
 </head>
 <body>
   <h2>站台登入設定</h2>
-  <div class="risk-notice">
+  <div class="risk-notice banner is-warn">
     密碼會加密後存在本機，僅防誤讀、不防同機的惡意程式。
   </div>
   <form id="site-form" onsubmit="return false;">
@@ -170,10 +159,10 @@
         <input type="text" id="success-value">
         <button type="button" id="use-current-url">用目前這一頁的網址</button>
       </div>
-      <div class="site-hint">登入後在這一頁按這顆</div>
+      <div class="field-hint">登入後在這一頁按這顆</div>
       <div class="inline-row">
         <button type="button" id="site-test-login">測試登入</button>
-        <span class="site-hint">只在這台電腦上測試，不會儲存</span>
+        <span class="field-hint">只在這台電腦上測試，不會儲存</span>
       </div>
       <ol id="test-login-steps" class="test-steps" hidden></ol>
       <div id="test-login-result" class="test-result" role="status" hidden></div>

@@ -258,7 +258,7 @@ test('樣式：內容區可捲動、非採用列淡化、排除列警告色，�
   assert.ok(bodyRules.length > 0, '要有明細內容區的樣式')
   assert.ok(bodyRules.some(r => /max-height/.test(r.body) && /overflow/.test(r.body)), '列很多時要能捲動，不能把整個面板撐長')
   assert.ok(rules.some(r => r.sel.includes('data-use') && r.body.includes('var(--text-muted)')), '非採用列要淡化')
-  assert.ok(rules.some(r => r.sel.includes('data-use="excluded"') && r.body.includes('var(--warn)')), '排除列要用警告色')
+  assert.ok(rules.some(r => r.sel.includes('data-use="excluded"') && /var\(--warn(-text)?\)/.test(r.body)), '排除列要用警告色')
 })
 
 // ---- 不進紀錄 ----

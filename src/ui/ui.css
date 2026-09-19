@@ -42,15 +42,21 @@ h2 {
   color: var(--text);
 }
 
+/* 數值一律等寬數字（資料監控工具：欄與欄的數字要對得齊） */
+body { font-variant-numeric: tabular-nums; }
+
 /* ============================================================
-   按鈕元件（三級）
+   按鈕元件（四種：主要／次要（預設 button）／文字／危險）
+   共同：最小點擊高度 32px（popup 在自己那份收成 28px）、hover／active／focus-visible 三態、
+   停用態降不透明度、過場 150ms
    ============================================================ */
 
-/* 基礎按鈕（次要 / ghost 風格）*/
+/* 次要按鈕（預設 button：框線）*/
 button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-height: 32px;
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius);
   border: 1px solid var(--border);
@@ -68,20 +74,69 @@ button:hover {
   background: var(--hover);
 }
 
-/* 主要按鈕（實心主色）*/
-.btn-primary,
-button.btn-primary {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: var(--bg);
-  font-weight: 500;
+button:active {
+  background: var(--surface-2);
 }
 
+/* 主要按鈕（實心 --primary-strong 底＋--on-primary 字；暗色軌的 --primary 較亮，只給連結與框線）*/
+.btn-primary,
+button.btn-primary {
+  background: var(--primary-strong);
+  border-color: var(--primary-strong);
+  color: var(--on-primary);
+  font-weight: 600;
+}
+
+/* hover／active 往暗走：往亮走會把白字的對比吃掉 */
 .btn-primary:hover,
 button.btn-primary:hover {
-  background: var(--primary);
-  border-color: var(--primary);
-  filter: brightness(1.1);
+  background: var(--primary-strong);
+  border-color: var(--primary-strong);
+  filter: brightness(0.92);
+}
+
+.btn-primary:active,
+button.btn-primary:active {
+  filter: brightness(0.84);
+}
+
+/* 文字按鈕：無框、主色字、hover 給底色 */
+.btn-text,
+button.btn-text {
+  background: transparent;
+  border-color: transparent;
+  color: var(--primary);
+}
+
+.btn-text:hover,
+button.btn-text:hover {
+  background: var(--primary-soft);
+}
+
+/* 危險按鈕：--danger-text 字＋--danger-soft 底（確認對話框內改成實心，見下方 dialog 段）*/
+.btn-danger,
+button.btn-danger {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger-text);
+  font-weight: 600;
+}
+
+.btn-danger:hover,
+button.btn-danger:hover {
+  background: var(--danger-soft);
+  border-color: var(--danger-text);
+  filter: brightness(0.95);
+}
+
+/* 停用態：看得出按不了，滑上去也不假裝能按 */
+button[disabled],
+button[aria-disabled="true"],
+button[disabled]:hover,
+button[aria-disabled="true"]:hover {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: none;
 }
 
 /* ============================================================
@@ -205,15 +260,16 @@ footer.action-bar {
 }
 
 /* ============================================================
-   儲存守門（save-guard.js）：「還不能儲存」原因區、還差 N 項、欄位下方錯誤字
+   儲存守門（save-guard.js）：「還不能儲存」原因區、還差 N 項
    ============================================================ */
 .save-guard {
   margin-top: var(--space-2);
   padding: var(--space-2);
   border: 1px solid var(--danger);
-  border-radius: var(--radius);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
   background: var(--danger-soft);
-  color: var(--danger);
+  color: var(--danger-text);
   font-size: var(--text-xs);
   line-height: 1.5;
   flex-shrink: 0;
@@ -236,10 +292,11 @@ footer.action-bar {
 
 .save-guard > ul button {
   width: 100%;
+  min-height: 28px;
   justify-content: flex-start;
   text-align: left;
   font-size: var(--text-xs);
-  color: var(--danger);
+  color: var(--danger-text);
   background: var(--surface);
   border-color: var(--danger);
 }
@@ -247,25 +304,134 @@ footer.action-bar {
 .save-guard-count {
   flex-shrink: 0;
   font-size: var(--text-xs);
-  color: var(--danger);
+  font-weight: 600;
+  color: var(--danger-text);
   white-space: nowrap;
 }
 
-.status-badge {
+/* ============================================================
+   狀態 chip：soft 底＋狀態文字色，前面一個 8px 圓點；
+   文字本身就是白話狀態，顏色只是輔助（不靠顏色單獨表意）
+   ============================================================ */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   flex-shrink: 0;
-  padding: 0 var(--space-2);
-  border: 1px solid var(--warn);
+  padding: 2px var(--space-2);
   border-radius: 999px;
-  background: var(--warn-soft);
-  color: var(--warn);
+  background: var(--surface-2);
+  color: var(--text-muted);
   font-size: var(--text-xs);
+  font-weight: 500;
+  line-height: 1.4;
   white-space: nowrap;
+}
+
+.chip::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.chip.is-ok { background: var(--ok-soft); color: var(--ok-text); }
+.chip.is-ok::before { background: var(--ok); }
+.chip.is-warn { background: var(--warn-soft); color: var(--warn-text); }
+.chip.is-warn::before { background: var(--warn); }
+.chip.is-bad { background: var(--danger-soft); color: var(--danger-text); }
+.chip.is-bad::before { background: var(--danger); }
+.chip.is-off { background: var(--surface-2); color: var(--text-muted); }
+.chip.is-off::before { background: var(--text-muted); }
+
+/* ============================================================
+   橫幅：左側 3px 色條＋soft 底；內文維持正文色，色條與底色表達種類
+   ============================================================ */
+.banner {
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius-sm);
+  background: var(--primary-soft);
+  color: var(--text);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.banner.is-info { border-left-color: var(--primary); background: var(--primary-soft); }
+.banner.is-warn { border-left-color: var(--warn); background: var(--warn-soft); }
+.banner.is-bad { border-left-color: var(--danger); background: var(--danger-soft); }
+
+/* ============================================================
+   空狀態：置中、圖示位（40px、currentColor）、一句標題、一句說明、一個動作
+   ============================================================ */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-5) var(--space-4);
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+.empty-state > svg {
+  width: 40px;
+  height: 40px;
+  color: var(--text-subtle);
+  fill: none;
+  stroke: currentColor;
+}
+
+.empty-state > h3,
+.empty-state > strong {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.empty-state > p { margin: 0; }
+
+/* ============================================================
+   就地回饋：「已儲存 ✓」這類短暫訊息（淡入 150ms；reduced-motion 時由下方統一關掉）
+   ============================================================ */
+.inline-status {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--ok-text);
+  white-space: nowrap;
+  animation: af-fade-in 150ms ease-out;
+}
+
+@keyframes af-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ============================================================
+   表單：欄位說明字、錯誤字、aria-invalid 紅框
+   ============================================================ */
+.field-hint {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1.4;
 }
 
 .field-error {
   font-size: var(--text-xs);
-  color: var(--danger);
+  color: var(--danger-text);
   line-height: 1.4;
+}
+
+input[aria-invalid="true"],
+select[aria-invalid="true"],
+textarea[aria-invalid="true"] {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 1px var(--danger);
 }
 
 /* ============================================================
@@ -276,10 +442,12 @@ footer.action-bar {
 dialog {
   width: min(480px, calc(100vw - 2 * var(--space-4)));
   max-height: calc(100vh - 2 * var(--space-4));
+  /* 置中靠 UA 的 margin: auto；report.css／popup.css 的 `* { margin: 0 }` 會把它歸零、對話框貼到左上角 */
+  margin: auto;
   overflow: auto;
   padding: var(--space-4);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--surface);
   color: var(--text);
   box-shadow: var(--shadow-2);
@@ -307,20 +475,12 @@ dialog > div:last-child {
   margin-top: var(--space-3);
 }
 
-/* 危險動作的確認鈕：紅框紅字，刻意不是實心主要按鈕 */
-.btn-danger,
-button.btn-danger {
-  background: var(--danger-soft);
-  border-color: var(--danger);
-  color: var(--danger);
-  font-weight: 500;
-}
-
-.btn-danger:hover,
-button.btn-danger:hover {
-  background: var(--danger-soft);
-  border-color: var(--danger);
-  filter: brightness(1.1);
+/* 對話框裡的危險確認：實心 --danger-strong 底＋--on-primary 字（對比見 tests/zh1_tokens） */
+dialog button.btn-danger,
+dialog button.btn-danger:hover {
+  background: var(--danger-strong);
+  border-color: var(--danger-strong);
+  color: var(--on-primary);
 }
 
 /* ============================================================

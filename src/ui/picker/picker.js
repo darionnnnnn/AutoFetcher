@@ -1484,7 +1484,7 @@ export function renderTimeChips() {
   box.replaceChildren()
   for (const t of times) {
     const chip = document.createElement('span')
-    chip.className = 'chip'
+    chip.className = 'time-chip'
     chip.setAttribute('data-time-chip', t)
     chip.setAttribute('role', 'listitem')
     const label = document.createElement('span')

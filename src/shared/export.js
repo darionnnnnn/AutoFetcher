@@ -148,6 +148,14 @@ async function loadThemeCss() {
       --warn-soft: rgba(217, 119, 6, 0.1);
       --danger-soft: rgba(220, 38, 38, 0.1);
       --radius-lg: 10px;
+      --on-primary: var(--on-primary, canvas);
+      --primary-strong: var(--primary-strong, currentColor);
+      --ok-text: var(--ok-text, currentColor);
+      --warn-text: var(--warn-text, currentColor);
+      --danger-text: var(--danger-text, currentColor);
+      --danger-strong: var(--danger-strong, currentColor);
+      --text-subtle: var(--text-subtle, gray);
+      --radius-sm: 4px;
     }`
 }
 

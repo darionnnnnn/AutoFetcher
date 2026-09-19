@@ -115,7 +115,7 @@ function appendAckControls(container, id, record, { onDisable } = {}) {
   if (onDisable) {
     const off = document.createElement('button')
     off.type = 'button'
-    off.className = 'disable-task'
+    off.className = 'disable-task btn-danger'
     off.dataset.action = 'disable'
     off.textContent = '停用這個任務'
     off.onclick = onDisable
@@ -171,7 +171,7 @@ function renderSiteRow(origin, record, sites) {
 // 零任務的三步引導：主要按鈕是最上面那顆「在這個頁面選取」（同一個畫面只留一顆主按鈕）
 function renderEmptyGuide() {
   const box = document.createElement('div')
-  box.className = 'empty-hint empty-guide'
+  box.className = 'empty-state empty-guide'
   const lead = document.createElement('p')
   lead.textContent = EMPTY_GUIDE.lead
   box.appendChild(lead)
@@ -295,7 +295,7 @@ function renderTaskRow(task, { lastValues, nextRuns, healthMap, sites }) {
 
     const openPageBtn = document.createElement('button')
     openPageBtn.type = 'button'
-    openPageBtn.className = 'open-page'
+    openPageBtn.className = 'open-page btn-text'
     openPageBtn.textContent = '開啟頁面'
     openPageBtn.addEventListener('click', () => {
       chrome.tabs.create({ url: task.url })
