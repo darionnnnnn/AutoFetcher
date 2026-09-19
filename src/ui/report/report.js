@@ -16,7 +16,7 @@ import { buildTsv } from './cards.js'
 import { confirmDialog } from '../modal.js'
 import { renderTasks, focusTaskRow } from './tasks.js'
 import { renderSettings } from './settings.js'
-import { renderDashboard, isEditing } from './dashboard.js'
+import { renderDashboard, refreshDashboard, dashboardDataRange } from './dashboard.js'
 import { isSuccess, statusTextOf } from '../../shared/record-status.js'
 import { MSG } from '../../shared/messages.js'
 import { buildSeriesIndex, nameOf } from '../../shared/series-index.js'
@@ -470,25 +470,69 @@ export function showTab(name) {
   }
 }
 
-export async function refreshCurrentView() {
+// 會整份重畫的鍵（任務清單或版面變了，側欄、頁籤、卡片組成都可能不同）
+const STRUCTURE_KEYS = new Set(['tasks', 'layout'])
+// 不是紀錄、但卡片或任務頁會顯示的鍵
+const STATUS_KEYS = new Set(['lastValues', 'health', 'missed'])
+
+/**
+ * 變動的紀錄日期與範圍有沒有交集；範圍不完整時一律當作有
+ */
+export function datesIntersect(dates, from, to) {
+  if (!from || !to) return true
+  for (const d of dates || []) {
+    if (typeof d === 'string' && d >= from && d <= to) return true
+  }
+  return false
+}
+
+/**
+ * 依 storage 的變動決定要不要重畫、重畫多少（AF-21 批次 6）。
+ * 不帶 change（使用者操作後的主動刷新）＝照舊整份重畫。
+ * @param {{ keys: Set<string>, dates: Set<string> }} [change]
+ */
+export async function refreshCurrentView(change) {
   const currentView = state.view || 'dashboard'
+  const keys = change?.keys instanceof Set ? change.keys : null
+  const dates = change?.dates instanceof Set ? change.dates : new Set()
+  let structural = !keys
+  let status = false
+  let records = false
+  if (keys) {
+    for (const k of keys) {
+      if (STRUCTURE_KEYS.has(k)) structural = true
+      else if (STATUS_KEYS.has(k)) status = true
+      else records = true
+    }
+  }
   if (currentView === 'dashboard') {
-    if (isEditing()) return
     try {
-      const l = await getLayout()
-      const targetId = state.dash || l?.lastDashboardId || l?.dashboards?.[0]?.id
-      await renderDashboard(targetId)
+      if (structural) {
+        const l = await getLayout()
+        const targetId = state.dash || l?.lastDashboardId || l?.dashboards?.[0]?.id
+        await refreshDashboard({ full: true, dashId: targetId })
+        return
+      }
+      if (!status) {
+        if (!records) return
+        // 儀表板的範圍是各卡片自己的區間設定合起來（與實際讀紀錄的範圍同一份）
+        const range = await dashboardDataRange()
+        if (range && !datesIntersect(dates, range.from, range.to)) return
+      }
+      await refreshDashboard({ full: false })
     } catch {}
     return
+  }
+  if (currentView !== 'tasks' && currentView !== 'history') return
+  if (!structural && !status) {
+    if (!records) return
+    if (!datesIntersect(dates, state.from, state.to)) return
   }
   if (currentView === 'tasks') {
     await loadAndRenderTasks()
     return
   }
-  if (currentView === 'history') {
-    await applyCurrentFilters()
-    return
-  }
+  await applyCurrentFilters()
 }
 
 export function renderTable(records = [], columns = currentColumns, opts = {}) {
@@ -1187,7 +1231,7 @@ async function loadAndRenderPage() {
 }
 
 if (typeof document !== 'undefined' && globalThis.chrome?.runtime?.id) {
-  subscribe(() => { refreshCurrentView() })
+  subscribe((change) => { refreshCurrentView(change) })
   loadAndRenderPage()
   if (typeof window !== 'undefined') {
     window.addEventListener('hashchange', () => {

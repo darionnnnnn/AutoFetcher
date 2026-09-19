@@ -7,11 +7,11 @@ import { getRecordsInRange, getTasks, getHealthMap, getMissedList } from '../../
 import { renderCard } from './cards.js'
 import { resolvePeriod } from './series.js'
 import { placeCard, resizeCard, compact, autoArrange } from './layout.js'
-import { openDrawer, getDraftPreview, mergeIntoDraft } from './drawer.js'
+import { openDrawer, getDraftPreview, mergeIntoDraft, isDrawerOpen } from './drawer.js'
 import { applyTemplate } from './templates.js'
 import { MSG } from '../../shared/messages.js'
-import { createDragSource, registerDropTarget, resetDnd, isPointInside } from './dnd.js'
-import { closeTrendPopover } from './trend-popover.js'
+import { createDragSource, registerDropTarget, resetDnd, isPointInside, isDragBusy, setDragIdleListener } from './dnd.js'
+import { closeTrendPopover, isTrendPopoverOpen, setTrendPopoverCloseListener } from './trend-popover.js'
 import { applyDrop, applyDropMany, cardTypeForTask } from './drop-rules.js'
 import { buildSeriesIndex, parentIdOf } from '../../shared/series-index.js'
 
@@ -521,7 +521,7 @@ function setupEvents(grid) {
 /**
  * 建立卡片渲染共用 Context
  */
-async function buildDashboardContext(dash) {
+function fetchRangeOf(dash) {
   const today = getTodayString()
   const rangeFromInput = document.getElementById('range-from')
   const rangeToInput = document.getElementById('range-to')
@@ -531,7 +531,7 @@ async function buildDashboardContext(dash) {
   let minFrom = defaultFrom
   let maxTo = defaultTo
 
-  const cards = Array.isArray(dash.cards) ? dash.cards : []
+  const cards = Array.isArray(dash?.cards) ? dash.cards : []
   for (const card of cards) {
     const p = resolvePeriod(card?.options?.period, defaultFrom, defaultTo, today)
     if (p?.from) {
@@ -544,6 +544,11 @@ async function buildDashboardContext(dash) {
 
   const fetchFrom = minFrom ? shiftDate(minFrom, -1) : minFrom
   const fetchTo = maxTo
+  return { today, defaultFrom, defaultTo, fetchFrom, fetchTo }
+}
+
+async function buildDashboardContext(dash) {
+  const { today, defaultFrom, defaultTo, fetchFrom, fetchTo } = fetchRangeOf(dash)
 
   const records = (fetchFrom && fetchTo) ? await getRecordsInRange(fetchFrom, fetchTo) : []
   const tasks = await getTasks()
@@ -991,6 +996,7 @@ function registerGridDropTarget(grid) {
  * 渲染儀表板
  */
 export async function renderDashboard(dashId) {
+  pendingRefresh = null
   const layout = await getLayout()
   let dash = null
   if (dashId) {
@@ -1144,6 +1150,7 @@ export async function renderDashboard(dashId) {
           const ids = [...tabsContainer.querySelectorAll('[data-dash-id]')].map(el => el.dataset.dashId)
           await reorderDashboards(ids)
         }
+        flushDashboardRefresh()
       })
 
       tabsContainer.appendChild(tabEl)
@@ -1222,4 +1229,107 @@ export async function rerenderCard(dashId, cardId, draft = null) {
   registerCardDropTarget(newCardEl, card, ctx)
 
   oldCardEl.replaceWith(newCardEl)
+}
+
+// ---- 資料變動的重畫（AF-21 批次 6）----
+// 'light'＝只重畫卡片內容；'full'＝整份 renderDashboard；null＝沒有延後中的重畫
+let pendingRefresh = null
+let idleHooksInstalled = false
+
+/**
+ * 儀表板目前是否不能被資料變動打斷：編輯版面、卡片設定抽屜、趨勢浮層、拖曳（卡片來源或頁籤）
+ */
+export function isDashboardBusy() {
+  return editing || isDrawerOpen() || isTrendPopoverOpen() || isDragBusy() || Boolean(activeOp) || Boolean(tabDrag)
+}
+
+/**
+ * 目前顯示中的儀表板要讀的紀錄日期範圍（含各卡片自己的區間設定與前一天）；
+ * 沒有顯示中的儀表板時回傳 null（呼叫端當作「有交集」）
+ */
+export async function dashboardDataRange() {
+  if (!currentDashId) return null
+  const layout = await getLayout()
+  const dash = layout?.dashboards?.find(d => d.id === currentDashId)
+  if (!dash) return null
+  const { fetchFrom, fetchTo } = fetchRangeOf(dash)
+  if (!fetchFrom || !fetchTo) return null
+  return { from: fetchFrom, to: fetchTo }
+}
+
+function installIdleHooks() {
+  if (idleHooksInstalled) return
+  idleHooksInstalled = true
+  setTrendPopoverCloseListener(flushDashboardRefresh)
+  setDragIdleListener(flushDashboardRefresh)
+}
+
+/**
+ * 資料變動時重畫儀表板：忙碌中就記下來，等結束後補一次（整份優先於輕量）
+ * @param {{ full?: boolean, dashId?: string }} [opts]
+ * @returns {Promise<'deferred'|'full'|'light'>}
+ */
+export async function refreshDashboard(opts = {}) {
+  installIdleHooks()
+  const full = Boolean(opts.full) || !currentDashId
+  if (isDashboardBusy()) {
+    pendingRefresh = (full || pendingRefresh === 'full') ? 'full' : 'light'
+    return 'deferred'
+  }
+  if (full) {
+    await renderDashboard(opts.dashId || currentDashId)
+    return 'full'
+  }
+  const done = await rerenderAllCards()
+  if (!done) {
+    await renderDashboard(currentDashId)
+    return 'full'
+  }
+  return 'light'
+}
+
+/**
+ * 有延後中的重畫、而且已經不忙了 → 補一次
+ */
+export function flushDashboardRefresh() {
+  if (!pendingRefresh || isDashboardBusy()) return
+  const full = pendingRefresh === 'full'
+  pendingRefresh = null
+  refreshDashboard({ full }).catch(() => {})
+}
+
+/**
+ * 輕量重畫：讀一次資料、逐張換掉卡片元素；側欄、頁籤、格線容器與格線的投放註冊都不動。
+ * 畫面上的卡片與版面對不上時回傳 false（交給整份重畫）
+ */
+async function rerenderAllCards() {
+  const layout = await getLayout()
+  const dash = layout?.dashboards?.find(d => d.id === currentDashId)
+  const grid = document.getElementById('dashboard-grid')
+  if (!dash || !grid) return false
+  const cards = Array.isArray(dash.cards) ? dash.cards : []
+  const byId = new Map()
+  for (const el of grid.children) {
+    if (el?.dataset?.cardId !== undefined) byId.set(el.dataset.cardId, el)
+  }
+  if (byId.size !== cards.length || cards.some(c => !byId.has(String(c.id ?? '')))) return false
+
+  const ctx = await buildDashboardContext(dash)
+  // 讀資料的途中使用者可能開了抽屜或開始拖曳：改成延後
+  if (isDashboardBusy()) {
+    pendingRefresh = pendingRefresh === 'full' ? 'full' : 'light'
+    return true
+  }
+  for (const stored of cards) {
+    const oldEl = byId.get(String(stored.id ?? ''))
+    if (!oldEl || !oldEl.isConnected) continue
+    // 抽屜正在編輯的那張卡繼續顯示草稿預覽
+    const draft = getDraftPreview(dash.id, stored.id)
+    const card = draft ? { ...stored, ...draft } : stored
+    if (typeof oldEl._unregisterDropTarget === 'function') oldEl._unregisterDropTarget()
+    const newEl = prepareCardElement(card, ctx, dash.id)
+    registerCardDropTarget(newEl, card, ctx)
+    oldEl.replaceWith(newEl)
+  }
+  return true
 }

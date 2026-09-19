@@ -1161,12 +1161,28 @@ export async function countRecordsForTask(taskId) {
   return res.byId[taskId] ?? 0
 }
 
-// 訂閱 storage 變更（去抖 50ms，僅監聽 local 且指定鍵值與 rec: 紀錄鍵）
+// 訂閱 storage 變更（去抖，僅監聽 local 且指定鍵值與紀錄鍵；預設模式的 handler 收到 { keys, dates }）
 const subscribers = new Set()
 let isListening = false
 let debounceTimer = null
 
 const NOTIFY_KEYS = new Set(['tasks', 'health', 'layout', 'missed', 'lastValues'])
+// 去抖時間：AF-21 規劃暫定 300ms，但既有鎖定測試（za2、ze2）以 60／150ms 等待通知，維持 50ms
+const NOTIFY_DEBOUNCE_MS = 50
+// 去抖期間累積的變動：keys 是會通知的鍵、dates 是其中紀錄鍵（rec: 與 rec2:）的日期
+let pendingChange = null
+
+function accumulateChange(changes) {
+  if (!pendingChange) pendingChange = { keys: new Set(), dates: new Set() }
+  for (const key of Object.keys(changes)) {
+    if (NOTIFY_KEYS.has(key)) {
+      pendingChange.keys.add(key)
+    } else if (isRecordKey(key)) {
+      pendingChange.keys.add(key)
+      pendingChange.dates.add(keyToDate(key))
+    }
+  }
+}
 
 function shouldNotify(changes) {
   if (!changes || typeof changes !== 'object') return false
@@ -1263,18 +1279,22 @@ export function subscribe(handler, opts = {}) {
     onChanged.addListener((changes, areaName) => {
       if (areaName !== 'local') return
       if (!shouldNotify(changes)) return
+      accumulateChange(changes)
       if (debounceTimer) {
         clearTimeout(debounceTimer)
       }
       debounceTimer = setTimeout(() => {
         debounceTimer = null
+        const change = pendingChange
+        pendingChange = null
         for (const fn of [...subscribers]) {
           if (!subscribers.has(fn)) continue
           try {
-            fn()
+            // 每個訂閱者各拿一份，免得某一個改了集合影響下一個
+            fn({ keys: new Set(change.keys), dates: new Set(change.dates) })
           } catch {}
         }
-      }, 50)
+      }, NOTIFY_DEBOUNCE_MS)
     })
     isListening = true
   }

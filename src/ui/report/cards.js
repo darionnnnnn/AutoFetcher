@@ -1,6 +1,6 @@
 // AutoFetcher 卡片渲染模組（將卡片設定與資料渲染為 DOM 元素）
 
-import { buildSeries, resolvePeriod, latest, pivot, effectiveTimeOf, withDelta } from './series.js';
+import { buildSeries, resolvePeriod, latest, pivot, effectiveTimeOf, withDelta, downsamplePoints } from './series.js';
 
 // 樞紐表未指定列數上限時的預設(避免長時間區間渲染上千列)
 const DEFAULT_PIVOT_ROWS = 50;
@@ -287,14 +287,33 @@ function makeRemoveHandle(taskId, editing) {
   return handle;
 }
 
-function renderChartCard(card, ctx, { bodyEl }) {
+function renderChartCard(card, ctx, { bodyEl, actionsEl }) {
   const periodRange = resolveCardRange(card, ctx);
-  const seriesList = buildSeries(ctx.records, card.source, {
+  const fullSeries = buildSeries(ctx.records, card.source, {
     from: periodRange.from,
     to: periodRange.to,
     aggregation: card.options?.aggregation,
     normalize: card.options?.normalize
   });
+
+  // 單一序列點數超過上限就抽樣（每桶保留最小與最大，缺口保留）；只影響圖，表格與匯出照舊用全部資料
+  let sampledFrom = 0;
+  let sampledTo = 0;
+  const seriesList = fullSeries.map(series => {
+    const res = downsamplePoints(series.points);
+    if (!res.sampled) return series;
+    sampledFrom += res.original;
+    sampledTo += res.points.length;
+    return { ...series, points: res.points };
+  });
+  if (sampledFrom > 0 && actionsEl?.parentNode) {
+    const badge = document.createElement('span');
+    badge.className = 'card-sampled';
+    badge.setAttribute('data-sampled', '');
+    badge.textContent = '已抽樣顯示';
+    badge.title = `資料點太多，圖上只畫其中 ${sampledTo} 點（原始 ${sampledFrom} 點，每段保留最高與最低值）`;
+    actionsEl.parentNode.insertBefore(badge, actionsEl);
+  }
 
   // viewBox 的長寬比要貼近卡片實際的格子比例，否則等比縮放後會在左右留一大片空白
   const cols = Number.isFinite(Number(card.w)) ? Number(card.w) : 6;

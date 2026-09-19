@@ -27,11 +27,35 @@ export function closeTrendPopover() {
   }
   onDocClick = null;
   onDocKeyDown = null;
+  const wasOpen = activePopover !== null;
   if (activePopover) {
     activePopover.remove();
     activePopover = null;
   }
   activeAnchor = null;
+  // 浮層開著時延後的重畫，關掉之後補一次（排到下一個 microtask）
+  if (wasOpen && typeof closeListener === 'function') {
+    const fn = closeListener;
+    queueMicrotask(() => {
+      try { fn(); } catch {}
+    });
+  }
+}
+
+let closeListener = null;
+
+/**
+ * 趨勢浮層是否開著（唯讀）
+ */
+export function isTrendPopoverOpen() {
+  return activePopover !== null;
+}
+
+/**
+ * 設定「浮層關閉」時要呼叫的函式（只有一個，後設的取代先設的）
+ */
+export function setTrendPopoverCloseListener(fn) {
+  closeListener = typeof fn === 'function' ? fn : null;
 }
 
 /**

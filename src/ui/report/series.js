@@ -398,3 +398,87 @@ export function withDelta(rows, columnIds) {
     return { ...row, deltas };
   });
 }
+
+// 圖表單一序列的點數上限（AF-21 批次 6，暫定值）
+export const SAMPLE_LIMIT = 600;
+
+function isGapPoint(pt) {
+  return !pt || pt.v === null || pt.v === undefined || !Number.isFinite(Number(pt.v));
+}
+
+// 依桶數抽一次：每桶保留最小與最大那兩點（依原順序），桶內的缺值在對應位置留一個缺口
+function sampleWithBuckets(points, xs, bucketCount) {
+  const x0 = xs[0];
+  const span = xs[xs.length - 1] - x0;
+  const buckets = new Array(bucketCount);
+  for (let i = 0; i < points.length; i++) {
+    let b = span > 0 ? Math.floor(((xs[i] - x0) / span) * bucketCount) : 0;
+    if (b >= bucketCount) b = bucketCount - 1;
+    if (b < 0) b = 0;
+    let bucket = buckets[b];
+    if (!bucket) {
+      bucket = { minIdx: -1, maxIdx: -1, gaps: [] };
+      buckets[b] = bucket;
+    }
+    if (isGapPoint(points[i])) {
+      bucket.gaps.push(i);
+      continue;
+    }
+    const v = Number(points[i].v);
+    if (bucket.minIdx < 0 || v < Number(points[bucket.minIdx].v)) bucket.minIdx = i;
+    if (bucket.maxIdx < 0 || v > Number(points[bucket.maxIdx].v)) bucket.maxIdx = i;
+  }
+  const out = [];
+  const pushGap = (i) => {
+    // 連續的缺口併成一個；缺值不補、不內插，只留斷點
+    if (out.length > 0 && isGapPoint(out[out.length - 1])) return;
+    out.push(points[i]);
+  };
+  for (const bucket of buckets) {
+    if (!bucket) continue;
+    const kept = [];
+    if (bucket.minIdx >= 0) kept.push(bucket.minIdx);
+    if (bucket.maxIdx >= 0 && bucket.maxIdx !== bucket.minIdx) kept.push(bucket.maxIdx);
+    kept.sort((a, b) => a - b);
+    let g = 0;
+    for (const k of kept) {
+      // 原本在這個保留點之前的缺口：保留點之間若隔著缺值，抽樣後也不得連線
+      let gapBefore = -1;
+      while (g < bucket.gaps.length && bucket.gaps[g] < k) {
+        gapBefore = bucket.gaps[g];
+        g++;
+      }
+      if (gapBefore >= 0) pushGap(gapBefore);
+      out.push(points[k]);
+    }
+    if (g < bucket.gaps.length) pushGap(bucket.gaps[g]);
+  }
+  return out;
+}
+
+/**
+ * 圖表抽樣：點數超過上限時依 X 軸時間分成等寬的桶，每桶保留最小值與最大值（保留尖峰）。
+ * 缺值（null）的位置保留成缺口，不補、不內插（SPEC §8.6）。只給圖表用；表格、匯出、浮層數值表不抽樣。
+ * @param {Array<{t:string,v:number|null}>} points 依時間遞增的點
+ * @param {number} [limit] 上限
+ * @returns {{ points: Array, sampled: boolean, original: number }}
+ */
+export function downsamplePoints(points, limit = SAMPLE_LIMIT) {
+  const list = Array.isArray(points) ? points : [];
+  const max = Math.max(4, Math.floor(Number(limit) || SAMPLE_LIMIT));
+  if (list.length <= max) {
+    return { points: list, sampled: false, original: list.length };
+  }
+  // X 軸位置：時間可解析就用時間，否則退回原順序
+  const parsed = list.map(pt => Date.parse(pt?.t));
+  const byTime = parsed.every(Number.isFinite);
+  const xs = byTime ? parsed : list.map((_, i) => i);
+  // 每桶最多 2 點＋缺口；超過上限就縮桶數再抽（缺值多時才會發生）
+  let bucketCount = Math.floor(max / 2);
+  let out = sampleWithBuckets(list, xs, bucketCount);
+  while (out.length > max && bucketCount > 1) {
+    bucketCount = Math.max(1, Math.floor(bucketCount * max / out.length) - 1);
+    out = sampleWithBuckets(list, xs, bucketCount);
+  }
+  return { points: out, sampled: true, original: list.length };
+}

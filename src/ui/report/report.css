@@ -581,6 +581,7 @@ input[data-rename-input] {
 .report-card .card-title { font-weight: 600; font-size: var(--text-sm); }
 .report-card .card-meta { display: flex; align-items: center; gap: var(--space-2); }
 .report-card .card-period { font-size: var(--text-xs); color: var(--text-muted); }
+.report-card .card-sampled { font-size: var(--text-xs); color: var(--text-muted); border: 1px solid var(--border); border-radius: var(--radius); padding: 0 var(--space-1); cursor: help; }
 .report-card .card-actions button { background: transparent; border: none; cursor: pointer; color: var(--text-muted); font-size: var(--text-sm); }
 .report-card .card-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .remove-source-handle { background: transparent; border: none; cursor: grab; color: var(--text-muted); font-size: var(--text-sm); padding: 0 var(--space-1); margin-left: var(--space-1); line-height: 1; user-select: none; }

@@ -4,7 +4,7 @@
 
 import { getLayout, updateCard, removeCard } from '../../shared/layout-store.js'
 import { getTasks } from '../../shared/storage.js'
-import { rerenderCard, renderDashboard } from './dashboard.js'
+import { rerenderCard, renderDashboard, flushDashboardRefresh } from './dashboard.js'
 import { buildSeriesIndex } from '../../shared/series-index.js'
 import { confirmDialog, isDialogOpen } from '../modal.js'
 
@@ -47,6 +47,13 @@ function isDirty() {
 function isOpen() {
   const drawer = document.getElementById('card-drawer')
   return Boolean(drawer && !drawer.hidden && currentCardId)
+}
+
+/**
+ * 抽屜是否開著（唯讀；儀表板據此延後資料變動的重畫）
+ */
+export function isDrawerOpen() {
+  return isOpen()
 }
 
 /**
@@ -741,6 +748,7 @@ async function applyDraft() {
     await updateCard(did, cid, patch)
   }
   await rerenderCard(did, cid)
+  flushDashboardRefresh()
 }
 
 /**
@@ -753,6 +761,7 @@ async function discardDraft() {
   }
   const { did, cid } = hideAndReset()
   await rerenderCard(did, cid)
+  flushDashboardRefresh()
 }
 
 /**
