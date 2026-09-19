@@ -64,7 +64,7 @@ test('關鍵字篩選比對值與原文', async () => {
 test('只看告警只留下失敗紀錄', async () => {
   const { lg } = await fresh()
   const recs = [rec('t1', 'a', 1, 'ok'), rec('t1', 'b', null, 'not_found'), rec('t1', 'c', 2, 'late')]
-  assert.deepEqual(lg.filterRecords(recs, { alertsOnly: true }).map(r => r.status), ['not_found'])
+  assert.deepEqual(lg.filterRecords(recs, { failedOnly: true }).map(r => r.status), ['not_found'])
 })
 
 test('沒有給任何篩選時原樣回傳', async () => {
@@ -134,11 +134,12 @@ test('樞紐表欄序沿用任務頁順序', async () => {
 
 // ---- 篩選 UI ----
 
-test('篩選區產生任務多選、狀態、只看告警、值範圍與關鍵字控制項', async () => {
+test('篩選區產生任務多選、狀態、只看失敗、只看告警、值範圍與關鍵字控制項', async () => {
   const { st, rp, doc } = await fresh()
   await st.saveTask(task('t1', '電費'))
   await rp.renderFilters()
-  for (const id of ['filter-tasks', 'filter-statuses', 'filter-alerts-only',
+  // AF-21 5-B：「只看告警」拆成只看失敗 #filter-failed-only 與只看告警 #filter-alert-only
+  for (const id of ['filter-tasks', 'filter-statuses', 'filter-failed-only', 'filter-alert-only',
                     'filter-value-min', 'filter-value-max', 'filter-keyword']) {
     assert.ok(doc.getElementById(id), `缺少 #${id}`)
   }
@@ -158,13 +159,15 @@ test('篩選變更後寫進 hash', async () => {
   assert.equal(rp.getState().keyword, '停電')
 })
 
-test('hash 可還原值範圍與只看告警', async () => {
+test('hash 可還原值範圍；舊的 alertsOnly=1 還原成只看失敗', async () => {
   const { rp } = await fresh()
   rp.initFromHash('#view=history&valueMin=5&valueMax=50&alertsOnly=1')
   const s = rp.getState()
   assert.equal(s.valueMin, 5)
   assert.equal(s.valueMax, 50)
-  assert.equal(s.alertsOnly, true)
+  // AF-21 5-B：舊參數一直以來的實際行為是「只看失敗」
+  assert.equal(s.failedOnly, true)
+  assert.equal(s.alertOnly, false)
 })
 
 // ---- 月曆導覽 ----

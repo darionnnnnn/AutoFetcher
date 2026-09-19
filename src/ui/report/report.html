@@ -41,13 +41,14 @@
 
   <main>
     <section id="panel-dashboard" hidden>
+      <p class="range-note" id="range-note">卡片的「全局區間」＝上方的日期範圍</p>
       <div class="dashboard-tabs-bar">
         <div id="dashboard-tabs"></div>
         <button type="button" id="dashboard-add" title="新增儀表板">+</button>
       </div>
 
       <div class="dashboard-toolbar">
-        <button type="button" id="edit-layout">編輯版面</button>
+        <button type="button" id="edit-layout" class="btn-primary">編輯版面</button>
         <button type="button" id="auto-arrange">自動排列</button>
         <select id="apply-template">
           <option value="">套用範本...</option>
@@ -61,7 +62,7 @@
         <p>確定要刪除此儀表板嗎？</p>
         <div class="dialog-actions">
           <button type="button" data-action="cancel">取消</button>
-          <button type="button" data-action="confirm">確定</button>
+          <button type="button" data-action="confirm" class="btn-danger">確定</button>
         </div>
       </div>
 
@@ -107,7 +108,7 @@
           <p>確定要刪除這張卡片嗎？</p>
           <div class="dialog-actions">
             <button type="button" data-action="cancel">取消</button>
-            <button type="button" data-action="confirm">確定</button>
+            <button type="button" data-action="confirm" class="btn-danger">確定</button>
           </div>
         </div>
 

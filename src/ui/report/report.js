@@ -14,7 +14,7 @@ import { buildSeries, pivot } from './series.js'
 import { lineChart } from './charts.js'
 import { buildTsv } from './cards.js'
 import { confirmDialog } from '../modal.js'
-import { renderTasks } from './tasks.js'
+import { renderTasks, focusTaskRow } from './tasks.js'
 import { renderSettings } from './settings.js'
 import { renderDashboard, isEditing } from './dashboard.js'
 import { isSuccess, statusTextOf } from '../../shared/record-status.js'
@@ -41,7 +41,9 @@ const state = {
   valueMin: null,
   valueMax: null,
   keyword: '',
-  alertsOnly: false,
+  failedOnly: false,
+  alertOnly: false,
+  task: null,
   page: 1,
   compareTo: ''
 }
@@ -113,7 +115,10 @@ export function initFromHash(hash) {
   state.valueMin = parsed.valueMin !== undefined ? parsed.valueMin : null
   state.valueMax = parsed.valueMax !== undefined ? parsed.valueMax : null
   state.keyword = parsed.keyword || ''
-  state.alertsOnly = parsed.alertsOnly === true
+  state.failedOnly = parsed.failedOnly === true
+  state.alertOnly = parsed.alertOnly === true
+  // 只用一次：定位完就清掉，之後的重畫與切頁不再捲動
+  state.task = parsed.task || null
   state.page = parsed.page || 1
   state.compareTo = parsed.compareTo || ''
 
@@ -169,7 +174,8 @@ export function setupTableMode() {
     const filtered = filterRecords(allLoadedRecords, {
       taskIds: state.taskIds,
       statuses: state.statuses,
-      alertsOnly: state.alertsOnly,
+      failedOnly: state.failedOnly,
+      alertOnly: state.alertOnly,
       valueMin: state.valueMin,
       valueMax: state.valueMax,
       keyword: state.keyword
@@ -191,7 +197,8 @@ async function onFilterChange() {
   if (!container) return
   const tasksContainer = container.querySelector('#filter-tasks')
   const statusesContainer = container.querySelector('#filter-statuses')
-  const alertsCb = container.querySelector('#filter-alerts-only')
+  const failedCb = container.querySelector('#filter-failed-only')
+  const alertCb = container.querySelector('#filter-alert-only')
   const valMinInput = container.querySelector('#filter-value-min')
   const valMaxInput = container.querySelector('#filter-value-max')
   const kwInput = container.querySelector('#filter-keyword')
@@ -202,7 +209,8 @@ async function onFilterChange() {
         .map(cb => cb.value)
     : []
   state.statuses = statusesContainer ? [...statusesContainer.querySelectorAll('input:checked')].map(cb => cb.value) : []
-  state.alertsOnly = alertsCb ? alertsCb.checked : false
+  state.failedOnly = failedCb ? failedCb.checked : false
+  state.alertOnly = alertCb ? alertCb.checked : false
   state.valueMin = (valMinInput && valMinInput.value !== '') ? Number(valMinInput.value) : null
   state.valueMax = (valMaxInput && valMaxInput.value !== '') ? Number(valMaxInput.value) : null
   state.keyword = kwInput ? kwInput.value.trim() : ''
@@ -224,7 +232,8 @@ async function applyCurrentFilters() {
   const filtered = filterRecords(allLoadedRecords, {
     taskIds: state.taskIds,
     statuses: state.statuses,
-    alertsOnly: state.alertsOnly,
+    failedOnly: state.failedOnly,
+    alertOnly: state.alertOnly,
     valueMin: state.valueMin,
     valueMax: state.valueMax,
     keyword: state.keyword
@@ -341,14 +350,20 @@ export async function renderFilters() {
     statusesContainer.appendChild(label)
   }
 
-  // 3. 只看告警 #filter-alerts-only
+  // 3. 只看失敗 #filter-failed-only（不成功的紀錄）與只看告警 #filter-alert-only（alert === true），兩者可同時勾＝交集
+  const failedLabel = document.createElement('label')
+  const failedCb = document.createElement('input')
+  failedCb.type = 'checkbox'
+  failedCb.id = 'filter-failed-only'
+  failedCb.checked = !!state.failedOnly
+  failedLabel.append(failedCb, ' ', '只看失敗')
+
   const alertsLabel = document.createElement('label')
-  const alertsCb = document.createElement('input')
-  alertsCb.type = 'checkbox'
-  alertsCb.id = 'filter-alerts-only'
-  alertsCb.checked = !!state.alertsOnly
-  alertsLabel.appendChild(alertsCb)
-  alertsLabel.appendChild(document.createTextNode(' 只看告警'))
+  const alertCb = document.createElement('input')
+  alertCb.type = 'checkbox'
+  alertCb.id = 'filter-alert-only'
+  alertCb.checked = !!state.alertOnly
+  alertsLabel.append(alertCb, ' ', '只看告警')
 
   // 4. 值範圍 #filter-value-min, #filter-value-max
   const valMinLabel = document.createElement('label')
@@ -385,6 +400,7 @@ export async function renderFilters() {
 
   container.appendChild(tasksContainer)
   container.appendChild(statusesContainer)
+  container.appendChild(failedLabel)
   container.appendChild(alertsLabel)
   container.appendChild(valMinLabel)
   container.appendChild(valMaxLabel)
@@ -433,6 +449,9 @@ export function showTab(name) {
     const panel = document.getElementById(`panel-${tab}`)
     if (panel) panel.hidden = (tab !== name)
   }
+  // 日期範圍只影響儀表板（卡片的全局區間）與歷史頁；任務頁與設定頁顯示它會讓人以為清單被日期篩過
+  const rangeBar = document.getElementById('range-bar')
+  if (rangeBar) rangeBar.hidden = !(name === 'dashboard' || name === 'history')
   if (name === 'dashboard') {
     getLayout().then(l => {
       const targetId = state.dash || l?.lastDashboardId || l?.dashboards?.[0]?.id
@@ -440,7 +459,11 @@ export function showTab(name) {
     }).catch(() => {})
   }
   if (name === 'tasks') {
-    loadAndRenderTasks()
+    const focusId = state.task
+    state.task = null
+    return loadAndRenderTasks().then(() => {
+      if (focusId) focusTaskRow(focusId)
+    })
   }
   if (name === 'settings') {
     renderSettings()
@@ -670,7 +693,8 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
           const filtered = filterRecords(allLoadedRecords, {
             taskIds: state.taskIds,
             statuses: state.statuses,
-            alertsOnly: state.alertsOnly,
+            failedOnly: state.failedOnly,
+            alertOnly: state.alertOnly,
             valueMin: state.valueMin,
             valueMax: state.valueMax,
             keyword: state.keyword
@@ -1130,7 +1154,8 @@ async function loadAndRenderPage() {
   const filtered = filterRecords(records, {
     taskIds: state.taskIds,
     statuses: state.statuses,
-    alertsOnly: state.alertsOnly,
+    failedOnly: state.failedOnly,
+    alertOnly: state.alertOnly,
     valueMin: state.valueMin,
     valueMax: state.valueMax,
     keyword: state.keyword

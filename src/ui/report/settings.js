@@ -17,7 +17,7 @@ import { exportSettings, previewSettingsImport, applySettingsImport, numericSett
 import { confirmDialog } from '../modal.js'
 import * as diag from '../../shared/diag.js'
 import { MSG } from '../../shared/messages.js'
-import { statusTextOf } from '../../shared/record-status.js'
+import { statusTextOf, isRed } from '../../shared/record-status.js'
 import { applyTheme, applySavedTheme } from '../theme-apply.js'
 
 // 重新繪製儲存用量區
@@ -593,6 +593,7 @@ async function renderSitesList() {
     const healthEl = document.createElement('span')
     healthEl.className = 'site-health'
     const record = healthMap['site:' + origin]
+    if (isRed(record)) row.classList.add('failed')
     let healthText = '尚未檢查'
     if (record && record.status) {
       if (record.status === 'ok') {

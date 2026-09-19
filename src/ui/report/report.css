@@ -110,21 +110,8 @@ body:has(#panel-settings:not([hidden])) #tab-settings {
   font-weight: 600;
 }
 
-/* 按鈕分三級：基礎按鈕與 .btn-primary 在 ui.css。
-   下列按鈕由 JS 產生或沒有掛類別，套同一組主要按鈕樣式（文字色與 ui.css 的 .btn-primary 一致） */
-button[data-action="confirm"],
-#export-run,
-#settings-export {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: var(--bg);
-  font-weight: 500;
-}
-button[data-action="confirm"]:hover,
-#export-run:hover,
-#settings-export:hover {
-  filter: brightness(1.1);
-}
+/* 按鈕分三級：基礎按鈕、.btn-primary、.btn-danger 在 ui.css；主要按鈕一律在 HTML／JS 掛類別，
+   不用 id 或屬性選擇器把按鈕變主色（每個分頁最多一顆，AF-21 批次 5） */
 /* 幽靈按鈕 */
 .btn-ghost,
 .card-actions button,
@@ -658,6 +645,48 @@ input[data-rename-input] {
 .site-row.failed .site-status {
   background: var(--danger-soft);
   color: var(--danger);
+}
+/* 任務頁四態：綠（預設）／黃 warn／紅 failed／灰 paused（停用） */
+.task-row.warn .task-status {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.task-row.paused .task-status {
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.task-reason {
+  flex-basis: 100%;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.task-row.failed .task-reason { color: var(--danger); }
+.task-row.warn .task-reason { color: var(--warn); }
+/* 失敗列的下一步：強調但不是主要按鈕（有任務時任務頁不設主要按鈕） */
+.task-next-step {
+  border-color: var(--danger);
+  color: var(--danger);
+  font-weight: 600;
+}
+.task-row.task-highlight {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+.task-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.task-empty-title { font-weight: 600; margin: 0; }
+.range-note {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  margin: 0 0 var(--space-2);
 }
 .status-list { display: flex; flex-direction: column; gap: var(--space-1); }
 .status-item { display: flex; align-items: center; gap: var(--space-3); font-size: var(--text-sm); }

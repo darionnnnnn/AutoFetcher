@@ -102,7 +102,7 @@ test('interrupted 紀錄：只看失敗篩得到、行事曆標失敗、儀表�
   const r = { date: '2026-09-05', taskId: 't1', slot: '2026-09-05T09:00', capturedAt: '2026-09-05T09:00:05+08:00', status: 'interrupted', error: '被中斷' }
   const logic = await import('../src/ui/report/logic.js')
   const { isSuccess } = await import('../src/shared/record-status.js')
-  assert.equal(logic.filterRecords([r, { ...r, status: 'ok', value: 1 }], { alertsOnly: true }).length, 1)
+  assert.equal(logic.filterRecords([r, { ...r, status: 'ok', value: 1 }], { failedOnly: true }).length, 1)
   assert.equal(logic.buildDateStats([r], isSuccess)['2026-09-05'].hasFail, true)
 
   const jd = new JSDOM('<!doctype html><body></body>')

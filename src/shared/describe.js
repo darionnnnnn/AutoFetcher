@@ -322,3 +322,13 @@ export function gapTextOf(item) {
   const range = from && to && from !== to ? `${from}～${to}` : (to || from)
   return `休眠期間略過 ${Number(item?.count) || 0} 次（${range}）`
 }
+
+// 零任務的三步引導（popup 與任務頁共用這一份，AF-21 批次 5）
+export const EMPTY_GUIDE = Object.freeze({
+  lead: '還沒有任務。三步建立第一個：',
+  steps: Object.freeze([
+    '到要抓的頁面，按工具列 AutoFetcher 圖示裡的「在這個頁面選取」',
+    '點要抓的數字',
+    '按「儲存」'
+  ])
+})

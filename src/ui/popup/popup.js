@@ -7,7 +7,7 @@ import { applySavedTheme } from '../theme-apply.js'
 import { seriesIdOf } from '../../shared/series-index.js'
 import { computeHealth } from '../../background/health.js'
 import { isGap, gapTextOf } from '../../shared/describe.js'
-import { describeSchedule, describeTarget, targetOfTask } from '../../shared/describe.js'
+import { describeSchedule, describeTarget, targetOfTask, EMPTY_GUIDE } from '../../shared/describe.js'
 
 let currentCtx = null
 
@@ -56,7 +56,7 @@ function nextStepButton(task, status, sites) {
   if (status === 'selector_lost' || status === 'parse_error') {
     btn.dataset.action = 'repick'
     btn.textContent = '重選目標'
-    // 報表只讀 hash（report.js 的 initFromHash），任務頁依 task 參數捲到那一列是下一段的事
+    // 報表只讀 hash（report.js 的 initFromHash），任務頁依 task 參數捲到那一列並高亮（tasks.js 的 focusTaskRow）
     btn.onclick = () => openExtPage(`ui/report/report.html#view=tasks&task=${encodeURIComponent(task.id)}`)
     return btn
   }
@@ -173,14 +173,10 @@ function renderEmptyGuide() {
   const box = document.createElement('div')
   box.className = 'empty-hint empty-guide'
   const lead = document.createElement('p')
-  lead.textContent = '還沒有任務。三步建立第一個：'
+  lead.textContent = EMPTY_GUIDE.lead
   box.appendChild(lead)
   const ol = document.createElement('ol')
-  for (const s of [
-    '到要抓的頁面，按上方「在這個頁面選取」',
-    '點要抓的數字',
-    '按「儲存」'
-  ]) {
+  for (const s of EMPTY_GUIDE.steps) {
     const li = document.createElement('li')
     li.textContent = s
     ol.appendChild(li)
