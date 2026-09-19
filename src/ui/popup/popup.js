@@ -2,7 +2,8 @@
 import { getTasks, updateTasks, getHealthMap, getMissedList, getLastValues, getSites } from '../../shared/storage.js'
 import { openPanel } from '../../shared/panel.js'
 import { MSG } from '../../shared/messages.js'
-import { statusTextOf, RED_STATUSES } from '../../shared/record-status.js'
+import { statusTextOf, RED_STATUSES, isRed, isWarn } from '../../shared/record-status.js'
+import { setIcon, levelChipOf } from '../icons.js'
 import { applySavedTheme } from '../theme-apply.js'
 import { seriesIdOf } from '../../shared/series-index.js'
 import { computeHealth } from '../../background/health.js'
@@ -126,7 +127,7 @@ function appendAckControls(container, id, record, { onDisable } = {}) {
 // 站台異常列（health 的 site:<origin> 紅燈項目）：popup 開不了 side panel（手勢在網頁分頁），只能提示走右鍵
 function renderSiteRow(origin, record, sites) {
   const row = document.createElement('div')
-  row.className = 'site-row'
+  row.className = 'site-row is-bad'
   row.dataset.origin = origin
 
   const title = document.createElement('div')
@@ -141,7 +142,7 @@ function renderSiteRow(origin, record, sites) {
     const reason = document.createElement('div')
     reason.className = 'task-sub'
     const span = document.createElement('span')
-    span.className = 'task-reason'
+    span.className = 'task-reason is-bad'
     span.textContent = record.reason
     reason.appendChild(span)
     row.appendChild(reason)
@@ -224,35 +225,47 @@ function renderTaskRow(task, { lastValues, nextRuns, healthMap, sites }) {
   mainDiv.appendChild(valueSpan)
   row.appendChild(mainDiv)
 
-  // 次要資訊：下次執行時間、暫停狀態、異常原因
+  // 第二行：狀態 chip＋下次執行時間
   const subDiv = document.createElement('div')
   subDiv.className = 'task-sub'
 
+  const healthInfo = healthMap?.[task.id]
+  const isAbnormal = healthInfo && healthInfo.status !== undefined && healthInfo.status !== 'ok'
+  // 紅／黃判定只經 record-status.js；列左側的狀態色條與 chip 同一個等級
+  const tone = isRed(healthInfo) ? 'bad' : (isWarn(healthInfo) ? 'warn' : '')
+
+  const chip = document.createElement('span')
+  if (task.enabled === false) {
+    chip.className = 'chip is-off task-paused'
+    chip.textContent = '暫停'
+  } else if (isAbnormal) {
+    chip.className = `chip ${tone === 'bad' ? 'is-bad' : (tone === 'warn' ? 'is-warn' : 'is-off')}`
+    chip.textContent = statusTextOf(healthInfo.status) || healthInfo.status
+  } else {
+    chip.className = 'chip is-ok'
+    chip.textContent = '正常'
+  }
+  subDiv.appendChild(chip)
+
   const nextSpan = document.createElement('span')
   nextSpan.className = 'task-next'
-  nextSpan.textContent = formatTime(nextRuns?.[task.id])
+  nextSpan.textContent = `下次 ${formatTime(nextRuns?.[task.id])}`
   // 只寫一個時刻，久沒用回來看不出這是每天還是每十分鐘一次；
   // 排程白話走 shared/describe.js（與 Picker 摘要卡、任務頁同一份）
   nextSpan.title = describeSchedule(task.schedule)
   subDiv.appendChild(nextSpan)
-
-  if (task.enabled === false) {
-    const pausedSpan = document.createElement('span')
-    pausedSpan.className = 'task-paused'
-    pausedSpan.textContent = '暫停'
-    subDiv.appendChild(pausedSpan)
-  }
-
-  const healthInfo = healthMap?.[task.id]
-  const isAbnormal = healthInfo && healthInfo.status !== undefined && healthInfo.status !== 'ok'
-
-  if (isAbnormal && healthInfo.reason) {
-    const reasonSpan = document.createElement('span')
-    reasonSpan.className = 'task-reason'
-    reasonSpan.textContent = healthInfo.reason
-    subDiv.appendChild(reasonSpan)
-  }
   row.appendChild(subDiv)
+
+  if (isAbnormal && tone) row.classList.add(`is-${tone}`)
+
+  // 異常原因：黃燈用 --warn-text、紅燈用 --danger-text（以前一律紅字）
+  if (isAbnormal && healthInfo.reason) {
+    const reasonDiv = document.createElement('div')
+    reasonDiv.className = `task-reason${tone ? ` is-${tone}` : ''}`
+    reasonDiv.textContent = healthInfo.reason
+    reasonDiv.title = healthInfo.reason
+    row.appendChild(reasonDiv)
+  }
 
   // 異常任務按鈕：立即重試與開啟頁面
   if (isAbnormal) {
@@ -262,7 +275,7 @@ function renderTaskRow(task, { lastValues, nextRuns, healthMap, sites }) {
     const retryBtn = document.createElement('button')
     retryBtn.type = 'button'
     retryBtn.className = 'retry'
-    retryBtn.textContent = '立即重試'
+    setIcon(retryBtn, 'refresh', { text: '立即重試' })
     retryBtn.addEventListener('click', async () => {
       // 每一列只有一個結果位置，重複按就地更新
       const showResult = (text) => {
@@ -296,7 +309,7 @@ function renderTaskRow(task, { lastValues, nextRuns, healthMap, sites }) {
     const openPageBtn = document.createElement('button')
     openPageBtn.type = 'button'
     openPageBtn.className = 'open-page btn-text'
-    openPageBtn.textContent = '開啟頁面'
+    setIcon(openPageBtn, 'external', { text: '開啟頁面' })
     openPageBtn.addEventListener('click', () => {
       chrome.tabs.create({ url: task.url })
     })
@@ -333,13 +346,17 @@ export function render(ctx) {
   const summaryEl = document.getElementById('status-summary')
   if (summaryEl) summaryEl.textContent = health?.summary || ''
 
+  // 燈號 chip：等級類別（ok／warn／bad／off）＋共用 chip 配色（is-*）；文字與 Report 應用列同一份
   const dotEl = document.getElementById('status-dot')
   if (dotEl) {
     const levelMap = { green: 'ok', yellow: 'warn', red: 'bad', off: 'off' }
     const targetClass = levelMap[health?.level] || 'off'
-    const preserved = dotEl.className.split(/\s+/).filter(c => c && !['ok', 'warn', 'bad', 'off'].includes(c))
-    preserved.push(targetClass)
+    const chip = levelChipOf(health?.level)
+    const drop = ['ok', 'warn', 'bad', 'off', 'is-ok', 'is-warn', 'is-bad', 'is-off']
+    const preserved = dotEl.className.split(/\s+/).filter(c => c && !drop.includes(c))
+    preserved.push(targetClass, chip.cls)
     dotEl.className = preserved.join(' ')
+    dotEl.textContent = chip.text
   }
 
   // 2. 清空並填入任務清單
@@ -422,6 +439,7 @@ export function render(ctx) {
 
   const openReportBtn = document.getElementById('open-report')
   if (openReportBtn) {
+    if (!openReportBtn.querySelector('svg')) setIcon(openReportBtn, 'external', { text: '開啟報表' })
     openReportBtn.onclick = () => {
       let url = typeof chrome?.runtime?.getURL === 'function'
         ? chrome.runtime.getURL('ui/report/report.html')

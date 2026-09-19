@@ -8,19 +8,22 @@
   <link rel="stylesheet" href="./popup.css">
 </head>
 <body>
-  <header>
-    <span id="status-dot" class="status-dot"></span>
-    <span id="status-summary"></span>
+  <header class="popup-head" aria-live="polite">
+    <span id="status-dot" class="chip off is-off">已暫停</span>
+    <p id="status-summary"></p>
   </header>
-  <button type="button" id="pick-here">在這個頁面選取</button>
+  <button type="button" id="pick-here" class="btn-primary">在這個頁面選取</button>
   <div id="pick-here-note"></div>
-  <button type="button" id="ack-all" hidden>全部知道了</button>
+  <div class="list-head">
+    <span class="list-title">任務</span>
+    <button type="button" id="ack-all" class="btn-text" hidden>全部知道了</button>
+  </div>
   <div id="task-list"></div>
-  <footer>
-    <button type="button" id="toggle-all">全部暫停 / 恢復</button>
-    <button type="button" id="open-report">開啟報表</button>
+  <footer class="popup-foot">
+    <button type="button" id="open-report" class="btn-text">開啟報表</button>
+    <a href="#" id="open-help" class="help-link">使用教學</a>
+    <button type="button" id="toggle-all" class="btn-text">全部暫停 / 恢復</button>
   </footer>
-  <a href="#" id="open-help" class="help-link">使用教學</a>
   <script type="module" src="./popup.js"></script>
 </body>
 </html>

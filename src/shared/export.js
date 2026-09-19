@@ -353,8 +353,8 @@ export async function buildHtmlReport({ from, to, dashId }) {
       display: inline-flex;
       align-items: center;
     }
-    .diff-up { color: var(--ok); background: var(--ok-soft); }
-    .diff-down { color: var(--danger); background: var(--danger-soft); }
+    .diff-up { color: var(--ok-text); background: var(--ok-soft); }
+    .diff-down { color: var(--danger-text); background: var(--danger-soft); }
     .card-table {
       width: 100%;
       border-collapse: collapse;
@@ -392,18 +392,19 @@ export async function buildHtmlReport({ from, to, dashId }) {
     .status-state, .status-next, .status-missed {
       font-size: var(--text-xs, 0.8rem);
     }
-    .status-state {
+    /* 狀態 chip：文字色用 --*-text（對比達標），底色用 soft；狀態清單卡依 health 掛 is-ok／is-warn／is-bad／is-off */
+    .status-state, .status-missed {
       padding: 2px 8px;
       border-radius: 9999px;
-      background: var(--ok-soft);
-      color: var(--ok);
+      background: var(--surface-2);
+      color: var(--text-muted);
     }
-    .status-missed {
-      padding: 2px 8px;
-      border-radius: 9999px;
-      background: var(--danger-soft);
-      color: var(--danger);
-    }
+    .chip.is-ok { background: var(--ok-soft); color: var(--ok-text); }
+    .chip.is-warn { background: var(--warn-soft); color: var(--warn-text); }
+    .chip.is-bad { background: var(--danger-soft); color: var(--danger-text); }
+    .chip.is-off { background: var(--surface-2); color: var(--text-muted); }
+    /* 卡片帶出的內嵌 SVG 圖示（ui/icons.js，outerHTML 帶出的靜態標記） */
+    svg.icon { width: 16px; height: 16px; flex-shrink: 0; vertical-align: middle; }
     .records-section {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -449,7 +450,7 @@ export async function buildHtmlReport({ from, to, dashId }) {
     }
     .report-table tbody tr.status-failed {
       background: var(--danger-bg);
-      color: var(--danger);
+      color: var(--danger-text);
     }
     .empty-state {
       text-align: center;

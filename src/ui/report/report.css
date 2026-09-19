@@ -10,7 +10,10 @@ body {
   background: var(--bg);
   color: var(--text);
   line-height: 1.5;
-  padding: var(--space-4);
+  /* 整頁內容最大寬 1280px 置中、側邊留白 --space-5（AF-21 8-B）；背景色照樣鋪滿視窗（body 背景會傳到畫布） */
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-5);
 }
 
 /* 蓋回 ui.css 的元素選擇器（Report 沿用瀏覽器預設，再由各區塊規則設定） */
@@ -55,25 +58,48 @@ button {
   user-select: revert;
 }
 
-/* 頂部應用列 */
+/* 頂部應用列：左產品名、右燈號 chip＋摘要句 */
 .app-bar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: var(--space-3);
-  padding-bottom: var(--space-2);
+  gap: var(--space-4);
+  margin-bottom: var(--space-2);
+  min-height: 40px;
 }
 .app-title {
   font-size: var(--text-lg);
   font-weight: 700;
   color: var(--text);
   letter-spacing: -0.02em;
+  flex-shrink: 0;
 }
 .app-status {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  min-width: 0;
 }
+#app-status-summary {
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 內嵌 SVG 圖示（ui/icons.js）：線條跟著文字色；不接指標事件，點到的一律是外層按鈕 */
+.icon { flex-shrink: 0; pointer-events: none; vertical-align: middle; }
+button.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+}
+button.has-icon { display: inline-flex; align-items: center; gap: var(--space-1); }
 
 /* 頁籤：底線式 */
 .tab-nav {
@@ -87,7 +113,8 @@ button {
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;
-  padding: var(--space-2) var(--space-3);
+  min-height: 40px;
+  padding: var(--space-2) var(--space-4);
   font-size: var(--text-sm);
   font-weight: 500;
   color: var(--text-muted);
@@ -100,11 +127,8 @@ button {
   background: var(--hover);
   color: var(--text);
 }
-.tab-btn.active,
-body:has(#panel-dashboard:not([hidden])) #tab-dashboard,
-body:has(#panel-history:not([hidden])) #tab-history,
-body:has(#panel-tasks:not([hidden])) #tab-tasks,
-body:has(#panel-settings:not([hidden])) #tab-settings {
+/* active 由 showTab 寫的 aria-selected 決定（螢幕閱讀器與畫面看同一個來源） */
+.tab-btn[aria-selected="true"] {
   color: var(--primary);
   border-bottom-color: var(--primary);
   font-weight: 600;
@@ -140,7 +164,16 @@ body:has(#panel-settings:not([hidden])) #tab-settings {
   gap: var(--space-2);
   margin-bottom: var(--space-4);
   align-items: center;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
 }
+.range-step { display: inline-flex; gap: 2px; }
+.range-step button { color: var(--text-muted); background: transparent; border-color: transparent; }
+.range-step button:hover { color: var(--text); background: var(--hover); }
+.range-sep { color: var(--text-subtle); }
+.range-presets { margin-left: auto; }
 #range-bar input[type="date"] {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -161,7 +194,7 @@ body:has(#panel-settings:not([hidden])) #tab-settings {
   border-right: 1px solid var(--border);
   border-radius: 0;
   background: transparent;
-  padding: var(--space-1) var(--space-2);
+  padding: var(--space-1) var(--space-3);
   font-size: var(--text-xs);
   color: var(--text);
   cursor: pointer;
@@ -186,10 +219,15 @@ body:has(#panel-settings:not([hidden])) #tab-settings {
   gap: var(--space-4);
   align-items: start;
 }
-@media (max-width: 768px) { .history-layout { grid-template-columns: 1fr; } }
+@media (max-width: 900px) {
+  .history-layout { grid-template-columns: 1fr; }
+  body { padding: var(--space-3); }
+  .range-presets { margin-left: 0; }
+  #app-status-summary { white-space: normal; }
+}
 /* 窄視窗:資料來源側欄改成整列排在格線上方,並可收合,不與格線搶寬度 */
 @media (max-width: 900px) {
-  .dashboard-layout { flex-direction: column; }
+  .dashboard-layout { flex-direction: column; align-items: stretch; }
   #source-palette { width: auto; max-height: 40vh; }
   #source-palette #palette-list { max-height: 30vh; }
 }
@@ -198,14 +236,28 @@ body:has(#panel-settings:not([hidden])) #tab-settings {
 #calendar {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   padding: var(--space-3);
   box-shadow: var(--shadow-1);
 }
 #calendar table { width: 100%; border-collapse: collapse; text-align: center; font-size: var(--text-sm); }
 #calendar th { padding: var(--space-1); color: var(--text-muted); font-weight: 500; }
-#calendar td { padding: var(--space-2) var(--space-1); border-radius: var(--radius); cursor: pointer; position: relative; }
-#calendar td:hover { background: var(--hover); }
+#calendar td { padding: 1px; cursor: pointer; position: relative; }
+/* 日曆格內的按鈕：可聚焦、Enter／空白鍵選日；顏色跟著格子的狀態類別走 */
+#calendar .cal-day {
+  display: block;
+  width: 100%;
+  min-height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+#calendar .cal-day:hover { background: var(--hover); }
+#calendar td.in-range .cal-day { background: var(--primary-soft); font-weight: 600; }
 #calendar td.out-of-month { color: var(--text-muted); opacity: 0.4; }
 #calendar td.has-records::after { content: ""; position: absolute; bottom: 3px; left: 50%; transform: translateX(-50%); width: 4px; height: 4px; border-radius: 50%; background: var(--primary); }
 #calendar td.has-fail { color: var(--danger-text); font-weight: bold; }
@@ -336,6 +388,19 @@ body:has(#panel-settings:not([hidden])) #tab-settings {
 
 .detail-box { display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--text-sm); font-family: var(--font-mono, monospace); }
 .detail-item { display: flex; gap: var(--space-2); }
+/* 紀錄列的展開鈕（鍵盤可達；滑鼠點整列一樣會展開） */
+#record-table .row-expand {
+  min-width: 32px;
+  min-height: 32px;
+  margin: -6px var(--space-1) -6px calc(-1 * var(--space-2));
+  vertical-align: middle;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+#record-table .row-expand:hover { color: var(--text); background: var(--hover); }
+#record-table .row-expand[aria-expanded="true"] { color: var(--primary); }
+.alert-mark { display: inline-flex; margin-left: var(--space-1); color: var(--warn-text); vertical-align: middle; }
 
 /* 空狀態 */
 #empty-state {
@@ -366,6 +431,8 @@ body:has(#panel-settings:not([hidden])) #tab-settings {
 
 /* 圖表要填滿卡片，否則會縮在角落 */
 .report-card .card-body > svg { width: 100%; flex: 1 1 auto; min-height: 0; display: block; }
+/* 數值卡的迷你走勢圖只是輔助：單欄滿寬時不得撐成整張卡高、線條被放大成粗棒 */
+.report-card[data-card-type="number"] .card-body > svg { flex: 0 0 auto; max-height: 48px; margin-top: auto; }
 
 #missed-banner {
   background: var(--danger-bg);
@@ -409,55 +476,140 @@ input[data-rename-input] {
 }
 #task-bulk-bar[hidden] { display: none; }
 #task-list { display: flex; flex-direction: column; gap: var(--space-2); }
+/* 任務列（AF-21 8-B）：DOM 順序不動，用 order 排成三層——
+   第一行：勾選、啟用、名稱（字重 500）、改名、狀態 chip ……（靠右）動作按鈕
+   第二行：原因（--text-muted；紅黃燈換狀態文字色）
+   第三行：下次時間、排程、其餘中繼資訊（小字） */
 .task-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-3);
+  column-gap: var(--space-2);
+  row-gap: var(--space-1);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-left: 3px solid transparent;
+  border-radius: var(--radius-lg);
   padding: var(--space-2) var(--space-3);
   font-size: var(--text-sm);
   box-shadow: var(--shadow-1);
-  transition: box-shadow 0.15s ease;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
 }
 .task-row:hover { box-shadow: var(--shadow-2); }
 .task-row.selected { border-color: var(--primary); }
-.task-name { font-weight: 600; }
-.task-url { color: var(--text-muted); font-size: var(--text-xs); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-mode, .task-schedule, .task-next, .task-streak { color: var(--text-muted); }
-.task-actions { margin-left: auto; display: flex; gap: var(--space-1); }
+.task-row.warn { border-left-color: var(--warn); }
+.task-row.failed { border-left-color: var(--danger); }
+.task-row > * { order: 30; }
+.task-row > [data-action="select"] { order: 1; }
+.task-row > .task-toggle-label { order: 6; }
+.task-row > .task-name,
+.task-row > [data-rename-input] { order: 2; }
+.task-row > [data-action="rename"] { order: 3; }
+.task-row > .task-status { order: 4; }
+.task-row > .task-actions { order: 5; }
+/* 換行點：兩個 flex-basis 100% 的空項目，把原因與中繼資訊各推到下一行 */
+.task-row::before,
+.task-row::after { content: ""; flex-basis: 100%; height: 0; }
+.task-row::before { order: 10; }
+.task-row:not(:has(> .task-reason))::before { display: none; }
+.task-row > .task-reason { order: 11; }
+.task-row::after { order: 20; }
+.task-row > .task-next { order: 21; }
+.task-row > .task-schedule { order: 22; }
+.task-row > .task-suggest-foreground { order: 40; flex-basis: 100%; }
+.task-toggle-label { display: inline-flex; align-items: center; min-height: 32px; padding-left: var(--space-2); cursor: pointer; }
+/* 啟用開關：switch 外觀（不是核取方塊），一眼分得出「選取這列」與「啟用這個任務」 */
+.task-toggle-label input[role="switch"] {
+  appearance: none;
+  position: relative;
+  width: 32px;
+  height: 18px;
+  margin: 0;
+  border-radius: 999px;
+  background: var(--border);
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+.task-toggle-label input[role="switch"]::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  transition: transform 150ms ease;
+}
+.task-toggle-label input[role="switch"]:checked { background: var(--primary-strong); }
+.task-toggle-label input[role="switch"]:checked::after { transform: translateX(14px); }
+.task-toggle-label input[role="switch"]:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.task-name { font-weight: 500; font-size: var(--text-md); color: var(--text); }
+.task-row > [data-action="rename"] {
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+.task-row > [data-action="rename"]:hover { color: var(--text); background: var(--hover); }
+.task-url { color: var(--text-muted); font-size: var(--text-xs); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-mode, .task-schedule, .task-next, .task-streak, .task-fields, .task-alerts, .task-preactions { color: var(--text-muted); font-size: var(--text-xs); }
+.task-next { font-variant-numeric: tabular-nums; }
+.task-next::before { content: "下次 "; color: var(--text-subtle); }
+.task-alerts { display: inline-flex; align-items: center; gap: 2px; color: var(--warn-text); }
+.task-actions { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); }
 .task-actions button, .missed-actions button, .dialog-actions button, #task-bulk-bar button {
   padding: var(--space-1) var(--space-2);
   font-size: var(--text-xs);
 }
+/* 動作按鈕收成較輕的樣式（無框、次要文字色）；主要下一步另外強調（見 .task-next-step） */
+.task-actions button {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-muted);
+}
+.task-actions button:hover { background: var(--hover); color: var(--text); }
+.task-actions [data-action="delete"]:hover { background: var(--danger-soft); color: var(--danger-text); }
+.task-run-result { font-size: var(--text-xs); color: var(--text-muted); }
 .dialog-actions { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
 
 /* 設定頁 */
-.settings-container { display: flex; flex-direction: column; gap: var(--space-4); max-width: 800px; }
+/* 設定頁：分區卡片（排程與抓取／通知與告警／資料與備份／站台／診斷），每區標題＋一句說明 */
+.settings-container { display: flex; flex-direction: column; gap: var(--space-4); max-width: 880px; }
 .settings-section {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4) var(--space-5);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
   box-shadow: var(--shadow-1);
 }
-.settings-section h2 { font-size: var(--text-md); font-weight: 600; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: var(--space-2); }
-.settings-section h3 { font-size: var(--text-sm); font-weight: 600; color: var(--text-muted); margin-top: var(--space-2); }
-.settings-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); font-size: var(--text-sm); }
-/* 設定頁欄位就地回饋（AF-21 4-D）：「已儲存 ✓」與匯出結果掛 ui.css 的 .inline-status；錯誤原因換一整行 */
+.settings-head { display: flex; flex-direction: column; gap: 2px; padding-bottom: var(--space-3); border-bottom: 1px solid var(--border); }
+.settings-section h2 { font-size: var(--text-md); font-weight: 600; color: var(--text); }
+.settings-desc { font-size: var(--text-sm); color: var(--text-muted); line-height: 1.5; }
+.settings-section h3 { font-size: var(--text-xs); font-weight: 600; color: var(--text-muted); margin-top: var(--space-2); letter-spacing: 0.02em; }
+.settings-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); min-height: 32px; font-size: var(--text-sm); }
+.settings-row > label:first-child,
+.settings-row > .settings-label { min-width: 13em; color: var(--text); }
+.settings-row > label:has(> input[type="checkbox"]) { display: inline-flex; align-items: center; gap: var(--space-2); cursor: pointer; }
+/* 設定頁欄位就地回饋（AF-21 4-D）：「已儲存 ✓」與匯出結果掛 ui.css 的 .inline-status，一律貼在該列最右側；錯誤原因換一整行 */
+.settings-row > .inline-status { margin-left: auto; }
 .settings-row > .field-error { flex-basis: 100%; }
-.settings-row input[type="date"], .settings-row input[type="number"], .settings-row input[type="password"], .settings-row select, .settings-row input[type="file"] {
+#open-help { color: var(--primary); }
+.settings-row input[type="date"], .settings-row input[type="number"], .settings-row input[type="password"], .settings-row select, .settings-row input[type="file"], .settings-row input[type="time"] {
   background: var(--surface);
   border: 1px solid var(--border);
   color: var(--text);
+  min-height: 32px;
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius);
   font-size: var(--text-sm);
+  max-width: 100%;
 }
 .settings-row button {
   padding: var(--space-1) var(--space-3);
@@ -476,12 +628,11 @@ input[data-rename-input] {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-3);
-  background: var(--surface);
+  background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: var(--space-2) var(--space-3);
   font-size: var(--text-sm);
-  box-shadow: var(--shadow-1);
 }
 .site-origin { font-weight: 600; }
 .site-user, .site-streak, .site-health { color: var(--text-muted); }
@@ -515,6 +666,9 @@ input[data-rename-input] {
 #source-palette[hidden] { display: none; }
 #source-palette.collapsed #palette-list, #source-palette.collapsed #palette-search { display: none; }
 #palette-toggle { background: transparent; border: none; color: var(--text-muted); font-size: var(--text-xs); text-align: left; padding: 0; cursor: pointer; }
+.palette-grip { color: var(--text-subtle); margin-right: var(--space-1); }
+[data-palette-task] { display: flex; align-items: center; flex-wrap: wrap; }
+.palette-toggle { min-width: 24px; min-height: 24px; background: transparent; border: none; color: var(--text-muted); }
 #palette-search { width: 100%; background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: var(--space-1) var(--space-2); border-radius: var(--radius); font-size: var(--text-sm); }
 #palette-list { display: flex; flex-direction: column; gap: var(--space-1); max-height: 70vh; overflow-y: auto; }
 [data-palette-task] { padding: var(--space-1) var(--space-2); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); font-size: var(--text-sm); cursor: grab; user-select: none; }
@@ -526,8 +680,10 @@ input[data-rename-input] {
 #dashboard-grid { display: grid; grid-template-columns: repeat(12, 1fr); grid-auto-rows: 80px; gap: 8px; position: relative; flex: 1; min-width: 0; }
 #dashboard-grid > [data-card-id] { grid-column: calc(var(--card-x) + 1) / span var(--card-w); grid-row: calc(var(--card-y) + 1) / span var(--card-h); position: relative; }
 #dashboard-grid.editing > [data-card-id] { cursor: move; }
-#dashboard-grid.single-column { grid-template-columns: 1fr; }
-#dashboard-grid.single-column > [data-card-id] { grid-column: auto; grid-row: auto; }
+/* 900px 以下單欄：每張卡滿寬、高度照原本的格數（以前固定 80px 一列，卡片內容被切掉；
+   .dashboard-layout 直排時 align-items: flex-start 又讓格線縮成內容寬，卡片只剩半寬） */
+#dashboard-grid.single-column { grid-template-columns: 1fr; grid-auto-rows: auto; width: 100%; }
+#dashboard-grid.single-column > [data-card-id] { grid-column: auto; grid-row: auto; min-height: calc(var(--card-h) * 80px + (var(--card-h) - 1) * 8px); }
 .ghost { grid-column: calc(var(--card-x) + 1) / span var(--card-w); grid-row: calc(var(--card-y) + 1) / span var(--card-h); background: var(--hover); border: 2px dashed var(--primary); border-radius: var(--radius); opacity: 0.6; pointer-events: none; }
 #dashboard-grid.single-column > .ghost { grid-column: auto; grid-row: auto; }
 .resize-handle { position: absolute; right: 2px; bottom: 2px; width: 14px; height: 14px; cursor: se-resize; }
@@ -536,8 +692,8 @@ input[data-rename-input] {
 .report-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-4);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -552,17 +708,20 @@ input[data-rename-input] {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: var(--space-2);
+  gap: var(--space-2);
+  min-height: 32px;
+  margin: calc(-1 * var(--space-1)) 0 var(--space-3);
   padding-bottom: var(--space-2);
   border-bottom: 1px solid var(--border);
 }
-.report-card .card-title { font-weight: 600; font-size: var(--text-sm); }
+.report-card .card-title { font-weight: 600; font-size: var(--text-sm); color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .report-card .card-meta { display: flex; align-items: center; gap: var(--space-2); }
 .report-card .card-period { font-size: var(--text-xs); color: var(--text-muted); }
 .report-card .card-sampled { font-size: var(--text-xs); color: var(--text-muted); border: 1px solid var(--border); border-radius: var(--radius); padding: 0 var(--space-1); cursor: help; }
-.report-card .card-actions button { background: transparent; border: none; cursor: pointer; color: var(--text-muted); font-size: var(--text-sm); }
+.report-card .card-actions { display: flex; }
+.report-card .card-actions button { background: transparent; border: none; cursor: pointer; color: var(--text-muted); font-size: var(--text-sm); margin-right: calc(-1 * var(--space-2)); }
 .report-card .card-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-.remove-source-handle { background: transparent; border: none; cursor: grab; color: var(--text-muted); font-size: var(--text-sm); padding: 0 var(--space-1); margin-left: var(--space-1); line-height: 1; user-select: none; }
+.remove-source-handle { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; background: transparent; border: none; cursor: grab; color: var(--text-muted); font-size: var(--text-sm); padding: 0; margin-left: var(--space-1); line-height: 1; user-select: none; vertical-align: middle; }
 .remove-source-handle:hover { color: var(--danger-text); }
 .remove-source-handle[hidden] { display: none; }
 .card-chart-legend { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-2); font-size: var(--text-xs); }
@@ -572,9 +731,9 @@ input[data-rename-input] {
 
 /* 數值卡 */
 .card-number-display { display: flex; align-items: baseline; gap: var(--space-1); margin: var(--space-2) 0; }
-.card-number-value { font-size: var(--text-xl); font-weight: 700; color: var(--text); line-height: 1.1; }
+.card-number-value { font-size: var(--text-xl); font-weight: 700; color: var(--text); line-height: 1.1; font-family: var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
 .card-number-unit { font-size: var(--text-sm); color: var(--text-muted); }
-.card-number-diff { font-size: var(--text-xs); font-weight: 500; padding: 2px 8px; border-radius: 9999px; display: inline-flex; align-items: center; }
+.card-number-diff { font-size: var(--text-xs); font-weight: 500; padding: 2px 8px; border-radius: 9999px; display: inline-flex; align-items: center; align-self: flex-start; font-variant-numeric: tabular-nums; }
 .diff-up { color: var(--ok-text); background: var(--ok-soft); }
 .diff-down { color: var(--danger-text); background: var(--danger-soft); }
 
@@ -601,17 +760,6 @@ input[data-rename-input] {
 
 /* 狀態 chip：外形與配色在 ui.css 的 .chip.is-*（tasks.js／cards.js／settings.js 掛類別）；
    任務頁四態：綠（預設）／黃 warn／紅 failed／灰 paused（停用）——異常狀態字重加重 */
-.status-state {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  border-radius: 9999px;
-  font-size: var(--text-xs);
-  font-weight: 500;
-  line-height: 1.3;
-  background: var(--surface-2);
-  color: var(--text-muted);
-}
 .task-row.warn .task-status,
 .task-row.failed .task-status,
 .task-row.paused .task-status {
@@ -624,12 +772,15 @@ input[data-rename-input] {
 }
 .task-row.failed .task-reason { color: var(--danger-text); }
 .task-row.warn .task-reason { color: var(--warn-text); }
-/* 失敗列的下一步：強調但不是主要按鈕（有任務時任務頁不設主要按鈕） */
+/* 失敗列的下一步：文字按鈕強調（主色字、字重 600、淡底），不是實心主要按鈕（有任務時任務頁不設主要按鈕） */
+.task-actions .task-next-step,
 .task-next-step {
-  border-color: var(--danger);
-  color: var(--danger-text);
+  background: var(--primary-soft);
+  border-color: transparent;
+  color: var(--primary);
   font-weight: 600;
 }
+.task-actions .task-next-step:hover { background: var(--primary-soft); color: var(--primary); filter: brightness(0.95); }
 .task-row.task-highlight {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px var(--focus-ring);

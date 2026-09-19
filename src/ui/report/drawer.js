@@ -7,6 +7,7 @@ import { getTasks } from '../../shared/storage.js'
 import { rerenderCard, renderDashboard, flushDashboardRefresh } from './dashboard.js'
 import { buildSeriesIndex } from '../../shared/series-index.js'
 import { confirmDialog, isDialogOpen } from '../modal.js'
+import { setIcon } from '../icons.js'
 
 // 草稿只管抽屜自己的欄位；位置與大小不在草稿內（拖曳縮放照舊即時寫）
 const DRAFT_KEYS = ['title', 'type', 'source', 'options']
@@ -296,15 +297,13 @@ function renderSources(tasks, currentSources = [], type = 'number') {
           const up = document.createElement('button')
           up.type = 'button'
           up.setAttribute('data-action', 'source-up')
-          up.textContent = '↑'
-          up.title = '往前移一欄'
+          setIcon(up, 'chevron-up', { label: '往前移一欄' })
           up.disabled = selectedIdx === 0
 
           const down = document.createElement('button')
           down.type = 'button'
           down.setAttribute('data-action', 'source-down')
-          down.textContent = '↓'
-          down.title = '往後移一欄'
+          setIcon(down, 'chevron-down', { label: '往後移一欄' })
           down.disabled = selectedIdx === selectedIds.length - 1
 
           childRow.appendChild(up)
@@ -341,15 +340,13 @@ function renderSources(tasks, currentSources = [], type = 'number') {
         const up = document.createElement('button')
         up.type = 'button'
         up.setAttribute('data-action', 'source-up')
-        up.textContent = '↑'
-        up.title = '往前移一欄'
+        setIcon(up, 'chevron-up', { label: '往前移一欄' })
         up.disabled = selectedIdx === 0
 
         const down = document.createElement('button')
         down.type = 'button'
         down.setAttribute('data-action', 'source-down')
-        down.textContent = '↓'
-        down.title = '往後移一欄'
+        setIcon(down, 'chevron-down', { label: '往後移一欄' })
         down.disabled = selectedIdx === selectedIds.length - 1
 
         row.appendChild(up)
@@ -765,7 +762,7 @@ async function discardDraft() {
 }
 
 /**
- * 其他關閉方式（✕、Esc、點抽屜外、開另一張卡）：有變更先問，回傳抽屜是否已關
+ * 其他關閉方式（關閉鈕、Esc、點抽屜外、開另一張卡）：有變更先問，回傳抽屜是否已關
  */
 async function requestClose() {
   if (!isOpen()) return true

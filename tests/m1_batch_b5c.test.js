@@ -237,7 +237,7 @@ test('圖表的長寬比跟著卡片走，不會在卡片裡縮成一小塊', as
     id: 'w', type: 'line', x: 0, y: 0, w: 12, h: 2,
     source: [{ taskId: 'bank#k1' }], options: {}
   }, ctxOf())
-  const vb = wide.querySelector('svg').getAttribute('viewBox').split(' ').map(Number)
+  const vb = wide.querySelector('.card-body > svg').getAttribute('viewBox').split(' ').map(Number)
   const ratio = vb[2] / vb[3]
   assert.ok(ratio > 4, `12 欄 2 列的卡片是扁長型，viewBox 比例應該跟著扁，實得 ${ratio.toFixed(1)}`)
 })

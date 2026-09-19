@@ -14,6 +14,7 @@ import { createDragSource, registerDropTarget, resetDnd, isPointInside, isDragBu
 import { closeTrendPopover, isTrendPopoverOpen, setTrendPopoverCloseListener } from './trend-popover.js'
 import { applyDrop, applyDropMany, cardTypeForTask } from './drop-rules.js'
 import { buildSeriesIndex, parentIdOf } from '../../shared/series-index.js'
+import { icon, setIcon } from '../icons.js'
 
 // 編輯模式狀態與復原歷史
 let editing = false
@@ -164,7 +165,6 @@ function updateEditingUI() {
     const removeHandles = grid.querySelectorAll('[data-remove-source]')
     for (const handle of removeHandles) {
       handle.hidden = !editing
-      handle.textContent = editing ? '×' : ''
     }
   }
   const editBtn = document.getElementById('edit-layout')
@@ -697,13 +697,17 @@ async function renderPalette() {
     item.setAttribute('data-palette-task', '')
     item.setAttribute('data-task-id', t.id)
     item.setAttribute('data-mode', t.mode || 'number')
+    // 拖曳把手：一眼看得出這一列是拖得動的（整列都是拖曳起點，把手只是示意）
+    const grip = icon('grip')
+    grip.classList.add('palette-grip')
+    item.appendChild(grip)
     if (isMulti) {
       // 三家銀行各六個值就是十八列，要收得起來才看得完
       const toggle = document.createElement('button')
       toggle.type = 'button'
       toggle.setAttribute('data-palette-toggle', t.id)
       toggle.className = 'palette-toggle'
-      toggle.textContent = '▾'
+      setIcon(toggle, 'chevron-down', { label: `收合「${t.name || ''}」的值` })
       // 把手不是拖曳的起點：pointerdown 一冒泡到父列，拖曳的 pointer capture 會把 click 吃掉
       toggle.addEventListener('pointerdown', (ev) => ev.stopPropagation())
       toggle.addEventListener('click', (ev) => {
@@ -712,13 +716,13 @@ async function renderPalette() {
         const collapsed = item.dataset.collapsed === '1'
         item.dataset.collapsed = collapsed ? '' : '1'
         toggle.setAttribute('aria-expanded', collapsed ? 'true' : 'false')
-        toggle.textContent = collapsed ? '▾' : '▸'
+        setIcon(toggle, collapsed ? 'chevron-down' : 'chevron-right', { label: `${collapsed ? '收合' : '展開'}「${t.name || ''}」的值` })
         filterPaletteItems(document.getElementById('palette-search')?.value || '')
       })
       if (collapsedParents.has(t.id)) {
         item.dataset.collapsed = '1'
         toggle.setAttribute('aria-expanded', 'false')
-        toggle.textContent = '▸'
+        setIcon(toggle, 'chevron-right', { label: `展開「${t.name || ''}」的值` })
       } else {
         toggle.setAttribute('aria-expanded', 'true')
       }
@@ -1049,8 +1053,7 @@ export async function renderDashboard(dashId) {
       const dupBtn = document.createElement('button')
       dupBtn.type = 'button'
       dupBtn.dataset.action = 'duplicate'
-      dupBtn.title = '複製儀表板'
-      dupBtn.textContent = '⧉'
+      setIcon(dupBtn, 'copy', { label: '複製儀表板' })
       dupBtn.addEventListener('click', async (e) => {
         e.stopPropagation()
         const dup = await duplicateDashboard(d.id)
@@ -1066,8 +1069,7 @@ export async function renderDashboard(dashId) {
       const delBtn = document.createElement('button')
       delBtn.type = 'button'
       delBtn.dataset.action = 'delete'
-      delBtn.title = '刪除儀表板'
-      delBtn.textContent = '×'
+      setIcon(delBtn, 'trash', { label: '刪除儀表板' })
       delBtn.addEventListener('click', (e) => {
         e.stopPropagation()
         dashIdPendingDelete = d.id

@@ -4,6 +4,7 @@ import { statusTextOf, isRed, isWarn } from '../../shared/record-status.js'
 import { MSG } from '../../shared/messages.js'
 import { buildExport, download } from '../../shared/export.js'
 import { confirmDialog, dismissDialog, isDialogOpen } from '../modal.js'
+import { icon } from '../icons.js'
 import { isGap, gapTextOf } from '../../shared/describe.js'
 import { describeSchedule, describeTarget, targetOfTask, exclusionOfTarget, EMPTY_GUIDE } from '../../shared/describe.js'
 
@@ -488,6 +489,10 @@ function createTaskRow(t) {
   const toggle = document.createElement('input')
   toggle.type = 'checkbox'
   toggle.dataset.action = 'toggle'
+  // 啟用開關畫成 switch（report.css），與左邊的「選取」核取方塊分得開；名稱給螢幕閱讀器與滑鼠提示
+  toggle.setAttribute('role', 'switch')
+  toggle.setAttribute('aria-label', `啟用「${t.name || t.id}」`)
+  toggleLabel.title = '啟用／停用這個任務'
   toggle.checked = t.enabled !== false
   toggle.addEventListener('change', async () => {
     const [current] = await updateTasks([t.id], (task) => ({ ...task, enabled: toggle.checked }))
@@ -597,7 +602,8 @@ function createTaskRow(t) {
   if (activeAlerts.length > 0) {
     const alertEl = document.createElement('span')
     alertEl.className = 'task-alerts'
-    alertEl.textContent = `🔔 ${activeAlerts.length}`
+    alertEl.appendChild(icon('alert'))
+    alertEl.appendChild(document.createTextNode(` 告警 ${activeAlerts.length}`))
     alertEl.title = `${activeAlerts.length} 條告警條件`
     row.appendChild(alertEl)
   }

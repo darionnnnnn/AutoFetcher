@@ -9,6 +9,7 @@ import { isSuccess, isRed, isWarn, statusTextOf } from '../../shared/record-stat
 import { parentIdOf } from '../../shared/series-index.js';
 import { isGap, gapTextOf } from '../../shared/describe.js';
 import { openTrendPopover } from './trend-popover.js';
+import { icon, setIcon } from '../icons.js';
 
 const SUPPORTED_TYPES = new Set(['number', 'line', 'bar', 'table', 'gauge', 'text', 'status']);
 
@@ -140,8 +141,7 @@ function createCardShell(card, ctx) {
   configBtn.type = 'button';
   configBtn.className = 'card-btn-config';
   configBtn.dataset.action = 'config';
-  configBtn.setAttribute('aria-label', '設定');
-  configBtn.textContent = '⚙';
+  setIcon(configBtn, 'settings', { label: '卡片設定' });
   actionsEl.appendChild(configBtn);
 
   metaEl.appendChild(actionsEl);
@@ -276,14 +276,18 @@ function renderNumberCard(card, ctx, { cardEl, bodyEl }) {
 /**
  * 建立「拖出移除」把手(只有一份;table 欄標、圖表圖例、狀態清單共用)
  */
-function makeRemoveHandle(taskId, editing) {
+function makeRemoveHandle(taskId, editing, name) {
   const handle = document.createElement('button');
   handle.type = 'button';
   handle.setAttribute('data-remove-source', '');
   handle.setAttribute('data-task-id', taskId);
   handle.className = 'remove-source-handle';
   handle.hidden = !editing;
-  handle.textContent = editing ? '×' : '';
+  // 拖出卡片外就移除這個來源（dnd.js 的拖曳來源）；圖示常駐，顯示與否只看 hidden
+  handle.appendChild(icon('remove'));
+  const label = name ? `拖出卡片外移除「${name}」` : '拖出卡片外移除這個來源';
+  handle.setAttribute('aria-label', label);
+  handle.title = label;
   return handle;
 }
 
@@ -365,7 +369,7 @@ function renderChartCard(card, ctx, { bodyEl, actionsEl }) {
       labelEl.setAttribute('title', ctx?.tasksById?.[s.taskId]?.name || s.taskId);
       itemEl.appendChild(labelEl);
 
-      itemEl.appendChild(makeRemoveHandle(s.taskId, Boolean(ctx?.editing)));
+      itemEl.appendChild(makeRemoveHandle(s.taskId, Boolean(ctx?.editing), ctx?.tasksById?.[s.taskId]?.name));
       legendEl.appendChild(itemEl);
     });
 
@@ -441,7 +445,7 @@ function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
       th.setAttribute('title', ctx?.tasksById?.[id]?.name || id);
       th.appendChild(titleSpan);
 
-      th.appendChild(makeRemoveHandle(id, Boolean(ctx?.editing)));
+      th.appendChild(makeRemoveHandle(id, Boolean(ctx?.editing), ctx?.tasksById?.[id]?.name));
 
       if (!ctx?.editing) {
         th.classList.add('clickable');
@@ -722,7 +726,10 @@ function renderStatusCard(card, ctx, { bodyEl }) {
     item.appendChild(nameEl);
 
     const stateEl = document.createElement('span');
-    stateEl.className = 'status-state';
+    // 顏色跟著 health 走（判定只經 record-status.js）；以前不論成敗都是綠色
+    const health = ctx?.health?.[id];
+    const chipCls = !healthCode ? 'is-off' : (isRed(health) ? 'is-bad' : (isWarn(health) ? 'is-warn' : 'is-ok'));
+    stateEl.className = `status-state chip ${chipCls}`;
     stateEl.textContent = healthStatus;
     item.appendChild(stateEl);
 
@@ -745,7 +752,7 @@ function renderStatusCard(card, ctx, { bodyEl }) {
     }
 
     // 加得進去就要拿得出來
-    item.appendChild(makeRemoveHandle(id, Boolean(ctx?.editing)));
+    item.appendChild(makeRemoveHandle(id, Boolean(ctx?.editing), taskName));
 
     list.appendChild(item);
   }

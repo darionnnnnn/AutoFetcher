@@ -20,6 +20,14 @@ import { renderDashboard, refreshDashboard, dashboardDataRange } from './dashboa
 import { isSuccess, statusTextOf } from '../../shared/record-status.js'
 import { MSG } from '../../shared/messages.js'
 import { buildSeriesIndex, nameOf } from '../../shared/series-index.js'
+import { computeHealth } from '../../background/health.js'
+import { icon, setIcon, levelChipOf } from '../icons.js'
+
+// 頁籤順序（方向鍵在這四個之間移動）
+const TABS = ['dashboard', 'history', 'tasks', 'settings']
+
+// 紀錄明細列的 id 流水號（展開鈕的 aria-controls 指向它）
+let detailSeq = 0
 
 const DEFAULT_COLUMNS = [
   { key: 'slot', label: '時間', visible: true },
@@ -445,9 +453,15 @@ export async function loadAndRenderTasks() {
 
 export function showTab(name) {
   state.view = name
-  for (const tab of ['dashboard', 'history', 'tasks', 'settings']) {
+  for (const tab of TABS) {
     const panel = document.getElementById(`panel-${tab}`)
     if (panel) panel.hidden = (tab !== name)
+    // 螢幕閱讀器靠 aria-selected 知道在哪一頁；roving tabindex：Tab 鍵只停在目前這一頁的頁籤
+    const btn = document.getElementById(`tab-${tab}`)
+    if (btn) {
+      btn.setAttribute('aria-selected', tab === name ? 'true' : 'false')
+      btn.tabIndex = tab === name ? 0 : -1
+    }
   }
   // 日期範圍只影響儀表板（卡片的全局區間）與歷史頁；任務頁與設定頁顯示它會讓人以為清單被日期篩過
   const rangeBar = document.getElementById('range-bar')
@@ -467,6 +481,57 @@ export function showTab(name) {
   }
   if (name === 'settings') {
     renderSettings()
+  }
+}
+
+/**
+ * 頁籤的點擊與方向鍵（WAI-ARIA tabs：←／→ 換頁並移焦點，Home／End 到頭尾）。
+ * 用 onclick／onkeydown 指派，重複呼叫不會累加監聽
+ */
+export function setupTabs() {
+  const go = (tab, focus) => {
+    showTab(tab)
+    if (typeof window !== 'undefined') window.location.hash = buildHash(state)
+    if (focus) document.getElementById(`tab-${tab}`)?.focus()
+  }
+  for (const tab of TABS) {
+    const btn = document.getElementById(`tab-${tab}`)
+    if (!btn) continue
+    btn.onclick = () => go(tab, false)
+    btn.onkeydown = (e) => {
+      const i = TABS.indexOf(tab)
+      let next = null
+      if (e.key === 'ArrowRight') next = TABS[(i + 1) % TABS.length]
+      else if (e.key === 'ArrowLeft') next = TABS[(i - 1 + TABS.length) % TABS.length]
+      else if (e.key === 'Home') next = TABS[0]
+      else if (e.key === 'End') next = TABS[TABS.length - 1]
+      if (!next) return
+      e.preventDefault()
+      go(next, true)
+    }
+  }
+}
+
+/**
+ * 應用列右側的燈號 chip＋摘要句（與 popup 同一份燈號算法 computeHealth、同一份 chip 對照 levelChipOf）
+ */
+export async function renderAppStatus() {
+  const chip = document.getElementById('app-status-chip')
+  const summary = document.getElementById('app-status-summary')
+  if (!chip && !summary) return
+  let health = { level: 'off', summary: '' }
+  try {
+    const [tasks, healthMap, missed] = await Promise.all([getTasks(), getHealthMap(), getMissedList()])
+    health = computeHealth(tasks, healthMap, missed)
+  } catch {}
+  const { cls, text } = levelChipOf(health.level)
+  if (chip) {
+    chip.className = `chip ${cls}`
+    chip.textContent = text
+  }
+  if (summary) {
+    summary.textContent = health.summary || ''
+    summary.title = health.summary || ''
   }
 }
 
@@ -505,6 +570,8 @@ export async function refreshCurrentView(change) {
       else records = true
     }
   }
+  // 應用列的燈號跟著任務與健康狀態走（純紀錄變動不影響燈號）
+  if (structural || status) renderAppStatus()
   if (currentView === 'dashboard') {
     try {
       if (structural) {
@@ -642,9 +709,6 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
       const text = col.key === 'status' && record.status
         ? statusTextOf(record.status)
         : formatValue(record[col.key])
-      if (col.key === 'status' && hasAlert) {
-        return `${text} 🔔`
-      }
       return text
     })
     const classNames = []
@@ -656,11 +720,35 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
     if (record.label) {
       tr.setAttribute('title', `來源列：${record.label}`)
     }
+    // 告警：狀態欄後面接警示圖示（有 aria-label，不只靠顏色）
+    const statusIdx = visibleCols.findIndex(c => c.key === 'status')
+    if (hasAlert && statusIdx !== -1) {
+      const mark = document.createElement('span')
+      mark.className = 'alert-mark'
+      mark.setAttribute('role', 'img')
+      mark.setAttribute('aria-label', '告警')
+      mark.title = '告警條件成立'
+      mark.appendChild(icon('alert'))
+      tr.children[statusIdx]?.appendChild(mark)
+    }
+
+    // 展開控制是列內一顆按鈕（鍵盤可達）；滑鼠點整列展開照舊，按鈕的 click 冒泡到列上同一個處理
+    const detailId = `record-detail-${++detailSeq}`
+    const expandBtn = document.createElement('button')
+    expandBtn.type = 'button'
+    expandBtn.className = 'row-expand'
+    expandBtn.dataset.action = 'toggle-detail'
+    expandBtn.setAttribute('aria-expanded', 'false')
+    expandBtn.setAttribute('aria-controls', detailId)
+    setIcon(expandBtn, 'chevron-right', { label: '展開明細' })
+    tr.firstElementChild?.prepend(expandBtn)
 
     tr.addEventListener('click', () => {
       const next = tr.nextElementSibling
       if (next && next.classList.contains('detail')) {
         next.remove()
+        expandBtn.setAttribute('aria-expanded', 'false')
+        setIcon(expandBtn, 'chevron-right', { label: '展開明細' })
         return
       }
 
@@ -756,7 +844,10 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
       box.appendChild(deleteActionRow)
 
       td.appendChild(box)
+      detailTr.id = detailId
       tr.after(detailTr)
+      expandBtn.setAttribute('aria-expanded', 'true')
+      setIcon(expandBtn, 'chevron-down', { label: '收合明細' })
     })
     tbody.appendChild(tr)
   }
@@ -835,7 +926,7 @@ export function renderCalendar(year, month, statsByDate = {}) {
   const prevBtn = document.createElement('button')
   prevBtn.type = 'button'
   prevBtn.id = 'cal-prev-month'
-  prevBtn.textContent = '‹'
+  setIcon(prevBtn, 'chevron-left', { label: '上個月' })
   prevBtn.onclick = () => {
     let y = currentCalYear
     let m = currentCalMonth - 1
@@ -846,6 +937,7 @@ export function renderCalendar(year, month, statsByDate = {}) {
   const jumpInput = document.createElement('input')
   jumpInput.type = 'month'
   jumpInput.id = 'cal-jump'
+  jumpInput.setAttribute('aria-label', '跳到月份')
   jumpInput.value = `${year}-${String(month).padStart(2, '0')}`
   jumpInput.onchange = () => {
     if (jumpInput.value) {
@@ -857,7 +949,7 @@ export function renderCalendar(year, month, statsByDate = {}) {
   const nextBtn = document.createElement('button')
   nextBtn.type = 'button'
   nextBtn.id = 'cal-next-month'
-  nextBtn.textContent = '›'
+  setIcon(nextBtn, 'chevron-right', { label: '下個月' })
   nextBtn.onclick = () => {
     let y = currentCalYear
     let m = currentCalMonth + 1
@@ -883,7 +975,21 @@ export function renderCalendar(year, month, statsByDate = {}) {
     for (const day of week) {
       const td = document.createElement('td')
       td.dataset.date = day.date
-      td.textContent = String(day.day)
+      // 格內放一顆按鈕：可聚焦、Enter／空白鍵觸發（原生 button 的 click 冒泡到格子上同一個處理）
+      const dayBtn = document.createElement('button')
+      dayBtn.type = 'button'
+      dayBtn.className = 'cal-day'
+      dayBtn.textContent = String(day.day)
+      let note = ''
+      if (day.hasFail) note = '，有失敗'
+      else if (day.hasAlert) note = '，有告警'
+      else if (day.count > 0) note = '，有紀錄'
+      dayBtn.setAttribute('aria-label', `${day.date}${note}`)
+      if (state.from && state.to && day.date >= state.from && day.date <= state.to) {
+        dayBtn.setAttribute('aria-pressed', 'true')
+        td.classList.add('in-range')
+      }
+      td.appendChild(dayBtn)
 
       if (!day.inMonth) td.classList.add('out-of-month')
       if (day.count > 0) td.classList.add('has-records')
@@ -1137,16 +1243,28 @@ export function renderRangeBar() {
   }
 
   const prevDay = document.getElementById('range-prev-day')
-  if (prevDay) prevDay.onclick = () => shift(-1)
+  if (prevDay) {
+    setIcon(prevDay, 'chevron-left', { label: '往前一天' })
+    prevDay.onclick = () => shift(-1)
+  }
 
   const nextDay = document.getElementById('range-next-day')
-  if (nextDay) nextDay.onclick = () => shift(1)
+  if (nextDay) {
+    setIcon(nextDay, 'chevron-right', { label: '往後一天' })
+    nextDay.onclick = () => shift(1)
+  }
 
   const prevWeek = document.getElementById('range-prev-week')
-  if (prevWeek) prevWeek.onclick = () => shift(-7)
+  if (prevWeek) {
+    setIcon(prevWeek, 'chevrons-left', { label: '往前一週' })
+    prevWeek.onclick = () => shift(-7)
+  }
 
   const nextWeek = document.getElementById('range-next-week')
-  if (nextWeek) nextWeek.onclick = () => shift(7)
+  if (nextWeek) {
+    setIcon(nextWeek, 'chevrons-right', { label: '往後一週' })
+    nextWeek.onclick = () => shift(7)
+  }
 
   const onDateChange = () => {
     const rawFrom = fromInput ? fromInput.value : state.from
@@ -1168,6 +1286,7 @@ async function loadAndRenderPage() {
   initFromHash(typeof location !== 'undefined' ? location.hash : '')
   showTab(state.view || 'dashboard')
   renderRangeBar()
+  renderAppStatus()
 
   let cols = currentColumns
   try {
@@ -1237,15 +1356,7 @@ if (typeof document !== 'undefined' && globalThis.chrome?.runtime?.id) {
     window.addEventListener('hashchange', () => {
       loadAndRenderPage()
     })
-    for (const tab of ['dashboard', 'history', 'tasks', 'settings']) {
-      const btn = document.getElementById(`tab-${tab}`)
-      if (btn) {
-        btn.addEventListener('click', () => {
-          showTab(tab)
-          window.location.hash = buildHash(state)
-        })
-      }
-    }
+    setupTabs()
   }
 }
 
