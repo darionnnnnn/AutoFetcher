@@ -1,6 +1,10 @@
 // AutoFetcher: 重新找回目標所在的 iframe
 import { MSG } from '../shared/messages.js'
 import { injectContent } from './inject.js'
+import { sendToFrame } from './messaging.js'
+
+// 每個候選框架的 RESOLVE_LOCATOR 探測逾時（AF-21 批次 2 定案 6，暫定值）：逾時算沒命中
+export const PROBE_TIMEOUT_MS = 5000
 
 // 兩個網址是不是同一個目標頁：query 常帶 token 或時戳，只比 origin + pathname。
 // frame 定位的第二層與「立即測試」核對分頁網址都走這一份，不得各寫一次。
@@ -70,6 +74,7 @@ export async function locateFrame(tabId, frame, locator, opts = {}) {
 
   const pollMs = opts?.pollMs ?? 250
   const timeoutMs = opts?.timeoutMs ?? 20000
+  const probeTimeoutMs = opts?.probeTimeoutMs ?? PROBE_TIMEOUT_MS
   const startTime = Date.now()
 
   let ambiguousCandidates = null
@@ -104,16 +109,12 @@ export async function locateFrame(tabId, frame, locator, opts = {}) {
   for (const fid of candidateIds) {
     try {
       await injectContent(tabId, { frameId: fid })
-      const res = await chrome.tabs.sendMessage(
-        tabId,
-        { type: MSG.RESOLVE_LOCATOR, locator },
-        { frameId: fid }
-      )
+      const res = await sendToFrame(tabId, { type: MSG.RESOLVE_LOCATOR, locator }, fid, probeTimeoutMs, 'Resolve locator')
       if (res?.ok === true && res?.found === true) {
         matchedFrameIds.push(fid)
       }
     } catch {
-      // 送訊息拋例外或回別的都算沒命中
+      // 送訊息拋例外、逾時或回別的都算沒命中
     }
   }
 

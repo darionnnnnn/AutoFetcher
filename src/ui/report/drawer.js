@@ -1,15 +1,93 @@
 // AutoFetcher 卡片設定抽屜模組（SPEC I1）
+// 草稿模型（AF-21 批次 4 定案 5）：抽屜裡的變更只改草稿、即時預覽在畫面上那張卡，
+// 按「套用」才一次寫進 storage；「取消」與其他關閉方式丟掉草稿（有變更時先問）。
 
 import { getLayout, updateCard, removeCard } from '../../shared/layout-store.js'
 import { getTasks } from '../../shared/storage.js'
-import { rerenderCard, renderDashboard } from './dashboard.js'
+import { rerenderCard, renderDashboard, flushDashboardRefresh } from './dashboard.js'
 import { buildSeriesIndex } from '../../shared/series-index.js'
+import { confirmDialog, isDialogOpen } from '../modal.js'
+import { setIcon } from '../icons.js'
+
+// 草稿只管抽屜自己的欄位；位置與大小不在草稿內（拖曳縮放照舊即時寫）
+const DRAFT_KEYS = ['title', 'type', 'source', 'options']
 
 let currentDashId = null
 let currentCardId = null
+// 草稿：開啟時從卡片深拷貝，抽屜裡的變更只改它
 let currentCard = null
-let snapshot = null
+// 開啟當下的草稿欄位（判斷有沒有變更、套用時只寫有變的欄位）
+let baseline = null
 let cachedTasks = []
+// 關閉流程進行中（確認框開著時不重複問）
+let closing = null
+
+function pickDraft(card) {
+  const out = {}
+  for (const k of DRAFT_KEYS) {
+    if (card && card[k] !== undefined) out[k] = structuredClone(card[k])
+  }
+  return out
+}
+
+// 各欄位與開啟當下不同的那些（只寫有變的欄位）
+function changedFields() {
+  if (!currentCard || !baseline) return {}
+  const draft = pickDraft(currentCard)
+  const out = {}
+  for (const k of DRAFT_KEYS) {
+    if (JSON.stringify(draft[k]) !== JSON.stringify(baseline[k])) out[k] = draft[k]
+  }
+  return out
+}
+
+function isDirty() {
+  return Object.keys(changedFields()).length > 0
+}
+
+function isOpen() {
+  const drawer = document.getElementById('card-drawer')
+  return Boolean(drawer && !drawer.hidden && currentCardId)
+}
+
+/**
+ * 抽屜是否開著（唯讀；儀表板據此延後資料變動的重畫）
+ */
+export function isDrawerOpen() {
+  return isOpen()
+}
+
+/**
+ * 抽屜正在編輯這張卡時回傳草稿欄位（儀表板重畫時用它蓋過 storage 版本），否則 null
+ */
+export function getDraftPreview(dashId, cardId) {
+  if (!isOpen() || !currentCard) return null
+  if (cardId !== currentCardId) return null
+  if (dashId && currentDashId && dashId !== currentDashId) return null
+  return pickDraft(currentCard)
+}
+
+/**
+ * 把投放到正在編輯那張卡的補丁併進草稿（不寫 storage）；不是這張卡回傳 false
+ * 補丁由呼叫端以草稿為基準經 drop-rules 算好（同一套去重與上限）
+ */
+export async function mergeIntoDraft(dashId, cardId, patch) {
+  if (!getDraftPreview(dashId, cardId) || !patch) return false
+  const next = { ...currentCard }
+  for (const k of DRAFT_KEYS) {
+    if (patch[k] !== undefined) next[k] = structuredClone(patch[k])
+  }
+  currentCard = next
+  populateFields(currentCard)
+  await previewDraft()
+  return true
+}
+
+// 用草稿重畫畫面上那張卡（不寫 storage）
+async function previewDraft() {
+  if (!currentDashId || !currentCardId || !currentCard) return
+  await rerenderCard(currentDashId, currentCardId, pickDraft(currentCard))
+}
 
 /**
  * 依型別更新欄位分組容器的顯示／隱藏
@@ -219,15 +297,13 @@ function renderSources(tasks, currentSources = [], type = 'number') {
           const up = document.createElement('button')
           up.type = 'button'
           up.setAttribute('data-action', 'source-up')
-          up.textContent = '↑'
-          up.title = '往前移一欄'
+          setIcon(up, 'chevron-up', { label: '往前移一欄' })
           up.disabled = selectedIdx === 0
 
           const down = document.createElement('button')
           down.type = 'button'
           down.setAttribute('data-action', 'source-down')
-          down.textContent = '↓'
-          down.title = '往後移一欄'
+          setIcon(down, 'chevron-down', { label: '往後移一欄' })
           down.disabled = selectedIdx === selectedIds.length - 1
 
           childRow.appendChild(up)
@@ -264,15 +340,13 @@ function renderSources(tasks, currentSources = [], type = 'number') {
         const up = document.createElement('button')
         up.type = 'button'
         up.setAttribute('data-action', 'source-up')
-        up.textContent = '↑'
-        up.title = '往前移一欄'
+        setIcon(up, 'chevron-up', { label: '往前移一欄' })
         up.disabled = selectedIdx === 0
 
         const down = document.createElement('button')
         down.type = 'button'
         down.setAttribute('data-action', 'source-down')
-        down.textContent = '↓'
-        down.title = '往後移一欄'
+        setIcon(down, 'chevron-down', { label: '往後移一欄' })
         down.disabled = selectedIdx === selectedIds.length - 1
 
         row.appendChild(up)
@@ -624,7 +698,7 @@ function ensureTableDeltaField() {
 }
 
 /**
- * 立即套用欄位變更至 storage 與畫面
+ * 欄位變更只改草稿，並即時預覽在畫面上那張卡（不寫 storage）
  */
 async function applyChanges(e) {
   if (!currentDashId || !currentCardId) return
@@ -642,19 +716,137 @@ async function applyChanges(e) {
     options: { ...(patch.options || {}) }
   }
 
-  await updateCard(currentDashId, currentCardId, patch)
-  await rerenderCard(currentDashId, currentCardId)
+  await previewDraft()
+}
+
+// 收掉抽屜並清掉草稿狀態（之後的重畫就回到 storage 版本）
+function hideAndReset() {
+  const drawer = document.getElementById('card-drawer')
+  if (drawer) drawer.hidden = true
+  const deleteConfirm = document.getElementById('drawer-delete-confirm')
+  if (deleteConfirm) deleteConfirm.hidden = true
+  const did = currentDashId
+  const cid = currentCardId
+  currentDashId = null
+  currentCardId = null
+  currentCard = null
+  baseline = null
+  return { did, cid }
+}
+
+// 抽屜裡的錯誤訊息區（套用寫不進去時要說原因；沒有就建一個放在動作列之前）
+function drawerErrorEl() {
+  const drawer = document.getElementById('card-drawer')
+  if (!drawer) return null
+  let el = document.getElementById('drawer-error')
+  if (!el) {
+    el = drawer.ownerDocument.createElement('div')
+    el.id = 'drawer-error'
+    el.className = 'banner is-bad'
+    el.setAttribute('role', 'alert')
+    el.hidden = true
+    const footer = drawer.querySelector('.drawer-footer')
+    if (footer) drawer.insertBefore(el, footer)
+    else drawer.appendChild(el)
+  }
+  return el
+}
+
+function showDrawerError(msg) {
+  const el = drawerErrorEl()
+  if (!el) return
+  el.textContent = msg
+  el.hidden = false
+}
+
+function clearDrawerError() {
+  const el = document.getElementById('drawer-error')
+  if (el) {
+    el.textContent = ''
+    el.hidden = true
+  }
 }
 
 /**
- * 還原卡片至開啟時的快照
+ * 套用：一次 updateCard 寫入草稿（只寫有變的欄位）；**寫成功才關抽屜**。
+ * 寫不進去時抽屜留著、草稿留著、在抽屜裡說出原因，回傳 false。
  */
-async function onRevert() {
-  if (!currentDashId || !currentCardId || !snapshot) return
-  currentCard = structuredClone(snapshot)
-  await updateCard(currentDashId, currentCardId, currentCard)
-  await rerenderCard(currentDashId, currentCardId)
-  populateFields(currentCard)
+async function applyDraft() {
+  if (!currentDashId || !currentCardId) return false
+  const patch = changedFields()
+  const did = currentDashId
+  const cid = currentCardId
+  // 抽屜開著時背景可能修剪過序列（值被移除、任務被刪）：以寫入當下的任務清單為準，
+  // 草稿來源裡已經不存在的序列丟掉，不讓它復活
+  if (Array.isArray(patch.source)) {
+    let tasks = []
+    try { tasks = await getTasks() } catch {}
+    const idx = buildSeriesIndex(tasks)
+    patch.source = patch.source.filter(s => typeof s?.taskId === 'string' && (Boolean(idx.byId[s.taskId]) || Boolean(idx.parents[s.taskId])))
+  }
+  if (Object.keys(patch).length > 0) {
+    try {
+      await updateCard(did, cid, patch)
+    } catch (err) {
+      showDrawerError(`套用失敗，設定還留在這裡：${err?.message || err || '未知原因'}`)
+      return false
+    }
+  }
+  clearDrawerError()
+  hideAndReset()
+  await rerenderCard(did, cid)
+  flushDashboardRefresh()
+  return true
+}
+
+/**
+ * 取消：丟掉草稿、把畫面上的卡重畫回 storage 的樣子、關抽屜
+ */
+async function discardDraft() {
+  clearDrawerError()
+  if (!currentDashId || !currentCardId) {
+    hideAndReset()
+    return
+  }
+  const { did, cid } = hideAndReset()
+  await rerenderCard(did, cid)
+  flushDashboardRefresh()
+}
+
+/**
+ * 其他關閉方式（關閉鈕、Esc、點抽屜外、開另一張卡）：有變更先問，回傳抽屜是否已關
+ */
+async function requestClose() {
+  if (!isOpen()) return true
+  if (closing) return closing
+  if (!isDirty()) {
+    await discardDraft()
+    return true
+  }
+  closing = (async () => {
+    try {
+      const answer = await confirmDialog({
+        title: '要套用剛才的變更嗎？',
+        body: '這張卡片的設定改過還沒套用。',
+        confirmText: '套用',
+        // 取消（含 Esc）＝繼續編輯，草稿保留；捨棄是 extra 那顆
+        cancelText: '繼續編輯',
+        extra: { text: '捨棄', value: 'discard' }
+      })
+      if (answer === true) {
+        // 套用寫不進去時抽屜要留著（與「套用」鈕同一條路）
+        return await applyDraft()
+      }
+      if (answer === 'discard') {
+        await discardDraft()
+        return true
+      }
+      return false
+    } finally {
+      closing = null
+    }
+  })()
+  return closing
 }
 
 /**
@@ -667,13 +859,44 @@ function setupDrawerEvents() {
 
   const closeBtn = document.getElementById('drawer-close')
   if (closeBtn) {
-    closeBtn.addEventListener('click', () => closeDrawer())
+    closeBtn.addEventListener('click', () => requestClose())
   }
 
-  const revertBtn = document.getElementById('drawer-revert')
-  if (revertBtn) {
-    revertBtn.addEventListener('click', () => onRevert())
+  const applyBtn = document.getElementById('drawer-apply')
+  if (applyBtn) {
+    applyBtn.addEventListener('click', () => applyDraft())
   }
+
+  const cancelDraftBtn = document.getElementById('drawer-cancel')
+  if (cancelDraftBtn) {
+    cancelDraftBtn.addEventListener('click', () => discardDraft())
+  }
+
+  const doc = drawer.ownerDocument
+  // Esc：確認框自己的 Esc 已經 preventDefault，不能再被這裡當成關抽屜
+  doc.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || e.defaultPrevented) return
+    if (!isOpen() || isDialogOpen()) return
+    requestClose()
+  })
+  // 點抽屜外：拖曳（按下與放開距離超過幾個像素）不算，否則把值拖進卡片就會關抽屜；
+  // 卡片右上的齒輪由 openDrawer 自己處理換卡，確認框裡的點擊也不算
+  let downAt = null
+  doc.addEventListener('pointerdown', (e) => {
+    downAt = { x: e.clientX ?? 0, y: e.clientY ?? 0 }
+  }, true)
+  doc.addEventListener('click', (e) => {
+    const start = downAt
+    downAt = null
+    if (!isOpen() || isDialogOpen()) return
+    const t = e.target
+    if (!t || typeof t.closest !== 'function') return
+    if (drawer.contains(t)) return
+    if (t.closest('dialog') || t.closest('[data-action="config"]')) return
+    if (!t.isConnected) return
+    if (start && (Math.abs((e.clientX ?? 0) - start.x) > 4 || Math.abs((e.clientY ?? 0) - start.y) > 4)) return
+    requestClose()
+  })
 
   const deleteBtn = document.getElementById('drawer-delete')
   const deleteConfirm = document.getElementById('drawer-delete-confirm')
@@ -694,11 +917,10 @@ function setupDrawerEvents() {
     if (confirmBtn) {
       confirmBtn.addEventListener('click', async () => {
         if (!currentDashId || !currentCardId) return
-        const did = currentDashId
-        const cid = currentCardId
+        // 卡片都刪了，草稿一併丟掉（不問）
+        const { did, cid } = hideAndReset()
         await removeCard(did, cid)
         await renderDashboard(did)
-        closeDrawer()
       })
     }
   }
@@ -731,7 +953,7 @@ function setupDrawerEvents() {
 }
 
 /**
- * 把某個來源在欄序中前後移動一位,並立即寫回卡片
+ * 把某個來源在欄序中前後移動一位（只改草稿並預覽）
  */
 async function moveSource(taskId, delta) {
   if (!currentDashId || !currentCardId || !currentCard) return
@@ -744,15 +966,21 @@ async function moveSource(taskId, delta) {
   source.splice(to, 0, moved)
 
   currentCard = { ...currentCard, source }
-  await updateCard(currentDashId, currentCardId, { source })
-  await rerenderCard(currentDashId, currentCardId)
   renderSources(cachedTasks, source, currentCard.type)
+  await previewDraft()
 }
 
 /**
  * 開啟卡片設定抽屜
  */
 export async function openDrawer(dashId, cardId) {
+  // 正在編輯另一張卡：先照關閉規則處理那份草稿；選「繼續編輯」就不換卡
+  if (isOpen() && cardId !== currentCardId) {
+    const closed = await requestClose()
+    if (!closed) return
+  } else if (isOpen() && cardId === currentCardId) {
+    return
+  }
   const layout = await getLayout()
   let dash = null
   if (dashId) {
@@ -768,8 +996,8 @@ export async function openDrawer(dashId, cardId) {
 
   currentDashId = dash.id
   currentCardId = card.id
-  snapshot = structuredClone(card)
   currentCard = structuredClone(card)
+  baseline = pickDraft(card)
 
   try {
     cachedTasks = await getTasks()
@@ -778,6 +1006,7 @@ export async function openDrawer(dashId, cardId) {
   }
 
   setupDrawerEvents()
+  clearDrawerError()
   populateFields(currentCard)
 
   const deleteConfirm = document.getElementById('drawer-delete-confirm')
@@ -788,11 +1017,8 @@ export async function openDrawer(dashId, cardId) {
 }
 
 /**
- * 關閉卡片設定抽屜
+ * 關閉卡片設定抽屜（有未套用的變更時先問）；回傳抽屜是否已關
  */
 export function closeDrawer() {
-  const drawer = document.getElementById('card-drawer')
-  if (drawer) drawer.hidden = true
-  const deleteConfirm = document.getElementById('drawer-delete-confirm')
-  if (deleteConfirm) deleteConfirm.hidden = true
+  return requestClose()
 }

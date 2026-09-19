@@ -170,12 +170,14 @@ test('整欄改重選成整列時，掛在另一軸的位置不得照搬；儲�
     locator: { css: '#t' }, schedule: { type: 'daily', times: ['09:30'], weekdays: [1] } }
 
   await st.saveTask({ ...base, spec: { mode: 'block', block: { axis: 'col', index: 2, headerText: '成交金額', pos: 'last', aggregate: 'sum' } } })
+  await chrome.storage.session.set({ repickTabs: { 't1': 3 } })
   await bg.handleMessage({ type: 'PICKED', purpose: 'repick', taskId: 't1', locator: { css: '#t' },
     picks: [{ block: { axis: 'row', index: 0, headerText: '115/09/01' } }] }, sender)
   let back = await st.getTask('t1')
   assert.equal(back.spec.block.pos, undefined, '「最後一列」搬到整列上會變成「最後一欄」')
 
   await st.saveTask({ ...base, spec: { mode: 'block', block: { cell: { row: { pos: 'last' }, col: { index: 2, header: '成交金額' } } } } })
+  await chrome.storage.session.set({ repickTabs: { 't1': 3 } })
   await bg.handleMessage({ type: 'PICKED', purpose: 'repick', taskId: 't1', locator: { css: '#t' },
     picks: [{ block: { axis: 'col', index: 2, headerText: '成交金額' } }] }, sender)
   back = await st.getTask('t1')

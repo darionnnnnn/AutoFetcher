@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AutoFetcher",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "description": "網頁元素定時自動擷取與報表檢視工具",
   "icons": {
     "16": "icons/icon-16.png",
@@ -39,8 +39,16 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "content/*.js",
-        "shared/*.js"
+        "content/main.js",
+        "content/picker-mode.js",
+        "shared/aggregate.js",
+        "shared/block-detect.js",
+        "shared/describe.js",
+        "shared/extract.js",
+        "shared/messages.js",
+        "shared/preaction.js",
+        "shared/selector.js",
+        "shared/table.js"
       ],
       "matches": [
         "<all_urls>"

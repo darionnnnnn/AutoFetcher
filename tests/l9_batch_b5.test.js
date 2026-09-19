@@ -139,6 +139,9 @@ test('多值樞紐表在抽屜改標題後欄位一個都不能少', async () =>
   title.value = '匯率明細'
   title.dispatchEvent(new win.Event('change', { bubbles: true }))
   await new Promise(r => setTimeout(r, 40))
+  // AF-21 批次 4 定案 5：抽屜改成草稿模型，按「套用」才寫進 storage
+  doc.getElementById('drawer-apply').click()
+  await new Promise(r => setTimeout(r, 40))
   const after = (await ls.getLayout()).dashboards[0].cards.find(c => c.id === card.id)
   assert.deepEqual(after.source.map(s => s.taskId), ['bank#k1', 'bank#k2'])
 })

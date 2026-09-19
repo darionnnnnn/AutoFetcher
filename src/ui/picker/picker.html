@@ -88,7 +88,7 @@
     }
     #task-status-note {
       font-size: var(--text-xs, 12px);
-      color: var(--warn);
+      color: var(--warn-text);
     }
     #target-host {
       font-size: var(--text-xs, 12px);
@@ -127,8 +127,8 @@
       text-align: right;
       flex-shrink: 0;
     }
-    .field-result[data-state="ok"] { color: var(--ok); }
-    .field-result[data-state="error"] { color: var(--danger); }
+    .field-result[data-state="ok"] { color: var(--ok-text); }
+    .field-result[data-state="error"] { color: var(--danger-text); }
     .field-label { font-size: var(--text-xs, 12px); color: var(--text-muted); }
     #setup-summary {
       display: flex;
@@ -146,7 +146,7 @@
     }
     #setup-summary > div:empty { display: none; }
     .chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
-    .chip {
+    .time-chip {
       display: inline-flex;
       align-items: center;
       gap: 4px;
@@ -158,7 +158,7 @@
       font-size: var(--text-xs, 12px);
       color: var(--text);
     }
-    .chip button {
+    .time-chip button {
       background: transparent;
       border: none;
       color: var(--text-muted);
@@ -167,7 +167,7 @@
       line-height: 1;
       cursor: pointer;
     }
-    .chip button:hover { color: var(--text); }
+    .time-chip button:hover { color: var(--text); }
     /* 執行星期看起來也是 chip；DOM 仍是 checkbox，輔助技術才讀得到勾選狀態 */
     #card-types label,
     #weekdays label {
@@ -210,17 +210,25 @@
       align-items: center;
       justify-content: center;
     }
-    #errors { color: var(--danger); font-size: var(--text-xs, 12px); white-space: pre-line; }
+    #preview[data-empty] {
+      font-family: inherit;
+      font-size: var(--text-xs, 12px);
+      color: var(--text-muted);
+    }
+    #dashboard-edit-link { color: var(--primary); }
+    [data-saved-first] { font-size: var(--text-sm); color: var(--text-muted); }
+    [data-saved-first][data-state="ok"] { color: var(--ok-text); }
+    [data-saved-first][data-state="error"] { color: var(--danger-text); }
     #test-note { color: var(--text-muted); font-size: var(--text-xs, 12px); line-height: 1.4; }
     #block-summary { font-size: var(--text-xs, 12px); color: var(--text-muted); line-height: 1.4; }
-    #preview[data-state="ok"] { border-color: var(--ok); color: var(--ok); }
-    #preview[data-state="error"] { border-color: var(--danger); color: var(--danger); }
-    #preview[data-state="warn"] { border-color: var(--warn); color: var(--warn); }
-    #test-note[data-state="warn"] { color: var(--warn); }
+    #preview[data-state="ok"] { border-color: var(--ok); color: var(--ok-text); }
+    #preview[data-state="error"] { border-color: var(--danger); color: var(--danger-text); }
+    #preview[data-state="warn"] { border-color: var(--warn); color: var(--warn-text); }
+    #test-note[data-state="warn"] { color: var(--warn-text); }
     #test-detail {
       margin-top: var(--space-2);
     }
-    [data-saved-warning] { color: var(--warn); margin: var(--space-2) 0; }
+    [data-saved-warning] { color: var(--warn-text); margin: var(--space-2) 0; }
     [data-saved-hint] { color: var(--text-muted); font-size: var(--text-xs); margin: var(--space-2) 0; }
     #test-detail summary {
       display: block;
@@ -271,7 +279,7 @@
       color: var(--text);
     }
     [data-test-detail-body] tr[data-use="excluded"] {
-      color: var(--warn);
+      color: var(--warn-text);
     }
     #field-list { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; counter-reset: field-row; }
     [data-field-row] { display: flex; align-items: center; gap: 6px; counter-increment: field-row; }
@@ -301,7 +309,6 @@
       color: var(--text);
     }
     #save-summary { font-size: var(--text-xs, 12px); color: var(--text-muted); line-height: 1.4; padding: 4px 0; }
-    #pos-hint { font-size: var(--text-xs, 12px); color: var(--text-muted); line-height: 1.4; }
     .alert-desc { font-size: var(--text-xs, 12px); color: var(--text-muted); line-height: 1.4; }
     #alert-list { display: flex; flex-direction: column; gap: 6px; }
     [data-alert-row] { display: flex; align-items: center; gap: 6px; }
@@ -321,17 +328,26 @@
       color: var(--text);
     }
     #alert-add { align-self: flex-start; }
-    #preaction-section {
+    details#preaction-section {
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: var(--space-2, 8px);
       margin: 0;
+      background: var(--surface);
+    }
+    details#preaction-section summary {
+      font-size: var(--text-sm, 13px);
+      font-weight: 600;
+      cursor: pointer;
+      color: var(--text);
+    }
+    details#preaction-section[open] {
       display: flex;
       flex-direction: column;
       gap: var(--space-2, 8px);
-      background: var(--surface);
     }
-    .preaction-title { font-size: var(--text-xs, 12px); font-weight: 600; padding: 0 var(--space-1, 4px); color: var(--text); }
+    #test-preaction-hint { display: flex; flex-direction: column; gap: 6px; margin-top: var(--space-2, 8px); }
+    #test-preaction-hint button { align-self: flex-start; }
     .preaction-desc { font-size: var(--text-xs, 12px); color: var(--text-muted); line-height: 1.4; }
     #preaction-list { display: flex; flex-direction: column; gap: 6px; }
     [data-preaction-row] { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -353,14 +369,9 @@
     .preaction-target { font-size: var(--text-xs, 12px); color: var(--text-muted); font-family: var(--font-mono, monospace); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 90px; }
     #preaction-add { align-self: flex-start; }
     #frame-hint {
-      border: 1px solid var(--border);
-      border-left: 3px solid var(--primary);
-      border-radius: var(--radius);
-      padding: var(--space-2, 8px);
       display: flex;
       flex-direction: column;
       gap: 6px;
-      background: var(--hover);
     }
     #frame-hint-text { font-size: var(--text-xs, 12px); color: var(--text); line-height: 1.5; }
     #frame-hint-actions { display: flex; gap: 6px; }
@@ -401,6 +412,7 @@
     <div id="task-status-note" role="status" hidden></div>
     <label for="name" class="field-label">任務名稱</label>
     <input type="text" id="name" placeholder="替這個任務取個名字">
+    <div id="name-error" class="field-error" hidden></div>
     <div id="setup-summary" role="status">
       <div id="summary-target"></div>
       <button type="button" id="goto-rowpos" hidden>去設定「列定位」</button>
@@ -421,7 +433,7 @@
         <legend>要建立的任務</legend>
         <div id="batch-list"></div>
         <div id="batch-note">每個任務各自命名；多久抓一次與抓完放哪裡共用。要個別調整的，存完到任務頁按編輯。</div>
-        <label id="batch-aggregate-label" hidden>整欄／整列的合成方式
+        <label id="batch-aggregate-label" hidden><span data-term="aggregate"></span>
           <select id="batch-aggregate">
             <option value="max">最大值</option>
             <option value="min">最小值</option>
@@ -463,8 +475,8 @@
             <option value="last-1">倒數第二筆</option>
           </select>
         </label>
-        <div id="pos-hint"></div>
-        <label>聚合方式
+        <div id="pos-hint" class="field-hint"></div>
+        <label><span data-term="aggregate"></span>
           <select id="block-aggregate">
             <option value="max">最大值</option>
             <option value="min">最小值</option>
@@ -479,11 +491,31 @@
           <label for="skip-blank"><input type="checkbox" id="skip-blank" checked>自動略過頭尾空白</label>
         </div>
       </fieldset>
+      <details id="preaction-section">
+        <summary><span data-preaction-ask></span> <span id="preaction-count" class="chip" hidden></span></summary>
+        <div class="preaction-desc">抓取前依序執行，例如先關掉彈窗、或等圖表載入完成。<br>
+          要抓「滑鼠移過去才出現的選單」，用「移到元素上」→「等元素出現」→「點擊元素」三步。
+          <strong>純用 CSS <code>:hover</code> 展開的選單無法用這個方式打開</strong>（程式送出的滑鼠事件不是真的游標）；
+          這種站台通常選單項目本來就在頁面裡，把「等元素出現」的「要看得見」取消再直接點它即可。</div>
+        <div id="frame-hint" class="banner is-info" role="status" hidden>
+          <div id="frame-hint-text"></div>
+          <div id="frame-hint-actions">
+            <button type="button" id="frame-hint-add">加入點擊步驟</button>
+            <button type="button" id="frame-hint-dismiss">不需要</button>
+          </div>
+        </div>
+        <div id="preaction-list"></div>
+        <button type="button" id="preaction-add">新增動作</button>
+      </details>
       <fieldset id="preview-section">
-        <legend>先試抓看看</legend>
+        <legend data-term="testResult">試抓結果</legend>
         <div id="preview"></div>
-        <div id="errors" role="alert"></div>
         <div id="test-note" role="status"></div>
+        <!-- 試抓失敗而且沒有前置動作時才出現：指向「抓之前要先點什麼嗎？」那一列 -->
+        <div id="test-preaction-hint" class="banner is-info" role="status" hidden>
+          <div data-test-preaction-hint-text></div>
+          <button type="button" id="test-preaction-goto">去加一步</button>
+        </div>
         <details id="test-detail" hidden>
           <summary></summary>
           <div data-test-detail-body></div>
@@ -510,7 +542,7 @@
                上面的 time 選擇器與 chip 只是它的輸入介面，兩邊一律同步 -->
           <input type="text" id="times" value="09:30" hidden>
         </div>
-        <label data-schedule-only="interval">間隔時間（分鐘）<input type="number" id="every-minutes" value="15" min="1"></label>
+        <label data-schedule-only="interval">間隔時間（分鐘）<input type="number" id="every-minutes" value="15" min="1"><div id="every-minutes-error" class="field-error" hidden></div></label>
         <div data-schedule-only="interval" id="window-block">
           <label class="checkbox-label">
             <input type="checkbox" id="window-enabled">只在某個時段內執行
@@ -523,11 +555,12 @@
         </div>
         <label>執行星期</label>
         <div id="weekdays" class="chip-row">
-          <label><input type="checkbox" value="1" checked>一</label>
-          <label><input type="checkbox" value="2" checked>二</label>
-          <label><input type="checkbox" value="3" checked>三</label>
-          <label><input type="checkbox" value="4" checked>四</label>
-          <label><input type="checkbox" value="5" checked>五</label>
+          <!-- 預設值只有一份：picker.js 的 BUILTIN_DEFAULTS（每天），這裡不寫死勾選 -->
+          <label><input type="checkbox" value="1">一</label>
+          <label><input type="checkbox" value="2">二</label>
+          <label><input type="checkbox" value="3">三</label>
+          <label><input type="checkbox" value="4">四</label>
+          <label><input type="checkbox" value="5">五</label>
           <label><input type="checkbox" value="6">六</label>
           <label><input type="checkbox" value="0">日</label>
         </div>
@@ -535,12 +568,15 @@
       </fieldset>
       <fieldset id="add-to-dashboard">
         <legend>抓完放哪裡</legend>
-        <label>目標儀表板
+        <!-- 編輯既有任務時不加卡片（只有新建才加）：整區藏起來使用者會以為設定不見了，改成一行說明＋去處 -->
+        <div id="dashboard-edit-note" class="field-label" hidden>要把這個任務加進儀表板，請到報表的儀表板用「＋」新增卡片。
+          <a href="#" id="dashboard-edit-link">開啟報表</a></div>
+        <label id="dashboard-select-label">目標儀表板
           <select id="dashboard-select">
             <option value="none">不加入</option>
           </select>
         </label>
-        <label>卡片型別</label>
+        <label id="card-types-label">卡片型別</label>
         <div id="card-types">
           <label><input type="checkbox" value="number">數字</label>
           <label><input type="checkbox" value="line">折線</label>
@@ -565,40 +601,30 @@
           </select>
         </label>
         <div id="legacy-strategy-note" class="hint" hidden></div>
-      <label>正規表達式<input type="text" id="regex" placeholder="策略為正規表達式時必填"></label>
+      <label>正規表達式<input type="text" id="regex" placeholder="策略為正規表達式時必填"><div id="regex-error" class="field-error" hidden></div></label>
         <fieldset id="alert-section">
           <legend>告警條件</legend>
           <div class="alert-desc">命中時會發通知，並在報表標記。同一條件 60 分鐘內只通知一次。</div>
           <div id="alert-list"></div>
           <button type="button" id="alert-add">新增條件</button>
         </fieldset>
-        <div id="preaction-section">
-          <div class="preaction-title">前置動作</div>
-          <div class="preaction-desc">抓取前依序執行，例如先關掉彈窗、或等圖表載入完成。<br>
-            要抓「滑鼠移過去才出現的選單」，用「移到元素上」→「等元素出現」→「點擊元素」三步。
-            <strong>純用 CSS <code>:hover</code> 展開的選單無法用這個方式打開</strong>（程式送出的滑鼠事件不是真的游標）；
-            這種站台通常選單項目本來就在頁面裡，把「等元素出現」的「要看得見」取消再直接點它即可。</div>
-          <div id="frame-hint" role="status" hidden>
-            <div id="frame-hint-text"></div>
-            <div id="frame-hint-actions">
-              <button type="button" id="frame-hint-add">加入點擊步驟</button>
-              <button type="button" id="frame-hint-dismiss">不需要</button>
-            </div>
-          </div>
-          <div id="preaction-list"></div>
-          <button type="button" id="preaction-add">新增動作</button>
-        </div>
       </details>
     </div>
-    <label class="checkbox-label">
-      <input type="checkbox" id="pin-defaults">將此次設定固定為預設值
-    </label>
     <div id="save-summary" hidden></div>
-    <footer>
-      <button type="button" id="repick-target">回頁面重選目標</button>
-      <button type="button" id="test-now">立即測試</button>
-      <button type="button" id="cancel">取消</button>
-      <button type="button" id="save" class="btn-primary">儲存</button>
+    <!-- 「還不能儲存」的原因、存檔失敗、試抓的錯誤都在這裡：緊貼固定列上方、在捲動區外，
+         使用者在底部按儲存時一定看得到（save-guard.js） -->
+    <div id="errors" class="save-guard" role="alert" hidden></div>
+    <footer class="action-bar">
+      <div class="action-bar-primary">
+        <button type="button" id="save" class="btn-primary">儲存</button>
+        <span id="save-missing" class="save-guard-count" hidden></span>
+        <span id="paused-badge" class="chip is-off" title="這個任務停用中：存檔後也不會排程，到任務頁啟用後才會抓。" hidden>停用中</span>
+      </div>
+      <div class="action-bar-secondary">
+        <button type="button" id="test-now" data-term="test">試抓</button>
+        <button type="button" id="repick-target" title="回頁面重選目標"><span class="label-full">回頁面重選目標</span><span class="label-short" aria-hidden="true">重選目標</span></button>
+        <button type="button" id="cancel">取消</button>
+      </div>
     </footer>
   </form>
 </body>

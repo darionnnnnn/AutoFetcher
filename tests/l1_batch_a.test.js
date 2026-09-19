@@ -80,7 +80,7 @@ test('computeHealth 對各狀態的分級不變', async () => {
 test('manual：帳本已有該 slot 仍執行並寫紀錄', async () => {
   const { c, st, fe } = await freshFetcher()
   await st.saveTask(task())
-  await c.storage.local.set({ runs: { t1: { '2026-09-06T09:00': 'ok' } } })
+  await st.setRunStatus('t1', '2026-09-06T09:00', 'ok')
   const rec = await fe.runTask(task(), { slot: '2026-09-06T09:00', reason: 'manual', ...FAST })
   assert.ok(rec, 'manual 不得被冪等帳本擋掉')
   assert.equal(rec.status, 'ok')
@@ -91,15 +91,14 @@ test('manual：不寫帳本（否則會偷走同一分鐘的排程槽）', async
   const { c, st, fe } = await freshFetcher()
   await st.saveTask(task())
   await fe.runTask(task(), { slot: '2026-09-06T09:00', reason: 'manual', ...FAST })
-  const runs = (await c.storage.local.get('runs')).runs || {}
-  assert.deepEqual(runs, {}, 'manual 不得在帳本留下任何鍵')
+  assert.deepEqual(Object.keys(await c.storage.local.get(null)).filter(k => k.startsWith('runs')), [], 'manual 不得在帳本留下任何鍵')
 })
 
 test('排程觸發仍寫帳本且維持冪等', async () => {
   const { c, st, fe } = await freshFetcher()
   await st.saveTask(task())
   await fe.runTask(task(), { slot: '2026-09-06T09:00', ...FAST })
-  const runs = (await c.storage.local.get('runs')).runs || {}
+  const runs = (await c.storage.local.get('runs:2026-09-06'))['runs:2026-09-06'] || {}
   assert.equal(runs.t1?.['2026-09-06T09:00'], 'ok')
   const again = await fe.runTask(task(), { slot: '2026-09-06T09:00', ...FAST })
   assert.equal(again, null, '同一 slot 第二次要略過')
@@ -228,11 +227,9 @@ test('RUN_TASK 一律以 manual 執行（執行選項不得覆蓋 reason）', as
   const { c, st, bg } = await freshMain()
   await st.saveTask(task())
   c.__setTabResponder(() => ({ ok: true, value: 9, raw: '9', status: 'ok', strategyUsed: 'auto', layer: 'css' }))
-  await c.storage.local.set({ runs: { t1: {} } })
   const res = await runTask(bg, 't1', { ...FAST, reason: 'scheduled' })
   assert.equal(res.outcome, 'done')
-  const runs = (await c.storage.local.get('runs')).runs || {}
-  assert.deepEqual(runs.t1, {}, 'manual 不寫帳本')
+  assert.deepEqual(Object.keys(await c.storage.local.get(null)).filter(k => k.startsWith('runs')), [], 'manual 不寫帳本')
 })
 
 // ---- A4：storage 變更訂閱 ----
@@ -274,7 +271,7 @@ test('帳本與診斷的變更不觸發重繪', async () => {
   await st.init()
   let hits = 0
   st.subscribe(() => { hits++ })
-  await c.storage.local.set({ runs: { t1: { s: 'ok' } } })
+  await c.storage.local.set({ 'runs:2026-09-06': { t1: { s: 'ok' } } })
   await c.storage.local.set({ diag: [1] })
   await new Promise(r => setTimeout(r, 60))
   assert.equal(hits, 0, 'runs／diag 每次抓取都在變，不能拿來觸發重繪')

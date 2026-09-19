@@ -18,8 +18,10 @@ async function fresh() {
 }
 
 const FAST = { pollMs: 1, loadTimeoutMs: 100, extraDelayMs: 0, extractTimeoutMs: 100 }
+// createdAt 固定在測試時間軸之前（否則 saveTask 填「真實的現在」，錯過的格子全被建立時刻擋掉）
 const daily = (id, times = ['09:00']) => ({
   id, name: id, url: 'https://a.test/p', mode: 'number', enabled: true,
+  createdAt: new Date(2026, 0, 1).getTime(),
   locator: { css: '#v', path: '', anchor: null, xpath: '' }, spec: { strategy: 'auto' },
   schedule: { type: 'daily', times, weekdays: [0, 1, 2, 3, 4, 5, 6] }
 })
@@ -154,7 +156,6 @@ test('訊息裡帶的執行選項一律不生效（dryRun／reason／__testOpts 
   const { c, st } = await fresh()
   await st.saveTask(daily('t1'))
   await st.saveSettings({ extraDelaySec: 0 })
-  await c.storage.local.set({ runs: {} })
   await c.__emitMessage({
     type: 'RUN_TASK',
     taskId: 't1',
@@ -166,8 +167,7 @@ test('訊息裡帶的執行選項一律不生效（dryRun／reason／__testOpts 
   const recs = await st.getRecordsByDate(localToday())
   assert.equal(recs.length, 1, 'dryRun 生效的話就不會寫紀錄——訊息塞得進執行選項')
   assert.notEqual(recs[0].slot, '2000-01-01T00:00', 'slot 也不得由訊息指定')
-  const runs = (await c.storage.local.get('runs')).runs || {}
-  assert.deepEqual(runs, {}, 'reason 被改成 scheduled 的話會寫帳本，偷走同一分鐘的排程槽')
+  assert.deepEqual(Object.keys(await c.storage.local.get(null)).filter(k => k.startsWith('runs')), [], 'reason 被改成 scheduled 的話會寫帳本，偷走同一分鐘的排程槽')
 })
 
 test('訊息 REBUILD_ALARMS 會重建排程與預檢', async () => {

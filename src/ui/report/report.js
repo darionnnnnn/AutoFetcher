@@ -13,12 +13,22 @@ import { applyTheme } from '../theme-apply.js'
 import { buildSeries, pivot } from './series.js'
 import { lineChart } from './charts.js'
 import { buildTsv } from './cards.js'
-import { renderTasks } from './tasks.js'
+import { confirmDialog } from '../modal.js'
+import { renderTasks, focusTaskRow } from './tasks.js'
 import { renderSettings } from './settings.js'
-import { renderDashboard, isEditing } from './dashboard.js'
-import { isSuccess } from '../../shared/record-status.js'
+import { renderDashboard, refreshDashboard, dashboardDataRange } from './dashboard.js'
+import { closeDrawer, isDrawerOpen } from './drawer.js'
+import { isSuccess, statusTextOf } from '../../shared/record-status.js'
 import { MSG } from '../../shared/messages.js'
 import { buildSeriesIndex, nameOf } from '../../shared/series-index.js'
+import { computeHealth } from '../../background/health.js'
+import { icon, setIcon, levelChipOf } from '../icons.js'
+
+// 頁籤順序（方向鍵在這四個之間移動）
+const TABS = ['dashboard', 'history', 'tasks', 'settings']
+
+// 紀錄明細列的 id 流水號（展開鈕的 aria-controls 指向它）
+let detailSeq = 0
 
 const DEFAULT_COLUMNS = [
   { key: 'slot', label: '時間', visible: true },
@@ -40,7 +50,9 @@ const state = {
   valueMin: null,
   valueMax: null,
   keyword: '',
-  alertsOnly: false,
+  failedOnly: false,
+  alertOnly: false,
+  task: null,
   page: 1,
   compareTo: ''
 }
@@ -112,7 +124,10 @@ export function initFromHash(hash) {
   state.valueMin = parsed.valueMin !== undefined ? parsed.valueMin : null
   state.valueMax = parsed.valueMax !== undefined ? parsed.valueMax : null
   state.keyword = parsed.keyword || ''
-  state.alertsOnly = parsed.alertsOnly === true
+  state.failedOnly = parsed.failedOnly === true
+  state.alertOnly = parsed.alertOnly === true
+  // 只用一次：定位完就清掉，之後的重畫與切頁不再捲動
+  state.task = parsed.task || null
   state.page = parsed.page || 1
   state.compareTo = parsed.compareTo || ''
 
@@ -168,7 +183,8 @@ export function setupTableMode() {
     const filtered = filterRecords(allLoadedRecords, {
       taskIds: state.taskIds,
       statuses: state.statuses,
-      alertsOnly: state.alertsOnly,
+      failedOnly: state.failedOnly,
+      alertOnly: state.alertOnly,
       valueMin: state.valueMin,
       valueMax: state.valueMax,
       keyword: state.keyword
@@ -190,7 +206,8 @@ async function onFilterChange() {
   if (!container) return
   const tasksContainer = container.querySelector('#filter-tasks')
   const statusesContainer = container.querySelector('#filter-statuses')
-  const alertsCb = container.querySelector('#filter-alerts-only')
+  const failedCb = container.querySelector('#filter-failed-only')
+  const alertCb = container.querySelector('#filter-alert-only')
   const valMinInput = container.querySelector('#filter-value-min')
   const valMaxInput = container.querySelector('#filter-value-max')
   const kwInput = container.querySelector('#filter-keyword')
@@ -201,7 +218,8 @@ async function onFilterChange() {
         .map(cb => cb.value)
     : []
   state.statuses = statusesContainer ? [...statusesContainer.querySelectorAll('input:checked')].map(cb => cb.value) : []
-  state.alertsOnly = alertsCb ? alertsCb.checked : false
+  state.failedOnly = failedCb ? failedCb.checked : false
+  state.alertOnly = alertCb ? alertCb.checked : false
   state.valueMin = (valMinInput && valMinInput.value !== '') ? Number(valMinInput.value) : null
   state.valueMax = (valMaxInput && valMaxInput.value !== '') ? Number(valMaxInput.value) : null
   state.keyword = kwInput ? kwInput.value.trim() : ''
@@ -223,7 +241,8 @@ async function applyCurrentFilters() {
   const filtered = filterRecords(allLoadedRecords, {
     taskIds: state.taskIds,
     statuses: state.statuses,
-    alertsOnly: state.alertsOnly,
+    failedOnly: state.failedOnly,
+    alertOnly: state.alertOnly,
     valueMin: state.valueMin,
     valueMax: state.valueMax,
     keyword: state.keyword
@@ -326,15 +345,9 @@ export async function renderFilters() {
   // 2. 狀態多選容器 #filter-statuses
   const statusesContainer = document.createElement('div')
   statusesContainer.id = 'filter-statuses'
-  const allStatuses = [
-    { key: 'ok', label: '成功 (ok)' },
-    { key: 'fallback', label: '備援 (fallback)' },
-    { key: 'late', label: '逾時 (late)' },
-    { key: 'not_found', label: '未找到 (not_found)' },
-    { key: 'parse_error', label: '抓不到數值 (parse_error)' },
-    { key: 'login_failed', label: '無法登入 (login_failed)' },
-    { key: 'error', label: '錯誤 (error)' }
-  ]
+  // 標籤文字只經 statusTextOf（全站唯一一份），格式「白話 (代碼)」
+  const allStatuses = ['ok', 'fallback', 'late', 'not_found', 'parse_error', 'login_failed', 'error', 'interrupted']
+    .map(key => ({ key, label: `${statusTextOf(key)} (${key})` }))
   for (const item of allStatuses) {
     const label = document.createElement('label')
     const cb = document.createElement('input')
@@ -346,14 +359,20 @@ export async function renderFilters() {
     statusesContainer.appendChild(label)
   }
 
-  // 3. 只看告警 #filter-alerts-only
+  // 3. 只看失敗 #filter-failed-only（不成功的紀錄）與只看告警 #filter-alert-only（alert === true），兩者可同時勾＝交集
+  const failedLabel = document.createElement('label')
+  const failedCb = document.createElement('input')
+  failedCb.type = 'checkbox'
+  failedCb.id = 'filter-failed-only'
+  failedCb.checked = !!state.failedOnly
+  failedLabel.append(failedCb, ' ', '只看失敗')
+
   const alertsLabel = document.createElement('label')
-  const alertsCb = document.createElement('input')
-  alertsCb.type = 'checkbox'
-  alertsCb.id = 'filter-alerts-only'
-  alertsCb.checked = !!state.alertsOnly
-  alertsLabel.appendChild(alertsCb)
-  alertsLabel.appendChild(document.createTextNode(' 只看告警'))
+  const alertCb = document.createElement('input')
+  alertCb.type = 'checkbox'
+  alertCb.id = 'filter-alert-only'
+  alertCb.checked = !!state.alertOnly
+  alertsLabel.append(alertCb, ' ', '只看告警')
 
   // 4. 值範圍 #filter-value-min, #filter-value-max
   const valMinLabel = document.createElement('label')
@@ -390,6 +409,7 @@ export async function renderFilters() {
 
   container.appendChild(tasksContainer)
   container.appendChild(statusesContainer)
+  container.appendChild(failedLabel)
   container.appendChild(alertsLabel)
   container.appendChild(valMinLabel)
   container.appendChild(valMaxLabel)
@@ -432,12 +452,35 @@ export async function loadAndRenderTasks() {
   }
 }
 
+/**
+ * 換頁籤。離開儀表板前先請抽屜關閉（有未套用的變更照既有流程問）；
+ * 使用者選「繼續編輯」就不切頁——抽屜藏在隱藏的 panel 裡、卻還算開著，是最糟的狀態。
+ * 需要問的時候回傳 Promise，其餘情況同步完成（既有呼叫端不受影響）
+ */
 export function showTab(name) {
+  if (name !== 'dashboard' && isDrawerOpen()) {
+    return closeDrawer().then((closed) => {
+      if (closed) return applyTab(name)
+    })
+  }
+  return applyTab(name)
+}
+
+function applyTab(name) {
   state.view = name
-  for (const tab of ['dashboard', 'history', 'tasks', 'settings']) {
+  for (const tab of TABS) {
     const panel = document.getElementById(`panel-${tab}`)
     if (panel) panel.hidden = (tab !== name)
+    // 螢幕閱讀器靠 aria-selected 知道在哪一頁；roving tabindex：Tab 鍵只停在目前這一頁的頁籤
+    const btn = document.getElementById(`tab-${tab}`)
+    if (btn) {
+      btn.setAttribute('aria-selected', tab === name ? 'true' : 'false')
+      btn.tabIndex = tab === name ? 0 : -1
+    }
   }
+  // 日期範圍只影響儀表板（卡片的全局區間）與歷史頁；任務頁與設定頁顯示它會讓人以為清單被日期篩過
+  const rangeBar = document.getElementById('range-bar')
+  if (rangeBar) rangeBar.hidden = !(name === 'dashboard' || name === 'history')
   if (name === 'dashboard') {
     getLayout().then(l => {
       const targetId = state.dash || l?.lastDashboardId || l?.dashboards?.[0]?.id
@@ -445,32 +488,145 @@ export function showTab(name) {
     }).catch(() => {})
   }
   if (name === 'tasks') {
-    loadAndRenderTasks()
+    const focusId = state.task
+    state.task = null
+    return loadAndRenderTasks().then(() => {
+      if (focusId) focusTaskRow(focusId)
+    })
   }
   if (name === 'settings') {
     renderSettings()
   }
 }
 
-export async function refreshCurrentView() {
+/**
+ * 頁籤的點擊與方向鍵（WAI-ARIA tabs：←／→ 換頁並移焦點，Home／End 到頭尾）。
+ * 用 onclick／onkeydown 指派，重複呼叫不會累加監聽
+ */
+export function setupTabs() {
+  const finish = (tab, focus) => {
+    if (typeof window !== 'undefined') window.location.hash = buildHash(state)
+    if (focus) document.getElementById(`tab-${tab}`)?.focus()
+  }
+  const go = (tab, focus) => {
+    // 抽屜開著時要先問「要套用嗎」：沒切成頁就不改網址、不移焦點（其餘情況照舊同步做完）
+    if (tab !== 'dashboard' && isDrawerOpen()) {
+      closeDrawer().then((closed) => {
+        if (!closed) return
+        applyTab(tab)
+        finish(tab, focus)
+      }).catch(() => {})
+      return
+    }
+    showTab(tab)
+    finish(tab, focus)
+  }
+  for (const tab of TABS) {
+    const btn = document.getElementById(`tab-${tab}`)
+    if (!btn) continue
+    btn.onclick = () => go(tab, false)
+    btn.onkeydown = (e) => {
+      const i = TABS.indexOf(tab)
+      let next = null
+      if (e.key === 'ArrowRight') next = TABS[(i + 1) % TABS.length]
+      else if (e.key === 'ArrowLeft') next = TABS[(i - 1 + TABS.length) % TABS.length]
+      else if (e.key === 'Home') next = TABS[0]
+      else if (e.key === 'End') next = TABS[TABS.length - 1]
+      if (!next) return
+      e.preventDefault()
+      go(next, true)
+    }
+  }
+}
+
+/**
+ * 應用列右側的燈號 chip＋摘要句（與 popup 同一份燈號算法 computeHealth、同一份 chip 對照 levelChipOf）
+ */
+export async function renderAppStatus() {
+  const chip = document.getElementById('app-status-chip')
+  const summary = document.getElementById('app-status-summary')
+  if (!chip && !summary) return
+  let health = { level: 'off', summary: '' }
+  try {
+    const [tasks, healthMap, missed] = await Promise.all([getTasks(), getHealthMap(), getMissedList()])
+    health = computeHealth(tasks, healthMap, missed)
+  } catch {}
+  const { cls, text } = levelChipOf(health.level)
+  if (chip) {
+    chip.className = `chip ${cls}`
+    chip.textContent = text
+  }
+  if (summary) {
+    summary.textContent = health.summary || ''
+    summary.title = health.summary || ''
+  }
+}
+
+// 會整份重畫的鍵（任務清單或版面變了，側欄、頁籤、卡片組成都可能不同）
+const STRUCTURE_KEYS = new Set(['tasks', 'layout'])
+// 不是紀錄、但卡片或任務頁會顯示的鍵
+const STATUS_KEYS = new Set(['lastValues', 'health', 'missed'])
+
+/**
+ * 變動的紀錄日期與範圍有沒有交集；範圍不完整時一律當作有
+ */
+export function datesIntersect(dates, from, to) {
+  if (!from || !to) return true
+  for (const d of dates || []) {
+    if (typeof d === 'string' && d >= from && d <= to) return true
+  }
+  return false
+}
+
+/**
+ * 依 storage 的變動決定要不要重畫、重畫多少（AF-21 批次 6）。
+ * 不帶 change（使用者操作後的主動刷新）＝照舊整份重畫。
+ * @param {{ keys: Set<string>, dates: Set<string> }} [change]
+ */
+export async function refreshCurrentView(change) {
   const currentView = state.view || 'dashboard'
+  const keys = change?.keys instanceof Set ? change.keys : null
+  const dates = change?.dates instanceof Set ? change.dates : new Set()
+  let structural = !keys
+  let status = false
+  let records = false
+  if (keys) {
+    for (const k of keys) {
+      if (STRUCTURE_KEYS.has(k)) structural = true
+      else if (STATUS_KEYS.has(k)) status = true
+      else records = true
+    }
+  }
+  // 應用列的燈號跟著任務與健康狀態走（純紀錄變動不影響燈號）
+  if (structural || status) renderAppStatus()
   if (currentView === 'dashboard') {
-    if (isEditing()) return
     try {
-      const l = await getLayout()
-      const targetId = state.dash || l?.lastDashboardId || l?.dashboards?.[0]?.id
-      await renderDashboard(targetId)
+      if (structural) {
+        const l = await getLayout()
+        const targetId = state.dash || l?.lastDashboardId || l?.dashboards?.[0]?.id
+        await refreshDashboard({ full: true, dashId: targetId })
+        return
+      }
+      if (!status) {
+        if (!records) return
+        // 儀表板的範圍是各卡片自己的區間設定合起來（與實際讀紀錄的範圍同一份）
+        const range = await dashboardDataRange()
+        if (range && !datesIntersect(dates, range.from, range.to)) return
+      }
+      await refreshDashboard({ full: false })
     } catch {}
     return
+  }
+  if (currentView !== 'tasks' && currentView !== 'history') return
+  if (!structural && !status) {
+    if (!records) return
+    if (!datesIntersect(dates, state.from, state.to)) return
   }
   if (currentView === 'tasks') {
     await loadAndRenderTasks()
     return
   }
-  if (currentView === 'history') {
-    await applyCurrentFilters()
-    return
-  }
+  await applyCurrentFilters()
 }
 
 export function renderTable(records = [], columns = currentColumns, opts = {}) {
@@ -576,10 +732,10 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
     const isFailed = !isSuccess(record)
     const hasAlert = record.alert === true
     const cells = visibleCols.map(col => {
-      const text = formatValue(record[col.key])
-      if (col.key === 'status' && hasAlert) {
-        return `${text} 🔔`
-      }
+      // 狀態欄顯示白話；複製 TSV 與匯出維持代碼
+      const text = col.key === 'status' && record.status
+        ? statusTextOf(record.status)
+        : formatValue(record[col.key])
       return text
     })
     const classNames = []
@@ -591,11 +747,35 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
     if (record.label) {
       tr.setAttribute('title', `來源列：${record.label}`)
     }
+    // 告警：狀態欄後面接警示圖示（有 aria-label，不只靠顏色）
+    const statusIdx = visibleCols.findIndex(c => c.key === 'status')
+    if (hasAlert && statusIdx !== -1) {
+      const mark = document.createElement('span')
+      mark.className = 'alert-mark'
+      mark.setAttribute('role', 'img')
+      mark.setAttribute('aria-label', '告警')
+      mark.title = '告警條件成立'
+      mark.appendChild(icon('alert'))
+      tr.children[statusIdx]?.appendChild(mark)
+    }
+
+    // 展開控制是列內一顆按鈕（鍵盤可達）；滑鼠點整列展開照舊，按鈕的 click 冒泡到列上同一個處理
+    const detailId = `record-detail-${++detailSeq}`
+    const expandBtn = document.createElement('button')
+    expandBtn.type = 'button'
+    expandBtn.className = 'row-expand'
+    expandBtn.dataset.action = 'toggle-detail'
+    expandBtn.setAttribute('aria-expanded', 'false')
+    expandBtn.setAttribute('aria-controls', detailId)
+    setIcon(expandBtn, 'chevron-right', { label: '展開明細' })
+    tr.firstElementChild?.prepend(expandBtn)
 
     tr.addEventListener('click', () => {
       const next = tr.nextElementSibling
       if (next && next.classList.contains('detail')) {
         next.remove()
+        expandBtn.setAttribute('aria-expanded', 'false')
+        setIcon(expandBtn, 'chevron-right', { label: '展開明細' })
         return
       }
 
@@ -606,8 +786,10 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
       }
 
       const detailItems = [
-        ['原始值 (raw)', record.raw ?? '—'], ['錯誤訊息 (error)', record.error ?? '—'],
-        ['DOM 片段 (snippet)', record.snippet ?? '—'], ['使用策略 (strategyUsed)', record.strategyUsed ?? '—'],
+        ['原始值 (raw)', record.raw !== undefined && record.raw !== null
+          ? `${record.raw}${record.rawTruncated === true ? '（已截斷）' : ''}` : '—'],
+        ['錯誤訊息 (error)', record.error ?? '—'],
+        ['使用策略 (strategyUsed)', record.strategyUsed ?? '—'],
         ['排定時間 (slot)', record.slot ?? '—'], ['擷取時間 (capturedAt)', record.capturedAt ?? '—'],
         ['時間差 (diff)', diffText]
       ]
@@ -648,57 +830,51 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
       delBtn.type = 'button'
       delBtn.dataset.action = 'delete-record'
       delBtn.textContent = '刪除此紀錄'
-      delBtn.addEventListener('click', (e) => {
+      delBtn.addEventListener('click', async (e) => {
         e.stopPropagation()
-        const confirmBox = document.getElementById('record-delete-confirm')
-        if (confirmBox) {
-          confirmBox.hidden = false
-          const cancelBtn = confirmBox.querySelector('[data-action="cancel"]')
-          const okBtn = confirmBox.querySelector('[data-action="confirm"]')
+        // 共用 modal（AF-21 4-D）：確認框就在畫面正中，不再離刪除鈕數百像素
+        const ok = await confirmDialog({
+          title: '刪除紀錄',
+          body: `確定要刪除此筆紀錄嗎？（${record.taskName || record.taskId || ''}，${record.capturedAt || record.slot || ''}）刪除後無法復原。`,
+          confirmText: '刪除',
+          cancelText: '取消',
+          danger: true
+        })
+        if (ok !== true) return
+        const recDate = record.date || (record.slot ? record.slot.slice(0, 10) : '')
+        await deleteRecord(recDate, record.taskId, record.capturedAt)
 
-          if (cancelBtn) {
-            cancelBtn.onclick = () => {
-              confirmBox.hidden = true
-            }
-          }
-
-          if (okBtn) {
-            okBtn.onclick = async () => {
-              confirmBox.hidden = true
-
-              const recDate = record.date || (record.slot ? record.slot.slice(0, 10) : '')
-              await deleteRecord(recDate, record.taskId, record.capturedAt)
-
-              if (state.from && state.to) {
-                let tasks = []
-                try { tasks = await getTasks() } catch {}
-                const raw = await getRecordsInRange(state.from, state.to)
-                allLoadedRecords = joinTaskNames(raw, tasks)
-                const filtered = filterRecords(allLoadedRecords, {
-                  taskIds: state.taskIds,
-                  statuses: state.statuses,
-                  alertsOnly: state.alertsOnly,
-                  valueMin: state.valueMin,
-                  valueMax: state.valueMax,
-                  keyword: state.keyword
-                })
-                await renderCurrentHistoryTable(filtered, tasks)
-                renderSummary(summarize(filtered))
-              } else {
-                const idx = lastRecords.findIndex(r => r.taskId === record.taskId && r.capturedAt === record.capturedAt)
-                if (idx !== -1) lastRecords.splice(idx, 1)
-                renderTable(lastRecords, lastColumns, opts)
-                renderSummary(summarize(lastRecords))
-              }
-            }
-          }
+        if (state.from && state.to) {
+          let tasks = []
+          try { tasks = await getTasks() } catch {}
+          const raw = await getRecordsInRange(state.from, state.to)
+          allLoadedRecords = joinTaskNames(raw, tasks)
+          const filtered = filterRecords(allLoadedRecords, {
+            taskIds: state.taskIds,
+            statuses: state.statuses,
+            failedOnly: state.failedOnly,
+            alertOnly: state.alertOnly,
+            valueMin: state.valueMin,
+            valueMax: state.valueMax,
+            keyword: state.keyword
+          })
+          await renderCurrentHistoryTable(filtered, tasks)
+          renderSummary(summarize(filtered))
+        } else {
+          const idx = lastRecords.findIndex(r => r.taskId === record.taskId && r.capturedAt === record.capturedAt)
+          if (idx !== -1) lastRecords.splice(idx, 1)
+          renderTable(lastRecords, lastColumns, opts)
+          renderSummary(summarize(lastRecords))
         }
       })
       deleteActionRow.appendChild(delBtn)
       box.appendChild(deleteActionRow)
 
       td.appendChild(box)
+      detailTr.id = detailId
       tr.after(detailTr)
+      expandBtn.setAttribute('aria-expanded', 'true')
+      setIcon(expandBtn, 'chevron-down', { label: '收合明細' })
     })
     tbody.appendChild(tr)
   }
@@ -777,7 +953,7 @@ export function renderCalendar(year, month, statsByDate = {}) {
   const prevBtn = document.createElement('button')
   prevBtn.type = 'button'
   prevBtn.id = 'cal-prev-month'
-  prevBtn.textContent = '‹'
+  setIcon(prevBtn, 'chevron-left', { label: '上個月' })
   prevBtn.onclick = () => {
     let y = currentCalYear
     let m = currentCalMonth - 1
@@ -788,6 +964,7 @@ export function renderCalendar(year, month, statsByDate = {}) {
   const jumpInput = document.createElement('input')
   jumpInput.type = 'month'
   jumpInput.id = 'cal-jump'
+  jumpInput.setAttribute('aria-label', '跳到月份')
   jumpInput.value = `${year}-${String(month).padStart(2, '0')}`
   jumpInput.onchange = () => {
     if (jumpInput.value) {
@@ -799,7 +976,7 @@ export function renderCalendar(year, month, statsByDate = {}) {
   const nextBtn = document.createElement('button')
   nextBtn.type = 'button'
   nextBtn.id = 'cal-next-month'
-  nextBtn.textContent = '›'
+  setIcon(nextBtn, 'chevron-right', { label: '下個月' })
   nextBtn.onclick = () => {
     let y = currentCalYear
     let m = currentCalMonth + 1
@@ -825,7 +1002,21 @@ export function renderCalendar(year, month, statsByDate = {}) {
     for (const day of week) {
       const td = document.createElement('td')
       td.dataset.date = day.date
-      td.textContent = String(day.day)
+      // 格內放一顆按鈕：可聚焦、Enter／空白鍵觸發（原生 button 的 click 冒泡到格子上同一個處理）
+      const dayBtn = document.createElement('button')
+      dayBtn.type = 'button'
+      dayBtn.className = 'cal-day'
+      dayBtn.textContent = String(day.day)
+      let note = ''
+      if (day.hasFail) note = '，有失敗'
+      else if (day.hasAlert) note = '，有告警'
+      else if (day.count > 0) note = '，有紀錄'
+      dayBtn.setAttribute('aria-label', `${day.date}${note}`)
+      if (state.from && state.to && day.date >= state.from && day.date <= state.to) {
+        dayBtn.setAttribute('aria-pressed', 'true')
+        td.classList.add('in-range')
+      }
+      td.appendChild(dayBtn)
 
       if (!day.inMonth) td.classList.add('out-of-month')
       if (day.count > 0) td.classList.add('has-records')
@@ -1079,16 +1270,28 @@ export function renderRangeBar() {
   }
 
   const prevDay = document.getElementById('range-prev-day')
-  if (prevDay) prevDay.onclick = () => shift(-1)
+  if (prevDay) {
+    setIcon(prevDay, 'chevron-left', { label: '往前一天' })
+    prevDay.onclick = () => shift(-1)
+  }
 
   const nextDay = document.getElementById('range-next-day')
-  if (nextDay) nextDay.onclick = () => shift(1)
+  if (nextDay) {
+    setIcon(nextDay, 'chevron-right', { label: '往後一天' })
+    nextDay.onclick = () => shift(1)
+  }
 
   const prevWeek = document.getElementById('range-prev-week')
-  if (prevWeek) prevWeek.onclick = () => shift(-7)
+  if (prevWeek) {
+    setIcon(prevWeek, 'chevrons-left', { label: '往前一週' })
+    prevWeek.onclick = () => shift(-7)
+  }
 
   const nextWeek = document.getElementById('range-next-week')
-  if (nextWeek) nextWeek.onclick = () => shift(7)
+  if (nextWeek) {
+    setIcon(nextWeek, 'chevrons-right', { label: '往後一週' })
+    nextWeek.onclick = () => shift(7)
+  }
 
   const onDateChange = () => {
     const rawFrom = fromInput ? fromInput.value : state.from
@@ -1110,6 +1313,7 @@ async function loadAndRenderPage() {
   initFromHash(typeof location !== 'undefined' ? location.hash : '')
   showTab(state.view || 'dashboard')
   renderRangeBar()
+  renderAppStatus()
 
   let cols = currentColumns
   try {
@@ -1140,7 +1344,8 @@ async function loadAndRenderPage() {
   const filtered = filterRecords(records, {
     taskIds: state.taskIds,
     statuses: state.statuses,
-    alertsOnly: state.alertsOnly,
+    failedOnly: state.failedOnly,
+    alertOnly: state.alertOnly,
     valueMin: state.valueMin,
     valueMax: state.valueMax,
     keyword: state.keyword
@@ -1172,21 +1377,13 @@ async function loadAndRenderPage() {
 }
 
 if (typeof document !== 'undefined' && globalThis.chrome?.runtime?.id) {
-  subscribe(() => { refreshCurrentView() })
+  subscribe((change) => { refreshCurrentView(change) })
   loadAndRenderPage()
   if (typeof window !== 'undefined') {
     window.addEventListener('hashchange', () => {
       loadAndRenderPage()
     })
-    for (const tab of ['dashboard', 'history', 'tasks', 'settings']) {
-      const btn = document.getElementById(`tab-${tab}`)
-      if (btn) {
-        btn.addEventListener('click', () => {
-          showTab(tab)
-          window.location.hash = buildHash(state)
-        })
-      }
-    }
+    setupTabs()
   }
 }
 

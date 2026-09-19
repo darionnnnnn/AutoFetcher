@@ -101,6 +101,19 @@ function drawAxes(svg, { plotLeft, plotRight, plotTop, plotBottom, yRange, xLabe
 }
 
 /**
+ * X 軸時間戳排序：多序列各自抽樣後留下的時間戳不同，「首見順序」會讓 X 座標亂跳、線段回頭。
+ * 全部解析得出時間就依時間排序（同時刻維持原順序），否則原樣不動（不是時間的標籤照首見順序）。
+ */
+function sortDistinctT(list) {
+  const parsed = list.map(t => Date.parse(t));
+  if (!parsed.every(Number.isFinite)) return list;
+  return list
+    .map((t, i) => ({ t, i, ms: parsed[i] }))
+    .sort((a, b) => (a.ms - b.ms) || (a.i - b.i))
+    .map(x => x.t);
+}
+
+/**
  * 線性座標換算
  */
 function mapLinear(v, inMin, inMax, outMin, outMax) {
@@ -252,7 +265,9 @@ export function lineChart(seriesList, opts = {}) {
   }
 
   const svg = createSvg(width, height);
-  const tIndexMap = new Map(distinctT.map((t, idx) => [t, idx]));
+  // X 軸依時間排序，不是首見順序
+  const axisT = sortDistinctT(distinctT);
+  const tIndexMap = new Map(axisT.map((t, idx) => [t, idx]));
 
   const padding = { top: 16, right: 16, bottom: 24, left: 48 };
   const plotLeft = padding.left;
@@ -262,9 +277,9 @@ export function lineChart(seriesList, opts = {}) {
 
   const yRange = computeYRange(allValues, opts.yMin, opts.yMax);
 
-  drawAxes(svg, { plotLeft, plotRight, plotTop, plotBottom, yRange, xLabels: distinctT });
+  drawAxes(svg, { plotLeft, plotRight, plotTop, plotBottom, yRange, xLabels: axisT });
 
-  const getX = pt => mapX(tIndexMap.get(pt.t) ?? pt.originalIndex, distinctT.length, plotLeft, plotRight);
+  const getX = pt => mapX(tIndexMap.get(pt.t) ?? pt.originalIndex, axisT.length, plotLeft, plotRight);
   const getY = pt => mapY(pt.v, yRange.min, yRange.max, plotTop, plotBottom);
 
   seriesList.forEach((series, seriesIndex) => {
@@ -339,7 +354,9 @@ export function barChart(seriesList, opts = {}) {
   }
 
   const svg = createSvg(width, height);
-  const tIndexMap = new Map(distinctT.map((t, idx) => [t, idx]));
+  // X 軸依時間排序，不是首見順序（與折線圖同一套）
+  const axisT = sortDistinctT(distinctT);
+  const tIndexMap = new Map(axisT.map((t, idx) => [t, idx]));
 
   const padding = { top: 16, right: 16, bottom: 24, left: 48 };
   const plotLeft = padding.left;
@@ -350,9 +367,9 @@ export function barChart(seriesList, opts = {}) {
 
   const yRange = computeYRange(allValues, opts.yMin, opts.yMax);
 
-  drawAxes(svg, { plotLeft, plotRight, plotTop, plotBottom, yRange, xLabels: distinctT });
+  drawAxes(svg, { plotLeft, plotRight, plotTop, plotBottom, yRange, xLabels: axisT });
 
-  const numT = distinctT.length;
+  const numT = axisT.length;
   const numSeries = seriesList.length;
   const slotWidth = plotWidth / numT;
   const groupWidth = slotWidth * 0.8;

@@ -1,19 +1,21 @@
 import {
-  getLayout, saveLayout, addDashboard, renameDashboard,
+  getLayout, addDashboard, renameDashboard,
   deleteDashboard, duplicateDashboard, reorderDashboards,
-  setLastDashboard, addCard, updateCard
+  setLastDashboard, addCard, updateCard, arrangeCards, applyLayoutStep
 } from '../../shared/layout-store.js'
+import { confirmDialog } from '../modal.js'
 import { getRecordsInRange, getTasks, getHealthMap, getMissedList } from '../../shared/storage.js'
 import { renderCard } from './cards.js'
 import { resolvePeriod } from './series.js'
 import { placeCard, resizeCard, compact, autoArrange } from './layout.js'
-import { openDrawer } from './drawer.js'
+import { openDrawer, getDraftPreview, mergeIntoDraft, isDrawerOpen } from './drawer.js'
 import { applyTemplate } from './templates.js'
 import { MSG } from '../../shared/messages.js'
-import { createDragSource, registerDropTarget, resetDnd, isPointInside } from './dnd.js'
-import { closeTrendPopover } from './trend-popover.js'
+import { createDragSource, registerDropTarget, resetDnd, isPointInside, isDragBusy, setDragIdleListener } from './dnd.js'
+import { closeTrendPopover, isTrendPopoverOpen, setTrendPopoverCloseListener } from './trend-popover.js'
 import { applyDrop, applyDropMany, cardTypeForTask } from './drop-rules.js'
 import { buildSeriesIndex, parentIdOf } from '../../shared/series-index.js'
+import { icon, setIcon } from '../icons.js'
 
 // 編輯模式狀態與復原歷史
 let editing = false
@@ -21,7 +23,6 @@ let currentDashId = null
 const undoStack = []
 const redoStack = []
 let activeOp = null
-let dashIdPendingDelete = null
 let templateKindPending = null
 let tabDrag = null
 let toastTimer = null
@@ -68,18 +69,26 @@ export function isEditing() {
 }
 
 /**
- * 把目前版面推進歷史堆疊（上限 50 步）
+ * 把目前版面推進歷史堆疊（上限 50 步）。每一步記「操作前」，操作寫完後 sealHistory 補上「操作後」；
+ * 復原／重做只把這兩份之間的差異套到最新版面（applyLayoutStep），不整份蓋回
  */
 export async function pushHistory(snapshot) {
   if (!snapshot) {
     const layout = await getLayout()
     snapshot = layout.dashboards
   }
-  undoStack.push(structuredClone(snapshot))
+  undoStack.push({ before: structuredClone(snapshot), after: null })
   if (undoStack.length > 50) {
     undoStack.shift()
   }
   redoStack.length = 0
+}
+
+// 最近一步操作寫完之後記下「操作後」的版面
+async function sealHistory() {
+  const top = undoStack[undoStack.length - 1]
+  if (!top || top.after) return
+  top.after = structuredClone((await getLayout()).dashboards)
 }
 
 /**
@@ -89,17 +98,23 @@ export function historySize() {
   return undoStack.length
 }
 
+// 序列是否還在任務清單裡（復原／重做不讓已刪的序列回到卡片上）
+async function liveSeriesCheck() {
+  let tasks = []
+  try { tasks = await getTasks() } catch {}
+  const idx = buildSeriesIndex(tasks)
+  return (id) => typeof id === 'string' && (Boolean(idx.byId[id]) || Boolean(idx.parents[id]))
+}
+
 /**
  * 復原上一步
  */
 export async function undo() {
   if (undoStack.length === 0) return
-  const layout = await getLayout()
-  redoStack.push(structuredClone(layout.dashboards))
-
-  const prevDashboards = undoStack.pop()
-  layout.dashboards = prevDashboards
-  await saveLayout(layout)
+  const step = undoStack.pop()
+  if (!step.after) step.after = structuredClone((await getLayout()).dashboards)
+  redoStack.push(step)
+  await applyLayoutStep(step.after, step.before, await liveSeriesCheck())
   await renderDashboard(currentDashId)
 }
 
@@ -108,15 +123,12 @@ export async function undo() {
  */
 export async function redo() {
   if (redoStack.length === 0) return
-  const layout = await getLayout()
-  undoStack.push(structuredClone(layout.dashboards))
+  const step = redoStack.pop()
+  undoStack.push(step)
   if (undoStack.length > 50) {
     undoStack.shift()
   }
-
-  const nextDashboards = redoStack.pop()
-  layout.dashboards = nextDashboards
-  await saveLayout(layout)
+  await applyLayoutStep(step.before, step.after, await liveSeriesCheck())
   await renderDashboard(currentDashId)
 }
 
@@ -164,7 +176,6 @@ function updateEditingUI() {
     const removeHandles = grid.querySelectorAll('[data-remove-source]')
     for (const handle of removeHandles) {
       handle.hidden = !editing
-      handle.textContent = editing ? '×' : ''
     }
   }
   const editBtn = document.getElementById('edit-layout')
@@ -308,27 +319,52 @@ async function onPointerUp(e) {
   const dash = layout.dashboards.find(d => d.id === currentDashId) || layout.dashboards[0]
   if (!dash) return
 
-  let changed = false
   const snapshot = structuredClone(layout.dashboards)
 
+  // 在 layout 鎖內以最新卡片重排，只寫位置與大小（背景同時修剪掉的來源／卡片不會被這裡的舊副本蓋回）
+  let arrange = null
   if (op.type === 'drag') {
     if (op.targetX !== op.card.x || op.targetY !== op.card.y) {
-      changed = true
-      const target = { ...op.card, x: op.targetX, y: op.targetY }
-      dash.cards = placeCard(dash.cards, target)
+      arrange = (cards) => {
+        const fresh = cards.find(c => c.id === op.card.id)
+        return fresh ? placeCard(cards, { ...fresh, x: op.targetX, y: op.targetY }) : cards
+      }
     }
   } else if (op.type === 'resize') {
     if (op.targetW !== op.card.w || op.targetH !== op.card.h) {
-      changed = true
-      dash.cards = compact(resizeCard(dash.cards, op.card.id, op.targetW, op.targetH))
+      arrange = (cards) => compact(resizeCard(cards, op.card.id, op.targetW, op.targetH))
     }
   }
 
-  if (changed) {
+  if (arrange) {
     await pushHistory(snapshot)
-    await saveLayout(layout)
+    await arrangeCards(dash.id, arrange)
+    await sealHistory()
     await renderDashboard(dash.id)
   }
+}
+
+/**
+ * 指標取消（觸控被瀏覽器接管、視窗失焦）：不套用這次移動、清掉 ghost，
+ * 與 pointerup 同樣收尾。沒有它 activeOp 永不歸零，儀表板就永遠算忙碌。
+ */
+function onPointerCancel(e) {
+  if (!activeOp) return
+  if (e && e.pointerId !== undefined && activeOp.pointerId !== undefined && e.pointerId !== activeOp.pointerId) return
+
+  const op = activeOp
+  activeOp = null
+
+  if (op.ghost) {
+    op.ghost.remove()
+    op.ghost = null
+  }
+
+  if (e?.target && typeof e.target.releasePointerCapture === 'function') {
+    try { e.target.releasePointerCapture(op.pointerId) } catch {}
+  }
+
+  flushDashboardRefresh()
 }
 
 /**
@@ -358,6 +394,7 @@ function setupEvents(grid) {
     grid._dashboardPointerAttached = true
     grid.addEventListener('pointermove', onPointerMove)
     grid.addEventListener('pointerup', onPointerUp)
+    grid.addEventListener('pointercancel', onPointerCancel)
   }
 
   if (typeof window !== 'undefined' && !window._dashboardResizeAttached) {
@@ -393,8 +430,7 @@ function setupEvents(grid) {
       const layout = await getLayout()
       const dash = layout.dashboards.find(d => d.id === currentDashId) || layout.dashboards[0]
       if (dash) {
-        dash.cards = autoArrange(dash.cards)
-        await saveLayout(layout)
+        await arrangeCards(dash.id, (cards) => autoArrange(cards))
         await renderDashboard(dash.id)
       }
     })
@@ -447,33 +483,6 @@ function setupEvents(grid) {
     })
   }
 
-  const deleteConfirm = document.getElementById('dashboard-delete-confirm')
-  if (deleteConfirm && !deleteConfirm._dashboardDeleteAttached) {
-    deleteConfirm._dashboardDeleteAttached = true
-    const cancelBtn = deleteConfirm.querySelector('[data-action="cancel"]')
-    if (cancelBtn) {
-      cancelBtn.addEventListener('click', () => {
-        deleteConfirm.hidden = true
-        dashIdPendingDelete = null
-      })
-    }
-    const confirmBtn = deleteConfirm.querySelector('[data-action="confirm"]')
-    if (confirmBtn) {
-      confirmBtn.addEventListener('click', async () => {
-        deleteConfirm.hidden = true
-        if (dashIdPendingDelete) {
-          const targetId = dashIdPendingDelete
-          dashIdPendingDelete = null
-          await deleteDashboard(targetId)
-          const l = await getLayout()
-          const nextId = l.dashboards[0]?.id
-          if (nextId) await setLastDashboard(nextId)
-          await renderDashboard(nextId)
-        }
-      })
-    }
-  }
-
   const emptyEl = document.getElementById('dashboard-empty')
   if (emptyEl && !emptyEl._dashboardEmptyAttached) {
     emptyEl._dashboardEmptyAttached = true
@@ -521,7 +530,7 @@ function setupEvents(grid) {
 /**
  * 建立卡片渲染共用 Context
  */
-async function buildDashboardContext(dash) {
+function fetchRangeOf(dash) {
   const today = getTodayString()
   const rangeFromInput = document.getElementById('range-from')
   const rangeToInput = document.getElementById('range-to')
@@ -531,7 +540,7 @@ async function buildDashboardContext(dash) {
   let minFrom = defaultFrom
   let maxTo = defaultTo
 
-  const cards = Array.isArray(dash.cards) ? dash.cards : []
+  const cards = Array.isArray(dash?.cards) ? dash.cards : []
   for (const card of cards) {
     const p = resolvePeriod(card?.options?.period, defaultFrom, defaultTo, today)
     if (p?.from) {
@@ -544,6 +553,11 @@ async function buildDashboardContext(dash) {
 
   const fetchFrom = minFrom ? shiftDate(minFrom, -1) : minFrom
   const fetchTo = maxTo
+  return { today, defaultFrom, defaultTo, fetchFrom, fetchTo }
+}
+
+async function buildDashboardContext(dash) {
+  const { today, defaultFrom, defaultTo, fetchFrom, fetchTo } = fetchRangeOf(dash)
 
   const records = (fetchFrom && fetchTo) ? await getRecordsInRange(fetchFrom, fetchTo) : []
   const tasks = await getTasks()
@@ -692,13 +706,17 @@ async function renderPalette() {
     item.setAttribute('data-palette-task', '')
     item.setAttribute('data-task-id', t.id)
     item.setAttribute('data-mode', t.mode || 'number')
+    // 拖曳把手：一眼看得出這一列是拖得動的（整列都是拖曳起點，把手只是示意）
+    const grip = icon('grip')
+    grip.classList.add('palette-grip')
+    item.appendChild(grip)
     if (isMulti) {
       // 三家銀行各六個值就是十八列，要收得起來才看得完
       const toggle = document.createElement('button')
       toggle.type = 'button'
       toggle.setAttribute('data-palette-toggle', t.id)
       toggle.className = 'palette-toggle'
-      toggle.textContent = '▾'
+      setIcon(toggle, 'chevron-down', { label: `收合「${t.name || ''}」的值` })
       // 把手不是拖曳的起點：pointerdown 一冒泡到父列，拖曳的 pointer capture 會把 click 吃掉
       toggle.addEventListener('pointerdown', (ev) => ev.stopPropagation())
       toggle.addEventListener('click', (ev) => {
@@ -707,13 +725,13 @@ async function renderPalette() {
         const collapsed = item.dataset.collapsed === '1'
         item.dataset.collapsed = collapsed ? '' : '1'
         toggle.setAttribute('aria-expanded', collapsed ? 'true' : 'false')
-        toggle.textContent = collapsed ? '▾' : '▸'
+        setIcon(toggle, collapsed ? 'chevron-down' : 'chevron-right', { label: `${collapsed ? '收合' : '展開'}「${t.name || ''}」的值` })
         filterPaletteItems(document.getElementById('palette-search')?.value || '')
       })
       if (collapsedParents.has(t.id)) {
         item.dataset.collapsed = '1'
         toggle.setAttribute('aria-expanded', 'false')
-        toggle.textContent = '▸'
+        setIcon(toggle, 'chevron-right', { label: `展開「${t.name || ''}」的值` })
       } else {
         toggle.setAttribute('aria-expanded', 'true')
       }
@@ -855,8 +873,11 @@ function registerCardDropTarget(cardEl, card, ctx) {
       if (patch.notice) showToast(patch.notice)
 
       const { notice, ...cardPatch } = patch
+      // 抽屜正在編輯這張卡：投放併進草稿（抽屜的來源清單與預覽跟著變），不寫 storage
+      if (await mergeIntoDraft(currentDashId, card.id, cardPatch)) return
       await pushHistory()
       await updateCard(currentDashId, card.id, cardPatch)
+      await sealHistory()
       await renderDashboard(currentDashId)
     }
   })
@@ -913,15 +934,20 @@ function registerGridDropTarget(grid) {
         const layout = await getLayout()
         const currentDash = layout.dashboards.find(d => d.id === currentDashId) || layout.dashboards[0]
         if (!currentDash) return
-        const card = currentDash.cards.find(c => c.id === cardId)
-        if (!card) return
+        const stored = currentDash.cards.find(c => c.id === cardId)
+        if (!stored) return
+        // 抽屜正在編輯這張卡：以草稿為基準移除，併進草稿（不寫 storage）
+        const draft = getDraftPreview(currentDash.id, cardId)
+        const card = draft ? { ...stored, ...draft } : stored
 
         // status 卡片的來源存在 options.taskIds,不是 source
         const patch = card.type === 'status'
           ? { options: { ...(card.options || {}), taskIds: (card.options?.taskIds || []).filter(id => parentIdOf(id) !== parentIdOf(taskId)) } }
           : { source: (card.source || []).filter(s => s.taskId !== taskId) }
+        if (draft && await mergeIntoDraft(currentDash.id, cardId, patch)) return
         await pushHistory()
         await updateCard(currentDash.id, cardId, patch)
+        await sealHistory()
         await renderDashboard(currentDash.id)
         return
       }
@@ -975,6 +1001,7 @@ function registerGridDropTarget(grid) {
 
         await pushHistory()
         await addCard(currentDash.id, newCard)
+        await sealHistory()
         await renderDashboard(currentDash.id)
       }
     }
@@ -985,6 +1012,7 @@ function registerGridDropTarget(grid) {
  * 渲染儀表板
  */
 export async function renderDashboard(dashId) {
+  pendingRefresh = null
   const layout = await getLayout()
   let dash = null
   if (dashId) {
@@ -994,6 +1022,12 @@ export async function renderDashboard(dashId) {
     dash = layout.dashboards[0]
   }
   if (!dash) return
+
+  // 換儀表板就清復原歷史：堆疊裡的步驟屬於上一個儀表板，Ctrl+Z 會默默改到沒在看的那一個
+  if (currentDashId && dash.id !== currentDashId) {
+    undoStack.length = 0
+    redoStack.length = 0
+  }
 
   currentDashId = dash.id
 
@@ -1037,8 +1071,7 @@ export async function renderDashboard(dashId) {
       const dupBtn = document.createElement('button')
       dupBtn.type = 'button'
       dupBtn.dataset.action = 'duplicate'
-      dupBtn.title = '複製儀表板'
-      dupBtn.textContent = '⧉'
+      setIcon(dupBtn, 'copy', { label: '複製儀表板' })
       dupBtn.addEventListener('click', async (e) => {
         e.stopPropagation()
         const dup = await duplicateDashboard(d.id)
@@ -1054,13 +1087,23 @@ export async function renderDashboard(dashId) {
       const delBtn = document.createElement('button')
       delBtn.type = 'button'
       delBtn.dataset.action = 'delete'
-      delBtn.title = '刪除儀表板'
-      delBtn.textContent = '×'
-      delBtn.addEventListener('click', (e) => {
+      setIcon(delBtn, 'trash', { label: '刪除儀表板' })
+      delBtn.addEventListener('click', async (e) => {
         e.stopPropagation()
-        dashIdPendingDelete = d.id
-        const confirmDlg = document.getElementById('dashboard-delete-confirm')
-        if (confirmDlg) confirmDlg.hidden = false
+        // 確認一律走共用 modal（AF-21 終檢）
+        const ok = await confirmDialog({
+          title: '刪除儀表板',
+          body: `確定要刪除儀表板「${d.name}」嗎？上面的卡片會一起刪除，紀錄不受影響。`,
+          confirmText: '刪除',
+          cancelText: '取消',
+          danger: true
+        })
+        if (ok !== true) return
+        await deleteDashboard(d.id)
+        const l = await getLayout()
+        const nextId = l.dashboards[0]?.id
+        if (nextId) await setLastDashboard(nextId)
+        await renderDashboard(nextId)
       })
       delBtn.addEventListener('pointerdown', (e) => {
         e.stopPropagation()
@@ -1138,6 +1181,24 @@ export async function renderDashboard(dashId) {
           const ids = [...tabsContainer.querySelectorAll('[data-dash-id]')].map(el => el.dataset.dashId)
           await reorderDashboards(ids)
         }
+        flushDashboardRefresh()
+      })
+
+      // 指標取消：這次拖曳不算數（順序不寫回），但 tabDrag 一定要歸零
+      tabEl.addEventListener('pointercancel', (e) => {
+        if (!tabDrag || tabDrag.id !== d.id) return
+        if (e && e.pointerId !== undefined && tabDrag.pointerId !== undefined && e.pointerId !== tabDrag.pointerId) return
+        const dragInfo = tabDrag
+        tabDrag = null
+        if (e?.target && typeof e.target.releasePointerCapture === 'function') {
+          try { e.target.releasePointerCapture(dragInfo.pointerId) } catch {}
+        }
+        // 拖到一半被取消：頁籤 DOM 可能已被搬動過，整份重畫回到存起來的順序
+        if (dragInfo.moved) {
+          renderDashboard(currentDashId).catch(() => {})
+          return
+        }
+        flushDashboardRefresh()
       })
 
       tabsContainer.appendChild(tabEl)
@@ -1169,7 +1230,10 @@ export async function renderDashboard(dashId) {
 
   registerGridDropTarget(grid)
 
-  for (const card of cards) {
+  for (const stored of cards) {
+    // 抽屜正在編輯的那張卡繼續顯示草稿預覽，不被 storage 版本蓋回去
+    const draft = getDraftPreview(dash.id, stored.id)
+    const card = draft ? { ...stored, ...draft } : stored
     const cardEl = prepareCardElement(card, ctx, dash.id)
     registerCardDropTarget(cardEl, card, ctx)
     grid.appendChild(cardEl)
@@ -1182,7 +1246,7 @@ export async function renderDashboard(dashId) {
 /**
  * 僅重新渲染指定單張卡片（不重建其他卡片 DOM 節點）
  */
-export async function rerenderCard(dashId, cardId) {
+export async function rerenderCard(dashId, cardId, draft = null) {
   const layout = await getLayout()
   let dash = null
   if (dashId) {
@@ -1193,8 +1257,10 @@ export async function rerenderCard(dashId, cardId) {
   }
   if (!dash) return
 
-  const card = dash.cards.find(c => c.id === cardId)
-  if (!card) return
+  const stored = dash.cards.find(c => c.id === cardId)
+  if (!stored) return
+  // 抽屜的草稿只蓋它自己的欄位（型別、來源、呈現選項、標題）；位置大小照 storage
+  const card = draft ? { ...stored, ...draft } : stored
 
   const grid = document.getElementById('dashboard-grid')
   if (!grid) return
@@ -1211,4 +1277,107 @@ export async function rerenderCard(dashId, cardId) {
   registerCardDropTarget(newCardEl, card, ctx)
 
   oldCardEl.replaceWith(newCardEl)
+}
+
+// ---- 資料變動的重畫（AF-21 批次 6）----
+// 'light'＝只重畫卡片內容；'full'＝整份 renderDashboard；null＝沒有延後中的重畫
+let pendingRefresh = null
+let idleHooksInstalled = false
+
+/**
+ * 儀表板目前是否不能被資料變動打斷：編輯版面、卡片設定抽屜、趨勢浮層、拖曳（卡片來源或頁籤）
+ */
+export function isDashboardBusy() {
+  return editing || isDrawerOpen() || isTrendPopoverOpen() || isDragBusy() || Boolean(activeOp) || Boolean(tabDrag)
+}
+
+/**
+ * 目前顯示中的儀表板要讀的紀錄日期範圍（含各卡片自己的區間設定與前一天）；
+ * 沒有顯示中的儀表板時回傳 null（呼叫端當作「有交集」）
+ */
+export async function dashboardDataRange() {
+  if (!currentDashId) return null
+  const layout = await getLayout()
+  const dash = layout?.dashboards?.find(d => d.id === currentDashId)
+  if (!dash) return null
+  const { fetchFrom, fetchTo } = fetchRangeOf(dash)
+  if (!fetchFrom || !fetchTo) return null
+  return { from: fetchFrom, to: fetchTo }
+}
+
+function installIdleHooks() {
+  if (idleHooksInstalled) return
+  idleHooksInstalled = true
+  setTrendPopoverCloseListener(flushDashboardRefresh)
+  setDragIdleListener(flushDashboardRefresh)
+}
+
+/**
+ * 資料變動時重畫儀表板：忙碌中就記下來，等結束後補一次（整份優先於輕量）
+ * @param {{ full?: boolean, dashId?: string }} [opts]
+ * @returns {Promise<'deferred'|'full'|'light'>}
+ */
+export async function refreshDashboard(opts = {}) {
+  installIdleHooks()
+  const full = Boolean(opts.full) || !currentDashId
+  if (isDashboardBusy()) {
+    pendingRefresh = (full || pendingRefresh === 'full') ? 'full' : 'light'
+    return 'deferred'
+  }
+  if (full) {
+    await renderDashboard(opts.dashId || currentDashId)
+    return 'full'
+  }
+  const done = await rerenderAllCards()
+  if (!done) {
+    await renderDashboard(currentDashId)
+    return 'full'
+  }
+  return 'light'
+}
+
+/**
+ * 有延後中的重畫、而且已經不忙了 → 補一次
+ */
+export function flushDashboardRefresh() {
+  if (!pendingRefresh || isDashboardBusy()) return
+  const full = pendingRefresh === 'full'
+  pendingRefresh = null
+  refreshDashboard({ full }).catch(() => {})
+}
+
+/**
+ * 輕量重畫：讀一次資料、逐張換掉卡片元素；側欄、頁籤、格線容器與格線的投放註冊都不動。
+ * 畫面上的卡片與版面對不上時回傳 false（交給整份重畫）
+ */
+async function rerenderAllCards() {
+  const layout = await getLayout()
+  const dash = layout?.dashboards?.find(d => d.id === currentDashId)
+  const grid = document.getElementById('dashboard-grid')
+  if (!dash || !grid) return false
+  const cards = Array.isArray(dash.cards) ? dash.cards : []
+  const byId = new Map()
+  for (const el of grid.children) {
+    if (el?.dataset?.cardId !== undefined) byId.set(el.dataset.cardId, el)
+  }
+  if (byId.size !== cards.length || cards.some(c => !byId.has(String(c.id ?? '')))) return false
+
+  const ctx = await buildDashboardContext(dash)
+  // 讀資料的途中使用者可能開了抽屜或開始拖曳：改成延後
+  if (isDashboardBusy()) {
+    pendingRefresh = pendingRefresh === 'full' ? 'full' : 'light'
+    return true
+  }
+  for (const stored of cards) {
+    const oldEl = byId.get(String(stored.id ?? ''))
+    if (!oldEl || !oldEl.isConnected) continue
+    // 抽屜正在編輯的那張卡繼續顯示草稿預覽
+    const draft = getDraftPreview(dash.id, stored.id)
+    const card = draft ? { ...stored, ...draft } : stored
+    if (typeof oldEl._unregisterDropTarget === 'function') oldEl._unregisterDropTarget()
+    const newEl = prepareCardElement(card, ctx, dash.id)
+    registerCardDropTarget(newEl, card, ctx)
+    oldEl.replaceWith(newEl)
+  }
+  return true
 }

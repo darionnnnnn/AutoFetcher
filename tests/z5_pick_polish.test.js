@@ -177,8 +177,10 @@ test('E chip 清單有高度上限且可捲動，動作列永遠看得到', asyn
   const panel = doc.querySelector('[data-af-panel]')
   const list = doc.querySelector('[data-af-chip-list]')
   assert.ok(list, 'chip 清單要有識別得出來的容器')
-  assert.ok(list.style.maxHeight, '沒有上限的話 60 個值會把面板撐出視窗上緣')
-  assert.equal(list.style.overflowY, 'auto')
+  // AF-21 7-B：捲動改由內容區統一負責（清單不再各自 40vh），上限來自面板 maxHeight＋內容區 min-height:0
+  const scroller = list.closest('[data-af-panel-body]')
+  assert.ok(scroller && scroller.style.minHeight, '沒有上限的話 60 個值會把面板撐出視窗上緣')
+  assert.equal(scroller.style.overflowY, 'auto')
   assert.ok(panel.style.maxHeight, '面板自己也要有保險上限')
   const actions = doc.querySelector('[data-af-done]')?.parentElement
   assert.equal(actions?.parentElement, panel, '動作列要留在面板底層，不得被捲進清單裡')

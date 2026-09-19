@@ -79,15 +79,20 @@ export function describe(el) {
   }
 
   // 第 2 層與第 4 層共用：階層路徑
+  // 沒有連到文件根（已脫離文件、或在網頁元件的 shadow root 裡）時鏈上缺了 html，
+  // 產生出來的缺根路徑在新 DOM 裡可能剛好唯一命中別的元素：寧可不給（AF-21 定案 7-3）
   const chain = getHierarchy(el);
-  const path = chain.map(node => `${node.tag}:nth-of-type(${node.index})`).join(' > ');
-  const xpath = '/' + chain.map(node => `${node.tag}[${node.index}]`).join('/');
+  const rooted = el.isConnected !== false && chain.length > 0 && chain[0].tag === 'html';
+  const path = rooted ? chain.map(node => `${node.tag}:nth-of-type(${node.index})`).join(' > ') : '';
+  const xpath = rooted ? '/' + chain.map(node => `${node.tag}[${node.index}]`).join('/') : '';
 
   // 第 3 層：anchor
+  const ANCHOR_TEXT_MAX = 120;
   let anchor = null;
   const prev = el.previousElementSibling;
   const text = prev?.textContent?.trim();
-  if (text) anchor = { text, hops: 1 };
+  // 前一個兄弟可能是整張表：太長的文字不當錨點（AF-21 定案 5；解析端照舊接受既有的長 anchor）
+  if (text && text.length <= ANCHOR_TEXT_MAX) anchor = { text, hops: 1 };
 
   return { css, path, anchor, xpath };
 }

@@ -7,9 +7,12 @@ import {
   nextDailyRun,
   nextIntervalRun
 } from './scheduler.js'
-import { getTasks, trimOldRecords } from '../shared/storage.js'
+import { getTasks, trimOldRecords, trimOldRuns, pruneOrphanEntries, runOncePerDay, getLastTimezone, setLastTimezone } from '../shared/storage.js'
 import { ensureSiteCheck } from './sitecheck.js'
 import { cleanOrphanFetchTabs } from './fetch-tab.js'
+import { recoverRunState, parseRetryName } from './fetcher.js'
+import { precheckAlarmsFor, parsePrecheckName } from './precheck.js'
+import { refreshMissed } from './missed.js'
 import * as diag from '../shared/diag.js'
 
 
@@ -20,11 +23,11 @@ async function checkWatchdogAlarm() {
 
 // 檢查時區變更，必要時重建所有 alarms
 async function checkTimezone() {
-  const { lastTimezone } = await chrome.storage.local.get('lastTimezone')
+  const lastTimezone = await getLastTimezone()
   const currentTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
   if (lastTimezone !== currentTimezone) {
     await rebuildAlarms()
-    await chrome.storage.local.set({ lastTimezone: currentTimezone })
+    await setLastTimezone(currentTimezone)
   }
 }
 
@@ -63,6 +66,14 @@ async function repairMissingAlarms() {
         }
       }
     }
+
+    // 預檢 alarm：與 schedulePrechecks 同一份計算，只補缺少的那幾個
+    for (const { name, when } of precheckAlarmsFor(task, Date.now())) {
+      if (!existingNames.has(name)) {
+        await chrome.alarms.create(name, { when })
+        existingNames.add(name)
+      }
+    }
   }
 }
 
@@ -73,7 +84,8 @@ async function cleanStaleAlarms() {
   const taskMap = new Map(tasks.map((t) => [t.id, t]))
 
   for (const alarm of alarms) {
-    const parsed = parseAlarmName(alarm.name)
+    // 任務 alarm、重試 alarm（<id>:retry:<n>@<slot>）、預檢 alarm（<id>:pre:<i>）都看它的任務還在不在、有沒有停用
+    const parsed = parseAlarmName(alarm.name) ?? parseRetryName(alarm.name) ?? parsePrecheckName(alarm.name)
     if (parsed !== null) {
       const task = taskMap.get(parsed.taskId)
       if (!task || task.enabled === false) {
@@ -83,36 +95,8 @@ async function cleanStaleAlarms() {
   }
 }
 
-// 清理執行超過 3 分鐘卡住的 inflight 狀態
-async function cleanStuckInflight() {
-  const res = await chrome.storage.session.get('inflight')
-  const inflight = res?.inflight
-  if (!inflight || typeof inflight !== 'object' || Array.isArray(inflight)) {
-    return
-  }
-
-  const now = Date.now()
-  const remaining = {}
-  let changed = false
-
-  for (const [key, val] of Object.entries(inflight)) {
-    // fetcher 寫進去的是 ISO 字串，早期這裡比對 typeof === 'number'，所以清理從未觸發過
-    const startedAt = typeof val?.startedAt === 'string' ? Date.parse(val.startedAt) : val?.startedAt
-    if (Number.isFinite(startedAt) && now - startedAt > 3 * 60 * 1000) {
-      changed = true
-      await diag.log('interrupted', key)
-    } else {
-      remaining[key] = val
-    }
-  }
-
-  if (changed) {
-    await chrome.storage.session.set({ inflight: remaining })
-  }
-}
-
-// 執行看門狗檢查巡迴
-export async function runWatchdog() {
+// 執行看門狗檢查巡迴（runOpts 只給測試縮短續跑的等待，正式接線不傳）
+export async function runWatchdog(runOpts = {}) {
   try {
     await checkWatchdogAlarm()
   } catch {}
@@ -128,6 +112,20 @@ export async function runWatchdog() {
     await trimOldRecords(today)
   } catch {}
 
+  // 帳本保留 14 天：與紀錄保留天數設定無關，自帶一天一次的日戳
+  try {
+    const d = new Date()
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    await trimOldRuns(today)
+  } catch {}
+
+  // 孤兒鍵清理（alertLog／lastValues／health）：一天一次，自帶日戳，不放在抓取路徑
+  try {
+    const d = new Date()
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    await runOncePerDay('lastOrphanPruneDate', today, pruneOrphanEntries)
+  } catch {}
+
   try {
     await checkTimezone()
   } catch {}
@@ -141,7 +139,15 @@ export async function runWatchdog() {
   } catch {}
 
   try {
-    await cleanStuckInflight()
+    // 上一個 worker 留下的排隊中／執行中排程槽：續跑或記 interrupted（本 worker 只處理卡住的 running）。
+    // 續跑不 await（detach）：一次抓取可以跑上數分鐘，不得讓下面的 refreshMissed／孤兒分頁清理等它
+    await recoverRunState(runOpts, { detach: true })
+  } catch {}
+
+  // 喚醒後也算錯過（筆電闔上再打開、瀏覽器沒重啟時 onStartup 不會跑）：
+  // refreshMissed 只算「現在 − 20 分鐘」之前的格子，重複呼叫不重複列、不重複通知
+  try {
+    await refreshMissed(Date.now())
   } catch {}
 
   // 上一個 service worker 被回收時沒關掉的抓取視窗（判定只看登記表，見 fetch-tab.js）

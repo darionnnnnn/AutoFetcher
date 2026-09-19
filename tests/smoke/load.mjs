@@ -654,8 +654,10 @@ try {
       ])
     } catch (e) { sendErr = String(e?.message || e) }
     const day = new Date().toLocaleDateString('sv-SE')
-    const all = await chrome.storage.local.get(`rec:${day}`)
-    return { res, sendErr, records: all[`rec:${day}`] || [] }
+    // 紀錄鍵是 rec2:<日期>:<時>（AF-21）；舊的 rec:<日期> 只讀不寫
+    const all = await chrome.storage.local.get(null)
+    const records = Object.keys(all).filter(k => k === `rec:${day}` || k.startsWith(`rec2:${day}:`)).flatMap(k => all[k] || [])
+    return { res, sendErr, records }
   }, taskDef)
 
   // (1) 子框架換頁:分頁狀態全程 complete(探針證實),只有重試救得回來
@@ -719,7 +721,8 @@ try {
       func: () => globalThis.__afContentLoaded === true
     }))[0]?.result
     const day = new Date().toLocaleDateString('sv-SE')
-    const recs = ((await chrome.storage.local.get(`rec:${day}`))[`rec:${day}`] || []).filter(r => r.taskId === 'af20bg')
+    const allRec = await chrome.storage.local.get(null)
+    const recs = Object.keys(allRec).filter(k => k === `rec:${day}` || k.startsWith(`rec2:${day}:`)).flatMap(k => allRec[k] || []).filter(r => r.taskId === 'af20bg')
     const reg = (await chrome.storage.session.get('fetchTabs')).fetchTabs || []
     return { res, sendErr, before, after, touched, sawWindow, rec: recs[recs.length - 1] || null, reg }
   }, mode)
@@ -744,6 +747,50 @@ try {
   }
   }
   await userPage.close()
+
+  // 5e-2. AF-21:上一個 service worker 留下的待辦(runState,boot 不是現在這個)要被續跑。
+  // 由看門狗 alarm 觸發復原(續跑不被 await,所以輪詢紀錄);這條路只有真實瀏覽器驗得到 session storage 與 alarm 接線
+  const af21 = await ext2.evaluate(async () => {
+    const pad = (n) => String(n).padStart(2, '0')
+    const d = new Date(Date.now() - 2 * 60000)
+    const day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+    const slot = `${day}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+    const t = {
+      id: 'af21resume', name: 'AF-21 續跑', url: 'http://127.0.0.1:48123/', mode: 'number', enabled: true,
+      locator: { css: '#v', path: '', anchor: null, xpath: '' }, spec: { strategy: 'auto' }, extraDelaySec: 0,
+      schedule: { type: 'daily', times: ['09:00'], weekdays: [0, 1, 2, 3, 4, 5, 6] }
+    }
+    await chrome.storage.local.set({ tasks: [t] })
+    await chrome.storage.session.set({ runState: { [`${t.id}@${slot}`]: { state: 'queued', at: Date.now() - 2 * 60000, boot: 'previous-worker', attempt: 1, reason: 'scheduled' } } })
+    await chrome.alarms.create('__watchdog', { when: Date.now() + 200 })
+    let rec = null
+    for (let i = 0; i < 120 && !rec; i++) {
+      await new Promise(r => setTimeout(r, 500))
+      const all = await chrome.storage.local.get(null)
+      rec = Object.keys(all).filter(k => k.startsWith(`rec2:${day}:`)).flatMap(k => all[k] || []).find(r => r.taskId === t.id) || null
+    }
+    // 紀錄寫入之後 runTask 還有收尾（帳本、health、通知帳）才移除登記：等它清空，最多 10 秒
+    let left = {}
+    for (let i = 0; i < 20; i++) {
+      left = (await chrome.storage.session.get('runState')).runState || {}
+      if (Object.keys(left).length === 0) break
+      await new Promise(r => setTimeout(r, 500))
+    }
+    const runs = (await chrome.storage.local.get(`runs:${day}`))[`runs:${day}`] || {}
+    const wd = await chrome.alarms.get('__watchdog')
+    return { rec, slot, ledger: runs[t.id]?.[slot] ?? null, left: Object.keys(left), watchdogBack: Boolean(wd) }
+  })
+  if (!af21.rec) {
+    errors.push(`AF-21:上一個 worker 留下的待辦沒有被續跑:${JSON.stringify(af21)}`)
+  } else if (af21.rec.slot !== af21.slot || Number(af21.rec.value) !== 1234 || af21.ledger !== 'ok') {
+    errors.push(`AF-21:續跑要寫回原本那一格並記帳:${JSON.stringify(af21)}`)
+  } else if (af21.left.length !== 0) {
+    errors.push(`AF-21:續跑完 runState 沒有清空:${JSON.stringify(af21.left)}`)
+  } else if (!af21.watchdogBack) {
+    errors.push('AF-21:看門狗 alarm 觸發後沒有補回來')
+  } else {
+    console.log(`${browserName}:上一個 worker 留下的待辦被續跑 (slot ${af21.slot}, value=${af21.rec.value})`)
+  }
 
   // 整頁換頁（`location.href`）的排程案**沒有留在這裡**：它在隔離的探針裡穩定通過
   // （單獨跑、連跑兩次、接在 iframe 任務之後都成功，取到換頁後的值），

@@ -15,7 +15,7 @@ import { getSettings } from '../shared/storage.js'
 import { sameOriginPath } from './frames.js'
 import { log } from '../shared/diag.js'
 
-const BOOT = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+export const BOOT = `${Date.now()}-${Math.random().toString(36).slice(2)}`
 let registryQueue = Promise.resolve()
 
 function sleep(ms) {

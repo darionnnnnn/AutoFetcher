@@ -1,7 +1,10 @@
 // AutoFetcher 設定匯出/匯入模組 (SPEC §5)
 // 負責任務、站台與全域設定的備份匯出與還原匯入，支援 PBKDF2 + AES-GCM 加解密
 
-import { exportAll, saveTask, saveSite, saveSettings, setRawLayout, normalizeSiteShape } from './storage.js'
+import {
+  exportAll, getTasks, getSites, saveTasks, saveSites, saveSettings, setRawLayout, normalizeSiteShape,
+  validateTask, taskUrlProtocolOf, snapshotImportKeys, restoreImportKeys, SCHEMA_VERSION
+} from './storage.js'
 import { encryptSecret, decryptSecret } from './crypto.js'
 import { getLayout, saveLayout } from './layout-store.js'
 import { rebuildAlarms } from '../background/scheduler.js'
@@ -97,9 +100,70 @@ export async function exportSettings({ includePasswords = false, passphrase } = 
   return JSON.stringify(result, null, 2)
 }
 
-// 匯入 JSON 字串設定並合併至現有儲存空間
-export async function importSettings(json, { passphrase } = {}) {
-  // 1. 解析與格式驗證
+// ---- 設定匯入：先驗後寫（AF-21 批次 3 定案 2）----
+
+const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
+
+// 匯入同 id 任務時，匯入檔沒帶就沿用本機既有值的執行期欄位（表單／匯出檔管不到的那些）
+const PRESERVED_TASK_FIELDS = ['enabled', 'foreground', 'suggestForeground', 'notFoundStreak', 'createdAt']
+
+// 設定白名單與數值域：鍵＝storage.js 的 DEFAULT_SETTINGS 鍵＋程式裡實際有讀的其他設定鍵；
+// 值回傳空字串＝合格，否則是拒絕原因
+const inRange = (min, max, integer = false) => (v) => {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return '必須是數字'
+  if (integer && !Number.isInteger(v)) return '必須是整數'
+  if (v < min || v > max) return `必須介於 ${min}～${max}`
+  return ''
+}
+const oneOf = (...options) => (v) => options.includes(v) ? '' : `只能是 ${options.join('、')}`
+const isBool = (v) => typeof v === 'boolean' ? '' : '必須是 true 或 false'
+const isObj = (v) => isPlainObject(v) ? '' : '必須是物件'
+const isTime = (v) => typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v) ? '' : '必須是 HH:MM'
+const isDateText = (v) => typeof v === 'string' && Number.isFinite(Date.parse(v)) ? '' : '必須是可解析的時間'
+// pickerDefaults：本體是物件，裡面的 pinned／last 有帶就必須也是物件（不是就整個 pickerDefaults 不收）
+const isPickerDefaults = (v) => {
+  const problem = isObj(v)
+  if (problem) return problem
+  for (const k of ['pinned', 'last']) {
+    if (v[k] !== undefined && !isPlainObject(v[k])) return `${k} 必須是物件`
+  }
+  return ''
+}
+
+// 數值設定的值域：匯入白名單與設定頁欄位驗證共用這一份（AF-21 4-D）
+export const NUMERIC_SETTING_RANGES = Object.freeze({
+  retentionDays: Object.freeze({ min: 1, max: 3650, integer: true }),
+  extraDelaySec: Object.freeze({ min: 0, max: 60, integer: false }),
+  alertCooldownMin: Object.freeze({ min: 0, max: 1440, integer: false })
+})
+const numericRule = (key) => {
+  const r = NUMERIC_SETTING_RANGES[key]
+  return inRange(r.min, r.max, r.integer)
+}
+
+// 數值設定合不合法：回傳空字串＝合格，否則是原因（設定頁欄位用；不認識的鍵視為合格）
+export function numericSettingProblem(key, value) {
+  if (!NUMERIC_SETTING_RANGES[key]) return ''
+  return numericRule(key)(value)
+}
+
+const SETTINGS_RULES = {
+  retentionDays: numericRule('retentionDays'),
+  notifications: isBool,
+  extraDelaySec: numericRule('extraDelaySec'),
+  theme: oneOf('system', 'light', 'dark'),
+  fetchTabMode: oneOf('tab', 'window'),
+  alertCooldownMin: numericRule('alertCooldownMin'),
+  siteCheckTime: isTime,
+  showHelpMenu: isBool,
+  pickerDefaults: isPickerDefaults,
+  history: isObj,
+  lastSettingsExportAt: isDateText,
+  lastRecordsExportAt: isDateText
+}
+
+// 解析檔案、解開 secrets（不寫入）；回傳 { data, passwords|null }
+async function parseSettingsFile(json, passphrase) {
   let parsed
   try {
     parsed = JSON.parse(json)
@@ -112,9 +176,12 @@ export async function importSettings(json, { passphrase } = {}) {
   if (parsed.version !== 1) throw new Error('不支援的設定版本')
   if (!parsed.data || typeof parsed.data !== 'object') throw new Error('缺少設定內容')
   const data = parsed.data
+  // 比程式新的檔案可能帶著這版看不懂的形狀，寫進去就是半套資料
+  if (typeof data.schemaVersion === 'number' && data.schemaVersion > SCHEMA_VERSION) {
+    throw new Error('這個設定檔來自較新的版本，請先更新 AutoFetcher')
+  }
 
-  // 2. 處理加密密碼（若有 secrets）
-  let decryptedPasswords = null
+  let passwords = null
   if (parsed.secrets) {
     if (!passphrase || typeof passphrase !== 'string' || passphrase.trim() === '') {
       throw new Error('匯入加密設定時必須提供密語')
@@ -122,54 +189,165 @@ export async function importSettings(json, { passphrase } = {}) {
     const { salt, iv, ct } = parsed.secrets
     if (!salt || !iv || !ct) throw new Error('加密資料欄位不完整')
 
-    const saltBytes = base64ToBytes(salt)
-    const ivBytes = base64ToBytes(iv)
-    const ctBytes = base64ToBytes(ct)
-
-    const key = await deriveAesKey(passphrase, saltBytes, ['decrypt'])
-    const decryptedBuf = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: ivBytes }, key, ctBytes
-    )
-    decryptedPasswords = JSON.parse(new TextDecoder().decode(decryptedBuf))
+    // WebCrypto 的失敗訊息是英文原文（而且常常是空字串），直接顯示等於沒說明；
+    // 解密之後的 JSON.parse 也一起包起來（解錯密語時內容會是亂碼）
+    let decoded
+    try {
+      const key = await deriveAesKey(passphrase, base64ToBytes(salt), ['decrypt'])
+      const decryptedBuf = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: base64ToBytes(iv) }, key, base64ToBytes(ct)
+      )
+      decoded = JSON.parse(new TextDecoder().decode(decryptedBuf))
+    } catch {
+      throw new Error('密語錯誤或加密資料已損毀，請確認密語')
+    }
+    passwords = isPlainObject(decoded) ? decoded : {}
   }
+  return { data, passwords }
+}
 
-  // 3. 驗證與解密完全成功後寫入儲存層
-  let skippedTasks = 0
+/**
+ * 設定匯入第一步：解析、解密、驗證，產生寫入計畫與摘要。**零寫入**。
+ * plan 內含解開的明文密碼（只在記憶體裡，apply 時才以本機金鑰加密），不得落地或送出頁面。
+ * @returns {Promise<{ plan: object, summary: object }>}
+ */
+export async function previewSettingsImport(json, { passphrase } = {}) {
+  const { data, passwords } = await parseSettingsFile(json, passphrase)
+
+  const summary = {
+    tasks: { add: 0, update: 0, skipped: [] },
+    sites: { add: 0, update: 0, needPassword: [] },
+    settings: { applied: [], rejected: [] },
+    layout: false
+  }
+  const plan = { tasks: [], sites: {}, passwords: {}, settings: null, layout: undefined, hasLayout: false }
+
+  // 任務：沿用寫入口的 validateTask；外來檔另拒 file:
   if (Array.isArray(data.tasks)) {
+    const existing = new Map((await getTasks()).map(t => [t.id, t]))
+    const planned = new Set()
     for (const t of data.tasks) {
+      const name = typeof t?.name === 'string' && t.name.trim() !== '' ? t.name
+        : (typeof t?.id === 'string' && t.id !== '' ? t.id : '（未命名）')
       try {
-        await saveTask(t)
-      } catch {
-        skippedTasks++
+        validateTask(t)
+      } catch (err) {
+        summary.tasks.skipped.push({ name, reason: err.message })
+        continue
       }
+      if (taskUrlProtocolOf(t.url) === 'file:') {
+        summary.tasks.skipped.push({ name, reason: '外來設定檔不接受本機檔案網址' })
+        continue
+      }
+      if (existing.has(t.id) || planned.has(t.id)) summary.tasks.update++
+      else summary.tasks.add++
+      planned.add(t.id)
+      // 同 id 是「更新」不是「整筆換掉」：匯入檔沒帶的執行期欄位沿用本機既有值
+      // （否則匯入一次就把停用中的任務復活、前景設定與建立時間洗掉）
+      const next = structuredClone(t)
+      const prior = existing.get(t.id)
+      if (prior) {
+        for (const field of PRESERVED_TASK_FIELDS) {
+          if (next[field] === undefined && prior[field] !== undefined) next[field] = prior[field]
+        }
+      }
+      plan.tasks.push(next)
     }
   }
 
-  if (data.sites && typeof data.sites === 'object') {
+  // 站台：外來的 passwordEnc／password 一律丟掉；secrets 解得開那個 origin 才留明文待 apply 加密
+  if (isPlainObject(data.sites)) {
+    const existing = await getSites()
     for (const [origin, site] of Object.entries(data.sites)) {
-      if (!site || typeof site !== 'object') continue
-      const siteToSave = normalizeSiteShape(site)
-      delete siteToSave.password
-      if (decryptedPasswords && typeof decryptedPasswords[origin] === 'string') {
-        // 一律以本機金鑰重新加密，storage 內不得留下明文
-        siteToSave.passwordEnc = await encryptSecret(decryptedPasswords[origin])
+      if (!isPlainObject(site)) continue
+      const next = normalizeSiteShape(site)
+      delete next.password
+      delete next.passwordEnc
+      plan.sites[origin] = next
+      if (passwords && typeof passwords[origin] === 'string' && passwords[origin] !== '') {
+        plan.passwords[origin] = passwords[origin]
+      } else if (existing[origin]?.passwordEnc) {
+        // 本機已有這個站台的密碼（同一台機器再匯入）：沿用，不要讓匯入把能用的密碼洗掉
+        next.passwordEnc = existing[origin].passwordEnc
+      } else {
+        summary.sites.needPassword.push(origin)
       }
-      await saveSite(origin, siteToSave)
+      if (Object.prototype.hasOwnProperty.call(existing, origin)) summary.sites.update++
+      else summary.sites.add++
     }
   }
 
-  if (data.settings && typeof data.settings === 'object') {
-    await saveSettings(data.settings)
+  // 設定：白名單＋數值域，其餘列入 rejected、不寫
+  if (isPlainObject(data.settings)) {
+    const patch = {}
+    for (const [key, value] of Object.entries(data.settings)) {
+      const rule = Object.prototype.hasOwnProperty.call(SETTINGS_RULES, key) ? SETTINGS_RULES[key] : null
+      if (!rule) {
+        summary.settings.rejected.push({ key, reason: '不認得的設定' })
+        continue
+      }
+      const reason = rule(value)
+      if (reason) {
+        summary.settings.rejected.push({ key, reason })
+        continue
+      }
+      patch[key] = structuredClone(value)
+      summary.settings.applied.push(key)
+    }
+    if (Object.keys(patch).length > 0) plan.settings = patch
   }
 
   if (data.layout !== undefined) {
-    await setRawLayout(data.layout)
-    const normalized = await getLayout()
-    await saveLayout(normalized)
+    plan.hasLayout = true
+    plan.layout = structuredClone(data.layout)
+    summary.layout = true
   }
 
-  // 4. 重建所有 alarms
-  await rebuildAlarms()
-
-  return { skippedTasks }
+  return { plan, summary }
 }
+
+/**
+ * 設定匯入第二步：依 preview 的計畫寫入。任何一步丟例外 → 把 tasks／sites／settings／layout
+ * 還原成寫入前的快照，再把原錯誤丟出去（還原本身失敗時錯誤帶 restoreError）。成功後重建排程。
+ */
+export async function applySettingsImport(plan) {
+  if (!plan || typeof plan !== 'object') throw new Error('缺少匯入計畫')
+
+  // 先把密碼加密好（加密失敗就什麼都還沒寫）
+  const sites = {}
+  for (const [origin, site] of Object.entries(plan.sites || {})) {
+    const next = { ...site }
+    if (typeof plan.passwords?.[origin] === 'string') {
+      next.passwordEnc = await encryptSecret(plan.passwords[origin])
+    }
+    sites[origin] = next
+  }
+
+  const snapshot = await snapshotImportKeys()
+  try {
+    if (Array.isArray(plan.tasks) && plan.tasks.length > 0) await saveTasks(plan.tasks)
+    if (Object.keys(sites).length > 0) await saveSites(sites)
+    if (plan.settings) await saveSettings(plan.settings)
+    if (plan.hasLayout) {
+      await setRawLayout(plan.layout)
+      await saveLayout(await getLayout())
+    }
+  } catch (err) {
+    try {
+      await restoreImportKeys(snapshot)
+    } catch (restoreErr) {
+      err.restoreError = restoreErr
+    }
+    throw err
+  }
+
+  await rebuildAlarms()
+}
+
+// 舊介面：preview 後直接 apply（既有呼叫端不變）
+export async function importSettings(json, opts = {}) {
+  const { plan, summary } = await previewSettingsImport(json, opts)
+  await applySettingsImport(plan)
+  return { skippedTasks: summary.tasks.skipped.length, summary }
+}
+

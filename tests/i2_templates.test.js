@@ -200,10 +200,11 @@ test('刪除頁籤需確認，取消時不刪', async () => {
   const did = (await ls.getLayout()).dashboards[0].id
   await ls.addDashboard('第二個')
   await db.renderDashboard(did)
+  doc.defaultView.HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
   doc.querySelector(`#dashboard-tabs [data-dash-id="${did}"] [data-action="delete"]`).click()
   await new Promise(r => setTimeout(r, 30))
-  const dlg = doc.getElementById('dashboard-delete-confirm')
-  assert.ok(dlg && !dlg.hidden)
+  const dlg = doc.querySelector('dialog.modal')
+  assert.ok(dlg && dlg.open)
   dlg.querySelector('[data-action="cancel"]').click()
   await new Promise(r => setTimeout(r, 30))
   assert.equal((await ls.getLayout()).dashboards.length, 2)
@@ -214,9 +215,10 @@ test('刪除頁籤確認後真的刪除', async () => {
   const did = (await ls.getLayout()).dashboards[0].id
   await ls.addDashboard('第二個')
   await db.renderDashboard(did)
+  doc.defaultView.HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
   doc.querySelector(`#dashboard-tabs [data-dash-id="${did}"] [data-action="delete"]`).click()
   await new Promise(r => setTimeout(r, 30))
-  doc.querySelector('#dashboard-delete-confirm [data-action="confirm"]').click()
+  doc.querySelector('dialog.modal [data-action="confirm"]').click()
   await new Promise(r => setTimeout(r, 40))
   const l = await ls.getLayout()
   assert.equal(l.dashboards.length, 1)

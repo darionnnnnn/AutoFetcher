@@ -70,28 +70,28 @@ test('看門狗:確保自己的 __watchdog alarm 存在', async () => {
   assert.equal(wdAlarm.periodInMinutes, 15)
 })
 
-test('看門狗:清理卡超過三分鐘的執行中狀態', async () => {
-  const { c, wd } = await fresh()
+// AF-21 批次 2：inflight／cleanStuckInflight 換成 runState＋recoverRunState（只處理別的 worker 留下的項目）
+test('看門狗:清理上一個 worker 留下的執行中狀態，本 worker 的不碰', async () => {
+  const { st, wd } = await fresh()
+  const { BOOT } = await import('../src/background/fetch-tab.js')
   const now = Date.now()
-  await c.storage.session.set({
-    inflight: {
-      'a:2026-09-05T09:00': { state: 'extracting', startedAt: now - 5 * 60 * 1000 },
-      'b:2026-09-05T09:00': { state: 'loading', startedAt: now - 30 * 1000 }
-    }
-  })
+  await st.updateRunState(() => ({
+    'a@2026-09-05T09:00': { state: 'running', at: now - 30 * 60 * 1000, boot: 'old-boot', attempt: 1, reason: 'scheduled' },
+    'b@2026-09-05T09:00': { state: 'running', at: now - 30 * 1000, boot: BOOT, attempt: 1, reason: 'scheduled' }
+  }))
   await wd.runWatchdog()
-  const { inflight } = await c.storage.session.get('inflight')
-  assert.deepEqual(Object.keys(inflight), ['b:2026-09-05T09:00'], '只清掉卡住的那筆')
+  assert.deepEqual(Object.keys(await st.getRunState()), ['b@2026-09-05T09:00'], '只清掉上一個 worker 留下的那筆')
 })
 
-test('看門狗:清掉的卡住執行會被記進診斷', async () => {
-  const { c, dg, wd } = await fresh()
-  await c.storage.session.set({
-    inflight: { 'a:2026-09-05T09:00': { state: 'extracting', startedAt: Date.now() - 600000 } }
-  })
+test('看門狗:清掉的中斷執行會留下 interrupted 紀錄', async () => {
+  const { st, wd } = await fresh()
+  await st.saveTask(daily('a', ['09:00']))
+  await st.updateRunState(() => ({
+    'a@2026-09-05T09:00': { state: 'running', at: Date.now() - 600000 - 60000, boot: 'old-boot', attempt: 1, reason: 'scheduled' }
+  }))
   await wd.runWatchdog()
-  const kinds = (await dg.getAll()).map(e => e.kind)
-  assert.ok(kinds.includes('interrupted'), '中斷的執行要留下痕跡')
+  const recs = await st.getRecordsByDate('2026-09-05')
+  assert.ok(recs.some(r => r.taskId === 'a' && r.status === 'interrupted'), '中斷的執行要留下痕跡')
 })
 
 test('看門狗:時區變更時重建所有 alarm', async () => {

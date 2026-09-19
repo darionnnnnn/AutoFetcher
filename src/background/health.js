@@ -1,17 +1,6 @@
 // AutoFetcher 健康狀態彙總與工具列燈號 (SPEC §12.1)
-import { getTasks } from '../shared/storage.js'
-import { RED_STATUSES, WARN_STATUSES } from '../shared/record-status.js'
-
-// 狀態代碼對應繁體中文詞對照表
-const STATUS_TEXT = {
-  login_failed: '無法登入',
-  selector_lost: '找不到元素',
-  parse_error: '抓不到數值',
-  failed: '抓取失敗',
-  fallback: '用備援方式抓到',
-  late: '遲到',
-  partial: '只抓到部分'
-}
+import { getTasks, getHealthMap, updateHealthMap, getMissedList } from '../shared/storage.js'
+import { RED_STATUSES, WARN_STATUSES, statusTextOf } from '../shared/record-status.js'
 
 // 健康紀錄裡站台項目的鍵前綴（sitecheck.js 寫入）
 const SITE_PREFIX = 'site:'
@@ -30,63 +19,61 @@ export function computeHealth(tasks = [], healthMap = {}, missed = []) {
     return {
       level: 'off',
       redCount: 0,
+      knownRedCount: 0,
       yellowCount: 0,
       summary: '已暫停'
     }
   }
 
-  const unreadRedTasks = []
+  // 紅燈（資料沒在收）：修好之前一直算，與已讀無關；已讀只讓它不進 badge 數字（AF-21 批次 5 定案 1）
+  // 黃燈：可「知道了」，已讀就不計；狀態改變時 setTaskHealth 會把 read 重設為未讀
+  const redTasks = []
   const unreadYellowTasks = []
+
+  const classify = (task, record) => {
+    if (RED_STATUSES.includes(record.status)) {
+      redTasks.push({ task, record, read: record.read === true })
+    } else if (WARN_STATUSES.includes(record.status) && record.read !== true) {
+      unreadYellowTasks.push({ task, record })
+    }
+  }
 
   for (const task of activeTasks) {
     const record = health[task.id]
     // 沒有健康紀錄的新任務視為正常，不列為異常
     if (!record || !record.status) continue
-
-    const isUnread = record.read !== true
-
-    if (RED_STATUSES.includes(record.status)) {
-      if (isUnread) {
-        unreadRedTasks.push({ task, record })
-      }
-    } else if (WARN_STATUSES.includes(record.status)) {
-      if (isUnread) {
-        unreadYellowTasks.push({ task, record })
-      }
-    }
+    classify(task, record)
   }
 
   // 站台層級的健康項目（key 為 site:<origin>，來自每日站台登入檢查）。
   // 站台登不進去等於所有靠它的任務都會失敗，只跳一次通知不夠，要一起進燈號。
   for (const [key, record] of Object.entries(health)) {
     if (!key.startsWith(SITE_PREFIX)) continue
-    if (!record || !record.status || record.read === true) continue
-    const site = { name: key.slice(SITE_PREFIX.length) }
-    if (RED_STATUSES.includes(record.status)) {
-      unreadRedTasks.push({ task: site, record })
-    } else if (WARN_STATUSES.includes(record.status)) {
-      unreadYellowTasks.push({ task: site, record })
-    }
+    if (!record || !record.status) continue
+    classify({ name: key.slice(SITE_PREFIX.length) }, record)
   }
 
-  const redCount = unreadRedTasks.length
+  // redCount＝未讀的紅（badge 數字）；knownRedCount＝已知悉但還沒修好的紅
+  const redCount = redTasks.filter(x => !x.read).length
+  const knownRedCount = redTasks.length - redCount
   const yellowCount = unreadYellowTasks.length + (hasMissed ? 1 : 0)
 
   let level = 'green'
   let summary = '一切正常'
 
-  // 先以未讀項目決定等級；若全部紅/黃項目皆已讀且無錯過排程，等級回到綠燈
-  if (redCount > 0) {
+  if (redTasks.length > 0) {
     level = 'red'
-    const items = unreadRedTasks.map(
-      ({ task, record }) => `${task.name || task.id} ${STATUS_TEXT[record.status] || record.reason || '抓取失敗'}`
+    // 未讀的排前面，已讀的標「（已知悉）」
+    const ordered = [...redTasks.filter(x => !x.read), ...redTasks.filter(x => x.read)]
+    const items = ordered.map(
+      ({ task, record, read }) => `${task.name || task.id} ${statusTextOf(record.status) || record.reason || '抓取失敗'}${read ? '（已知悉）' : ''}`
     )
     const desc = items.slice(0, 2).join('、') + (items.length > 2 ? '等' : '')
-    summary = `${redCount} 個任務異常:${desc}`
+    summary = `${redTasks.length} 個任務異常:${desc}`
   } else if (yellowCount > 0) {
     level = 'yellow'
     const items = unreadYellowTasks.map(
-      ({ task, record }) => `${task.name || task.id} ${STATUS_TEXT[record.status] || record.reason || '注意'}`
+      ({ task, record }) => `${task.name || task.id} ${statusTextOf(record.status) || record.reason || '注意'}`
     )
     if (hasMissed) {
       items.push('錯過排程')
@@ -95,57 +82,72 @@ export function computeHealth(tasks = [], healthMap = {}, missed = []) {
     summary = `${yellowCount} 個任務注意:${desc}`
   }
 
-  return { level, redCount, yellowCount, summary }
+  return { level, redCount, knownRedCount, yellowCount, summary }
 }
+
+// 各燈號對應的工具列圖示。**一定要以 / 開頭**：service worker 在 /background/，相對路徑會解析成
+// /background/icons/…，setIcon 讀不到就整個丟例外（AF-21 煙霧測試抓到：丟出來的例外讓抓取回報失敗）
+const ICON_COLOR = { red: 'red', yellow: 'yellow', green: 'green', off: 'gray' }
+
+export function iconPathOf(level) {
+  const color = ICON_COLOR[level] || 'green'
+  return {
+    16: `/icons/icon-${color}-16.png`,
+    32: `/icons/icon-${color}-32.png`,
+    48: `/icons/icon-${color}-48.png`
+  }
+}
+
+// 紅燈但全部已知悉時 badge 顯示的提示字：仍有問題、但沒有新的
+export const KNOWN_RED_BADGE = '!'
 
 // 取得儲存空間中的所有健康紀錄
 export async function getHealth() {
-  const res = await chrome.storage.local.get('health')
-  return res && res.health && typeof res.health === 'object' ? res.health : {}
+  return getHealthMap()
 }
 
 // 寫入單一任務的健康狀態紀錄並補上時間戳
 export async function setTaskHealth(taskId, { status, reason, detail } = {}) {
-  const health = await getHealth()
-  const prev = health[taskId]
+  let record
+  await updateHealthMap((health) => {
+    const prev = health[taskId]
 
-  // status 與上一次不同時重設為未讀（false），相同時保留既有 read 標記
-  const statusChanged = !prev || prev.status !== status
-  const read = statusChanged ? false : (prev.read === true)
+    // status 與上一次不同時重設為未讀（false），相同時保留既有 read 標記
+    const statusChanged = !prev || prev.status !== status
+    const read = statusChanged ? false : (prev.read === true)
 
-  const resolvedReason = (reason !== undefined && reason !== '')
-    ? reason
-    : (STATUS_TEXT[status] || '')
+    const resolvedReason = (reason !== undefined && reason !== '')
+      ? reason
+      : (statusTextOf(status) || '')
 
-  const record = {
-    status,
-    reason: resolvedReason,
-    detail,
-    at: Date.now(),
-    read
-  }
+    record = {
+      status,
+      reason: resolvedReason,
+      detail,
+      at: Date.now(),
+      read
+    }
 
-  const updated = {
-    ...health,
-    [taskId]: record
-  }
-
-  await chrome.storage.local.set({ health: updated })
+    return {
+      ...health,
+      [taskId]: record
+    }
+  })
   return record
 }
 
 // 將指定任務的健康紀錄標示為已讀
 export async function markRead(taskId) {
-  const health = await getHealth()
-  const prev = health[taskId] || {}
-  const updated = {
-    ...health,
-    [taskId]: {
-      ...prev,
-      read: true
+  await updateHealthMap((health) => {
+    const prev = health[taskId] || {}
+    return {
+      ...health,
+      [taskId]: {
+        ...prev,
+        read: true
+      }
     }
-  }
-  await chrome.storage.local.set({ health: updated })
+  })
 }
 
 // 將狀態物件反映至瀏覽器擴充功能圖示 badge 與標題
@@ -156,7 +158,7 @@ export async function applyBadge(state) {
 
   switch (level) {
     case 'red':
-      text = String(state?.redCount ?? 0)
+      text = (state?.redCount ?? 0) > 0 ? String(state.redCount) : KNOWN_RED_BADGE
       color = '#D93025'
       break
     case 'yellow':
@@ -174,6 +176,10 @@ export async function applyBadge(state) {
       break
   }
 
+  // 換圖示失敗只是少了顏色，不得讓燈號其餘部分（以及呼叫它的抓取流程）跟著失敗
+  try {
+    await chrome.action.setIcon({ path: iconPathOf(level || 'green') })
+  } catch {}
   await chrome.action.setBadgeText({ text })
   await chrome.action.setBadgeBackgroundColor({ color })
   await chrome.action.setTitle({ title: 'AutoFetcher — ' + (state?.summary || '') })
@@ -183,8 +189,7 @@ export async function applyBadge(state) {
 export async function refreshBadge() {
   const tasks = await getTasks()
   const health = await getHealth()
-  const res = await chrome.storage.local.get('missed')
-  const missed = Array.isArray(res?.missed) ? res.missed : []
+  const missed = await getMissedList()
 
   const state = computeHealth(tasks, health, missed)
   await applyBadge(state)

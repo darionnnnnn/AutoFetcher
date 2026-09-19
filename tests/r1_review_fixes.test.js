@@ -28,6 +28,9 @@ async function fresh() {
   await st.saveTask(task('t2', '水費'))
   const ls = await import('../src/shared/layout-store.js?t=' + Math.random())
   const jd = new JSDOM(html, { url: 'chrome-extension://abc/ui/report/report.html' })
+  // jsdom 25 沒有 <dialog> 的 showModal／close（AF-21 4-D 共用 modal）：替身只切 open 屬性
+  jd.window.HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  jd.window.HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
   globalThis.window = jd.window
   globalThis.document = jd.window.document
   const grid = jd.window.document.getElementById('dashboard-grid')
@@ -88,6 +91,9 @@ test('編輯表格卡片的標題，不會清掉它的小數位與單位', async
   t.value = '改標題'
   fire(win, t, 'change')
   await new Promise(r => setTimeout(r, 30))
+  // AF-21 批次 4 定案 5：抽屜改成草稿模型，按「套用」才寫進 storage
+  doc.getElementById('drawer-apply').click()
+  await new Promise(r => setTimeout(r, 30))
   const saved = (await ls.getLayout()).dashboards[0].cards[0].options
   assert.equal(saved.decimals, 2, '看不到的欄位不可被清掉')
   assert.equal(saved.unit, '元')
@@ -104,6 +110,9 @@ test('編輯數字卡片不會清掉它的 Y 軸範圍設定', async () => {
   u.value = '度'
   fire(win, u, 'change')
   await new Promise(r => setTimeout(r, 30))
+  // AF-21 批次 4 定案 5：抽屜改成草稿模型，按「套用」才寫進 storage
+  doc.getElementById('drawer-apply').click()
+  await new Promise(r => setTimeout(r, 30))
   const saved = (await ls.getLayout()).dashboards[0].cards[0].options
   assert.equal(saved.yMin, 0)
   assert.equal(saved.yMax, 50)
@@ -118,6 +127,9 @@ test('顯示中的欄位被清空時仍可移除該設定', async () => {
   const u = doc.getElementById('drawer-unit')
   u.value = ''
   fire(win, u, 'change')
+  await new Promise(r => setTimeout(r, 30))
+  // AF-21 批次 4 定案 5：抽屜改成草稿模型，按「套用」才寫進 storage
+  doc.getElementById('drawer-apply').click()
   await new Promise(r => setTimeout(r, 30))
   assert.equal((await ls.getLayout()).dashboards[0].cards[0].options.unit, undefined)
 })
@@ -170,7 +182,7 @@ test('連續對兩筆按刪除，確認只會刪掉最後一筆', async () => {
   const btns = doc.querySelectorAll('#record-table [data-action="delete-record"]')
   btns[btns.length - 1].click()
   await new Promise(r => setTimeout(r, 20))
-  doc.querySelector('#record-delete-confirm [data-action="confirm"]').click()
+  doc.querySelector('dialog.modal [data-action="confirm"]').click()
   await new Promise(r => setTimeout(r, 40))
   assert.equal((await st.getRecordsByDate('2026-09-01')).length, 1, '一次確認只能刪一筆')
 })

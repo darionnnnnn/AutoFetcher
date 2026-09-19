@@ -1,5 +1,5 @@
 import { MSG } from '../shared/messages.js'
-import { waitMsOf, timeoutMsOf, DEFAULT_HOVER_HOLD_MS } from '../shared/preaction.js'
+import { waitMsOf, timeoutMsOf, DEFAULT_HOVER_HOLD_MS, capStepMs } from '../shared/preaction.js'
 import { describe, resolve } from '../shared/selector.js'
 import { extractValue, parseNumber } from '../shared/extract.js'
 import {
@@ -108,9 +108,105 @@ function pageDebugOf(el, spec) {
   }
 }
 
+/**
+ * 觀察 DOM 變化，等到 `hit()` 成立或逾時（前置動作 `waitFor` 與擷取的延遲渲染短等待共用這一份）。
+ * 呼叫端要自己先判一次 `hit()`；這裡只負責「之後的變化」。
+ * @param {() => boolean} hit 判定
+ * @param {number} timeoutMs 最多等多久
+ * @param {{ throttleMs?: number }} [opts] throttleMs > 0 時，變動回呼最多每這麼久才檢查一次
+ *   （逾時前一定會再檢查最後一次）；擷取的短等待用它，`hit()` 是全文件掃描，
+ *   會自己重繪的監控頁一秒能觸發上百次變動
+ * @returns {Promise<boolean>} 等到了回 true、逾時回 false
+ */
+function waitUntil(hit, timeoutMs, { throttleMs = 0 } = {}) {
+  return new Promise((resolvePromise) => {
+    let timer = null
+    let observer = null
+    let throttleTimer = null
+    let lastCheckAt = 0
+
+    const cleanup = () => {
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+      if (throttleTimer) {
+        clearTimeout(throttleTimer)
+        throttleTimer = null
+      }
+      if (observer) {
+        observer.disconnect()
+        observer = null
+      }
+    }
+
+    // 檢查一次：成立就收工回 true，並回報有沒有成立
+    const check = () => {
+      lastCheckAt = Date.now()
+      if (!hit()) return false
+      cleanup()
+      resolvePromise(true)
+      return true
+    }
+
+    timer = setTimeout(() => {
+      // 合併模式下逾時前再檢查一次，免得最後那次變動正好落在節流窗裡
+      if (throttleMs > 0 && check()) return
+      cleanup()
+      resolvePromise(false)
+    }, timeoutMs)
+
+    const onMutation = () => {
+      if (throttleMs <= 0) {
+        check()
+        return
+      }
+      if (throttleTimer) return
+      const wait = throttleMs - (Date.now() - lastCheckAt)
+      if (wait <= 0) {
+        check()
+        return
+      }
+      throttleTimer = setTimeout(() => {
+        throttleTimer = null
+        check()
+      }, wait)
+    }
+
+    const Observer = globalThis.MutationObserver || document.defaultView?.MutationObserver
+    observer = new Observer(onMutation)
+
+    // 只監聽 childList 的話，「早就在 DOM 裡、靠 class/style 切換顯示」的選單永遠等不到
+    observer.observe(document, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style', 'hidden', 'aria-hidden']
+    })
+  })
+}
+
+// 擷取時找不到目標，再觀察這麼久才回 not_found（AF-21 批次 2 定案 10，暫定值）：
+// 前端延遲渲染的頁面常常晚幾百毫秒才把表格插進來，一次就判失敗要等 2 分鐘後的重試。
+// 不要求可見；背景的擷取逾時 15 秒不變
+const EXTRACT_SETTLE_MS = 3000
+// 短等待期間，DOM 變動最多這麼久檢查一次（hit 是全文件掃描）
+const EXTRACT_SETTLE_THROTTLE_MS = 100
+
 // 處理 EXTRACT 訊息：依 locator 尋找元素並擷取數值
-function handleExtract(msg, sendResponse) {
-  const resolved = resolve(document, msg.locator)
+async function handleExtract(msg, sendResponse) {
+  let resolved = resolve(document, msg.locator)
+  // 呼叫端可以指定短等待要等多久（已知找不到元素的任務帶 0，不必每次白等）
+  const settleMs = typeof msg.settleMs === 'number' ? msg.settleMs : EXTRACT_SETTLE_MS
+  if (resolved.error && settleMs > 0) {
+    const found = () => {
+      const r = resolve(document, msg.locator)
+      return !r?.error && !!r?.el
+    }
+    if (await waitUntil(found, settleMs, { throttleMs: EXTRACT_SETTLE_THROTTLE_MS })) {
+      resolved = resolve(document, msg.locator)
+    }
+  }
   if (resolved.error) {
     sendResponse({ ok: false, error: resolved.error, snippet: resolved.snippet })
     return
@@ -289,7 +385,8 @@ async function handlePreActions(msg, sendResponse) {
         }
         hoverElement(res.el)
         // 有些選單要游標「停著」才展開：停留期間持續補 mousemove
-        const hold = Number.isFinite(Number(action.holdMs)) ? Number(action.holdMs) : DEFAULT_HOVER_HOLD_MS
+        // 執行時上限（AF-21 批次 2 定案 5）：超過照上限停，註明由 background 寫進軌跡
+        const hold = capStepMs(Number.isFinite(Number(action.holdMs)) ? Number(action.holdMs) : DEFAULT_HOVER_HOLD_MS).ms
         if (hold > 0) {
           const step = 100
           for (let waited = 0; waited < hold; waited += step) {
@@ -325,43 +422,8 @@ async function handlePreActions(msg, sendResponse) {
           if (res?.error || !res?.el) return false
           return needVisible ? isVisible(res.el) : true
         }
-        if (!hit()) {
-          await new Promise((resolvePromise, rejectPromise) => {
-            const timeout = timeoutMsOf(action)
-            let timer = null
-            let observer = null
-
-            const cleanup = () => {
-              if (timer) {
-                clearTimeout(timer)
-                timer = null
-              }
-              if (observer) {
-                observer.disconnect()
-                observer = null
-              }
-            }
-
-            timer = setTimeout(() => {
-              cleanup()
-              rejectPromise(new Error('preaction_timeout'))
-            }, timeout)
-
-            observer = new MutationObserver(() => {
-              if (hit()) {
-                cleanup()
-                resolvePromise()
-              }
-            })
-
-            // 只監聽 childList 的話，「早就在 DOM 裡、靠 class/style 切換顯示」的選單永遠等不到
-            observer.observe(document, {
-              childList: true,
-              subtree: true,
-              attributes: true,
-              attributeFilter: ['class', 'style', 'hidden', 'aria-hidden']
-            })
-          })
+        if (!hit() && !(await waitUntil(hit, timeoutMsOf(action)))) {
+          throw new Error('preaction_timeout')
         }
       }
     }
@@ -380,70 +442,90 @@ if (!globalThis.__afContentLoaded) {
     lastTarget = event.target
   })
 
-  // 監聽來自 background 或 popup 的訊息
+  // 監聽來自 background 或 popup 的訊息。
+  // 分派處統一接例外（同步丟的與非同步 handler 的 rejection 都接）：
+  // 沒接住的話永遠不回應，背景只能等到逾時、原因也丟了（AF-21 批次 2 定案 6）
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg || typeof msg !== 'object') return
-
-    if (msg.type === MSG.DESCRIBE) {
-      handleDescribe(sendResponse)
-      return true
+    let responded = false
+    const respond = (res) => {
+      if (responded) return
+      responded = true
+      sendResponse(res)
     }
-
-    if (msg.type === MSG.EXTRACT) {
-      handleExtract(msg, sendResponse)
+    const fail = (err) => respond({ ok: false, error: 'content_exception', detail: String(err?.message || err) })
+    try {
+      const out = route(msg, respond)
+      if (out === undefined) return
+      if (out && typeof out.then === 'function') out.catch(fail)
       return true
-    }
-
-    if (msg.type === MSG.SCROLL_INTO_VIEW) {
-      handleScrollIntoView(msg, sendResponse)
-      return true
-    }
-
-    if (msg.type === MSG.ENTER_PICK) {
-      // 重選是在新分頁開的，沒有「上次右鍵的元素」；先用任務自己的 locator 找回目標
-      let target = lastTarget
-      if (msg.locator) {
-        const resolved = resolve(document, msg.locator)
-        if (!resolved.error && resolved.el) target = resolved.el
-      }
-      enterPickMode({
-        purpose: msg.purpose,
-        taskId: msg.taskId,
-        initialTarget: target,
-        preselect: msg.preselect,
-        // 下鑽失敗被退回來時 background 會帶 hint，面板要讓使用者知道為什麼還在原地
-        hint: msg.hint,
-        // 右鍵「一次建立多個任務」：每個不同的目標自成一組（picker-mode 只認字面 true）
-        ...(msg.batch === true ? { batch: true } : {})
-      })
-      sendResponse({ ok: true })
-      return true
-    }
-
-    if (msg.type === MSG.EXIT_PICK) {
-      exitPickMode()
-      sendResponse({ ok: true })
-      return true
-    }
-
-    if (msg.type === MSG.FILL_LOGIN) {
-      handleFillLogin(msg, sendResponse)
-      return true
-    }
-
-    if (msg.type === MSG.CHECK_ELEMENT) {
-      handleCheckElement(msg, sendResponse)
-      return true
-    }
-
-    if (msg.type === MSG.RUN_PRE_ACTIONS) {
-      handlePreActions(msg, sendResponse)
-      return true
-    }
-
-    if (msg.type === MSG.RESOLVE_LOCATOR) {
-      handleResolveLocator(msg, sendResponse)
+    } catch (err) {
+      fail(err)
       return true
     }
   })
+}
+
+// 訊息分派：認得的型別回 true 或 handler 的 Promise（都代表會回應），不認得回 undefined
+function route(msg, sendResponse) {
+  if (msg.type === MSG.DESCRIBE) {
+    handleDescribe(sendResponse)
+    return true
+  }
+
+  if (msg.type === MSG.EXTRACT) {
+    return handleExtract(msg, sendResponse)
+  }
+
+  if (msg.type === MSG.SCROLL_INTO_VIEW) {
+    handleScrollIntoView(msg, sendResponse)
+    return true
+  }
+
+  if (msg.type === MSG.ENTER_PICK) {
+    // 重選是在新分頁開的，沒有「上次右鍵的元素」；先用任務自己的 locator 找回目標
+    let target = lastTarget
+    if (msg.locator) {
+      const resolved = resolve(document, msg.locator)
+      if (!resolved.error && resolved.el) target = resolved.el
+    }
+    enterPickMode({
+      purpose: msg.purpose,
+      taskId: msg.taskId,
+      initialTarget: target,
+      preselect: msg.preselect,
+      // 下鑽失敗被退回來時 background 會帶 hint，面板要讓使用者知道為什麼還在原地
+      hint: msg.hint,
+      // 右鍵「一次建立多個任務」：每個不同的目標自成一組（picker-mode 只認字面 true）
+      ...(msg.batch === true ? { batch: true } : {})
+    })
+    sendResponse({ ok: true })
+    return true
+  }
+
+  if (msg.type === MSG.EXIT_PICK) {
+    exitPickMode()
+    sendResponse({ ok: true })
+    return true
+  }
+
+  if (msg.type === MSG.FILL_LOGIN) {
+    handleFillLogin(msg, sendResponse)
+    return true
+  }
+
+  if (msg.type === MSG.CHECK_ELEMENT) {
+    handleCheckElement(msg, sendResponse)
+    return true
+  }
+
+  if (msg.type === MSG.RUN_PRE_ACTIONS) {
+    return handlePreActions(msg, sendResponse)
+  }
+
+  if (msg.type === MSG.RESOLVE_LOCATOR) {
+    handleResolveLocator(msg, sendResponse)
+    return true
+  }
+  return undefined
 }

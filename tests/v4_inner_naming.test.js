@@ -98,6 +98,7 @@ test('C 七個命名與描述入口對同一個帶 inner 的值，都帶「小�
       spec: { mode: 'block', fields: [{ key: 'whole', cell: WHOLE_CELL }, { key: 'other', cell: { row: { index: 3, header: '10.231.1.32' }, col: { index: 2, header: 'PORT:443' } } }] },
       schedule: { type: 'daily', times: ['09:30'], weekdays: [1] }
     })
+    await chrome.storage.session.set({ repickTabs: { 't1': 3 } })
     await bg.handleMessage({
       type: 'PICKED', purpose: 'repick', taskId: 't1', locator: LOCATOR,
       picks: [{ cell: WHOLE_CELL }, { cell: INNER_CELL }]
@@ -202,6 +203,7 @@ test('C 單值任務重選：pickSpecOf 逐欄挑也要挑到 inner；其他多�
     spec: { mode: 'block', block: { cell: WHOLE_CELL } },
     schedule: { type: 'daily', times: ['09:30'], weekdays: [1] }
   })
+  await chrome.storage.session.set({ repickTabs: { 't1': 3 } })
   await bg.handleMessage({
     type: 'PICKED', purpose: 'repick', taskId: 't1', locator: LOCATOR,
     picks: [{ cell: { ...INNER_CELL, innerLabel: LABEL, junk: 1 } }]
@@ -219,6 +221,7 @@ test('C 重選時 inner 不合法（不是非空陣列）不抄進規格', async
     spec: { mode: 'block', block: { cell: WHOLE_CELL } },
     schedule: { type: 'daily', times: ['09:30'], weekdays: [1] }
   })
+  await chrome.storage.session.set({ repickTabs: { 't1': 3 } })
   await bg.handleMessage({
     type: 'PICKED', purpose: 'repick', taskId: 't1', locator: LOCATOR,
     picks: [{ cell: { ...WHOLE_CELL, inner: [] } }]
@@ -234,6 +237,7 @@ test('C 多值重選：同列同欄、inner 不同是兩個值（sameSpec 要比
     spec: { mode: 'block', fields: [{ key: 'whole', cell: WHOLE_CELL }, { key: 'small', cell: INNER_CELL }] },
     schedule: { type: 'daily', times: ['09:30'], weekdays: [1] }
   })
+  await chrome.storage.session.set({ repickTabs: { 't1': 3 } })
   await bg.handleMessage({
     type: 'PICKED', purpose: 'repick', taskId: 't1', locator: LOCATOR,
     picks: [{ cell: INNER_CELL }, { cell: WHOLE_CELL }]
@@ -252,6 +256,7 @@ test('C 整欄的重選也保留 block.inner', async () => {
     spec: { mode: 'block', block: { axis: 'col', index: 2, headerText: '', aggregate: 'max' } },
     schedule: { type: 'daily', times: ['09:30'], weekdays: [1] }
   })
+  await chrome.storage.session.set({ repickTabs: { 't1': 3 } })
   await bg.handleMessage({
     type: 'PICKED', purpose: 'repick', taskId: 't1', locator: LOCATOR,
     picks: [{ block: { axis: 'col', index: 2, headerText: '', inner: SMALL_TABLE_2ND } }]

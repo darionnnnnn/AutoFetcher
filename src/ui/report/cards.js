@@ -1,13 +1,15 @@
 // AutoFetcher 卡片渲染模組（將卡片設定與資料渲染為 DOM 元素）
 
-import { buildSeries, resolvePeriod, latest, pivot, effectiveTimeOf, withDelta } from './series.js';
+import { buildSeries, resolvePeriod, latest, pivot, effectiveTimeOf, withDelta, downsamplePoints } from './series.js';
 
 // 樞紐表未指定列數上限時的預設(避免長時間區間渲染上千列)
 const DEFAULT_PIVOT_ROWS = 50;
 import { lineChart, barChart, gauge, sparkline } from './charts.js';
-import { isSuccess, isRed, isWarn } from '../../shared/record-status.js';
+import { isSuccess, isRed, isWarn, statusTextOf } from '../../shared/record-status.js';
 import { parentIdOf } from '../../shared/series-index.js';
+import { isGap, gapTextOf } from '../../shared/describe.js';
 import { openTrendPopover } from './trend-popover.js';
+import { icon, setIcon } from '../icons.js';
 
 const SUPPORTED_TYPES = new Set(['number', 'line', 'bar', 'table', 'gauge', 'text', 'status']);
 
@@ -60,6 +62,18 @@ function getCardSourceName(card, ctx) {
   return names.length > 0 ? names.join('、') : '';
 }
 
+const STATUS_CARD_TITLE = '任務狀態';
+
+/**
+ * 表格卡時間欄的畫面格式「MM/DD HH:mm」（只給畫面用；複製 TSV 與匯出維持原本的完整時間）。
+ * 認不得的格式原樣回傳。
+ */
+export function shortTimeText(t) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(String(t ?? ''));
+  if (!m) return t ?? '';
+  return m[4] !== undefined ? `${m[2]}/${m[3]} ${m[4]}:${m[5]}` : `${m[2]}/${m[3]}`;
+}
+
 /**
  * 取得卡片標題（自訂標題優先；否則以來源名稱為主，
  * 若同一儀表板內排在前面已有同名但不同型別的卡片，就補上型別後綴以便分辨）
@@ -70,7 +84,8 @@ function getCardTitle(card, ctx) {
   }
   const baseName = getCardSourceName(card, ctx);
   if (!baseName) {
-    return '';
+    // 狀態清單卡的來源在 options.taskIds、不在 source：沒有標題時給預設標題，不留一條空白標頭
+    return card.type === 'status' ? STATUS_CARD_TITLE : '';
   }
 
   if (Array.isArray(ctx?.cards)) {
@@ -139,8 +154,7 @@ function createCardShell(card, ctx) {
   configBtn.type = 'button';
   configBtn.className = 'card-btn-config';
   configBtn.dataset.action = 'config';
-  configBtn.setAttribute('aria-label', '設定');
-  configBtn.textContent = '⚙';
+  setIcon(configBtn, 'settings', { label: '卡片設定' });
   actionsEl.appendChild(configBtn);
 
   metaEl.appendChild(actionsEl);
@@ -275,25 +289,48 @@ function renderNumberCard(card, ctx, { cardEl, bodyEl }) {
 /**
  * 建立「拖出移除」把手(只有一份;table 欄標、圖表圖例、狀態清單共用)
  */
-function makeRemoveHandle(taskId, editing) {
+function makeRemoveHandle(taskId, editing, name) {
   const handle = document.createElement('button');
   handle.type = 'button';
   handle.setAttribute('data-remove-source', '');
   handle.setAttribute('data-task-id', taskId);
   handle.className = 'remove-source-handle';
   handle.hidden = !editing;
-  handle.textContent = editing ? '×' : '';
+  // 拖出卡片外就移除這個來源（dnd.js 的拖曳來源）；圖示常駐，顯示與否只看 hidden
+  handle.appendChild(icon('remove'));
+  const label = name ? `拖出卡片外移除「${name}」` : '拖出卡片外移除這個來源';
+  handle.setAttribute('aria-label', label);
+  handle.title = label;
   return handle;
 }
 
-function renderChartCard(card, ctx, { bodyEl }) {
+function renderChartCard(card, ctx, { bodyEl, actionsEl }) {
   const periodRange = resolveCardRange(card, ctx);
-  const seriesList = buildSeries(ctx.records, card.source, {
+  const fullSeries = buildSeries(ctx.records, card.source, {
     from: periodRange.from,
     to: periodRange.to,
     aggregation: card.options?.aggregation,
     normalize: card.options?.normalize
   });
+
+  // 單一序列點數超過上限就抽樣（每桶保留最小與最大，缺口保留）；只影響圖，表格與匯出照舊用全部資料
+  let sampledFrom = 0;
+  let sampledTo = 0;
+  const seriesList = fullSeries.map(series => {
+    const res = downsamplePoints(series.points);
+    if (!res.sampled) return series;
+    sampledFrom += res.original;
+    sampledTo += res.points.length;
+    return { ...series, points: res.points };
+  });
+  if (sampledFrom > 0 && actionsEl?.parentNode) {
+    const badge = document.createElement('span');
+    badge.className = 'card-sampled';
+    badge.setAttribute('data-sampled', '');
+    badge.textContent = '已抽樣顯示';
+    badge.title = `資料點太多，圖上只畫其中 ${sampledTo} 點（原始 ${sampledFrom} 點，每段保留最高與最低值）`;
+    actionsEl.parentNode.insertBefore(badge, actionsEl);
+  }
 
   // viewBox 的長寬比要貼近卡片實際的格子比例，否則等比縮放後會在左右留一大片空白
   const cols = Number.isFinite(Number(card.w)) ? Number(card.w) : 6;
@@ -345,7 +382,7 @@ function renderChartCard(card, ctx, { bodyEl }) {
       labelEl.setAttribute('title', ctx?.tasksById?.[s.taskId]?.name || s.taskId);
       itemEl.appendChild(labelEl);
 
-      itemEl.appendChild(makeRemoveHandle(s.taskId, Boolean(ctx?.editing)));
+      itemEl.appendChild(makeRemoveHandle(s.taskId, Boolean(ctx?.editing), ctx?.tasksById?.[s.taskId]?.name));
       legendEl.appendChild(itemEl);
     });
 
@@ -416,12 +453,13 @@ function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
 
     for (const id of columns) {
       const th = document.createElement('th');
+      th.className = 'num';
       const titleSpan = document.createElement('span');
       titleSpan.textContent = seriesLabel(columns, id, ctx);
       th.setAttribute('title', ctx?.tasksById?.[id]?.name || id);
       th.appendChild(titleSpan);
 
-      th.appendChild(makeRemoveHandle(id, Boolean(ctx?.editing)));
+      th.appendChild(makeRemoveHandle(id, Boolean(ctx?.editing), ctx?.tasksById?.[id]?.name));
 
       if (!ctx?.editing) {
         th.classList.add('clickable');
@@ -444,7 +482,8 @@ function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
       const r = rows[rowIndex];
       const tr = document.createElement('tr');
       const timeTd = document.createElement('td');
-      timeTd.textContent = r.t ?? '';
+      timeTd.textContent = shortTimeText(r.t ?? '');
+      if (r.t) timeTd.title = String(r.t);
       tr.appendChild(timeTd);
 
       const rowTsv = [r.t ?? ''];
@@ -452,6 +491,7 @@ function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
       for (const col of columns) {
         const val = r.values?.[col];
         const td = document.createElement('td');
+        td.className = 'num';
         // 這一格由多筆合併而來時說明來源筆數，避免使用者以為只抓了一次
         const mergedCount = r.merged?.[col];
         if (typeof mergedCount === 'number' && mergedCount > 1) {
@@ -511,6 +551,7 @@ function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
     for (const h of tsvHeaders) {
       const th = document.createElement('th');
       th.textContent = h;
+      if (h === '值') th.className = 'num';
       headTr.appendChild(th);
     }
     thead.appendChild(headTr);
@@ -519,7 +560,9 @@ function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
       const tr = document.createElement('tr');
 
       const timeTd = document.createElement('td');
-      timeTd.textContent = effectiveTimeOf(r);
+      const fullTime = effectiveTimeOf(r);
+      timeTd.textContent = shortTimeText(fullTime);
+      if (fullTime) timeTd.title = fullTime;
       tr.appendChild(timeTd);
 
       const taskTd = document.createElement('td');
@@ -528,6 +571,7 @@ function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
       tr.appendChild(taskTd);
 
       const valTd = document.createElement('td');
+      valTd.className = 'num';
       let valDisplay = '—';
       let valRaw = '';
       if (typeof r.value === 'number' && Number.isFinite(r.value)) {
@@ -542,7 +586,8 @@ function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
       tr.appendChild(valTd);
 
       const statusTd = document.createElement('td');
-      statusTd.textContent = r.status || '—';
+      // 畫面顯示白話，複製的 TSV 維持代碼
+      statusTd.textContent = r.status ? statusTextOf(r.status) : '—';
       tr.appendChild(statusTd);
 
       tbody.appendChild(tr);
@@ -684,9 +729,14 @@ function renderStatusCard(card, ctx, { bodyEl }) {
   for (const id of taskIds) {
     const task = parents[id] || { id, name: id };
     const taskName = task.name || id;
-    const healthStatus = ctx?.health?.[id]?.status || '—';
+    const healthCode = ctx?.health?.[id]?.status;
+    // 停用中的任務不會抓：說「停用中」（與任務頁同一句），不沿用上一次的狀態
+    const paused = task.enabled === false;
+    const healthStatus = paused ? '停用中' : (healthCode ? statusTextOf(healthCode) : '—');
     const nextRun = ctx?.nextRuns?.[id] || '—';
-    const missedCount = (ctx?.missed || []).filter(m => m && m.taskId === id).length;
+    const mine = (ctx?.missed || []).filter(m => m && m.taskId === id);
+    const missedCount = mine.filter(m => !isGap(m)).length;
+    const gap = mine.find(m => isGap(m));
 
     const item = document.createElement('div');
     item.className = 'status-item';
@@ -698,7 +748,10 @@ function renderStatusCard(card, ctx, { bodyEl }) {
     item.appendChild(nameEl);
 
     const stateEl = document.createElement('span');
-    stateEl.className = 'status-state';
+    // 顏色跟著 health 走（判定只經 record-status.js）；以前不論成敗都是綠色
+    const health = ctx?.health?.[id];
+    const chipCls = (paused || !healthCode) ? 'is-off' : (isRed(health) ? 'is-bad' : (isWarn(health) ? 'is-warn' : 'is-ok'));
+    stateEl.className = `status-state chip ${chipCls}`;
     stateEl.textContent = healthStatus;
     item.appendChild(stateEl);
 
@@ -709,13 +762,19 @@ function renderStatusCard(card, ctx, { bodyEl }) {
 
     if (missedCount > 0) {
       const missedEl = document.createElement('span');
-      missedEl.className = 'status-missed';
+      missedEl.className = 'status-missed chip is-bad';
       missedEl.textContent = `錯過 ${missedCount}`;
       item.appendChild(missedEl);
     }
+    if (gap) {
+      const gapEl = document.createElement('span');
+      gapEl.className = 'status-missed chip is-bad';
+      gapEl.textContent = gapTextOf(gap);
+      item.appendChild(gapEl);
+    }
 
     // 加得進去就要拿得出來
-    item.appendChild(makeRemoveHandle(id, Boolean(ctx?.editing)));
+    item.appendChild(makeRemoveHandle(id, Boolean(ctx?.editing), taskName));
 
     list.appendChild(item);
   }

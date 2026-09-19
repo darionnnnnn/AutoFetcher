@@ -83,15 +83,16 @@ test('renderTable:有紀錄時空狀態隱藏', async () => {
   assert.equal(doc.getElementById('empty-state').hidden, true)
 })
 
-test('renderTable:失敗紀錄可展開看錯誤與 DOM 片段', async () => {
+test('renderTable:失敗紀錄可展開看錯誤（AF-21：不再顯示 DOM 片段）', async () => {
   const { rp, doc } = await fresh()
-  rp.renderTable([rec({ status: 'not_found', value: undefined, snippet: '<div>片段</div>' })], COLS)
+  rp.renderTable([rec({ status: 'not_found', value: undefined, error: '找不到片段', snippet: '<div>SNIP</div>' })], COLS)
   const row = doc.querySelector('#record-table tbody tr')
   assert.ok(row.classList.contains('failed'), '失敗列要標出來')
   row.click()
   const detail = doc.querySelector('#record-table tbody tr.detail')
   assert.ok(detail, '點一下要展開細節')
-  assert.match(detail.textContent, /片段/)
+  assert.match(detail.textContent, /找不到片段/)
+  assert.doesNotMatch(detail.textContent, /SNIP|snippet/, '舊紀錄帶著 snippet 也不顯示')
 })
 
 test('renderTable:失敗紀錄的值顯示為破折號,不顯示 0', async () => {

@@ -35,8 +35,8 @@ test('dryRun:不寫紀錄、不記帳本,但回傳擷取結果', async () => {
   assert.equal(r.ok, true)
   assert.equal(r.value, 12)
   assert.equal((await st.getRecordsByDate('2026-09-05')).length, 0, '演練不得留下紀錄')
-  const { runs } = await c.storage.local.get('runs')
-  assert.equal(runs?.t1?.['2026-09-05T09:00'], undefined, '演練不得記帳本')
+  assert.equal(await st.getRunStatus('t1', '2026-09-05T09:00'), undefined, '演練不得記帳本')
+  assert.deepEqual(Object.keys(await c.storage.local.get(null)).filter(k => k.startsWith('runs')), [], '演練不得記帳本')
 })
 
 test('dryRun:不受帳本冪等阻擋,可以重複演練', async () => {

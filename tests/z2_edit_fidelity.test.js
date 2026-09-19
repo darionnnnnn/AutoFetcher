@@ -429,6 +429,7 @@ test('D-5 任務頁重選少掉一格時同樣清掉孤兒並記診斷', async (
   await ls.addCard(did, { type: 'line', x: 0, y: 0, w: 4, h: 3, source: [{ taskId: 't1#k2', aggregation: 'raw' }], options: {} })
 
   const tab = await c.tabs.create({ url: 'https://a.test/p' })
+  await chrome.storage.session.set({ repickTabs: { 't1': tab.id } })
   await bg.handleMessage(
     { type: 'PICKED', purpose: 'repick', taskId: 't1', locator: LOCATOR, picks: [cellPick(1, 2)] },
     { tab }
@@ -454,6 +455,7 @@ test('D-5 重選沒有少值時不做清理', async () => {
   const did = (await ls.getLayout()).dashboards[0].id
   await ls.addCard(did, { type: 'line', x: 0, y: 0, w: 4, h: 3, source: [{ taskId: 't1#k2', aggregation: 'raw' }], options: {} })
   const tab = await c.tabs.create({ url: 'https://a.test/p' })
+  await chrome.storage.session.set({ repickTabs: { 't1': tab.id } })
   await bg.handleMessage(
     { type: 'PICKED', purpose: 'repick', taskId: 't1', locator: LOCATOR, picks: [cellPick(1, 2), cellPick(2, 2)] },
     { tab }
@@ -540,6 +542,7 @@ test('D-5 單值任務重選成多值：原本那條序列（id 就是任務 id�
   const did = (await ls.getLayout()).dashboards[0].id
   await ls.addCard(did, { type: 'number', x: 0, y: 0, w: 3, h: 2, source: [{ taskId: 't2', aggregation: 'raw' }], options: {} })
   const tab = await c.tabs.create({ url: 'https://a.test/p' })
+  await chrome.storage.session.set({ repickTabs: { 't2': tab.id } })
   await bg.handleMessage(
     { type: 'PICKED', purpose: 'repick', taskId: 't2', locator: LOCATOR, picks: [cellPick(1, 2), cellPick(2, 2)] },
     { tab }

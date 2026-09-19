@@ -41,6 +41,7 @@ const sendTo = (c, msg, sender = {}) => new Promise((resolve, reject) => {
 test('重選時加了一個值、拿掉一個值，任務要跟著變', async () => {
   const { c, st } = await freshBg()
   await st.saveTask(multi())
+  await chrome.storage.session.set({ repickTabs: { 'bank': 3 } })
   await sendTo(c, {
     type: 'PICKED', purpose: 'repick', taskId: 'bank', locator: { css: '#rate2' },
     blockInfo: { kind: 'table' },
@@ -68,6 +69,7 @@ test('單值任務重選另一欄，規格要跟著換', async () => {
     spec: { strategy: 'auto', mode: 'block', block: { axis: 'col', index: 1, headerText: '數量', aggregate: 'avg' } },
     schedule: { type: 'daily', times: ['09:30'] }
   })
+  await chrome.storage.session.set({ repickTabs: { 't1': 3 } })
   await sendTo(c, {
     type: 'PICKED', purpose: 'repick', taskId: 't1', locator: { css: '#t' },
     blockInfo: { kind: 'table' },
@@ -117,6 +119,9 @@ test('欄序被使用者調成跨任務交錯後，改任何設定都不能把�
   const title = jd.window.document.getElementById('drawer-title')
   title.value = '改個標題'
   title.dispatchEvent(new jd.window.Event('change', { bubbles: true }))
+  await new Promise(r => setTimeout(r, 40))
+  // AF-21 批次 4 定案 5：抽屜改成草稿模型，按「套用」才寫進 storage
+  jd.window.document.getElementById('drawer-apply').click()
   await new Promise(r => setTimeout(r, 40))
   const after = (await ls.getLayout()).dashboards[0].cards.find(c => c.id === card.id)
   assert.deepEqual(after.source.map(s => s.taskId), ['bank#k1', 'p', 'bank#k2'],

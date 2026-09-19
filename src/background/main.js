@@ -1,12 +1,12 @@
 // AutoFetcher MV3 Background Service Worker 入口總接線
 import {
-  init as initStorage, getTask, saveTask, getRecordsByDate,
+  init as initStorage, getTask, updateTasks, getRecordsByDate, updateRepickTabs, getRepickTabs,
   getPanelCtx, setPanelCtx, mergePanelCtx, clearPanelCtx,
-  getSettings, subscribe, deleteLastValues
+  getSettings, subscribe, deleteLastValues, getSite
 } from '../shared/storage.js'
 import { pruneSeries } from '../shared/layout-store.js'
 import { openPanel, closePanel } from '../shared/panel.js'
-import { MSG } from '../shared/messages.js'
+import { MSG, CONTENT_ALLOWED } from '../shared/messages.js'
 import * as diag from '../shared/diag.js'
 import {
   rebuildAlarms,
@@ -17,9 +17,10 @@ import {
   nextIntervalRun,
   parseAlarmName
 } from './scheduler.js'
-import { runTask } from './fetcher.js'
+import { runTask, recoverRunState, isLateStart, parseRetryName } from './fetcher.js'
 import { refreshMissed, catchUpAll, skipAll, catchUpOne, skipOne } from './missed.js'
 import { runWatchdog, selfCheck } from './watchdog.js'
+import { cleanOrphanFetchTabs } from './fetch-tab.js'
 import { refreshBadge, markRead } from './health.js'
 import {
   schedulePrechecks,
@@ -27,12 +28,15 @@ import {
   parsePrecheckName
 } from './precheck.js'
 import { injectContent } from './inject.js'
+import { sendToFrame } from './messaging.js'
 import { locateFrame, listFrames, matchFrameByUrl } from './frames.js'
 import { isAnchorText, putSkip } from '../shared/table.js'
 import { pickSpecOf, reconcileFields } from '../shared/field-match.js'
 import { withInnerLabel } from '../shared/describe.js'
 import { scheduleSiteCheck, runSiteCheck } from './sitecheck.js'
-import { isSuccess } from '../shared/record-status.js'
+import { testLogin } from './login.js'
+import { decryptSecret } from '../shared/crypto.js'
+import { isSuccess, statusTextOf } from '../shared/record-status.js'
 import { parentIdOf, buildSeriesIndex, nameOf, seriesIdOf } from '../shared/series-index.js'
 
 
@@ -201,39 +205,8 @@ function parseTaskAlarm(name) {
   return { taskId, index: Number(indexStr) }
 }
 
-// 解析重試 alarm 名稱（格式：<taskId>:retry:<n>）
-function parseRetryName(name) {
-  if (typeof name !== 'string') return null
-  // 名稱可能帶原始排程槽:<taskId>:retry:<n>@<slot>
-  let slot = ''
-  const at = name.lastIndexOf('@')
-  if (at !== -1) {
-    slot = name.slice(at + 1)
-    name = name.slice(0, at)
-  }
-  const lastColon = name.lastIndexOf(':')
-  if (lastColon === -1) return null
-  const attemptStr = name.slice(lastColon + 1)
-  if (!/^\d+$/.test(attemptStr)) return null
-  const before = name.slice(0, lastColon)
-  const secondColon = before.lastIndexOf(':')
-  if (secondColon === -1) return null
-  if (before.slice(secondColon + 1) !== 'retry') return null
-  const taskId = before.slice(0, secondColon)
-  if (!taskId) return null
-  return { taskId, attempt: Number(attemptStr), slot }
-}
-
-// 計算每日任務當日時間槽（格式：YYYY-MM-DDTHH:mm）
-function getDailySlot(task, index) {
-  const d = new Date()
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  const time = task?.schedule?.times?.[index] || '00:00'
-  const [h = '00', min = '00'] = time.split(':')
-  return `${y}-${m}-${day}T${h.padStart(2, '0')}:${min.padStart(2, '0')}`
-}
+// 晚超過這麼久才觸發的 daily alarm 不執行（把今天的值寫進好幾天前那格沒有意義），那一格交給錯過清單
+const DAILY_STALE_MS = 24 * 60 * 60 * 1000
 
 // 短暫等待輔助函式
 function sleep(ms) {
@@ -346,7 +319,8 @@ export async function handleAlarm(alarm, testOpts = {}) {
       const { task, active } = await getValidTask(precheck.taskId)
       if (!task || !active) return
       await runPrecheck(task, testOpts)
-      await schedulePrechecks()
+      // 只重排自己那個任務；全部重建只留給 REBUILD_ALARMS、安裝、啟動
+      await schedulePrechecks(Date.now(), { taskId: precheck.taskId })
       return
     }
 
@@ -357,7 +331,7 @@ export async function handleAlarm(alarm, testOpts = {}) {
       if (!task || !active) return
       // 重試補的是原本那一格;舊格式沒帶槽時才退回當下時刻
       const retrySlot = retry.slot || slotOf(Date.now())
-      await runTask(task, { slot: retrySlot, attempt: retry.attempt + 1, ...testOpts })
+      await runTask(task, { slot: retrySlot, attempt: retry.attempt + 1, markLate: isLateStart(retrySlot, Date.now()), ...testOpts })
       return
     }
 
@@ -370,7 +344,7 @@ export async function handleAlarm(alarm, testOpts = {}) {
         await chrome.alarms.clear(alarm.name)
         return
       }
-      // interval 是 one-shot alarm,必須先把下一次排好,任何提早 return 都不能跳過重排
+      // interval 與 daily 都是 one-shot alarm,必須先把下一次排好,任何提早 return 或例外都不能跳過重排
       if (task.schedule?.type === 'interval') {
         const nextWhen = nextIntervalRun(task, Date.now())
         if (nextWhen !== null) await chrome.alarms.create(alarm.name, { when: nextWhen })
@@ -379,13 +353,6 @@ export async function handleAlarm(alarm, testOpts = {}) {
         const decideAt = alarm.scheduledTime ?? Date.now()
         if (!shouldRunInterval(task, decideAt)) return
       }
-
-      // interval 的槽取 alarm 排定時刻(對齊格線),晚觸發不可自成新槽,冪等帳本靠它
-      const slot = task.schedule?.type === 'daily'
-        ? getDailySlot(task, parsed.index)
-        : slotOf(alarm.scheduledTime ?? Date.now())
-      await runTask(task, { slot, ...testOpts })
-
       if (task.schedule?.type === 'daily') {
         const times = task.schedule.times
         const weekdays = task.schedule.weekdays ?? task.weekdays ?? [0, 1, 2, 3, 4, 5, 6]
@@ -393,10 +360,18 @@ export async function handleAlarm(alarm, testOpts = {}) {
           const when = nextDailyRun(Date.now(), [times[parsed.index]], weekdays)
           if (when !== null) await chrome.alarms.create(alarm.name, { when })
         }
+        if (typeof alarm.scheduledTime === 'number' && Date.now() - alarm.scheduledTime > DAILY_STALE_MS) return
       }
+
+      // 槽一律取 alarm 排定時刻:晚觸發(跨日)不可寫進隔天那一格,冪等帳本與錯過清單都靠它
+      const slot = slotOf(alarm.scheduledTime ?? Date.now())
+      await runTask(task, { slot, markLate: isLateStart(slot, Date.now()), ...testOpts })
       await refreshBadge()
     }
-  } catch {}
+  } catch (err) {
+    // 寫診斷本身失敗才吞掉
+    await diag.log('alarm_error', `${alarm?.name}：${String(err?.message || err)}`).catch(() => {})
+  }
 }
 
 // 處理內部訊息分派
@@ -469,9 +444,85 @@ async function applyPickEntry(tabId, batch) {
   return true
 }
 
+// 選取模式相關訊息送給 content 的逾時（AF-21 批次 2 定案 6，暫定值）：
+// 那幾則都是頁面上立刻完成的動作，回應遺失時不要吊到 worker 被回收
+const CONTENT_MESSAGE_TIMEOUT_MS = 10000
+
+// forbidden 診斷節流（AF-21 終檢）：同一來源（sender.url 的 origin）＋同一型別 60 秒內只寫一筆。
+// 網頁若一直送，diag 環形緩衝會被洗掉；計數放模組層即可（worker 重啟歸零無妨）
+const FORBIDDEN_LOG_WINDOW_MS = 60 * 1000
+const forbiddenLoggedAt = new Map()
+
+function originOfUrl(url) {
+  try { return new URL(String(url ?? '')).origin } catch { return String(url ?? '') }
+}
+
+async function logForbidden(sender, type, detail) {
+  const key = `${originOfUrl(sender?.url)}|${type}`
+  const now = Date.now()
+  const last = forbiddenLoggedAt.get(key)
+  if (typeof last === 'number' && now - last < FORBIDDEN_LOG_WINDOW_MS) return
+  forbiddenLoggedAt.set(key, now)
+  // 過期的鍵順手清掉，Map 不會越長越大
+  for (const [k, at] of forbiddenLoggedAt) {
+    if (now - at >= FORBIDDEN_LOG_WINDOW_MS) forbiddenLoggedAt.delete(k)
+  }
+  await diag.log('forbidden', detail)
+}
+
+// 本擴充功能的來源取自 getURL('')（＝ chrome-extension://<runtime.id>/）
+async function isFromContentScript(sender) {
+  if (!sender?.tab) return false
+  const origin = await chrome.runtime.getURL('')
+  return !String(sender.url ?? '').startsWith(origin)
+}
+
+// 站台面板的「測試登入」（AF-21 批次 4）：表單上尚未儲存的設定＋明文密碼（或 useSaved 由這裡解密已存密文）。
+// 密碼只活在這則訊息與函式參數裡：不寫 diag、紀錄、storage；失敗不累加站台的失敗計數
+async function handleTestLogin(msg, runOpts = {}) {
+  const src = msg.site && typeof msg.site === 'object' ? msg.site : {}
+  const loginUrl = typeof src.loginUrl === 'string' ? src.loginUrl.trim() : ''
+  let origin = ''
+  try { origin = new URL(loginUrl).origin } catch {}
+  if (!origin || !/^https?:/.test(loginUrl)) return { ok: false, error: '登入頁網址不是合法的網址' }
+  const sel = src.selectors || {}
+  if (!sel.user || !sel.pass || !sel.submit) return { ok: false, error: '帳號欄位、密碼欄位、送出按鈕都要先選好' }
+  const successCheck = src.successCheck && typeof src.successCheck === 'object' ? src.successCheck : {}
+  if (!['urlPrefix', 'element'].includes(successCheck.type) || typeof successCheck.value !== 'string' || !successCheck.value) {
+    return { ok: false, error: '沒有設定成功判定值' }
+  }
+  let password = typeof msg.password === 'string' ? msg.password : ''
+  if (!password && msg.useSaved === true) {
+    const saved = await getSite(origin)
+    if (!saved?.passwordEnc) return { ok: false, error: '沒有已儲存的密碼，請填入密碼再測' }
+    try {
+      password = await decryptSecret(saved.passwordEnc)
+    } catch {
+      return { ok: false, error: '已儲存的密碼解不開，請重新填入密碼' }
+    }
+  }
+  if (!password) return { ok: false, error: '請填入密碼再測' }
+  const site = {
+    loginUrl,
+    selectors: { user: sel.user, pass: sel.pass, submit: sel.submit },
+    loginCheck: { type: 'urlPrefix', value: loginUrl },
+    successCheck: { type: successCheck.type, value: successCheck.value },
+    username: typeof src.username === 'string' ? src.username : ''
+  }
+  return await testLogin(site, password, runOpts)
+}
+
 export async function handleMessage(msg, sender, runOpts = {}) {
+  const contentMs = runOpts.contentTimeoutMs ?? CONTENT_MESSAGE_TIMEOUT_MS
   try {
     if (!msg || typeof msg !== 'object') return undefined
+
+    // sender 守門（AF-21 批次 3 定案 3）：有 tab 且網址不是本擴充功能頁 → content script，
+    // 只准送 CONTENT_ALLOWED 內的型別。Report 開在分頁裡也有 tab，所以要連網址一起看
+    if (await isFromContentScript(sender) && !CONTENT_ALLOWED.has(msg.type)) {
+      await logForbidden(sender, msg.type, `${msg.type} 來自 ${sender.url}`)
+      return { ok: false, error: 'forbidden' }
+    }
 
     if (msg.type === MSG.TEST_TASK) {
       const task = msg.task
@@ -512,7 +563,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
             name: idx.byId[r.taskId]?.shortName || nameOf(idx, r.taskId),
             ok: isSuccess(r),
             value: isSuccess(r) ? r.value : undefined,
-            error: isSuccess(r) ? undefined : (r.error || r.status)
+            error: isSuccess(r) ? undefined : (r.error || statusTextOf(r.status))
           }))
         }
       }
@@ -538,9 +589,11 @@ export async function handleMessage(msg, sender, runOpts = {}) {
     }
 
     if (msg.type === MSG.SKIP_ONE) {
-      await skipOne(msg.taskId, msg.slot)
+      const removed = await skipOne(msg.taskId, msg.slot)
       await refreshBadge()
-      return { ok: true }
+      // 比不到就不能靜默成功：畫面上那一筆已經過期（gap 的 slot 每輪會延），要請使用者重新整理
+      if (removed === 0) return { ok: false, error: '這一筆已經不在清單裡，請重新整理' }
+      return { ok: true, removed }
     }
 
     // 面板無法自己判斷歸屬：它的 sender.tab 永遠是 null、網址參數重載後會被丟掉，
@@ -579,8 +632,10 @@ export async function handleMessage(msg, sender, runOpts = {}) {
 
       if (msg.cancelled === true) {
         // 取消也要收掉「為了重選而開的那個分頁」，否則每取消一次殘留一個
+        // 只有那個重選分頁自己送的取消才收掉它（任何網頁送一個取消就能關掉我們開的分頁，AF-21 終檢）
         if (msg.purpose === 'repick' && msg.taskId !== undefined) {
-          await closeRepickTab(msg.taskId)
+          const expected = (await getRepickTabs())[msg.taskId]
+          if (!sender?.tab || sender.tab.id === expected) await closeRepickTab(msg.taskId)
         }
         return { ok: true }
       }
@@ -615,13 +670,24 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       }
 
       if (msg.purpose === 'repick') {
-        const task = await getTask(msg.taskId)
+        // 只認「為了重選而開的那個分頁」送來的（AF-21 終檢）：別的網頁的 content script 也送得出 PICKED，
+        // 不核對分頁的話任何頁面都能改掉任意任務的定位
+        const expectedTab = (await getRepickTabs())[msg.taskId]
+        const senderTab = sender?.tab?.id
+        if (typeof expectedTab !== 'number' || senderTab !== expectedTab) {
+          await logForbidden(sender, 'PICKED:repick', `重選 ${msg.taskId} 來自分頁 ${senderTab}（${sender?.url}），不是重選開的分頁 ${expectedTab}`)
+          return { ok: false, error: 'forbidden' }
+        }
+        // 鎖內讀最新的任務再套用重選，不會把同時寫入的 notFoundStreak 之類洗掉
+        let orphanSeries = []
+        const [task] = await updateTasks([msg.taskId], (t) => {
+          t.locator = msg.locator
+          orphanSeries = applyRepick(t, Array.isArray(msg.picks) ? msg.picks : [])
+          return t
+        })
         if (!task) {
           return { ok: true }
         }
-        task.locator = msg.locator
-        const orphanSeries = applyRepick(task, Array.isArray(msg.picks) ? msg.picks : [])
-        await saveTask(task)
         // 被移除的值：清掉它們在儀表板上的來源與最後一次的值，紀錄留到保留天數自然到期。
         // 不清的話卡片會一直指著不存在的序列，使用者只看得到一張永遠空白的卡
         if (Array.isArray(orphanSeries) && orphanSeries.length > 0) {
@@ -656,11 +722,11 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       const matched = matchFrameByUrl(await listFrames(tabId), msg.src)
       if (matched?.frameId !== undefined) {
         await injectContent(tabId, { frameId: matched.frameId })
-        await chrome.tabs.sendMessage(tabId, enter, { frameId: matched.frameId })
+        await sendToFrame(tabId, enter, matched.frameId, contentMs, 'Enter pick')
         return { ok: true }
       }
       const backTo = sender?.frameId ?? 0
-      await chrome.tabs.sendMessage(tabId, { ...enter, hint: 'frame_not_found' }, { frameId: backTo })
+      await sendToFrame(tabId, { ...enter, hint: 'frame_not_found' }, backTo, contentMs, 'Enter pick')
       return { ok: true }
     }
 
@@ -684,7 +750,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
           preselect: msg.preselect || preselectOf(known)
         }
         if (batch) enter.batch = true
-        await chrome.tabs.sendMessage(msg.tabId, enter, { frameId })
+        await sendToFrame(msg.tabId, enter, frameId, contentMs, 'Enter pick')
         return { ok: true }
       }
 
@@ -713,7 +779,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
 
       const frameId = loc.frameId
       await injectContent(tab.id, { frameId })
-      await chrome.tabs.sendMessage(tab.id, {
+      await sendToFrame(tab.id, {
         type: MSG.ENTER_PICK,
         purpose: msg.purpose || 'repick',
         taskId: msg.taskId,
@@ -721,11 +787,15 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         // 不帶這兩個欄位就沒有預選對象，既有的值也勾不回來
         locator: msg.locator || task.locator,
         preselect: msg.preselect || preselectOf(task)
-      }, { frameId })
+      }, frameId, contentMs, 'Enter pick')
       return { ok: true }
     }
 
-    if (msg.type === 'MARK_READ') {
+    if (msg.type === MSG.TEST_LOGIN) {
+      return await handleTestLogin(msg, runOpts)
+    }
+
+    if (msg.type === MSG.MARK_READ) {
       if (Array.isArray(msg.taskIds)) {
         for (const id of msg.taskIds) await markRead(id)
       }
@@ -754,8 +824,11 @@ export async function handleMessage(msg, sender, runOpts = {}) {
     }
 
     return undefined
-  } catch {
-    return undefined
+  } catch (err) {
+    // 背景出錯不得靜默：UI 等結果的按鈕要拿得到 ok:false 與原因
+    const message = String(err?.message || err)
+    try { await diag.log('message_error', `${msg?.type}：${message}`) } catch {}
+    return { ok: false, error: `背景處理失敗：${message}` }
   }
 }
 
@@ -800,20 +873,20 @@ export async function handleNotificationClick(notificationId) {
 // 為了重選而開的分頁：`taskId -> tabId`。使用者原本就開著的分頁不進這張表，也就不會被收掉。
 // 放 `storage.session` 而不是模組級 Map——MV3 的 service worker 一被回收就整張歸零，
 // 而重選流程（開分頁→等載入→使用者慢慢選）很容易跨過閒置回收。
-const REPICK_KEY = 'repickTabs'
 
 async function rememberRepickTab(taskId, tabId) {
-  const cur = (await chrome.storage.session.get(REPICK_KEY))[REPICK_KEY] || {}
-  cur[taskId] = tabId
-  await chrome.storage.session.set({ [REPICK_KEY]: cur })
+  await updateRepickTabs((cur) => ({ ...cur, [taskId]: tabId }))
 }
 
 async function closeRepickTab(taskId) {
-  const cur = (await chrome.storage.session.get(REPICK_KEY))[REPICK_KEY] || {}
-  const tabId = cur[taskId]
+  let tabId
+  await updateRepickTabs((cur) => {
+    tabId = cur[taskId]
+    const next = { ...cur }
+    delete next[taskId]
+    return next
+  })
   if (tabId === undefined) return
-  delete cur[taskId]
-  await chrome.storage.session.set({ [REPICK_KEY]: cur })
   try { await chrome.tabs.remove(tabId) } catch {}
 }
 
@@ -843,7 +916,7 @@ export async function closePanelFor(tabId, opts = {}) {
     }
   } catch {}
   for (const frameId of targets) {
-    try { await chrome.tabs.sendMessage(tabId, { type: MSG.EXIT_PICK }, { frameId }) } catch {}
+    try { await sendToFrame(tabId, { type: MSG.EXIT_PICK }, frameId, opts.contentTimeoutMs ?? CONTENT_MESSAGE_TIMEOUT_MS, 'Exit pick') } catch {}
   }
 }
 
@@ -877,7 +950,7 @@ export async function handleContextMenu(info, tab) {
       await openPanel(tab.id, 'site', `origin=${encodeURIComponent(origin)}&tabId=${tab.id}`)
       await setPanelCtx(tab.id, { kind: 'site', origin, tabId: tab.id })
       await injectContent(tab.id, { frameId: 0 })
-      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'login-user' }, { frameId: 0 })
+      await sendToFrame(tab.id, { type: MSG.ENTER_PICK, purpose: 'login-user' }, 0, CONTENT_MESSAGE_TIMEOUT_MS, 'Enter pick')
       return
     }
 
@@ -891,7 +964,7 @@ export async function handleContextMenu(info, tab) {
       // 蓋成等待態會把草稿一起洗掉，選完也認不出這是「換目標」
       if (!(await applyPickEntry(tab.id, false))) return
       await injectContent(tab.id, { frameId })
-      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'task' }, { frameId })
+      await sendToFrame(tab.id, { type: MSG.ENTER_PICK, purpose: 'task' }, frameId, CONTENT_MESSAGE_TIMEOUT_MS, 'Enter pick')
       return
     }
 
@@ -902,7 +975,7 @@ export async function handleContextMenu(info, tab) {
       await openPanel(tab.id, 'picker', `tabId=${tab.id}`)
       if (!(await applyPickEntry(tab.id, true))) return
       await injectContent(tab.id, { frameId })
-      await chrome.tabs.sendMessage(tab.id, { type: MSG.ENTER_PICK, purpose: 'task', batch: true }, { frameId })
+      await sendToFrame(tab.id, { type: MSG.ENTER_PICK, purpose: 'task', batch: true }, frameId, CONTENT_MESSAGE_TIMEOUT_MS, 'Enter pick')
       return
     }
   } catch {}
@@ -933,3 +1006,8 @@ if (chrome.sidePanel?.onClosed?.addListener) {
   chrome.sidePanel.onClosed.addListener((info) => { closePanelFor(info?.tabId) })
 }
 chrome.tabs?.onRemoved?.addListener?.((tabId) => { closePanelFor(tabId, { keepMarks: true }) })
+
+// worker 每次啟動（不只瀏覽器啟動）：上一個 worker 留下的抓取分頁與排隊中／執行中的排程槽。
+// storage 是空的時候兩者都只讀不寫
+cleanOrphanFetchTabs().catch((err) => diag.log('startup_error', `cleanOrphanFetchTabs：${String(err?.message || err)}`).catch(() => {}))
+recoverRunState().catch((err) => diag.log('startup_error', `recoverRunState：${String(err?.message || err)}`).catch(() => {}))

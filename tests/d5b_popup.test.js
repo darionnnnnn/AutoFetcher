@@ -145,9 +145,9 @@ test('開啟報表:用 tabs.create 開 report.html', async () => {
   assert.match(String(call.args[0].url), /report\.html/)
 })
 
-test('打開 popup 會把異常標記為已讀', async () => {
+test('「全部知道了」走 markAllSeen 標已讀(打開 popup 不再自動標,AF-21 批次 5)', async () => {
   const { c, pp } = await fresh()
   await pp.markAllSeen(['t1', 't2'])
   const msgs = c.__calls.filter(x => x.api === 'runtime.sendMessage')
-  assert.ok(msgs.some(m => m.args[0].type === 'MARK_READ'))
+  assert.ok(msgs.some(m => m.args[0].type === 'MARK_READ' && m.args[0].taskIds.join() === 't1,t2'))
 })

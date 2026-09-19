@@ -52,10 +52,34 @@ function cleanup() {
     } catch {}
   }
 
+  const wasBusy = dragging || pendingDrag !== null;
   dragging = false;
   pendingDrag = null;
   currentPayload = null;
   currentActiveTarget = null;
+  // 拖曳結束後通知延後中的重畫（排到下一個 microtask，免得在投放處理的途中重畫）
+  if (wasBusy && typeof idleListener === 'function') {
+    const fn = idleListener;
+    queueMicrotask(() => {
+      try { fn(); } catch {}
+    });
+  }
+}
+
+let idleListener = null;
+
+/**
+ * 是否有按下未放開的拖曳（含尚未超過門檻的那段）；唯讀，給重畫前判斷用
+ */
+export function isDragBusy() {
+  return dragging || pendingDrag !== null;
+}
+
+/**
+ * 設定「拖曳結束」時要呼叫的函式（只有一個，後設的取代先設的）
+ */
+export function setDragIdleListener(fn) {
+  idleListener = typeof fn === 'function' ? fn : null;
 }
 
 /**

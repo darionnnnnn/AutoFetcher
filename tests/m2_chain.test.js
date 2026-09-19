@@ -264,9 +264,8 @@ test('值清單是空的時候不得留下矛盾的帳本與燈號', async () =>
   }
   await st.saveTask(task)
   await fe.runTask(task, { slot: '2026-09-06T09:30', ...FAST })
-  const runs = (await c.storage.local.get('runs')).runs || {}
   const health = await he.getHealth()
-  const ledger = runs.bank?.['2026-09-06T09:30']
+  const ledger = await st.getRunStatus('bank', '2026-09-06T09:30')
   assert.ok(!(ledger === 'error' && health.bank?.status === 'ok'),
     `帳本說失敗、燈號說正常，兩邊講不同的話：ledger=${ledger} health=${health.bank?.status}`)
 })
@@ -303,7 +302,7 @@ test('滑鼠移到另一張表格不清空已選，點下去才換表（AF-10）
 })
 
 test('樞紐表的差值有顏色可以分辨漲跌', () => {
-  const css = readFileSync(new URL('../src/ui/report/report.html', import.meta.url), 'utf8')
+  const css = readFileSync(new URL('../src/ui/report/report.css', import.meta.url), 'utf8')
   assert.ok(/\.delta-up\s*\{/.test(css), '漲要有樣式')
   assert.ok(/\.delta-down\s*\{/.test(css), '跌要有樣式')
 })
@@ -370,6 +369,9 @@ test('抽屜保留的來源要留在原本的位置，不能跳到第一欄', as
   const title = jd.window.document.getElementById('drawer-title')
   title.value = '換個標題'
   title.dispatchEvent(new jd.window.Event('change', { bubbles: true }))
+  await new Promise(r => setTimeout(r, 40))
+  // AF-21 批次 4 定案 5：抽屜改成草稿模型，按「套用」才寫進 storage
+  jd.window.document.getElementById('drawer-apply').click()
   await new Promise(r => setTimeout(r, 40))
   const after = (await ls.getLayout()).dashboards[0].cards.find(c => c.id === card.id)
   assert.deepEqual(after.source.map(s => s.taskId), ['x', 'gone#k1'],
@@ -585,7 +587,9 @@ test('試抓的診斷從 content 一路帶到 Picker 匯出的檔案內容', asy
 
   const dl = c.__calls.filter(x => x.api === 'downloads.download')
   assert.equal(dl.length, 1, '匯出要真的送出下載')
-  const json = JSON.parse(decodeURIComponent(dl[0].args[0].url.split(',')[1]))
+  // AF-21：匯出改走 Blob object URL，從 object URL 讀回內容
+  const { resolveObjectURL } = await import('node:buffer')
+  const json = JSON.parse(await resolveObjectURL(dl[0].args[0].url).text())
   assert.equal(json.tabUrl, 'https://real.test/x?session=9', '分頁的實際網址要一路到檔案裡，不是任務設定的那個')
   assert.deepEqual(json.page.table.rowHeaders, ['歐元'], 'content 給的現況不得在中途被丟掉')
   assert.ok(json.error.message.includes('目前這張表的列標題是'), '訊息也要在檔案裡')
@@ -602,6 +606,7 @@ test('重選存回任務時，pick 上多出來的欄位不得進規格（進了
     schedule: { type: 'daily', times: ['09:30'] }
   }
   await st.saveTask(task)
+  await chrome.storage.session.set({ repickTabs: { 'rp': 5 } })
   await sendTo(c, {
     type: 'PICKED',
     purpose: 'repick',
@@ -630,6 +635,7 @@ test('多值任務的預設值名不得用純數值標題', async () => {
     schedule: { type: 'daily', times: ['09:30'] }
   }
   await st.saveTask(task)
+  await chrome.storage.session.set({ repickTabs: { 'mv': 5 } })
   await sendTo(c, {
     type: 'PICKED',
     purpose: 'repick',
@@ -736,4 +742,51 @@ test('AF-20：批次共用的前置動作要從面板一路走到 fetcher 送出
     assert.deepEqual(x.args[1].actions.map(a => [a.type, a.locator?.css, a.frame?.url]), [['click', '#tab2', 'https://f.test/inner']])
     assert.equal(x.args[2]?.frameId, 7, '要送到前置動作自己的 frame')
   }
+})
+
+test('AF-21：整欄聚合抓到 600 字的 raw → 紀錄截成 500 字並標 rawTruncated → 歷史頁明細接「（已截斷）」', async () => {
+  resetChromeMock()
+  const c = installChromeMock()
+  globalThis.navigator = { onLine: true }
+  const st = await import('../src/shared/storage.js?t=' + Math.random())
+  await st.init()
+  const fe = await import('../src/background/fetcher.js?t=' + Math.random())
+  const { extractValue } = await import('../src/shared/extract.js')
+
+  // 產生端：真的擷取函式；50 格（48 格 10 位數＋2 格 11 位數）以 ", " 串起來恰好 600 字
+  const cells = [...Array(48).fill('1000000000'), '10000000000', '10000000000']
+  const rows = cells.map((v, i) => `<tr><td>r${i}</td><td>${v}</td></tr>`).join('')
+  const tableEl = new JSDOM(`<!doctype html><body><table><thead><tr><th>主機</th><th>值</th></tr></thead><tbody>${rows}</tbody></table></body>`)
+    .window.document.body.firstElementChild
+  const block = { axis: 'col', index: 1, headerText: '值', aggregate: 'sum', skip: { head: 0, tail: 0 } }
+  const produced = extractValue(tableEl, { mode: 'block', block })
+  assert.equal(produced.ok, true, `前提：擷取成功，實得 ${JSON.stringify(produced.error)}`)
+  assert.equal(produced.raw.length, 600, '前提：擷取端回全文 600 字（擷取端不截）')
+
+  // 中段：排程抓取把 content 的回應寫成紀錄
+  c.__setTabResponder((tabId, msg) => (msg.type === 'EXTRACT' ? { ...produced, layer: 'css' } : { ok: true }))
+  const task = { id: 'agg', name: '整欄合計', url: 'https://real.test/x', enabled: true, locator: { css: '#t' },
+    spec: { mode: 'block', block }, schedule: { type: 'daily', times: ['09:00'], weekdays: [0, 1, 2, 3, 4, 5, 6] } }
+  await st.saveTask(task)
+  await fe.runTask(task, { slot: '2026-09-05T09:00', ...FAST })
+  const [rec] = await st.getRecordsByDate('2026-09-05')
+  assert.equal(rec.rawTruncated, true)
+  assert.equal(rec.raw.length, 500)
+  assert.equal(rec.raw, produced.raw.slice(0, 500))
+
+  // 消費端：歷史頁明細
+  const REPORT_HTML = readFileSync(new URL('../src/ui/report/report.html', import.meta.url), 'utf8')
+  const jd = new JSDOM(REPORT_HTML, { url: 'chrome-extension://abc/ui/report/report.html' })
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  const rp = await import('../src/ui/report/report.js?t=' + Math.random())
+  rp.renderTable([{ ...rec, date: '2026-09-05', taskName: task.name }], [
+    { key: 'slot', label: '時間', visible: true },
+    { key: 'value', label: '值', visible: true }
+  ])
+  const doc = jd.window.document
+  doc.querySelector('#record-table tbody tr').click()
+  const detail = doc.querySelector('#record-table tbody tr.detail')
+  assert.ok(detail, '點一下要展開明細')
+  assert.ok(detail.textContent.includes('（已截斷）'), '截斷過的 raw 要說出來')
 })

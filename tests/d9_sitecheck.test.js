@@ -133,6 +133,9 @@ async function settings() {
   await st.init()
   const cr = await import('../src/shared/crypto.js?t=' + Math.random())
   const jd = new JSDOM(reportHtml, { url: 'https://x/report.html' })
+  // jsdom 25 沒有 <dialog> 的 showModal／close（AF-21 4-D 共用 modal）：替身只切 open 屬性
+  jd.window.HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  jd.window.HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
   globalThis.window = jd.window
   globalThis.document = jd.window.document
   const se = await import('../src/ui/report/settings.js?t=' + Math.random())
@@ -177,6 +180,9 @@ test('可以刪除站台', async () => {
   await site(st, cr)
   await se.renderSettings()
   doc.querySelector('#sites-list [data-action="site-delete"]').click()
+  await new Promise(r => setTimeout(r, 30))
+  // AF-21 4-D：站台刪除改成二段確認，確認後才刪
+  doc.querySelector('dialog.modal [data-action="confirm"]').click()
   await new Promise(r => setTimeout(r, 30))
   assert.equal(await st.getSite(ORIGIN), null)
 })
@@ -248,14 +254,15 @@ test('站台正常時不影響燈號', async () => {
   assert.equal(res.level, 'green')
 })
 
-test('站台的健康項目已讀後不再計入(與任務一致)', async () => {
+test('站台的紅燈項目已讀後仍是紅燈、只不進 badge 數字(與任務一致,AF-21 批次 5)', async () => {
   const { computeHealth } = await import('../src/background/health.js?t=' + Math.random())
   const res = computeHealth(
     [{ id: 't1', name: '電費', enabled: true }],
     { 'site:https://a.test': { status: 'login_failed', read: true } },
     []
   )
-  assert.equal(res.level, 'green')
+  assert.equal(res.level, 'red')
+  assert.equal(res.redCount, 0)
 })
 
 test('沒有任何任務時,站台異常也不該讓燈號亮(整體已暫停)', async () => {

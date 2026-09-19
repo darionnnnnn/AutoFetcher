@@ -32,7 +32,7 @@
        │                               │
 ┌──────▼──────────┐          ┌─────────▼─────────────────────┐
 │ ui/picker       │          │ ui/report(AutoFetcher-Report) │
-│ 右鍵後的設定視窗 │          │  儀表板(自訂版面)/ 每日檢視     │
+│ 側邊面板(設定) │          │  儀表板(自訂版面)/ 每日檢視     │
 │ 命名、排程、策略 │          │  設定頁:匯出 JSON/CSV/HTML、   │
 │ 預覽、加入儀表板 │          │  設定匯入匯出、站台登入、偏好   │
 └─────────────────┘          └───────────────────────────────┘
@@ -45,6 +45,8 @@
 - **資料流**:右鍵 → content 描述元素 → picker 存任務 → scheduler 建 alarm → 到點 fetcher 開分頁擷取 → storage →
   report 讀取呈現;檔案匯出一律由使用者在 report 設定頁手動觸發。
 - **無框架、無 bundler**:原生 ES module;三個環境各自一個入口檔。
+- **storage 的讀-改-寫一律在鎖內**(AF-21,`shared/lock.js` 的 `withLock`):有 `navigator.locks` 用它(同一擴充功能來源的頁面與 service worker 互斥,實測成立),沒有(Node 測試)退回模組內佇列;鎖名由 `lockNameOf(key, area)` 決定(同一天的紀錄鍵共用 `rec@<日期>`,session 鍵加 `session:`)。**鎖不可重入、不得巢狀**(鎖內只呼叫不取鎖的內部版本,一次 `set` 只寫一個鍵);取鎖最多等 10 秒,逾時照做並記 `lock_timeout` 診斷。跨兩次呼叫的「讀任務→改→存」一律改用 `updateTasks(ids, mutator)`(鎖內讀最新)。`tests/za1_locks.test.js` 以「寫入時鎖必須正被持有、讀寫同一次持有、只持有一把」守門。
+- **`chrome.storage.` 只准出現在四個檔**:`shared/storage.js`、`shared/diag.js`、`shared/crypto.js`、`background/fetch-tab.js`(`session.fetchTabs`,自帶佇列)。
 
 ## §1 名詞
 
@@ -54,7 +56,7 @@
 | 抓取模式 | `text`(單一元素文字)、`number`(文字解析成數值)、`block`(表格:儲存格 / 欄列聚合 / 一次多個值,§7) |
 | 值(Field) | 多值任務裡的一個值(`task.fields[]`),有自己的名稱與 `key`;單值任務沒有這一層 |
 | 序列(Series) | 報表看到的一條資料線。單值任務就是任務本身,多值任務是「任務 · 值」;id 見 §7 |
-| 紀錄(Record) | 一次抓取結果:`{taskId, slot, capturedAt, value, raw, status, strategyUsed, layer, error?, partial?, used?, skipped?, alert?, alertHits?, snippet?}`。**`taskId` 對多值任務是序列 id**(§7) |
+| 紀錄(Record) | 一次抓取結果:`{taskId, slot, capturedAt, value, raw, status, strategyUsed, layer, error?, partial?, used?, skipped?, excluded?, label?, rawTruncated?, alert?, alertHits?}`。**`taskId` 對多值任務是序列 id**(§7)。`status` 另有 `interrupted`(§4.1);`snippet` 不再寫進紀錄(AF-21,舊紀錄可能帶著,JSON 匯出時剝掉) |
 | 站台設定(Site) | 以 origin 為 key 的登入設定:帳號、密碼、登入頁 URL、欄位選擇器、成功判定 |
 
 ## §2 右鍵選單與頁面內選取模式
@@ -71,7 +73,7 @@
 
     | 操作 | 表格 | 非表格 |
     |---|---|---|
-    | 點一下 | **加選**這一個(不送出);點到已選的＝**取消**(AF-18,推翻 AF-8 的「點一下取代」) | 鎖定這個元素(高亮不再跟著滑鼠);批次模式＝加成一組／再點移除那一組 |
+    | 點一下 | **加選**這一個(不送出);點到已選的＝**取消** | 鎖定這個元素(高亮不再跟著滑鼠);批次模式＝加成一組／再點移除那一組 |
     | 再點同一個 | **取消**(留復原) | 維持 |
     | `Ctrl`/`⌘` + 點 | 同「點一下」 | 不適用 |
     | 點另一張不相干的表的格子 | **換表**＝取代並留復原;已選 ≥2 時第一次只提示、再點同一格才換;批次模式＝切到那張表的組(沒有就開新組) | — |
@@ -112,19 +114,18 @@
   - **一次挑多個值**(`task` 與 `repick` 支援;`repick` 會帶既有的值回來勾,所以也要能多選):
     上述點一下／`Shift`／拖曳,加上
     `Shift` + 方向鍵以目前的格為起點四方向自由加選(不限軸)。上限 `maxPicks`(預設 100;AF-16 由 20 提高——監控頁一欄 60 多列,20 走不完),面板常駐一行「已選 N／M」(`data-af-count`,清單空的時候也顯示)。
-    **面板不得撐出視窗**(AF-19):chip 清單容器(`[data-af-chip-list]`,批次每組各一個)最大高度 `40vh` 可捲是主要機制;
-    `panelEl` 最大 `calc(100vh - 32px)`、`[data-af-panel-body]` 可捲只是保險;動作列一律是 `panelEl` 的直接子節點,永遠看得到。
+    **面板不得撐出視窗**(AF-21 改):面板是直向彈性版面——內容區 `[data-af-panel-body]`(`flex:1 1 auto; min-height:0; overflow-y:auto`)統一捲動、動作列 `flex:0 0 auto` 永遠看得到;chip 清單不再各自 `40vh`。面板寬度上限 `min(480px, 100vw - 32px)`(chip 多時不得橫跨整個視窗蓋住表格)、最大高度 `calc(100vh - 72px)`(讓出同側的工具列)。
     批次模式的組標題維持「任務 N：提示（M 個值）」(規劃想改成「任務 N（M 個值）：提示」,為了不動既有測試與使用者已熟悉的樣子而保留)。
     **chip 與格子雙向指涉**(AF-19):滑過 chip＝頁面上那個值涵蓋的格子加 `data-af-chip-hover` 加粗外框(整欄／整列值標它標示的每一格),
     移開還原;點 chip 本體＝捲到第一格並加強 1 秒(移除鈕仍是移除)。
     **加強標記在重貼已選標記(`applyPickedMarks` → `clearPickedMarks`)時一併清掉**:chip 在滑鼠換格時會整批重建,
-    舊 chip 的 `mouseleave` 不會觸發,不清就會殘留;滑鼠在面板上時頁面不重貼,滑過期間不受影響(AF-19 終檢定案,推翻規劃「重貼不清」)。**找格子只有 `cellsOfPick` 一份**,已選標記 `drawPicksOn` 也經它;
+    舊 chip 的 `mouseleave` 不會觸發,不清就會殘留;滑鼠在面板上時頁面不重貼,滑過期間不受影響。**找格子只有 `cellsOfPick` 一份**,已選標記 `drawPicksOn` 也經它;
     chip 建立時把它指向的表與 pick 記在元素上,批次模式指向那一組的表(元素組直接標元素)。
     **工具列預告**(AF-19):已選非空時「整欄→一個值／整欄→每格／整列→一個值」的 `title` 改成「會把最後選的『名稱』換成…」;清單空的時候還原。
     **`Enter` 只送已選的**:已選非空且滑鼠停在沒選的格子上時,面板說「Enter＝完成，只送已選的 N 個；要加這一格請先點它」。
     動作列順序固定是「完成、取消」在前,會出現消失的「復原／去掉第一格／去掉最後一格」在後(出現時不推動前兩顆)。
     **切換模式不清空已選**(已選清單本來就可以混放儲存格與欄列聚合,見 §7 的 `spec.fields`)。
-    **已經選了值就鎖在那張表**(AF-10,推翻 AF-8 的「滑鼠移到另一張表格時才清空」):
+    **已經選了值就鎖在那張表**:
     滑鼠移到非表格區域、或這張表的巢狀內外層,目標都不變——
     以前一移出表格,工具列三段立刻反灰、hover 標示被清掉,
     使用者根本走不到右上角去改「單格／整欄／整列」(P4 回饋的根因)。
@@ -239,7 +240,7 @@
     點一下改成加選之後,誤點取消是新的破壞性動作,沒有這一條的話 `Ctrl+Z` 會再刪掉另一個值。
     面板出現「復原」鈕(`data-af-undo`,沒有快照時 `hidden`),`Ctrl`/`⌘`+`Z` **先還原快照**,沒有才退回「移除最後一項」(那一步不存快照);
     加選與離開選取模式讓快照失效(留著會在幾步之後莫名其妙跳回舊的一批)。
-    **換表反而要存快照**(AF-10,推翻 AF-9 的「換表讓快照失效」):
+    **換表反而要存快照**:
     hover 不再有破壞性副作用之後,唯一的破壞性動作就是「點另一張表的格子」,它最需要反悔。
     快照因此連同**這批索引屬於哪一張表**一起存,還原時 `pickedTableEl` 與目標一起回去——
     只還原清單的話就是「舊表的索引配上新表的定位」,與 AF-7 體檢抓到的 `pickedTableEl` 同型。
@@ -253,6 +254,10 @@
     `preaction` / `login-*` → 「點一下要操作的那個元素就完成」。**不做教學浮層,這一句就是全部的教學。**
   - **面板的動作列建一次,之後只更新文字與狀態**——每次 hover 重建會把使用者正要按的那一顆換掉
     (「完成鈕點了沒反應」的根因)。面板的文字內容在 `data-af-panel-body`,動作列是它的兄弟節點。
+  - **工具列也會閃避**(AF-21):與面板同一個判定函式,外擴邊界 0(要點工具列的人游標一定會靠近它,留邊界會讓它在指尖前一直換邊);觸發閃避的是「滑鼠停著的那一格被工具列蓋住」。
+  - **送出前檢查選取仍在文件上**(AF-21):完成、雙擊、`Enter` 三條路徑共用一個檢查;目標或已選所屬的表 `isConnected === false`(SPA 重繪)時不送出,面板說「頁面剛剛更新過，請重新點選」(加選一格才消失)並清掉失效的選取(連同索引);iframe 代理層看它代表的 iframe。**只認節點脫離文件**:表格節點沒換、原地插列的重繪不算(見 BACKLOG)。`describe` 對沒連到文件根的節點不產生 `path`／`xpath`。
+  - **效能**(AF-21):表格描述、資料列、最內層表以表格元素為鍵快取(`WeakMap`),`MutationObserver` 看到變動就讓那張表失效(讀快取前先 `takeRecords()` 保住同步語意),`exitPickMode` 全部 `disconnect` 並換新;已選標示差異更新,只清自己畫過的元素。實測 5000 列表已選 20 格時,每次 hover 由約 400ms 降到 1ms 以下。不做節流。
+  - 已選 ≥1 時面板多一行「Shift＋點可以拉出範圍，Ctrl+A 全選」;目標在 shadow DOM 時說「這個區塊在網頁元件裡，只能整塊抓」;頁面上的中鍵點擊(`auxclick`)被攔。
   - **面板會閃避游標**:游標進入面板外圍 24px 內就換到另一角(右下 ⇄ 左下),
     **換過之後要等游標離開那個範圍才會再換**(沿著面板邊緣移動時每次 `mousemove` 都翻會變成抖動);
     **滑鼠正在面板上、或面板裡有焦點時不動**(移動會讓按到一半的按鈕從指尖跑掉)。
@@ -379,7 +384,7 @@
 - 選到表格類元素時,content 一併算出 **`nameHint`**(表格的 `<caption>` → 目標之前最近的
   `h1`~`h6` → 頁面 `title`,截 60 字)帶進 `PICKED`,Picker 拿它當任務名稱的預設值;
   非表格不帶,由 Picker 退回文字錨定或預覽前 20 字。
-- **設定畫面是側邊面板(`chrome.sidePanel`),不是彈出視窗**(AF-10 推翻先前的 `windows.create`):
+- **設定畫面是側邊面板(`chrome.sidePanel`),不是彈出視窗**:
   面板停在目標分頁旁邊,永遠看得見、不會被別的視窗蓋住(MV3 沒有 `alwaysOnTop`),
   而且頁面上的高亮與設定畫面可以同時在眼前。新增、編輯、站台登入**三條走同一個載體**
   (以前編輯是另開一個普通分頁,「保持在最上層」對分頁根本不適用)。
@@ -463,7 +468,7 @@
 - **整批改排程**(AF-19,`kind:'bulk'`,`{ kind, taskIds }`):任務頁勾選後按「改排程」、或點某一列的排程文字進來。
   - 畫面(`setBulkView`,與 `setBatchView` 互斥):只露 `#bulk-section`(唯讀的任務名稱清單＋`#bulk-note`)與 `#schedule-section`;
     **標題列留著(標題寫在這裡),只藏其中的名稱欄、主機、停用提示與摘要卡**(AF-19 終檢:整列藏起來標題就看不到);
-    抓什麼、先試抓、抓完放哪裡、進階、「固定為預設值」、回頁面重選、立即測試全部隱藏;`#save` 改稱「套用到 N 個任務」。
+    抓什麼、先試抓、抓完放哪裡、進階、「固定為預設值」、回頁面重選、試抓全部隱藏;`#save` 改稱「套用到 N 個任務」。
     `#picker-title`:一個任務「修改『名稱』的排程」,多個「整批修改 N 個任務的排程」。簽章含 `taskIds`(換一組任務要重畫)。
   - 預填:排程正規化(`weekdays` 與 `times` 去重排序、`window` 起訖都有才算)後全等→預填並說「相同」;
     不全等→預填 `order` 最小那個並說「所選任務的排程不同，目前顯示的是『名稱』的；套用後 N 個任務都會改成下面的設定」。
@@ -502,17 +507,18 @@
   `:focus-visible`、`prefers-reduced-motion`),**只吃 `theme.css` 變數、零色碼**,
   而且**不留沒有任何頁面使用的類別**(選取模式 overlay 注入在別人的網頁上,拿不到這份樣式表,
   它的 chip 樣式寫在 `content/picker-mode.js`)。
-  `picker.html`、`site.html` 與教學頁 `help/help.html` 都載入它,頁面自己的 `<style>` 只留版面規則,
-  **不得再寫一份共用樣式已有的規則**(主色按鈕掛 `class="btn-primary"`);
-  Report 與 popup 尚未沿用(見 BACKLOG)。
+  **所有擴充功能頁都載入它**(AF-21 起 Report 與 popup 也是;樣式分別在 `report.css`、`popup.css`,`<style>` 內嵌已移除),頁面自己的樣式只留版面規則,
+  **不得再寫一份共用樣式已有的規則**。元件(AF-21):按鈕四種(主要 `btn-primary`、次要預設、文字 `btn-text`、危險 `btn-danger`)、狀態 chip(`.chip.is-ok|is-warn|is-bad|is-off`)、橫幅(`.banner.is-*`)、空狀態(`.empty-state`)、就地回饋(`.inline-status`)、欄位說明與錯誤(`.field-hint`／`.field-error`、`aria-invalid`)、固定動作列、還不能儲存提示區、對話框。**每個畫面最多一顆主要按鈕**;危險確認不得是主要按鈕。
+  **token**(`theme.css` 四條軌):`--on-primary`／`--primary-strong`(實心主要按鈕)、`--ok-text`／`--warn-text`／`--danger-text`(狀態當**文字**用;`--ok`／`--warn`／`--danger` 留給圖示、框線、底色)、`--danger-strong`、`--text-subtle`、`--radius-sm`、`color-scheme`(暗色軌讓原生控制項也變暗)。`tests/zh1_tokens.test.js` 以 WCAG 對比守:主要按鈕、正文、次要文字、狀態文字對底色皆 ≥4.5:1。圖示一律 `ui/icons.js` 的內嵌 SVG(`icon()`／`setIcon()`,只有圖示的按鈕必有 `aria-label`),不用符號字元。
 - **Picker 設定視窗的版面**:整個視窗只回答三個問題——**抓什麼 / 多久抓一次 / 抓完放哪裡**。
   **「先試抓看看」區**(`#preview-section`)的逐格明細 `#test-detail`(AF-17)入口是一顆次要按鈕外觀的 `summary`「查看抓到的 N 格」(AF-18,
   真實瀏覽器實測原本是 12px 灰字、使用者以為沒有這個功能);**總格數 ≤30 測完自動展開**(`DETAIL_AUTO_OPEN_MAX`,多值加總),超過維持收合;
-  立即測試結束(成功、失敗、例外)把這一區捲進可視範圍(`prefers-reduced-motion` 時不平滑捲動)。
+  試抓結束(成功、失敗、例外)把這一區捲進可視範圍(`prefers-reduced-motion` 時不平滑捲動)。
   這一區在失敗時多出「匯出診斷」鈕(`#export-diag`)與一句
   說明它內含什麼(`#export-diag-note`),成功或換了目標就收起來(內容屬於上一頁,見 §3);
   提示句說「請改用列定位」時,摘要卡旁另有捷徑鈕(`#goto-rowpos`)把焦點送到 `#row-pos` / `#col-pos`
   ——那兩個下拉在「抓什麼」區,不在進階區。
+  **「還不能儲存」守門**(AF-21,`ui/save-guard.js`,Picker 與站台設定共用):`#errors` 在**固定列正上方、捲動區外**(`role="alert"`,沒內容時 `hidden`),按儲存若有原因就條列、每條是一顆按鈕(點了跳到那一欄並標 `aria-invalid`,或執行動作如「回頁面重選目標」),焦點移到第一條,儲存鈕旁「還差 N 項」;**儲存鈕不設 `disabled`**。守門條件新增「**有目標**」(`locator`／`picks`／`block` 至少一項;批次指名第幾組);欄位 blur 時就地驗證、錯字在欄位下方。預設名稱推不出來時給「<主機名> 的值」——**新使用者什麼都不改就能存**。**每個畫面切換入口(`render`、批次、整批)都清掉守門區與欄位錯誤**;面板重畫簽章含批次的 `items`,「全部試抓／全部儲存」進行中的重畫延後到結束再補。批次全部試抓期間儲存鈕 `aria-disabled` 並說明。
   頂部標題列(`[data-picker-header]`)——`#picker-title` 編輯既有任務時顯示任務名稱、新增時顯示「設定抓取任務」,
   `#target-host` 顯示目標網址的主機名(次要文字色、等寬字、過長截斷;網址不合法就留空),
   **任務名稱 `#name` 就在標題列**(開窗即可改,不必先找到某個欄位)。
@@ -523,18 +529,18 @@
   popup 任務列的 `title` 同一份;
   各寫一份會讓同一個任務在三個畫面上長得不一樣)。
   內容區(`.settings-body`)的直接子節點**一律是分節容器**,順序是
-  抓什麼(`#block-section`)→ 先試抓看看(`#preview-section`)→ 多久抓一次(`#schedule-section`)→
-  抓完放哪裡(`#add-to-dashboard`)→ 進階(`#advanced-section`),不留裸欄位。
+  抓什麼(`#block-section`)→ 抓之前要先點什麼嗎(`#preaction-section`,`<details>`,AF-21 從進階區提出來;有前置動作時展開並顯示步數)→ 試抓結果(`#preview-section`)→ 多久抓一次(`#schedule-section`)→
+  抓完放哪裡(`#add-to-dashboard`)→ 進階(`#advanced-section`),不留裸欄位。試抓失敗且沒有前置動作時,結果區提示可以加一步並給跳過去的鈕。還沒試抓時預覽區顯示一句引導。編輯既有任務時「抓完放哪裡」改成一行說明加開報表的連結(不再整區消失)。
   **`#url` 與 `#mode` 收在進階**:它們是程式從選取結果就知道的事實,擺在最前面只是讓使用者多讀兩行。
   `#preview` 是數值卡,測過之後帶 `data-state`(`ok` 綠 / `error` 紅,只用
   `--ok`/`--danger`),**每次 `render` 都先清掉**,免得換了目標還留著上一次的紅框。
-  底部動作列:儲存(主色)/取消/立即測試,「將此次設定固定為預設值」在動作列上方。
+  底部動作列**兩層**(AF-21):上層只有滿寬的「儲存」與「還差 N 項」(停用中的任務另有「停用中」小標記),下層是次要動作(試抓、回頁面重選目標、取消);340px 以下「回頁面重選目標」縮成「重選目標」(完整文字在 `title`)。常駐的「將此次設定固定為預設值」已移除(見 §2.1)。
   **頁面不得寫死寬度**(`picker.html` 與 `site.html` 都是 `width: 100%`):
   寫死會在較寬的視窗裡空出一條、讓捲軸卡在畫面中間;**面板寬度由瀏覽器管理**(實測最小 360px,使用者可自行拖寬),
   版面要在 360px 下不溢出、不橫向捲動;退路的彈出視窗尺寸(600×820)在 `shared/panel.js`。
 - **多值清單的每一列**(`[data-field-row]`)除了序號與名稱,還有
   `[data-field-where]`(這個值在表格的哪個位置,「美金 · 買入」/「買入 整欄」)與
-  `[data-field-result]`(立即測試的逐值結果就地顯示,未測與失敗都是 `—`,失敗原因放 `title`);
+  `[data-field-result]`(試抓的逐值結果就地顯示,未測與失敗都是 `—`,失敗原因放 `title`);
   另有一鍵命名 `#rename-col` / `#rename-cell`(**兩個值以上才顯示**),**只改沒有被使用者手動改過的列**
   (判準是 `input._afAutoName` 與現值相同)。
   上移／下移在第一列／最後一列用 `aria-disabled`(不是原生 `disabled`),點了在該列說「這個值已經是第一個了」／「…最後一個了」(AF-19)。
@@ -553,10 +559,10 @@
   `PICKED` 寫新表單時一併清掉被擋留下的 `notice` 與等待態的 `batch`(`mergePanelCtx` 是淺層合併)。
 - **儲存成功不無聲關窗**:表單區換成 `#saved-feedback`——
   「已儲存。下次抓取:HH:mm」(時間取 `GET_NEXT_RUNS` 的實值,**在「儲存中」期間就問完**,
-  拿不到才退回 `describeSchedule` 的白話句)加一顆 `#saved-open-report`,1.5 秒後自動關窗。
+  拿不到才退回 `describeSchedule` 的白話句)加一顆 `#saved-open-report`。**新建任務接著抓第一筆**(§4),不自動關窗、等結果出來:成功 4 秒後關、失敗不關;結果與「下次新任務沿用這組排程與去處」鈕(`#saved-pin-defaults`,按過顯示「已設定」)都寫進 `saved` ctx。編輯既有任務 1.5 秒後自動關窗。
   延遲關窗前要確認 `globalThis.window` 還是自己那一個(否則會關到別人的視窗)。
 
-- **使用教學頁**(AF-18,`ui/help/help.html`,推翻 AF-9「不做教學頁」):入口只有右鍵「使用教學」(開新分頁)與設定頁開關旁固定的連結。
+- **使用教學頁**(AF-18,`ui/help/help.html`):入口是右鍵「使用教學」、設定頁開關旁固定的連結、popup 頁尾與零任務引導、任務頁空狀態(AF-21 加後兩者)。
   - 設定 `showHelpMenu`:**缺省＝顯示,只有字面 `false` 才不建右鍵這一項**(`getSettings` 不合併預設,舊使用者沒有這個鍵)。
     設定頁 `#pref-help-menu` 切換、設定檔匯入都會改到它:background 經 `subscribe` 監看,有效值變了就重建右鍵選單(串行化,不重複不缺項)。
     **service worker 重啟後還沒建過選單時,以變動前的值當基準**——每存一個任務都會寫 `settings.pickerDefaults`,不相干的寫入不得把整組選單拆掉重建。
@@ -576,7 +582,7 @@
   **新任務預設加入第一個儀表板**,單值的卡片預設是**數字＋折線**
   (只給數字卡的話,使用者存完會看到一個沒有脈絡的數字,不會知道要自己去加折線才看得到趨勢);
   文字模式維持表格、多值維持樞紐表＋折線。
-- 每次儲存新任務都更新 `last`;勾了「將此次設定固定為預設值」才另外寫 `pinned`。
+- 每次儲存新任務都更新 `last`;在儲存回饋按「下次新任務沿用這組排程與去處」才另外寫 `pinned`(AF-21 從常駐勾選框搬來;與 `last` 同一份讀改寫 `writePickerDefaults`)。
   `saveSettings` 是淺層合併,寫 `pickerDefaults` 一律 read-modify-write,否則會把另一半洗掉。
   設定頁的「清除固定的預設值」只刪 `pinned`,保留 `last`。
 - **編輯既有任務不套用任何預設值**,也不更新 `last` / `pinned`。
@@ -587,10 +593,9 @@
   **編輯停用中的任務**:標題列 `#task-status-note` 說「此任務目前停用，不會排程；到任務頁啟用後才會抓。」,
   儲存回饋也說同一句,不說「下次抓取」。
 - **編輯時移除了值**:見 §5〈值被移除時的序列〉;回饋多一行「移除了 N 個值；它們的歷史紀錄會保留到保留天數到期。」(`saved` ctx 的 `note`)。
-- **進階設定**(策略、正規表達式、生效時段、告警條件、前置動作)收在 `<details id="advanced-section">`,
+- **進階設定**(策略、正規表達式、生效時段、告警條件;前置動作 AF-21 起在主區)收在 `<details id="advanced-section">`,
   預設收合;編輯既有任務且其中有非預設值時自動展開。所有欄位 id 不變,只是換了外層容器。
-- **一次建立多個任務的畫面共用一份前置動作**(AF-20):批次畫面展開進階區、標題改成「前置動作(套用到每一個任務)」,
-  區內只露出 `#preaction-section`,其餘直接子元素標 `data-batch-hidden` 藏起來,離開批次只還原帶這個標記的(`#legacy-strategy-note` 本來就可能是藏著的)。
+- **一次建立多個任務的畫面共用一份前置動作**(AF-20):同一份 `#preaction-section`(AF-21 起在主區),標題改成「抓之前要先點什麼嗎？（套用到每一個任務）」。
   前置動作跟排程欄位一樣走共用設定:`snapshotShared` 抄下(「畫面 → 資料」只有 `preActionsFromForm` 一份,`getFormData` 也用它)、
   每項 `render` 完由 `pasteShared` 以 `addPreActionRow` 重建;沒有前置動作時不寫 `preActions` 鍵(同單任務)。
   **進入批次畫面(`renderBatch`)先清空前置動作列**:同一份面板文件可能剛編輯過有前置動作的任務,不清就會被套到每一個新任務;
@@ -601,11 +606,11 @@
   前置動作**不進草稿**:面板文件重載(切去別的分頁再回來)後前置動作列會消失,與單任務相同(見 BACKLOG)。
 - 編輯用了已移除策略(`attr`/`child`/`label`)的舊任務時,表單顯示一行說明(`#legacy-strategy-note`):
   設定原樣保留,改選其他策略才會換掉。
-- 「立即測試」與正式抓取共用同一份規格組裝 `buildSpec(values)`,不得各組一份
+- 「試抓」與正式抓取共用同一份規格組裝 `buildSpec(values)`,不得各組一份
   (否則區塊模式的預覽會落回數值策略鏈,測到整張表的第一個數字)。
-  編輯既有任務時「立即測試」**維持隱藏**——這是產品決定,不是技術限制
+  編輯既有任務時「試抓」**維持隱藏**——這是產品決定,不是技術限制
   (改走 background 之後它會自己開分頁定位,開放與否見 BACKLOG)。
-- **「立即測試」由 background 執行,不是 Picker 自己對頁面送 `EXTRACT`**:
+- **「試抓」由 background 執行,不是 Picker 自己對頁面送 `EXTRACT`**:
   Picker 用 `buildTask` 組一個未儲存的任務(id `__preview`),送 `TEST_TASK{task, tabId}`;
   background 以 `runTask(task, { dryRun: true, reason: 'manual', tabId })` 跑完整流程
   ——找分頁、等載入、登入檢查、`locateFrame` 重新定位 iframe、`injectContent` 重新注入、`EXTRACT`——
@@ -624,7 +629,7 @@
 3. 文字錨定:最近的標籤文字(如「今日總量」)+ 相對位置
 4. 絕對 XPath(最後手段)
 
-三者以上失敗 → 紀錄 `status: "not_found"`,並附當時 DOM 片段前 500 字方便除錯。
+三者以上失敗 → 紀錄 `status: "not_found"`。擷取端回傳的 DOM 片段(`snippet`)只給試抓的診斷包與預檢通知,**不寫進紀錄**(AF-21:登入後頁面的片段可能含 token 或個資)。
 
 **目標在 iframe 內時另存 `task.frame = { url }`**(選取當下那個 frame 的 `location.href`);
 目標在最上層時**不存這個欄位**(舊任務零遷移,沒有這個鍵就等於最上層)。
@@ -644,7 +649,7 @@ iframe 可能是「先點按鈕才出現」,所以 1、2 層是**輪詢**等待(
 `candidates` 是當下列到的全部 frame,失敗時正是使用者要看的東西;呼叫端判定一律看**有沒有 `frameId`**,
 不得比對 `=== null`。`frameId` 仍然**存不得**。
 
-**試抓失敗的診斷包**(AF-14):「立即測試」失敗時,回應多帶一個 `debug`,Picker 顯示「匯出診斷」鈕,
+**試抓失敗的診斷包**(AF-14):「試抓」失敗時,回應多帶一個 `debug`,Picker 顯示「匯出診斷」鈕,
 使用者按下才存成 JSON 檔(`autofetcher-diag-<任務名>-<時戳>.json`,`saveAs` 由使用者選位置,SPEC §5)。
 內容:`version`(manifest)、`at`、`tabUrl`(**`chrome.tabs.get` 的實際網址**,不是任務設定的)、
 `task`(`name`/`url`/`spec`/`locator`/`frame`/`preActions`,**不含登入資料**)、
@@ -693,7 +698,10 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
   - **時段判定用 `alarm.scheduledTime`**,不是實際觸發時刻:晚觸發(休眠喚醒、worker 冷啟動)
     會滑出時段末端,把本來排定合法的最後一格丟掉。
   - 補建 alarm 的地方只有兩處(`scheduler.rebuildAlarms` 與看門狗),兩者共用同一個 `nextIntervalRun`。
-  - interval 任務**不進錯過清單**(一個週末可累積上百槽,補抓沒有意義);睡醒後從下一個對齊槽繼續。
+  - interval 任務**不補抓**(一個週末可累積上百槽,補到的是現在的值);睡醒後從下一個對齊槽繼續,錯過清單放一筆 `{ kind:'gap', count, from, slot }`「休眠期間略過 N 次」,只能「知道了」,黃燈(AF-21)。
+  - **daily 的槽同樣取 `alarm.scheduledTime`**(AF-21;以前用「今天的日期＋設定時刻」,23:55 的 alarm 在隔天 00:05 觸發會佔住隔天那一格、隔天整天漏抓)。daily 也**先排下一次再執行**;晚超過 24 小時的 daily alarm **不執行**,只排下一次,那一格交給錯過清單。
+  - **遲到**:由呼叫端(`handleAlarm`、`recoverRunState`)以 `isLateStart(slot, now)`(晚超過 30 分鐘,`LATE_AFTER_MS`)算好傳 `markLate`,`runTask` 把這一次**成功**的紀錄記成 `late`;失敗維持原狀態。`runTask` 自己不看時鐘。30 分鐘大於重試視窗(2＋10 分鐘),重試成功不會變黃燈。
+  - `handleAlarm` 外層例外寫診斷 `alarm_error`,不靜默。
 - **手動抓取(`reason: 'manual'`,來自任務頁與 popup 的「立即抓取」)**與排程觸發走同一個 `runTask`,但四點不同:
   ①**不查也不寫冪等帳本**——手動的 slot 是「當下這一分鐘」,寫進帳本會讓同一分鐘真正排定的 alarm 被擋掉,
   錯過清單也會誤判那一槽跑過;代價是同一分鐘按兩次會有兩筆紀錄(樞紐表同列取最新的成功值)。
@@ -703,6 +711,13 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
   `RUN_TASK` 回傳 `{ok, outcome: 'done'|'failed', status, value, error, values?}`;
   `values` 是多值任務每個值的 `{name, ok, value, error}`(同一分鐘按兩次只留每個值最新的那筆),
   任務頁與 popup 逐值就地顯示。
+- **錯過清單**:`onStartup` 與看門狗每輪都呼叫 `refreshMissed`(AF-21;以前只在啟動時算,闔上筆電再打開不會列出)。只算 slot 早於「現在 − 20 分鐘」的格子(`MISSED_SETTLE_MS`,剛到點還在跑或重試中的不誤報),`lastSeenAt` 也只推進到那裡。`computeMissedSlots` 不列早於任務 `createdAt` 的格子(新建任務不會被回溯成 7 天錯過);合併時丟掉「帳本已有該格」與「任務已不存在」的既有項目(清單不是只加不減)。`catchUpAll`／`catchUpOne` 略過 `gap`;gap 的 slot 每輪會延伸,所以 `skipOne` 對 gap 只比任務(UI 送 `kind:'gap'`),移除 0 筆時 `SKIP_ONE` 回 `ok:false`;gap 的白話只在 `shared/describe.js` 的 `gapTextOf`。任務帶 `createdAt`(`saveTasks` 對新 id 寫入、更新時保留),gap 不算建立之前的格子。
+- **失敗通知**(AF-21):`background/notify.js` 的 `notifyFailure(key, status, options)`——同一 key、同一狀態 24 小時內只跳一次(帳本 `notifyLog`),恢復正常時 `clearNotifyLog`(連帶把它從同站台合併名單拿掉);用在找不到元素(key＝任務 id)、預檢(`<id>:precheck`)、站台檢查(`site:<origin>`)。同一站台 5 分鐘內的失敗合成一則(`notifySiteFailure`,通知 id `fail:<origin>`,累計放 `session.failMerge`)。燈號不受冷卻影響。
+- **單次抓取總時限**(AF-21):150 秒＋任務宣告的等待(`wait`、`hover` 停留、`waitFor` 逾時),上限 270 秒;每個步驟開始前檢查、每個等待取「自己的逾時」與「剩餘時間」較小者;超過就以既有逾時類失敗處理(錯誤「超過單次抓取時限」)。**不得用 `Promise.race` 把整段包起來**(被拋下的那段會晚一點再寫一筆)。純等待改用每 20 秒戳一次 `getPlatformInfo` 的續命等待;前置動作 `wait` 與 `hover` 停留執行時各以 60 秒為上限(紀錄註明,不改使用者存的值)。被總時限截短的登入失敗**不累加** `failStreak`。
+- **送訊息一律有逾時**:background 的 `chrome.tabs.sendMessage` 只准出現在 `background/messaging.js`(`sendToFrame`,a4 D13b 守);登入 `CHECK_ELEMENT` 10 秒、`FILL_LOGIN` 15 秒,框架探測 5 秒(`frames.js` 的 `PROBE_TIMEOUT_MS`),`main.js` 的選取模式轉送 10 秒。登入等載入也走 `waitTabReady`。
+- **content 端**:訊息路由在分派處統一 try/catch,例外回 `{ ok:false, error:'content_exception', detail }`(紀錄寫「頁面上的程式發生錯誤：…」);擷取找不到目標時用與 `waitFor` 同一份觀察實作等最多 3 秒再判 `not_found`(延遲渲染的頁面不必等 2 分鐘的重試);這段等待的重新解析**最多每 100 毫秒一次**(anchor 層是全文件掃描,會自己重繪的頁面不得被拖住),`EXTRACT` 可帶 `settleMs`,fetcher 對已知壞掉的任務(`notFoundStreak ≥ 1`)帶 0。
+- **背景錯誤回應**:`handleMessage` 例外寫 `message_error` 並回 `{ ok:false, error }`;UI 對 `ok:false` 與 `sendMessage` 被拒絕(「抓取被中斷，請再試一次」)都要有字。
+- **新任務存檔後立刻抓第一筆**(AF-21):Picker 新建(單一與批次)存檔成功後送 `RUN_TASK`(手動性質、不寫帳本),回饋先「已儲存，正在抓第一筆…」再換成值或原因;結果寫進面板 ctx。編輯既有任務不觸發。
 - 時區:一律用瀏覽器本地時間;紀錄同時存 ISO 字串(含 offset)與「排程槽」`slot`(`YYYY-MM-DDTHH:mm` 本地)。
 - **Picker 的排程介面**(SPEC §2 的「多久抓一次」卡):
   - 每日:`<input type="time">` 加「加入」鈕,已加入的時刻顯示成可移除的 chip(去重並排序)。
@@ -718,17 +733,17 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
 
 | 風險 | 現象 | 對策 |
 |---|---|---|
-| service worker 被殺 | 閒置 30 秒或執行 5 分鐘就被回收,抓到一半消失 | 抓取開始時呼叫一次輕量 API(`runtime.getPlatformInfo`)延壽(**現況只呼叫一次,不是週期性續命**,見 BACKLOG);流程狀態機(`queued → loading → extracting → done`)寫 `storage.session`,worker 重啟時把卡在中途超過 3 分鐘的 run 標 `interrupted` 並清掉(重新排入見 BACKLOG) |
+| service worker 被殺 | 閒置 30 秒或執行 5 分鐘就被回收,抓到一半消失;同站台記憶體佇列裡排隊的任務一起蒸發 | **`session.runState`**(AF-21,取代 `inflight`):到點進佇列前登記 `{ '<taskId>@<slot>': { state:'queued'|'running', at, boot, attempt, reason } }`,結束(含例外)才移除;手動與試抓不登記。worker 每次啟動(模組頂層)與看門狗呼叫 `recoverRunState`:只處理 `boot` 不是自己的項目,**先在鎖內拿走再處理**(兩個復原同時跑時同一格只處理一次);`at` 在 10 分鐘內 → 續跑(同格已有重試 alarm 就不續跑,交給它);超過 → 寫 `interrupted` 紀錄(**不寫帳本**,紅燈,同時記一筆 `interrupted` 診斷),daily 另進錯過清單可補抓。啟動時同時清一次孤兒抓取分頁。純等待每 20 秒續命一次(§4) |
 | alarms 在擴充功能更新 / 重新載入後消失 | 更新後所有任務靜默停擺 | `runtime.onInstalled`、`runtime.onStartup` 一律 `rebuildAlarms()`;另有看門狗(下) |
-| alarm 觸發不準或重複 | 可能晚 0~60 秒、極少數重複觸發;補抓與正常觸發撞在同一槽 | **執行帳本** `runs[taskId][slot] = status`:同一 `slot` 只執行一次,重複觸發直接略過(冪等) |
-| 電腦睡眠 | alarm 在喚醒時才響,可能已晚數小時 | 觸發時算 `late = now - slot`;補抓的紀錄標 `late`,超過容忍範圍的槽進錯過清單交使用者決定(§4 補抓;`lateTolerance` 見 BACKLOG) |
-| 看門狗 | 上述任一環節漏掉,沒有人發現 | 固定 alarm `__watchdog` 每 15 分鐘:①確認每個啟用任務的 alarms 存在,缺就重建;②確認 `__sitecheck`(每日站台檢查)還在,不在才補建;③以帳本比對「上次檢查以來應有的槽」,缺的補進錯過清單;④清理超過 3 分鐘的中途 run(`startedAt` 存的是 ISO 字串);⑤記錄一筆心跳 |
+| alarm 觸發不準或重複 | 可能晚 0~60 秒、極少數重複觸發;補抓與正常觸發撞在同一槽 | **執行帳本**(按日分鍵 `runs:<日期>` = `{ [taskId]: { [slot]: status } }`,§5):同一 `slot` 只執行一次,重複觸發直接略過(冪等) |
+| 電腦睡眠 | alarm 在喚醒時才響,可能已晚數小時 | 槽一律取 `scheduledTime`;晚超過 30 分鐘的成功記 `late`,晚超過 24 小時的 daily 不執行、交錯過清單;看門狗每輪算錯過;interval 放 gap 提示(§4) |
+| 看門狗 | 上述任一環節漏掉,沒有人發現 | 固定 alarm `__watchdog` 每 15 分鐘:①確認每個啟用任務的 alarms 與**預檢 alarm** 存在,缺就重建(同一份計算);②清掉已刪／停用任務的重試與預檢 alarm;③確認 `__sitecheck` 還在;④`refreshMissed`;⑤`recoverRunState`;⑥一天一次:保留天數清紀錄、帳本留 14 天(`trimOldRuns`)、孤兒鍵清理(`pruneOrphanEntries`:`alertLog`／`lastValues`／`health`／`notifyLog` 裡已不存在的任務與站台);⑦記錄一筆心跳 |
 | 沒有任何視窗 | macOS 上 Chrome 可在無視窗狀態執行,`tabs.create` 失敗 | 預設的背景分頁模式在沒有任何視窗時改走專用視窗(`fetch-tab.js`) |
 | 抓取視窗沒被關掉 | service worker 在抓取途中被回收,記憶體裡的佇列跟著消失,沒有人關那個視窗 | 入口把自己建的視窗／分頁登記在 `storage.session.fetchTabs`(每筆帶這次 service worker 的 `boot`,**建立當下、最小化之前**就登記);看門狗每輪關掉 `boot` 不是自己的那些。**只看登記表**,不得用網址或標題猜哪個視窗是自己的。不用 inflight 判定:同站台兩個任務交接的空檔 inflight 是空的,會關到正要被沿用的視窗 |
 | 抓取途中瀏覽器被關閉 | 下次啟動「繼續上次的工作階段」可能把專用視窗還原回來 | **不處理**:`storage.session` 已清空、視窗 id 也換了,認不出來;發生機率低,使用者手動關掉即可 |
 | 背景頁面被 Chrome 丟棄(discard)/ 省電模式 | 分頁存在但內容被卸載,注入失敗 | `tabs.get` 檢查 `discarded`,是則 `tabs.reload` 再等 `complete`(只有 `waitTabReady` 一份);自開的分頁設 `autoDiscardable:false` |
 | 頁面永遠不到 `complete` | 有些頁長連線不結束 | 載入等待上限 30 秒,到時仍嘗試注入擷取;擷取本身逾時 15 秒(**計時器在擷取結束時清掉**,不清的話每抓一次都把 service worker 多吊 15 秒不能閒置) |
-| 離線 / 網路錯誤 | 抓到錯誤頁 | `navigator.onLine` 為 false 直接排 10 分鐘後重試;找不到目標元素走重試(2 分鐘、10 分鐘,共兩次;HTTP 錯誤頁的判定見 BACKLOG) |
+| 離線 / 網路錯誤 | 抓到錯誤頁 | `navigator.onLine` 為 false 排 10 分鐘後重試(與其他失敗同樣最多到第 3 次,用盡寫一筆「目前離線」的失敗紀錄);找不到目標元素走重試(2 分鐘、10 分鐘,共兩次;HTTP 錯誤頁的判定見 BACKLOG) |
 | 同時多任務 | 同站台互相干擾、開太多分頁 | 同站台嚴格串行並共用同一個分頁(佇列 `enqueueForOrigin` 在 `fetch-tab.js`,每日站台檢查也進同一條;全域並行佇列見 BACKLOG)。佇列清空時**先從表上拿掉再釋放分頁**:釋放要等瀏覽器,這段期間排進來的工作若還拿到舊佇列,之後再來的工作就會另建一條、同站台變兩條並行 |
 | 時鐘/時區變更 | 排程槽算錯 | 看門狗每次比較 `Intl.DateTimeFormat().resolvedOptions().timeZone`,變了就 `rebuildAlarms()` |
 
@@ -748,9 +763,10 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
      (**目前只有告警通知點得動**,預檢/站台檢查/找不到元素的通知點擊還沒接,見 BACKLOG。)
 - 每日一次的**站台健康檢查**(`background/sitecheck.js`,`__sitecheck` alarm,
   時間取 `settings.siteCheckTime`,預設 08:00):對每個**啟用中**的站台開分頁走一次登入流程,
-  結果寫 `health['site:<origin>']`,失敗即通知,提早發現密碼過期、驗證碼新增。
+  結果寫 `health['site:<origin>']`,失敗即通知(24 小時冷卻,§4),提早發現密碼過期、驗證碼新增。
   **與抓取走同一條同站台佇列與同一個抓取頁面**(AF-20):登入檢查會填表單、按送出,與同站台抓取同時進行會互相踩到登入狀態。
   每次都重新載入登入頁,結束後把頁面標成「被動過」,排在後面的抓取會先重載。與每日排程一樣用 `when` 重算,不用 `periodInMinutes`。
+- **預檢 alarm 觸發後只重排自己那個任務**(`schedulePrechecks(now, { taskId })`,AF-21);全部重建只在 `REBUILD_ALARMS`、安裝、啟動。
 - 預檢通過但正式抓取仍失敗 → 走 §4 重試;預檢與正式抓取共用同一段流程碼,只差「是否寫紀錄」旗標。
 - interval 任務(每 N 分鐘)不做每槽預檢(太頻繁),只吃每日站台健康檢查與正式失敗回報。
 - 預檢用的分頁與正式抓取相同規則(專用視窗、用完關閉);預檢失敗不重試,交給燈號與通知。
@@ -763,22 +779,10 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
     先 `windows.create({ url, focused:false, width:1280, height:800 })`、**立刻登記**(§4.1)、再 `windows.update({ state:'minimized' })`。
     建視窗失敗就退回 `tab` 並寫診斷 `fetch_window_fallback`;最小化失敗照樣用那個視窗(不得再開退路分頁,否則視窗沒人關)。
   - 兩種模式下,同站台的任務排在同一條佇列、共用同一個分頁;同一時刻到點的任務(同一頁拆出來的多個任務就是)只開一次、抓完才關。
-  - 兩種都**不沿用使用者開著的分頁**(AF-20 推翻舊規則「已開著同 URL 的分頁優先直接擷取」):那樣會在使用者眼前注入、點按鈕、捲動、甚至填登入並送出,
+  - 兩種都**不沿用使用者開著的分頁**:那樣會在使用者眼前注入、點按鈕、捲動、甚至填登入並送出,
     而且那一頁可能幾小時沒刷新,每次抓到的都是同一個舊值。只沿用本入口自己開的頁面;「是不是同一頁」一律 `sameOriginPath`。
-  - 立即測試(`TEST_TASK` 帶 `tabId`)仍用使用者眼前的分頁(那是使用者正在設定的畫面);網址核對不過就改走專用視窗。
-- **專用視窗的探針事實**(AF-20,Chrome for Testing 152 / Windows 11,已拿掉 puppeteer 預設的關閉節流旗標——帶著它們量到的可見性與計時器全都不可信):
-
-  | 做法 | 焦點 | 結果 |
-  |---|---|---|
-  | `windows.create({ state:'minimized' })` | 不搶 | 頁面 viewport **0×0**(RWD 站台會切成手機版、虛擬捲動表格渲染 0 列);之後改尺寸、重載、導覽都救不回來 |
-  | `state:'minimized'` ＋ `focused:false` | 不搶 | **靜默變成一般視窗**,沒有最小化 |
-  | `state:'minimized'` ＋ `type:'popup'` | **搶焦點** | — |
-  | 先不聚焦帶尺寸建立,再最小化 | 不搶,零 `onFocusChanged` | viewport 保住;頁面 `hidden`、計時器節流,與背景分頁完全相同 |
-  | 已最小化的視窗裡再 `tabs.create` | 不搶 | 新開的**作用中**分頁 viewport **0×0**,在它之後開的背景分頁也是(只開背景分頁時保得住,但不依賴這個順序)→ 同佇列的下一個任務一律在同一個分頁**導覽**(`tabs.update({url})`) |
-  | 畫面外座標 `left:-2000` | — | API 直接拒絕(至少 50% 要在可見範圍) |
-
-  探針腳本:`tests/smoke/probe_fetch_window.mjs`(不進 `npm test`;可見性一欄會隨視窗有沒有被遮住而變,viewport 與視窗狀態兩欄是穩定的)。
-  量不到的:建立到最小化之間(約 100~300 毫秒)肉眼看不看得到;Edge 未實測(本機 puppeteer 啟動不了 Edge)。
+  - 試抓(`TEST_TASK` 帶 `tabId`)仍用使用者眼前的分頁(那是使用者正在設定的畫面);網址核對不過就改走專用視窗。
+- **專用視窗只有一種建法**(探針事實表見 `docs/archive/SPEC-decisions.md`):先不聚焦帶尺寸建立、立刻登記、再最小化;直接 `state:'minimized'` 建立的頁面 viewport 是 0×0。
 - 補抓:Chrome 未開時錯過的排程,啟動時整理成「錯過清單」(任務、應抓時間),以 `notifications`
   按鈕「立即補抓 / 略過」詢問使用者,Report 頁同時顯示橫幅可逐筆勾選;補抓的紀錄標 `status: "late"`。
   錯過清單只把最近 7 天內的槽算進去;既有項目不會自動過期(見 BACKLOG)。
@@ -805,13 +809,13 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
   開不起來(沒有任何一般視窗)就退回背景那條路,不讓整次抓取失敗。
   成功抓到值一次就把提示清掉。
 - **目標在 iframe 內時,Picker 會提示可能要加前置動作**(`#frame-hint`,`role="status"`):
-  新任務、`ctx.frameUrl` 存在、又還沒有任何前置動作時才顯示,並把「進階設定」展開
+  新任務、`ctx.frameUrl` 存在、又還沒有任何前置動作時才顯示,並把「抓之前要先點什麼嗎」那一列展開
   (藏在收合區裡等於沒提示)。「加入點擊步驟」= 新增一列 `click` 並立刻進入選取模式
   (`frameId: 0`,要點的按鈕常在最上層);「不需要」收起。編輯既有任務不提示。
-  **「立即測試」成功且目標在框架內、又沒有前置動作時**,`#test-note`(`role="status"`,不是紅色的
+  **「試抓」成功且目標在框架內、又沒有前置動作時**,`#test-note`(`role="status"`,不是紅色的
   `#errors`)補一句「這次測試在目前分頁執行;排程會自己另外開一份頁面」——測試是在使用者眼前那個
   已經開著 iframe 的分頁跑的,排程卻是另外開一份頁面,成功不代表排程會成功。
-- **送出中要有回饋**:「立即測試」與「儲存」按下後停用並改字(測試中…／儲存中…),
+- **送出中要有回饋**:「試抓」與「儲存」按下後停用並改字(測試中…／儲存中…),
   結果回來(或驗證失敗)才還原,不得連按。
 - 抓取前可選的**前置動作**(`task.preActions`,依序執行,任一失敗即停止並走錯誤路徑),四種:
   - **`hover`**(移到元素上,AF-10):`scrollIntoView` 後依序派發
@@ -839,8 +843,8 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
   把 `waitFor` 的「要看得見」取消再直接點它)。沒有這一句,使用者會以為功能壞了。
 - **前置動作的失敗訊息要說得出「第幾步、哪一種動作、怎麼了」**(`shared/preaction.js` 的
   `preActionFailure`,唯一一份):`前置動作第 2 步（等元素出現）等不到元素出現（逾時）`。
-  內部代碼(`preaction_timeout`)不得露出到使用者眼前。訊息一路走到紀錄的 `error` 與立即測試的 `#errors`。
-- **立即測試回報前置動作的逐步軌跡**(`preActionTrace: [{step, type, ok, ms}]`,只在 `dryRun` 回傳,
+  內部代碼(`preaction_timeout`)不得露出到使用者眼前。訊息一路走到紀錄的 `error` 與試抓的 `#errors`。
+- **試抓回報前置動作的逐步軌跡**(`preActionTrace: [{step, type, ok, ms}]`,只在 `dryRun` 回傳,
   **成功與失敗都帶**):成功時 `#test-note` 顯示「前置動作 N 步完成（共 X 秒）」,
   失敗時顯示「走到第 N 步（前 M 步成功）」——失敗才是最需要軌跡的時候。
   `waitFor` 的逾時毫秒由 `shared/preaction.js` 的 `timeoutMsOf` 換算(字串也吃),
@@ -883,7 +887,7 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
 - **存活重試與排程層重試是兩件事**:前者是「同一次執行內,文件被換掉就再抓一次」(最多 3 次),
   後者是 §4.3 的「這一輪失敗,隔一段時間整個重跑」(`attempt < 3`)。兩者各自計數、互不影響。
 - **重試耗盡後給使用者的是中文**:`fetcher.js` 的 `PAGE_GONE_MESSAGE`(唯一一份,
-  立即測試、紀錄、任務頁、popup 都吃它),說出發生什麼、可能的原因、能怎麼辦;
+  試抓、紀錄、任務頁、popup 都吃它),說出發生什麼、可能的原因、能怎麼辦;
   **Chrome 的英文原文寫進 `shared/diag` 不丟掉**,但不顯示給使用者。
 - **額外等待秒數**的優先序:呼叫端指定 > `task.extraDelaySec` > `settings.extraDelaySec` > 3 秒。
   `0` 是合法值(代表不等)。
@@ -895,13 +899,19 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
 
 ## §5 儲存
 
-- 主資料:`chrome.storage.local`,`schemaVersion` 目前為 **2**
-  - `tasks: Task[]`、`sites: Record<origin, Site>`、紀錄以 `rec:<YYYY-MM-DD>` 為鍵
-  - 其他鍵:`runs`(冪等帳本)、`missed`、`health`、`diag`、`layout`、`alertLog`、`cryptoKey`、`lastValues`、`lastTrimDate`、`settings`;`storage.session.inflight`
-  - 保留天數預設 365,超過自動刪最舊(設定可調);由看門狗執行,一天最多掃一次(`lastTrimDate`),不放在抓取寫入路徑。
+- 主資料:`chrome.storage.local`,`schemaVersion` 目前為 **3**(AF-21)
+  - `tasks: Task[]`、`sites: Record<origin, Site>`
+  - **紀錄按小時分鍵** `rec2:<YYYY-MM-DD>:<HH>`(`HH` 取 slot 的本地小時,沒有 slot 取 `capturedAt` 換算的本地小時)。舊的 `rec:<YYYY-MM-DD>` **不遷移、只讀與刪**,隨保留天數到期;**刻意換前綴**:舊版以 `startsWith('rec:')` 認紀錄鍵,沿用前綴的話降版時小時鍵會被當成日期。同一天的所有紀錄鍵共用一把鎖 `rec@<日期>`。單日讀合併舊鍵與 24 個小時鍵、同日依 `capturedAt` 排序;範圍讀 ≤62 天由日期列舉鍵直接取(**不經 `listDates`、不 `get(null)`**——抓取路徑的告警評估會呼叫它),超過才取所有鍵名分批讀。
+  - **帳本按日分鍵** `runs:<YYYY-MM-DD>` = `{ [taskId]: { [slot]: status } }`,介面 `getRunStatus`／`setRunStatus`／`getLedgerRange`;保留 14 天(`trimOldRuns`,不受保留天數影響)。v2 → v3 遷移把舊單一 `runs` 近 14 天併入按日鍵、刪舊鍵,中途失敗重跑結果相同。
+  - 其他鍵:`missed`、`health`、`diag`、`layout`、`alertLog`、`notifyLog`、`cryptoKey`、`lastValues`、`lastSeenAt`、`lastTimezone`、`settings`,以及各一天一次守衛的日戳(`lastTrimDate` 等);`storage.session`:`runState`、`failMerge`、`repickTabs`、`fetchTabs`、`panel:<tabId>`
+  - 需要「所有鍵」的操作(`listDates`、清理、刪任務、計數、用量)有 `getKeys` 就用它、每批最多 50 鍵取值,不一次讀滿。
+  - 保留天數預設 365,超過自動刪最舊(設定可調;**調低要先確認**,§8.5);由看門狗執行,一天最多掃一次,不放在抓取寫入路徑。
+  - **紀錄瘦身**(AF-21):`raw` 超過 500 字在寫紀錄那一層截斷並設 `rawTruncated`(擷取端與試抓預覽不截);`snippet` 不進紀錄;locator 的 anchor 文字超過 120 字不產生 anchor。
+  - **升級注意**:v3 之後不建議降版(舊版看不到 `rec2:` 紀錄、帳本是空的);升級前先匯出設定與紀錄。
 - 檔案匯出(**只在使用者手動觸發**,不自動下載):
   - Report 設定頁「匯出」區:選日期範圍(單日 / 本月 / 全部)與格式(JSON 日檔、CSV、獨立 HTML 報表 §8.5),
     按下才呼叫 `chrome.downloads.download`(`saveAs:true` 讓使用者選位置;預設檔名 `AutoFetcher/<YYYY-MM-DD>.json`)。
+    內容以 `Blob`＋`URL.createObjectURL` 傳(AF-21;`data:` URL 大範圍會超過長度上限),下載完成／中斷或 60 秒後才 revoke;失敗(含在另存視窗按取消)按鈕旁說明「匯出沒有完成」。
   - 多日匯出時打包成一個 JSON(`days: [...]`)或多列 CSV,不產生多個下載。
   - **獨立 HTML 報表**:檔名 `AutoFetcher/report-<from>_<to>.html`;內嵌調色盤(取自 `ui/theme.css`)、
     目前儀表板的卡片快照與紀錄表格;**不含 `<script>`、不含任何外部資源**,離線可開、可列印
@@ -910,9 +920,10 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
 - 設定匯出/匯入(換機):
   - 匯出 `autofetcher-settings.json`:`tasks`、`sites`(密碼**預設不含**;勾「含密碼」時以匯出時輸入的密語 AES-GCM 加密,見 §6)、
     Report 版面(§8)。不含 `records`(歷史另有日檔)。
-  - 匯入:同 `taskId` 覆蓋、新 id 新增;匯入後重建所有 alarms;若含加密密碼則要求輸入密語。
+  - 匯入**先驗後寫**(AF-21):`previewSettingsImport` 零寫入地解析、解密、驗證並回摘要(新增／覆寫／略過與原因／要重輸密碼的站台／被拒的設定與原因),設定頁以對話框顯示,使用者確認後 `applySettingsImport` 才寫;任一步失敗把已寫的鍵還原成快照。同 `taskId` 覆蓋(匯入檔沒帶的 `enabled`／`foreground`／`suggestForeground`／`notFoundStreak`／`createdAt` 沿用本機)、新 id 新增;成功後重建 alarms、重畫設定頁並套用主題。密語錯誤說「密語錯誤或加密資料已損毀」。
+    - 任務網址只收 `http`／`https`(**匯入不收 `file:`**);`settings` 走白名單與數值域(`NUMERIC_SETTING_RANGES`,與設定頁欄位共用一份);外來 `passwordEnc` 一律丟棄,`secrets` 解得開才以本機金鑰重新加密,設定檔沒帶密碼但本機已有該站台密碼時沿用;匯入檔 `schemaVersion` 比程式新 → 拒絕。
   - 歷史匯入:Report 頁可選多個日檔 JSON 併回 `records`(同 taskId + capturedAt 去重,既有紀錄不被覆蓋);
-    也接受打包格式 `{days: [...]}`;回報 `{added, skipped}`;任一日檔形狀不合則整批不寫入。
+    也接受打包格式 `{days: [...]}`;回報 `{added, skipped, invalid?}`;任一日檔形狀不合則整批不寫入。逐筆驗 `taskId`(保留分隔字元至多一個)、`capturedAt`(可解析)、`status`(帶了就要是已知狀態;沒有 `status` 的照收),不合格計入 skipped 並列出前 5 筆原因。
 - **紀錄的 `taskId` 對多值任務是序列 id**(`<任務id>#<值key>`,§7):
   CSV 的 `taskId` 欄、日檔的 `tasks` 鍵、歷史匯入的去重鍵(`taskId` + `capturedAt`)都跟著變成序列 id,
   **檔案格式與 schema 版本不變**。單值任務完全維持原樣(舊資料零遷移)。
@@ -927,16 +938,16 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
   (比對完整序列 id,來源歸零的卡片整張移除,與 `pruneCardsForTask` 同一份判定),`lastValues` 的那幾個鍵以 `deleteLastValues` 清掉。
   background 重選時另記一筆診斷 `fields_pruned`。「哪些值被移除」由 `shared/field-match.js` 的 `reconcileFields` 算(`removed`)。
   **單值任務重選成多值**時,原本那一條序列(id 就是任務 id,§7)同樣不會再有新紀錄,一併清掉。
-- **`saveTask` 的守門**:`task.id` 不得含保留字元;`task.fields[].key` 必須是非空字串、
+- **`saveTask` 的守門**:任務網址只收 `http:`／`https:`／`file:`(AF-21;`updateTasks` 網址沒變時不檢查,舊資料的怪網址任務不會卡住其他寫入);`task.id` 不得含保留字元;`task.fields[].key` 必須是非空字串、
   不得含保留字元、同任務內不得重複——違反就丟例外拒絕存檔。設定匯入逐筆 try/catch,
   單一壞任務被跳過並回報 `{skippedTasks}`,不拖垮整批。
 - **變更訂閱**:`subscribe(handler)` 是 UI 監看資料變動的唯一入口(UI 不得自己碰 `chrome.storage.onChanged`)。
-  只看 `local` 這個 area,只有 `tasks` / `health` / `layout` / `missed` / `lastValues` 與 `rec:` 開頭的鍵會通知;
-  **`runs` 與 `diag` 一律排除**(每次抓取都在變,拿來重繪會讓畫面不停重畫)。
-  同一批連續變更去抖 50 毫秒只通知一次;回傳的函式可取消訂閱。
+  只看 `local` 這個 area,只有 `tasks` / `health` / `layout` / `missed` / `lastValues` 與紀錄鍵(`rec:`／`rec2:`)會通知;
+  **`runs:` 與 `diag` 一律排除**(每次抓取都在變,拿來重繪會讓畫面不停重畫)。
+  同一批連續變更去抖 50 毫秒只通知一次,handler 收到 `{ keys, dates }`(AF-21;`dates` 是變動紀錄鍵的日期),Report 依此決定要不要重畫(§8);回傳的函式可取消訂閱。
 - 紀錄欄位(除既有的 `taskId`/`slot`/`capturedAt`/`value`/`raw`/`status`/`strategyUsed`/`layer` 外):
   `alert` 與 `alertHits`(§10 命中告警時才有)、`used` / `skipped`(§7 區塊聚合用了幾格、跳過幾格)、
-  `partial`(§7 只抓到部分,**只有為真時才寫**)、`error`(失敗原因)、`snippet`(找不到元素時的 DOM 片段)、
+  `partial`(§7 只抓到部分,**只有為真時才寫**)、`error`(失敗原因)、`rawTruncated`(`raw` 被截斷時)、
   `label`(§7 位置定位抓的是哪一列;**只有用位置定位時才寫**)。
 - 日檔 schema:
   ```json
@@ -963,6 +974,8 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
      (只設 `value` 對 React 之類的表單無效),再點送出鈕。
   4. 等重新載入完成,依 `successCheck` 判定;成功 `failStreak` 歸零,失敗則累加。
 - 有 2FA / 驗證碼的站台不支援自動登入;連續 3 次登入失敗即停用該站台並通知一次。
+- **站台設定面板的守門**(AF-21):缺選擇器、缺密碼、缺成功判定值都是「還不能儲存」的可點原因;判定型別是網址開頭時,**判定值與登入頁網址互為前綴不給存**(在登入頁上也會判定成功)。「用目前這一頁的網址」一鍵帶入分頁實際網址的 origin＋路徑。儲存站台時 `failStreak` 歸零、`enabled` 設回、刪掉 `site:<origin>` 的紅燈。
+- **測試登入**(`MSG.TEST_LOGIN`,不在 content 可送清單):以面板上**尚未儲存**的設定經 `enqueueForOrigin`／`acquireFetchTab` 走 `attemptLogin`,回四步結果(開頁／找欄位／送出／判定);已是登入狀態回 `alreadyLoggedIn`、**不得回報成功**;不累加失敗計數、不停用、不通知;明文密碼只在這一則訊息與函式參數裡,不寫進 diag／紀錄／session／ctx。
 - `login_failed` 是紀錄狀態之一,**不算成功**,而且**不重試**(密碼錯了重試幾次都一樣)。
 
 - **站台設定面板**(`ui/site/`,side panel):每次重畫都從乾淨狀態起算(切到沒有站台設定的分頁時
@@ -1039,7 +1052,7 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
       - **「找得到」的判準是：定位成功，而且那個索引在排除前的完整清單裡**（AF-17：完整清單指**剝空白之前**的；排除項指到被剝掉的空白列算找到、只算一次、不亮黃燈）。兩種情形定位函式回成功、卻濾不到任何格子，都算找不到：
         標題是空字串時 `locateByHeader` 直接回原索引、不檢查範圍(索引越界);整列帶 `inner` 時清單只有每格的網格起點,排除項指到被 `colspan` 涵蓋的欄(AF-16 終檢)。
     - 結果多帶 `excluded`（被 `skip` 與 `exclude` 移掉的筆數，**不含剝掉的頭尾空白**，0 時不放鍵）；多值任務每個 block 值各自帶 `excluded` 與 `message`。
-    - 結果多帶 `blank`（剝掉的頭尾空白格數，0 時不放鍵），**只給立即測試預覽**，`fetcher` 寫紀錄不抄（紀錄格式與匯出不變）。不計入 `excluded`：沒設略過與排除的人不能看到「略過與排除 2 格」。
+    - 結果多帶 `blank`（剝掉的頭尾空白格數，0 時不放鍵），**只給試抓預覽**，`fetcher` 寫紀錄不抄（紀錄格式與匯出不變）。不計入 `excluded`：沒設略過與排除的人不能看到「略過與排除 2 格」。
     - **逐格處置明細 `items`**（AF-17）：整欄／整列（非 `pos` 取格、非儲存格）結果**一律**帶 `items: [{ index, header, use, raw?, number? }]`，順序即清單順序。
       `index` 是另一軸索引、`header` 是另一軸標題（整欄列標題、整列欄標題）；`raw` 只在解析得到時帶；`number` 只在 `use === 'used'` 時帶（與聚合同一份 `parseNumber`）。
       `use` 八態依優先順序判定：`trimmed`（頭尾空白已略過）→ `skipHead`／`skipTail` → `excluded` → `unresolved`（找不到子路徑）→ `blank`（空白，含 `blank` 關著時的頭尾空白）→ `nonnumeric` → `used`。
@@ -1048,7 +1061,7 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
       多值任務的逐值結果是擷取端白名單組出來的，成功那條抄 `blank` 與 `items`、失敗那條抄 `items`。
       **不走 dryRun 旗標、不走訊息欄位**：紀錄寫入本來就逐欄挑選（`fetcher.js` 單值與多值兩處），不會夾帶；`items` 與 `blank` **不得**加進那兩份白名單，也不進診斷包（`buildDebug` 只吃 `error`／`message`）。
       **消費端**：紀錄的 `excluded` 與 `error`（`message` 寫進成功紀錄的 `error`，狀態仍是 `fallback`；燈號只看 `status`，不會當成失敗）、
-      歷史頁明細「略過與排除格數 (excluded)」與「非數字格數 (skipped)」、立即測試預覽「用了 U 格、非數字 S 格、略過與排除 E 格」（AF-17：有剝掉頭尾空白時「非數字 S 格」後接「、空白 B 格」）與「看抓到的格子」明細表、白話描述。
+      歷史頁明細「略過與排除格數 (excluded)」與「非數字格數 (skipped)」、試抓預覽「用了 U 格、非數字 S 格、略過與排除 E 格」（AF-17：有剝掉頭尾空白時「非數字 S 格」後接「、空白 B 格」）與「看抓到的格子」明細表、白話描述。
       **口徑**：`skipped` 是解析不到（非數字）的格、`excluded` 含略過頭尾與點選排除兩種，標籤照口徑寫——只設略過的人不能看到「排除 1 格」。
     - **規格比對**：`pickSpecOf` 抄 `exclude`（經 `putExclude`）、不抄 `skip`；`sameSpec` 的 `stripPos` 同時剝掉 `block.exclude` 與 `block.skip`——
       排除清單不是值的身分，重選改了排除仍是同一個值、同一條序列。重選時 `exclude` **以這次選的為準**，`skip` 與 `aggregate` 一樣從舊任務保回來（新加的 block 值也套上）。
@@ -1093,7 +1106,7 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
   「標題『…』找不到;目前這張表的列標題是:A、B、C(超過 5 個只列 5 個並說總數);
   若這張表每天新增一列,請到任務設定改用位置定位」,列與欄各說各的軸;
   **一個標題都沒有時**改說「目前這張表沒有列標題」,不留下「是:」後面的空白。
-  而且**要一路走到使用者眼前**:多值任務的每個值各自帶、寫進紀錄的 `error`、「立即測試」優先顯示它
+  而且**要一路走到使用者眼前**:多值任務的每個值各自帶、寫進紀錄的 `error`、「試抓」優先顯示它
   (只顯示 `not_found` 等於告訴使用者「壞了」卻不說能怎麼辦)。
   儲存格的欄或列任一為 `fallback`,整格就是 `fallback`。
 - **多值的成敗分界**:表格本身解析不出來 → `{ok:false, error:'not_found'}`,這才走重試;
@@ -1116,7 +1129,7 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
 
   | 用父任務 id | 用序列 id |
   |---|---|
-  | 排程 alarm、執行帳本 `runs`、`inflight` | 紀錄的 `taskId` |
+  | 排程 alarm、執行帳本 `runs:<日期>`、`session.runState` | 紀錄的 `taskId` |
   | `health`、`missed`、`GET_NEXT_RUNS`、`MARK_READ` | `lastValues`、`alertLog`、通知 id |
   | 預檢、診斷、`notFoundStreak` | 卡片 `source`、歷史頁篩選、匯出的任務鍵 |
 
@@ -1168,7 +1181,7 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
   **「自動略過頭尾空白」勾選框**(`#skip-blank`,AF-17)在同一個 `[data-skip-row]` 裡,**新建時 HTML 預設勾選**,收集經同一份 `skipFromForm`、藏起來時一樣不寫;**編輯既有任務時照 `skipOf(舊 skip).blank` 回填**——舊任務沒有這個設定就不勾(勾起來等於替使用者改了抓法)。改勾選不觸發摘要卡與儲存摘要重算:白話描述(`describe.js`)不提空白,它是衛生預設,每個新任務都帶會變成噪音。
   單值整欄的逐欄組裝要帶上 pick 的 `exclude`(多值走展開,本來就留得住)。**換目標時 `render` 會再跑一次**:由 pick 建 `currentBlock` 不得把舊目標的 `exclude`、`inner`、`skip`、`pos` 併進來(新 pick 沒帶那個鍵就會殘留,排除列套到新表錯誤的列上)。
   值清單的 `[data-field-where]` 接「(排除 K 列)」／「(排除 K 格)」;位置定位下有排除清單時 `#pos-hint` 加一句「位置定位下排除不生效」;
-  「立即測試」對 block 值接「(用了 U 格、非數字 S 格、略過與排除 E 格)」(`blank` 大於 0 時「非數字 S 格」後接「、空白 B 格」,為 0 時字串不變),排除項找不到的訊息單值寫進 `#test-note`、多值接在該行的「⚠」之後。
+  「試抓」對 block 值接「(用了 U 格、非數字 S 格、略過與排除 E 格)」(`blank` 大於 0 時「非數字 S 格」後接「、空白 B 格」,為 0 時字串不變),排除項找不到的訊息單值寫進 `#test-note`、多值接在該行的「⚠」之後。
   **「看抓到的格子」明細表**(`<details id="test-detail">`,AF-17):在 `#test-note` 之後、預設 `hidden` 且收合;結果回來(**成功與失敗兩條路都畫**)只要任一值帶非空 `items` 就顯示,`<summary>`「看抓到的格子(N 格)」(N 為各值總和)。每個值一個 `section[data-detail-field]`,多值時段首 `[data-detail-name]` 是值名稱、單值不放;表格五欄「#／列標題或欄標題(依該值的軸)／內容／數字／處置」,每列 `data-use` 帶八態之一,處置文字對照表只有一份(採用／非數字／空白／頭尾空白（已自動略過）／略過開頭／略過結尾／排除／找不到子路徑)。內容欄單行截斷、完整文字放 `title`,內容區 `max-height` 捲動;非採用列 `--text-muted`、排除列 `--warn`;一律 `textContent`。下一次測試開始即清空、藏起、收合。列數不設上限(收合著)。儲存格與位置取格不帶 `items`,不顯示。
   **排除項找不到時預覽是警告色**(`#preview` 與 `#test-note` 帶 `data-state="warn"`,樣式用 `--warn`):值抓得到,但合計可能被加進去了,
   不能跟成功一樣是綠色;下一次測試開始時清掉警告狀態。
@@ -1186,7 +1199,7 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
   儲存前 `#save-summary` 顯示「將建立 1 個任務、N 個值」;**有略過設定時接上「,略過結尾 1 列」**(白話經 `describe.js` 的 `skipNote`,單位與略過欄位標籤共用 `skipUnitOf`)——
   略過是整個任務一份、存了就套到每個整欄整列的值,要在按儲存前說出來;欄位藏起來(改用位置定位)時不說。略過欄位與定位下拉一改就更新。
   告警列在多值任務多一個「套用到」下拉(空值 = 全部值),寫進 `alert.field`。
-  「立即測試」對多值任務逐值顯示預覽。
+  「試抓」對多值任務逐值顯示預覽。
 - 解析(`shared/table.js` 的 `parseTable`)→ 聚合(`shared/aggregate.js` 的 `aggregateCells`),
   兩層都是純函式;`extract.js` 的 block 分支串起來,**不走數值策略鏈**。
 - 對象是 HTML 表格的各種寫法,解析為二維陣列 `cells[row][col]`(只含資料列,表頭另外放 `headers`):
@@ -1330,7 +1343,7 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
 - **位置定位抓到的紀錄**(§7 的 `label`)在該列的 `title` 顯示「來源列:…」,展開明細另有一行。
   沒有它的話,「今天早上網站還沒更新」與「抓錯列」在畫面上長得一模一樣。
 - 右側依所選日期(或範圍)顯示紀錄;兩種表格模式切換:
-  - **紀錄列表**:時間 / 任務 / 值 / 狀態 / 策略,欄位可排序、可隱藏,順序可拖曳;失敗列展開錯誤與 DOM 片段。
+  - **紀錄列表**:時間 / 任務 / 值 / 狀態 / 策略,欄位可排序、可隱藏,順序可拖曳;失敗列展開錯誤。
   - **樞紐表**:列 = 時間、欄 = **序列**(單值任務一欄,多值任務每個值一欄),一眼比對同一時刻的所有值;欄順序沿用「任務」頁的排序 × 值的順序。
     與儀表板表格卡片共用同一個 `pivot()`,但**不吃卡片選項**(列軸標頭、容差、列數上限是卡片層的設定)。
 - 篩選:任務多選(**兩層**:父任務勾選 = 底下所有值一起勾,部分勾時父呈現 indeterminate;
@@ -1339,7 +1352,7 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
 - 樞紐表與「與另一天比較」的欄集合是 `buildSeriesIndex` 的 `seriesIds`(不是任務 id),
   多值任務的紀錄才對得上欄。
 - 範圍內摘要列:每任務的筆數、最大/最小/平均、首末值差;點任務名跳到只含該任務的折線(期間 = 目前範圍)。
-- 單筆紀錄可展開:原文 `raw`、所用策略、錯誤與 DOM 片段、對應的排程時間 vs 實際時間。
+- 單筆紀錄可展開(列內一顆展開鈕,`aria-expanded`,鍵盤可達):原文 `raw`(被截斷時標「已截斷」)、所用策略、錯誤、對應的排程時間 vs 實際時間。
 - 「與另一天比較」:選第二個日期,樞紐表並排顯示兩天同時刻的值與差異。
 - 表格設定(欄位、順序、模式 `tableMode`、篩選)記在 `settings.history`,隨設定匯出;
   URL hash 帶日期、篩選、值範圍、關鍵字、只看告警、分頁與比較日期,可加書籤或重新整理不丟狀態。
@@ -1351,7 +1364,8 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
 ### §8.4 任務頁
 
 - 所有任務清單(拖曳排序,此順序是全域預設順序;也是樞紐表的欄序)、啟用開關、下次執行時間、
-  最後狀態、**連續失敗次數**與最後錯誤(hover 顯示)、快速動作(立即抓取、編輯、複製、刪除、重新選取)。
+  最後狀態、**連續失敗次數**、快速動作(立即抓取、編輯、複製、刪除、重新選取)。
+- **狀態看得見**(AF-21):列依 health 掛 `failed`／`warn`／`paused`(判定只經 `record-status.js`),狀態 chip 綠／黃／紅／灰(停用顯示「停用中」);原因直接顯示成一行字;失敗列最前面給下一步(`selector_lost`／`parse_error` →「重選目標」、`login_failed` →「前往登入頁」、其他強調「立即抓取」)。零任務與篩選後為 0 各有空狀態(引導文字與 popup 共用 `describe.js` 的 `EMPTY_GUIDE`)。最近一次「立即抓取」的結果放模組層,跨重畫保留到該任務下一筆紀錄寫入。`#view=tasks&task=<id>` 捲到那一列並高亮。DOM 順序就是畫面順序(不用 CSS `order`,Tab 順序才對)。
 - 搜尋框(比對名稱與網址)與「只看失敗」勾選。
 - **多選與整批動作**(AF-19):每列最前面一顆勾選框(`[data-action="select"]`,`aria-label`「選取『名稱』」,被選的列帶 `.selected`);
   `Shift`＋點以上一次點的列到這一列做範圍(整段跟著被點那顆的新狀態),錨點不在目前畫面上就當一般點擊;
@@ -1375,15 +1389,16 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
   真實瀏覽器裡上一列會先失焦存檔並整份重畫(那顆按鈕節點被換掉、`click` 不會來),所以在 `pointerdown` 先記下意圖(`pendingRenameId`),存檔完成後兌現。
   開面板解不到報表所在分頁時在 `#task-note` 說明,不靜默。
 - **排程欄可點**(AF-19):`.task-schedule` 是 `button.task-link`(`data-action="edit-schedule"`,`title`「修改排程」),文字仍是 `describeSchedule`;點了走「改排程」,`taskIds` 只有這一個。
-- 編輯開同一個 Picker 表單(`picker.html?taskId=<id>`,帶入現值;沒有目標分頁時隱藏「立即測試」)。
+- 編輯開同一個 Picker 表單(`picker.html?taskId=<id>`,帶入現值;沒有目標分頁時隱藏「試抓」)。
 - **複製任務**:新 id、名稱加「(副本)」、**預設停用**、不自動加入儀表板。
-- **刪除保護**:對話框顯示「將一併刪除 N 筆紀錄」,並提供「先匯出再刪除」(先下載 CSV 成功才刪)。
+- **刪除保護**:共用對話框(`ui/modal.js`,真正的 modal:焦點在安全的那顆、`Esc` 取消、關閉後焦點回觸發元素;危險確認用 `btn-danger`,不是主要按鈕)顯示「將一併刪除 N 筆紀錄」,並提供「先匯出再刪除」(先下載成功才刪)。紀錄刪除、站台刪除、儀表板刪除、設定匯入確認、保留天數調低、抽屜未套用都用同一個;對話框節點若已不在文件上,`modal.js` 當成取消結束它(否則全頁的「有對話框開著」判定會卡住)。
 - **錯過清單橫幅**:列在清單上方,可逐筆勾選補抓或略過(`CATCH_UP_ONE` / `SKIP_ONE`)。
 - **重新選取**:開啟該任務的目標頁、等載入完成、注入後直接進入選取模式(§2);
   background 自己從任務組出 `locator` 與 `preselect`(多值走 `spec.fields`,單值走 `spec.block`)帶進 `ENTER_PICK`,
   新分頁沒有「上次右鍵的元素」可靠。啟動失敗才提示改用右鍵選單。
 - 下次執行時間一律向 background 詢問(`GET_NEXT_RUNS`),UI 不自行解析 alarm 名稱
   (預檢與重試 alarm 必須排除)。
+- **詞彙**(AF-21,`describe.js` 的 `TERMS` 是唯一來源):按鈕與區塊叫「試抓」(批次「全部試抓」)、聚合下拉叫「合計方式」、模式欄顯示白話(數字／文字／表格)。
 - 排程欄的文字走 `shared/describe.js` 的 `describeSchedule`(與 Picker 摘要卡、儲存回饋同一份),
   所以 interval 的**時段與星期都看得到**(「08:30～09:20 之間每 10 分鐘,週一～五」),
   不再只寫「每 15 分鐘」。
@@ -1398,11 +1413,16 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
 - 站台登入管理(§6):列出每個站台的 origin、帳號、啟用狀態、連續失敗次數、最近一次檢查結果;
   可停用 / 重新啟用(重新啟用會把 `failStreak` 歸零)/ 刪除。頂部固定顯示密碼保護的限度。
   **新增站台**走右鍵「設定此站台登入」開的獨立視窗(`ui/site/site.html`)。
+- **即時生效＋就地回饋**(AF-21):每一欄寫入成功顯示「已儲存」(`role="status"`);數值欄空白或超出範圍不寫入、欄位下說明原因、離開焦點回到上一個有效值;**調低保留天數先用對話框確認**「將會刪除 N 天以前的紀錄（約 M 筆）」。「排程健康」另列近 7 天的被瀏覽器中斷、取鎖逾時、擋下網頁訊息、背景錯誤次數(`countGuardEvents`,全部從診斷紀錄數,不掃紀錄)。
 - 偏好:保留天數、通知開關、預設額外等待秒數、**同一告警的通知間隔(分鐘,預設 60)**、**每日站台登入檢查時間(預設 08:00)**、深色模式(跟隨系統 / 亮 / 暗;AF-18 起 Picker／站台設定／popup／教學頁也套用)、**在右鍵選單顯示「使用教學」**(`#pref-help-menu`,缺省勾選;旁邊固定有「開啟使用教學」連結 `#open-help`,關掉這一項後仍找得到教學)。
 
 ### §8.6 圖表
 
 - 純 SVG 自繪,不引外部圖表庫;hover 顯示值與時間;缺值(失敗)以斷線呈現,不補 0;所有色彩取自 `ui/theme.css` 變數。
+- 折線與長條圖的 X 軸**依時間排序**(各序列時間戳的聯集;不是時間的標籤維持原順序)——抽樣後各序列保留的時間戳不同,用首見順序會讓線段回頭。
+- **抽樣**(AF-21):單一序列超過 600 點依時間分桶、每桶留最小與最大(保留尖峰、缺口仍在),卡片標「已抽樣顯示」;表格、匯出、趨勢浮層數值表不抽樣。
+- **重畫**(AF-21):Report 依 `subscribe` 的 `{ keys, dates }`——只有紀錄變動且與檢視範圍(儀表板用與取數同一份 `fetchRangeOf`)沒有交集就不動;儀表板只有紀錄／health／lastValues／missed 變動時輕量重畫(只換卡片內容,不重建側欄、頁籤、拖曳註冊,不關趨勢浮層);編輯版面、抽屜、趨勢浮層、拖曳進行中延後到結束再補。
+- **卡片設定抽屜是草稿**(AF-21):變更只改草稿並預覽在那張卡上,底部「套用」才一次 `updateCard`、「取消」丟掉;有變更時關閉(✕、`Esc`、點外面、開另一張卡)問「套用／捨棄／繼續編輯」(取消與 `Esc`＝繼續編輯)。抽屜開著時投放到同一張卡、或從同一張卡拖出移除把手,都併進草稿不直接寫。套用是**先寫入成功才關**,失敗時抽屜與草稿留著並說原因;離開儀表板分頁前先請抽屜關閉(選「繼續編輯」就不切頁)。切換儀表板時清空復原／重做堆疊;卡片與頁籤拖曳都要接 `pointercancel`(不接的話「忙碌中」永遠為真,之後的重畫全被延後)。
 
 ## §9 權限(manifest)
 
@@ -1413,7 +1433,7 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
 另設 `options_page: "ui/report/report.html"`,可從 `chrome://extensions` 的擴充功能選項開啟報表。
 `chrome.windows`(專用抓取視窗、前景抓取找最後聚焦的視窗,§4)**不需要宣告權限**。
 
-`web_accessible_resources`(`content/*.js`、`shared/*.js`,`matches: ["<all_urls>"]`)是**必要的**:
+`web_accessible_resources`(`matches: ["<all_urls>"]`)**只列 content 端靜態 import 閉包裡的 10 個檔**(AF-21 收斂;`tests/a4_conventions.test.js` D16 以閉包比對,多列漏列都紅)——`storage.js`、`crypto.js` 等不對網頁開放。它是**必要的**:
 content script 是 ES module,`executeScript({files})` 以傳統 script 注入會拋
 `Cannot use import statement outside a module`,注入必須改成 `executeScript({func: (url) => import(url)})`,
 而動態 import 只能讀 web accessible 的資源。代價是網頁可以探測本擴充功能是否安裝(列 BACKLOG)。
@@ -1426,7 +1446,9 @@ content script 是 ES module,`executeScript({files})` 以傳統 script 注入會
 `icons`(16/32/48/128)與 `action.default_icon` 為必填:通知的 `iconUrl` 只要載不到,
 Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runtime.getURL()` 取絕對網址**——
 相對路徑會相對於呼叫端的位址解析(service worker 是 `/background/`),在真實瀏覽器一律 404。
-所有通知走 `background/notify.js` 這個唯一入口,它同時負責遵守 `settings.notifications` 偏好。
+所有通知走 `background/notify.js` 這個唯一入口,它同時負責遵守 `settings.notifications` 偏好。`action.setIcon` 的路徑同理**以 `/` 開頭**(AF-21 煙霧測試抓到)。
+
+**sender 守門**(AF-21):`handleMessage` 把「有 `sender.tab` 且 `sender.url` 不是本擴充功能來源」的訊息視為 content script,只接受 `CONTENT_ALLOWED`(`PICKED`、`DESCEND_FRAME`),其餘回 `{ ok:false, error:'forbidden' }` 並記 `forbidden` 診斷;新增的訊息型別預設拒絕。
 
 ## §10 告警
 
@@ -1439,7 +1461,7 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
 - 觸發時發通知;**同一條件 60 分鐘內只通知一次**(`settings.alertCooldownMin` 可調),
   但紀錄一律標記——去重只針對通知。點通知會開報表並定位到該任務那一天。
 - Report:月曆對有告警的日期上色(與失敗分開)、歷史列標記並可展開看到命中哪一條、
-  「只看告警」可篩選;number 卡片沿用既有的閾值色機制,不另加一套顏色規則。
+  「只看告警」(`alertOnly`,`r.alert === true`)可篩選,與「只看失敗」(`failedOnly`)是兩個獨立條件(AF-21 拆開;舊網址的 `alertsOnly=1` 一直是只看失敗,`parseHash` 轉成 `failedOnly`);number 卡片沿用既有的閾值色機制,不另加一套顏色規則。
 - `deltaPct` 找不到前一筆成功紀錄、或前一筆是 0 時不命中(除以 0 沒有意義)。
 - **多值任務**:去重紀錄(`alertLog`)與通知 id 都用**子序列 id**,兩個值才不會互相把通知吃掉;
   `prevRecords` 也用子序列精確比對——用父任務比對會讓「買入」拿「賣出」的舊值算變動比例。
@@ -1449,7 +1471,7 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
 
 > `strategyUsed` 記的是這一筆值是怎麼來的:數值策略鏈的四種、區塊聚合的 `block`、單一儲存格的 `cell`。
 
-- 擷取來源(策略鏈,使用者在 Picker 選主策略,其餘為自動備援;紀錄寫入 `strategy_used`):
+- 擷取來源(策略鏈;Picker 的下拉只有 `auto` 與 `regex`,`attr`／`child`／`label` 仍支援但只能靠匯入設定,見 BACKLOG;其餘為自動備援;紀錄寫入 `strategyUsed`):
   1. `auto`:取元素 `innerText` 中第一個數字(預設)。
   2. `regex`:使用者給正則,取第一個群組(如從「餘額:1,234 元」取 `([\d,\.]+)`)。
   3. `attr`:取指定屬性(`value`、`data-*`、`title`、`aria-label`)——SPA 常把精確值放屬性、畫面顯示四捨五入。
@@ -1458,7 +1480,7 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
   - 主策略失敗時依 1→5 順序試其他策略,成功則紀錄標 `status: "fallback"` 並在 Report 提示。
   - 全部失敗或解析不出數字(如顯示「--」)→ `status: "parse_error"`,保留原文 `raw`,**不寫 0**。
 - 後處理:乘數(單位換算)、小數位數。
-- Picker 內「立即測試」按鈕:用目前設定對當前頁面實抓一次並顯示結果與所用策略,存檔前就能確認抓得到。
+- Picker 內「試抓」按鈕(AF-21 起詞彙統一為「試抓」,批次為「全部試抓」;詞彙表在 `describe.js` 的 `TERMS`):用目前設定對當前頁面實抓一次並顯示結果與所用策略,存檔前就能確認抓得到。
 
 ## §12 工具列圖示燈號與 popup
 
@@ -1473,8 +1495,8 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
 | 🔴 異常 | 預檢失敗(`login_failed` / `selector_lost` / `parse_error`)、重試用盡、站台自動登入被停用、連續 3 次失敗 | 紅底,數字 = 異常任務數 |
 | ⚪ 停用 | 沒有啟用中的任務,或使用者按「全部暫停」 | 灰底「II」 |
 
-- 狀態由 background 的 `health` 匯總;任何 run / 預檢 / 看門狗結束都重算並 `setBadgeText` / `setBadgeBackgroundColor` / `setIcon`。
-- 使用者在 popup 或 Report 看過該項(點開)即標已讀,黃/紅計數減少;問題真正解決(下次成功)才回綠。
+- 狀態由 background 的 `health` 匯總;任何 run / 預檢 / 看門狗結束都重算並 `setBadgeText` / `setBadgeBackgroundColor` / `setIcon`(圖示變體 `icons/icon-{green,yellow,red,gray}-*`,換圖失敗不影響其他)。
+- **已讀的語意**(AF-21):**紅燈不論已讀都計入等級**,已讀只讓它不進 badge 數字(紅燈但全部已讀時 badge 顯示 `!`);問題真正解決(下次成功)才回綠。黃燈與錯過清單已讀(「知道了」)後不計入,狀態改變才重新亮。**popup 開啟不再自動標已讀**。
 - **每抓一次就寫一次 health**(單值在 `writeRecord`、多值在整組寫完之後,兩處都呼叫同一個純函式
   `fetcher.js` 的 `healthFromRecords`——**狀態的算法只有那一份**),對應表由
   `shared/record-status.js` 的 `healthStatusOf` 提供,`background/health.js` 的紅/黃集合也引用同一份,
@@ -1487,10 +1509,10 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
   | `not_found` | `selector_lost` | 紅 |
   | `parse_error` / `login_failed` | 同名 | 紅 |
   | `error` | `failed` | 紅 |
+  | `interrupted` | 同名 | 紅 |
 
   **抓取成功會把 health 寫回 `ok`**:曾經失敗過的任務不會再永遠停在紅燈。
   health 寫在**父任務 id** 上,卡片以子序列 id 當來源時要先取父 id 才查得到。
-- `setIcon` 的圖示變體還沒接(見 BACKLOG)。
 - 圖示 `title`(滑鼠停留)顯示一行摘要:「2 個任務異常:A 無法登入、B 找不到元素」。
 
 ### §12.2 popup
@@ -1499,6 +1521,7 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
   異常項目有「立即重試」「開啟頁面」(開目標 URL 讓使用者自己處理,例如手動登入或看網站改版);
   底部「全部暫停 / 恢復」、「開啟 Report」。
 - popup 只讀 storage 與發訊息,不做抓取。
+- **下一步**(AF-21):每個異常列有「知道了」,清單上方有「全部知道了」;紅項知道了之後顯示「已知悉・尚未修復」與「停用這個任務」。依狀態給下一步(重選目標 → `report.html#view=tasks&task=<id>`、前往登入頁);站台紅燈畫成一列(前往登入頁＋「在登入頁按右鍵 → AutoFetcher → 設定此站台登入」提示,side panel 不能從 popup 代開)。零任務時三步引導;頁尾有「使用教學」、開啟報表、全部暫停。同一畫面只有一顆主要按鈕(「在這個頁面選取」)。
 - **最上方是主要入口 `#pick-here`「在這個頁面選取」**:查目前分頁,送
   `ENTER_PICK{purpose:'task', tabId, frameId: 0}`,成功即關閉 popup。
   不是 `http`/`https` 的頁面(擴充功能頁、`chrome://`)顯示 `#pick-here-note`
@@ -1526,4 +1549,4 @@ Chrome 會讓**整則通知不顯示**。且 `iconUrl` **必須用 `chrome.runti
 | 沒有 `chrome.sidePanel`(114 以下) | 設定畫面開不起來 | `shared/panel.js` 退回原本的彈出視窗,並記 `panel_fallback` 診斷 |
 
 - 驗收:Puppeteer 煙霧腳本以環境變數 `BROWSER_PATH` 指定執行檔,CI/本機各跑一次 Chrome 與 Edge(未安裝 Edge 時自動略過並標示)。
-- 使用者可見差異只有一處:設定頁「排程健康」顯示目前瀏覽器名稱與版本(`navigator.userAgentData`)。
+- 使用者可見的行為兩個瀏覽器相同。

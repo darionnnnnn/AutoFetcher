@@ -226,6 +226,7 @@ const bgTask = (spec, over = {}) => ({
 test('單值重選：舊任務的 skip.blank 保回來', async () => {
   const { st, bg } = await freshBg()
   await st.saveTask(bgTask({ mode: 'block', block: { axis: 'col', index: 1, headerText: '點金靈', aggregate: 'max', skip: ON } }))
+  await chrome.storage.session.set({ repickTabs: { 't1': 3 } })
   await bg.handleMessage({ type: 'PICKED', purpose: 'repick', taskId: 't1', locator: { css: '#t' }, picks: [colPick()] }, sender)
   const back = await st.getTask('t1')
   assert.deepEqual(back.spec.block.skip, ON)
@@ -237,6 +238,7 @@ test('多值重選：只設 blank 的舊任務，key 不變、每個值（含新
     mode: 'block',
     fields: [{ key: 'gold', block: { axis: 'col', index: 1, headerText: '點金靈', aggregate: 'max', skip: ON } }]
   }, { fields: [{ key: 'gold', name: '點金靈' }] }))
+  await chrome.storage.session.set({ repickTabs: { 't1': 3 } })
   await bg.handleMessage({
     type: 'PICKED', purpose: 'repick', taskId: 't1', locator: { css: '#t' },
     picks: [colPick(), { block: { axis: 'col', index: 2, headerText: 'TSWEB' } }]

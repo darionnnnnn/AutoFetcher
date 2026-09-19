@@ -107,7 +107,7 @@ test('number 抓取失敗顯示破折號而不是 0，並在 title 帶錯誤原�
   const el = CR.renderCard(card(), ctx)
   assert.ok(text(el).includes('—'))
   assert.ok(!/\b0\b/.test(text(el).replace(/近 \d+ 天/, '')), `失敗不可顯示 0：${text(el)}`)
-  const holder = el.querySelector('[title]')
+  const holder = el.querySelector('.card-body [title]')
   assert.ok(holder && holder.getAttribute('title').includes('找不到元素'))
 })
 
@@ -139,8 +139,8 @@ test('number 超過閾值時加上 threshold-hit 類別', () => {
 
 test('number 可選顯示迷你走勢圖', () => {
   const ctx = baseCtx({ records: [rec('t1', '2026-09-05T09:00', 1), rec('t1', '2026-09-06T09:00', 2)] })
-  assert.ok(CR.renderCard(card({ options: { sparkline: true } }), ctx).querySelector('svg'))
-  assert.equal(CR.renderCard(card({ options: { sparkline: false } }), ctx).querySelector('svg'), null)
+  assert.ok(CR.renderCard(card({ options: { sparkline: true } }), ctx).querySelector('.card-body svg'))
+  assert.equal(CR.renderCard(card({ options: { sparkline: false } }), ctx).querySelector('.card-body svg'), null)
 })
 
 test('number 完全沒有紀錄時顯示破折號', () => {
@@ -174,8 +174,8 @@ test('line 點擊資料點時呼叫 onPointClick 並帶任務與日期', () => {
 
 test('line 卡片的 Y 軸範圍選項會傳給圖表', () => {
   const ctx = baseCtx({ records: [rec('t1', '2026-09-05T09:00', 1), rec('t1', '2026-09-06T09:00', 2)] })
-  const a = CR.renderCard(card({ type: 'line', options: { yMin: 0, yMax: 10 } }), ctx).querySelector('path').getAttribute('d')
-  const b = CR.renderCard(card({ type: 'line', options: { yMin: 0, yMax: 1000 } }), ctx).querySelector('path').getAttribute('d')
+  const a = CR.renderCard(card({ type: 'line', options: { yMin: 0, yMax: 10 } }), ctx).querySelector('.card-body > svg path').getAttribute('d')
+  const b = CR.renderCard(card({ type: 'line', options: { yMin: 0, yMax: 1000 } }), ctx).querySelector('.card-body > svg path').getAttribute('d')
   assert.notEqual(a, b)
 })
 
@@ -276,4 +276,20 @@ test('status 顯示錯過筆數', () => {
   const ctx = baseCtx({ missed: [{ taskId: 't1', slot: 'x' }, { taskId: 't1', slot: 'y' }] })
   const el = CR.renderCard(card({ type: 'status', source: [], options: { taskIds: ['t1'] } }), ctx)
   assert.ok(/錯過\s*2/.test(text(el)) || text(el).includes('2'), `實得：${text(el)}`)
+})
+
+test('status：休眠空窗（gap）不算成「錯過一格」，說休眠期間略過幾次（AF-21）', () => {
+  const ctx = baseCtx({ missed: [{ taskId: 't1', slot: 'x' }, { taskId: 't1', kind: 'gap', count: 7, from: '2026-09-18T01:00', slot: '2026-09-18T02:00' }] })
+  const el = CR.renderCard(card({ type: 'status', source: [], options: { taskIds: ['t1'] } }), ctx)
+  assert.match(text(el), /錯過\s*1/)
+  assert.match(text(el), /休眠期間略過 7 次/)
+})
+
+test('status：停用中的任務顯示「停用中」灰色 chip，不沿用上一次的狀態（AF-21）', () => {
+  const ctx = baseCtx({ health: { t1: { status: 'ok' } } })
+  ctx.parentTasksById = { ...ctx.parentTasksById, t1: { ...ctx.parentTasksById.t1, enabled: false } }
+  const el = CR.renderCard(card({ type: 'status', source: [], options: { taskIds: ['t1'] } }), ctx)
+  const chip = el.querySelector('.status-state')
+  assert.equal(chip.textContent, '停用中')
+  assert.ok(chip.classList.contains('is-off'))
 })

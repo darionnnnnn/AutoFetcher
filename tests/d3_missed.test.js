@@ -12,8 +12,11 @@ async function fresh() {
   return { c, st, ms }
 }
 
+// createdAt 固定在測試時間軸之前：computeMissedSlots 不算建立之前的格子，
+// 沒有這一欄的話 saveTask 會填「真實的現在」，所有假時間軸的格子都會被擋掉
 const daily = (id, times, weekdays = [0, 1, 2, 3, 4, 5, 6]) => ({
   id, name: id, url: 'https://a.test/p', mode: 'number', enabled: true,
+  createdAt: new Date(2026, 0, 1).getTime(),
   schedule: { type: 'daily', times, weekdays }
 })
 

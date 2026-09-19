@@ -24,7 +24,7 @@ const rec = (over = {}) => ({
 
 test('init 在空 storage 建立 schemaVersion 與預設 settings', async () => {
   const s = await fresh()
-  assert.equal(await s.getSchemaVersion(), 2)
+  assert.equal(await s.getSchemaVersion(), 3)
   const st = await s.getSettings()
   assert.equal(st.retentionDays, 365)
 })
@@ -98,7 +98,7 @@ test('每個日期各自一個 storage 鍵,不是一個大物件', async () => {
   const s = await fresh()
   await s.appendRecord('2026-09-05', rec())
   const all = await chrome.storage.local.get(null)
-  assert.ok('rec:2026-09-05' in all, '應以 rec:<date> 為鍵')
+  assert.ok('rec2:2026-09-05:' + rec().slot.slice(11, 13) in all, '應以 rec2:<date>:<HH> 為鍵')
   assert.ok(!('records' in all), '不得把所有日期塞進單一 records 鍵')
 })
 
@@ -153,7 +153,7 @@ test('schemaVersion 缺少時 init 補成現行版本且保留既有資料', asy
   await c.storage.local.set({ tasks: [task()] })
   const s = await import('../src/shared/storage.js?t=' + Math.random())
   await s.init()
-  assert.equal(await s.getSchemaVersion(), 2)
+  assert.equal(await s.getSchemaVersion(), 3)
   assert.equal((await s.getTasks()).length, 1, '既有資料不得被清掉')
 })
 

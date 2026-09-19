@@ -60,7 +60,9 @@ function formatJson(days, seriesIndex, isSingleDay) {
           records: []
         }
       }
-      dayTasks[taskId].records.push(record)
+      // snippet 是頁面片段（可能含 token／個資），舊紀錄帶著也不匯出（AF-21 定案 5）
+      const { snippet, ...rest } = record
+      dayTasks[taskId].records.push(rest)
     }
     return { date, tasks: dayTasks }
   })
@@ -106,26 +108,26 @@ async function loadThemeCss() {
   } catch {}
 
   return `:root {
-      --bg: var(--bg, canvas);
-      --surface: var(--surface, canvas);
-      --text: var(--text, canvastext);
-      --text-muted: var(--text-muted, gray);
-      --border: var(--border, currentColor);
-      --primary: var(--primary, currentColor);
-      --danger: var(--danger, currentColor);
-      --danger-bg: var(--danger-bg, canvas);
-      --hover: var(--hover, canvas);
+      --bg: rgb(248, 250, 252);
+      --surface: rgb(255, 255, 255);
+      --text: rgb(15, 23, 42);
+      --text-muted: rgb(100, 116, 139);
+      --border: rgb(226, 232, 240);
+      --primary: rgb(37, 99, 235);
+      --danger: rgb(220, 38, 38);
+      --danger-bg: rgb(254, 242, 242);
+      --hover: rgb(241, 245, 249);
       --radius: 6px;
-      --ok: var(--ok, currentColor);
-      --warn: var(--warn, currentColor);
-      --chart-1: var(--chart-1, currentColor);
-      --chart-2: var(--chart-2, currentColor);
-      --chart-3: var(--chart-3, currentColor);
-      --chart-4: var(--chart-4, currentColor);
-      --chart-5: var(--chart-5, currentColor);
-      --chart-6: var(--chart-6, currentColor);
-      --chart-7: var(--chart-7, currentColor);
-      --chart-8: var(--chart-8, currentColor);
+      --ok: rgb(22, 163, 74);
+      --warn: rgb(217, 119, 6);
+      --chart-1: rgb(37, 99, 235);
+      --chart-2: rgb(22, 163, 74);
+      --chart-3: rgb(234, 88, 12);
+      --chart-4: rgb(147, 51, 234);
+      --chart-5: rgb(8, 145, 178);
+      --chart-6: rgb(219, 39, 119);
+      --chart-7: rgb(202, 138, 4);
+      --chart-8: rgb(79, 70, 229);
       --surface-2: rgb(241, 245, 249);
       --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.1);
       --shadow-2: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
@@ -146,6 +148,14 @@ async function loadThemeCss() {
       --warn-soft: rgba(217, 119, 6, 0.1);
       --danger-soft: rgba(220, 38, 38, 0.1);
       --radius-lg: 10px;
+      --on-primary: rgb(255, 255, 255);
+      --primary-strong: rgb(37, 99, 235);
+      --ok-text: rgb(21, 128, 61);
+      --warn-text: rgb(180, 83, 9);
+      --danger-text: rgb(185, 28, 28);
+      --danger-strong: rgb(220, 38, 38);
+      --text-subtle: rgb(148, 163, 184);
+      --radius-sm: 4px;
     }`
 }
 
@@ -343,8 +353,8 @@ export async function buildHtmlReport({ from, to, dashId }) {
       display: inline-flex;
       align-items: center;
     }
-    .diff-up { color: var(--ok); background: var(--ok-soft); }
-    .diff-down { color: var(--danger); background: var(--danger-soft); }
+    .diff-up { color: var(--ok-text); background: var(--ok-soft); }
+    .diff-down { color: var(--danger-text); background: var(--danger-soft); }
     .card-table {
       width: 100%;
       border-collapse: collapse;
@@ -382,18 +392,19 @@ export async function buildHtmlReport({ from, to, dashId }) {
     .status-state, .status-next, .status-missed {
       font-size: var(--text-xs, 0.8rem);
     }
-    .status-state {
+    /* 狀態 chip：文字色用 --*-text（對比達標），底色用 soft；狀態清單卡依 health 掛 is-ok／is-warn／is-bad／is-off */
+    .status-state, .status-missed {
       padding: 2px 8px;
       border-radius: 9999px;
-      background: var(--ok-soft);
-      color: var(--ok);
+      background: var(--surface-2);
+      color: var(--text-muted);
     }
-    .status-missed {
-      padding: 2px 8px;
-      border-radius: 9999px;
-      background: var(--danger-soft);
-      color: var(--danger);
-    }
+    .chip.is-ok { background: var(--ok-soft); color: var(--ok-text); }
+    .chip.is-warn { background: var(--warn-soft); color: var(--warn-text); }
+    .chip.is-bad { background: var(--danger-soft); color: var(--danger-text); }
+    .chip.is-off { background: var(--surface-2); color: var(--text-muted); }
+    /* 卡片帶出的內嵌 SVG 圖示（ui/icons.js，outerHTML 帶出的靜態標記） */
+    svg.icon { width: 16px; height: 16px; flex-shrink: 0; vertical-align: middle; }
     .records-section {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -439,7 +450,7 @@ export async function buildHtmlReport({ from, to, dashId }) {
     }
     .report-table tbody tr.status-failed {
       background: var(--danger-bg);
-      color: var(--danger);
+      color: var(--danger-text);
     }
     .empty-state {
       text-align: center;
@@ -501,12 +512,45 @@ export async function buildExport({ from, to, format, dashId }) {
   return { filename, content }
 }
 
-// 觸發使用者手動下載檔案（呼叫 chrome.downloads.download，saveAs 恆為 true）
-export async function download({ filename, content }) {
+// object URL 最晚多久釋放（AF-21 批次 3 定案 5）：另存視窗開著時提早 revoke 會讓下載失敗
+const REVOKE_AFTER_MS = 60000
+
+// 觸發使用者手動下載檔案（呼叫 chrome.downloads.download，saveAs 恆為 true）。
+// 內容走 Blob＋object URL（data: URL 大範圍匯出會超過長度上限）；呼叫端都在擴充功能頁。
+// object URL 在下載完成／中斷或 REVOKE_AFTER_MS 後（先到者）才釋放；opts.revokeAfterMs 只給測試縮短等待
+export async function download({ filename, content }, opts = {}) {
   const isCsv = typeof filename === 'string' && filename.endsWith('.csv')
   const isHtml = typeof filename === 'string' && filename.endsWith('.html')
   const mime = isCsv ? 'text/csv' : (isHtml ? 'text/html' : 'application/json')
-  const url = `data:${mime};charset=utf-8,${encodeURIComponent(content)}`
-  return await chrome.downloads.download({ url, filename, saveAs: true })
+  const url = URL.createObjectURL(new Blob([content], { type: mime }))
+  let downloadId = null
+  let timer = null
+  let done = false
+  const endedEarly = new Set()
+  const release = () => {
+    if (done) return
+    done = true
+    clearTimeout(timer)
+    chrome.downloads.onChanged.removeListener(onChanged)
+    URL.revokeObjectURL(url)
+  }
+  function onChanged(delta) {
+    const state = delta?.state?.current
+    if (state !== 'complete' && state !== 'interrupted') return
+    if (downloadId === null) endedEarly.add(delta.id)
+    else if (delta.id === downloadId) release()
+  }
+  chrome.downloads.onChanged.addListener(onChanged)
+  timer = setTimeout(release, opts.revokeAfterMs ?? REVOKE_AFTER_MS)
+  // Node 測試環境裡計時器會把行程多留 60 秒；瀏覽器的 setTimeout 回數字，沒有 unref
+  timer?.unref?.()
+  try {
+    downloadId = await chrome.downloads.download({ url, filename, saveAs: true })
+  } catch (e) {
+    release()
+    throw e
+  }
+  if (endedEarly.has(downloadId)) release()
+  return downloadId
 }
 

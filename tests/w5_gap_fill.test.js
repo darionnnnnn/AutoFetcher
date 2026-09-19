@@ -189,6 +189,6 @@ test('預覽：多值有一個值排除項找不到——預覽是警告色', as
 })
 
 test('picker.html 有警告狀態的樣式，而且只用色彩變數', () => {
-  assert.match(pickerHtml, /#preview\[data-state="warn"\]\s*\{[^}]*var\(--warn\)/)
-  assert.match(pickerHtml, /#test-note\[data-state="warn"\]\s*\{[^}]*var\(--warn\)/)
+  assert.match(pickerHtml, /#preview\[data-state="warn"\]\s*\{[^}]*var\(--warn(-text)?\)/)
+  assert.match(pickerHtml, /#test-note\[data-state="warn"\]\s*\{[^}]*var\(--warn(-text)?\)/)
 })

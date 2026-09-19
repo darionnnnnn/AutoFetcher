@@ -192,6 +192,15 @@ test('D13 守門:tabs.sendMessage 一律指名 frameId(否則會廣播給每個 
   assert.deepEqual(offenders, [], `tabs.sendMessage 必須帶第 3 個引數指定 frameId:${offenders.join(', ')}`)
 })
 
+// AF-21 批次 2 定案 6:沒有逾時的送訊息只要回應遺失就吊到 service worker 被回收。
+// background 一律經 messaging.js 的 sendToFrame(帶逾時、會清計時器)。
+test('D13b 守門:background 的 chrome.tabs.sendMessage( 只准出現在 messaging.js', () => {
+  const files = jsFiles().filter(p => rel(p).startsWith('background/'))
+  assert.ok(files.length > 0, '要先掃到 background 的檔案')
+  const hits = files.filter(p => read(p).includes('chrome.tabs.sendMessage(')).map(rel).sort()
+  assert.deepEqual(hits, ['background/messaging.js'], `這些檔案直接呼叫 chrome.tabs.sendMessage:${hits.join(', ')}`)
+})
+
 // AF-12:正式碼不得留測試用的後門。
 // `src/background/main.js` 的 `RUN_TASK` 曾把 `msg.__testOpts` 展開進 `runTask`——
 // 等於任何送得出 runtime 訊息的來源都能改抓取時序、把這次改成 dryRun、或改成 scheduled 去偷排程槽。
@@ -223,4 +232,46 @@ test('D14 守門:正式碼不得含測試後門(__test、__calls、測試檔名�
   }
   assert.deepEqual(offenders, [],
     `正式碼裡有測試後門(測試要縮短等待請走函式參數,不要走訊息欄位):${NL}${offenders.join(NL)}`)
+})
+
+test('D16 守門:manifest 的 web_accessible_resources 恰好是 content 端的靜態 import 閉包', () => {
+  // 注入是 background/inject.js 在頁面裡 import() content/main.js,被 import 的檔案都得在 WAR 裡;
+  // 但 WAR 對 <all_urls> 開放,多列一個(例如 shared/crypto.js)任何網站都 fetch 得到(AF-21 批次 3 定案 4)
+  const NL = String.fromCharCode(10)
+  const posix = (p) => p.split(sep).join('/')
+  const closure = new Set()
+  const stack = ['content/main.js', 'content/picker-mode.js']
+  const fromRe = /^\s*(?:import|export)\b[^'"]*?\bfrom\s*['"]([^'"]+)['"]/gm
+  const bareRe = /^\s*import\s*['"]([^'"]+)['"]/gm
+  while (stack.length) {
+    const f = stack.pop()
+    if (closure.has(f)) continue
+    closure.add(f)
+    const src = read(join(SRC, f))
+    const dir = f.includes('/') ? f.slice(0, f.lastIndexOf('/')) : ''
+    for (const re of [fromRe, bareRe]) {
+      for (const m of src.matchAll(re)) {
+        const spec = m[1]
+        assert.ok(spec.startsWith('.'), `${f} 匯入了非相對路徑 ${spec},網頁端解析不到`)
+        const parts = dir ? dir.split('/') : []
+        for (const seg of spec.split('/')) {
+          if (seg === '..') parts.pop()
+          else if (seg !== '.') parts.push(seg)
+        }
+        stack.push(posix(parts.join('/')))
+      }
+    }
+  }
+  assert.ok(closure.size > 2, `閉包只有入口,等於沒沿 import 走下去,實得 ${[...closure].join(', ')}`)
+  // inject.js 用 getURL 取得的入口檔也必須在閉包內
+  const inject = read(join(SRC, 'background', 'inject.js'))
+  const entries = [...inject.matchAll(/getURL\(\s*['"]([^'"]+)['"]\s*\)/g)].map(m => m[1])
+  assert.ok(entries.length > 0, 'inject.js 找不到 getURL 的入口檔')
+  for (const e of entries) assert.ok(closure.has(e), `注入入口 ${e} 不在 content 閉包裡`)
+
+  const manifest = JSON.parse(read(join(SRC, 'manifest.json')))
+  const listed = (manifest.web_accessible_resources || []).flatMap(w => w.resources || [])
+  assert.ok(listed.length > 0, 'manifest 沒有 web_accessible_resources')
+  assert.deepEqual([...listed].sort(), [...closure].sort(),
+    `WAR 清單要與 content 端 import 閉包完全相等(多列會外洩、漏列會注入失敗)${NL}清單:${listed.join(', ')}${NL}閉包:${[...closure].sort().join(', ')}`)
 })

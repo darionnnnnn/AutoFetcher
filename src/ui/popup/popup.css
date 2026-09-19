@@ -1,0 +1,204 @@
+/* 工具列 popup 樣式。載入順序：theme.css → ui.css → popup.css。
+   按鈕四種、狀態 chip、焦點環、[hidden]、box-sizing、reduced-motion 由 ui.css 提供；本檔只管版面。
+   版面層級（AF-21 8-B）：燈號 chip＋摘要句 → 唯一的主要按鈕 → 任務清單（兩行一列）→ 頁尾次要連結 */
+* { margin: 0; padding: 0; }
+body {
+  width: 360px;
+  font-size: var(--text-sm);
+  color: var(--text);
+  background: var(--bg);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* popup 版面較密：按鈕最小 28px（ui.css 預設 32px） */
+button {
+  min-height: 28px;
+  font-size: var(--text-xs);
+  line-height: 1.2;
+}
+a, button { cursor: pointer; }
+.icon { flex-shrink: 0; pointer-events: none; }
+button.has-icon { gap: var(--space-1); }
+
+/* 頂部：燈號 chip＋摘要句（最多兩行） */
+.popup-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+#status-dot { margin-top: 1px; }
+#status-summary {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 主要按鈕：滿寬、畫面上唯一一顆實心鈕 */
+#pick-here {
+  width: 100%;
+  min-height: 36px;
+  font-size: var(--text-sm);
+}
+#pick-here-note:empty { display: none; }
+#pick-here-note {
+  margin-top: calc(-1 * var(--space-2));
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+/* 清單標題列：左「任務」、右「全部知道了」 */
+.list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 28px;
+  margin-bottom: calc(-1 * var(--space-2));
+}
+.list-title {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+#ack-all { padding: 0 var(--space-2); }
+
+#task-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 380px;
+  overflow-y: auto;
+}
+
+/* 任務列：兩行（名稱＋最後值／狀態 chip＋下次時間）；異常列左側 3px 狀態色條 */
+.task-row,
+.site-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid transparent;
+  border-radius: var(--radius);
+}
+.task-row.is-warn { border-left-color: var(--warn); }
+.task-row.is-bad,
+.site-row.is-bad { border-left-color: var(--danger); }
+.task-row.disabled .task-main { opacity: 0.7; }
+
+.task-main {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.task-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-value {
+  flex-shrink: 0;
+  max-width: 55%;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-sub {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.task-next { font-variant-numeric: tabular-nums; margin-left: auto; }
+.task-reason {
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.task-reason.is-warn { color: var(--warn-text); }
+.task-reason.is-bad { color: var(--danger-text); }
+
+.task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+.task-actions button { padding: 0 var(--space-2); }
+.next-step,
+.retry { color: var(--primary); border-color: var(--primary); font-weight: 600; }
+.next-step:hover,
+.retry:hover { background: var(--primary-soft); }
+.ack-note { font-size: var(--text-xs); color: var(--text-muted); }
+.task-run-result { font-size: var(--text-xs); color: var(--text-muted); flex-basis: 100%; }
+.site-hint { font-size: var(--text-xs); color: var(--text-muted); line-height: 1.4; }
+
+/* 休眠空窗提示 */
+#missed-gaps { display: flex; flex-direction: column; gap: var(--space-1); }
+.missed-gap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+/* 零任務引導 */
+.empty-guide {
+  text-align: left;
+  align-items: stretch;
+  padding: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.empty-guide ol { margin: var(--space-1) 0 var(--space-1) var(--space-4); }
+
+/* 頁尾：次要連結列（開啟報表、使用教學、全部暫停） */
+.popup-foot {
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+}
+.popup-foot button { padding: 0 var(--space-2); }
+.help-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius);
+  color: var(--primary);
+  font-size: var(--text-xs);
+  text-decoration: none;
+}
+.help-link:hover { background: var(--primary-soft); text-decoration: underline; }
+.empty-guide .help-link { align-self: flex-start; padding: 0; }

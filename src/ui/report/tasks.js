@@ -1,8 +1,12 @@
-import { getTask, saveTasks, deleteTasks, getTasks, countRecordsForTasks, listDates, setPanelCtx } from '../../shared/storage.js'
+import { getTask, saveTasks, updateTasks, deleteTasks, getTasks, countRecordsForTasks, listDates, setPanelCtx, getHealthMap, getSites } from '../../shared/storage.js'
 import { openPanel } from '../../shared/panel.js'
+import { statusTextOf, isRed, isWarn } from '../../shared/record-status.js'
 import { MSG } from '../../shared/messages.js'
 import { buildExport, download } from '../../shared/export.js'
-import { describeSchedule, describeTarget, targetOfTask, exclusionOfTarget } from '../../shared/describe.js'
+import { confirmDialog, dismissDialog, isDialogOpen } from '../modal.js'
+import { icon } from '../icons.js'
+import { isGap, gapTextOf } from '../../shared/describe.js'
+import { describeSchedule, describeTarget, targetOfTask, exclusionOfTarget, EMPTY_GUIDE, TERMS } from '../../shared/describe.js'
 
 let currentTasks = []
 let currentHealth = {}
@@ -18,6 +22,71 @@ let pendingRenameId = null
 // 整批刪除對話框是依哪一組選取開的（單列刪除為 null）；選取一變就收掉，確認鈕刪的永遠是訊息說的那幾個
 let dialogSelectionSig = null
 const selectionSig = () => [...selectedIds].sort().join('|')
+// 最近一次「立即抓取」的結果（任務 id → { text, at }）：任務頁每次寫入都整份重畫，存在 DOM 上會被洗掉。
+// at 是結果回來當下該任務 health 的 at；重畫時 health 的 at 變了＝之後又寫了一筆紀錄，才清掉
+const runResults = new Map()
+
+// 狀態四態：停用 → paused、紅燈 → failed、黃燈 → warn；判定只經 record-status.js
+// 列狀態 → ui.css 的狀態 chip 類別（'' 是正常）
+const CHIP_OF_ROW_STATE = { paused: 'is-off', failed: 'is-bad', warn: 'is-warn' }
+
+function rowStateOf(t, h) {
+  if (t && t.enabled === false) return 'paused'
+  if (isRed(h)) return 'failed'
+  if (isWarn(h)) return 'warn'
+  return ''
+}
+
+// 重選流程（既有的 ENTER_PICK repick），「重選」與失敗列的「重選目標」共用
+async function startRepick(t) {
+  let res = null
+  try {
+    res = await chrome.runtime.sendMessage({
+      type: MSG.ENTER_PICK,
+      taskId: t.id,
+      purpose: 'repick'
+    })
+  } catch {}
+
+  const note = document.getElementById('task-note')
+  if (note) {
+    if (res && res.ok) {
+      note.textContent = '已開啟目標頁，請在頁面上選取要抓的元素。'
+    } else {
+      note.textContent = '無法直接啟動選取模式，請在開啟的頁面上使用右鍵選單重新選取元素。'
+    }
+  }
+}
+
+// 錯過清單與空窗的動作（補抓／略過／知道了）：ok:false 與 sendMessage 被拒都要在 #task-note 說出原因，不得靜默。
+// 橫幅每次資料變動會整份重畫，所以訊息放在橫幅外的 #task-note。回傳是否成功
+async function sendMissedAction(msg, label) {
+  let res
+  try {
+    res = await chrome.runtime.sendMessage(msg)
+  } catch (e) {
+    const note = document.getElementById('task-note')
+    if (note) note.textContent = `${label}沒有完成：${e?.message || e || '背景沒有回應'}`
+    return false
+  }
+  if (res?.ok === false) {
+    const note = document.getElementById('task-note')
+    if (note) note.textContent = `${label}沒有完成：${res.error || '背景處理失敗'}`
+    return false
+  }
+  return true
+}
+
+// 站台的登入頁：有設定站台登入就用它的 loginUrl，否則退回任務網址
+async function openLoginPage(t) {
+  let origin = ''
+  try { origin = new URL(t.url).origin } catch {}
+  let sites = {}
+  try { sites = await getSites() } catch {}
+  const site = origin ? sites?.[origin] : null
+  const url = (site && typeof site.loginUrl === 'string' && site.loginUrl) ? site.loginUrl : t.url
+  await chrome.tabs.create({ url })
+}
 
 // 純函式：依關鍵字與健康狀態篩選任務
 export function filterTasks(tasks, { q, failedOnly } = {}, health = {}) {
@@ -62,26 +131,24 @@ export function duplicateTask(task) {
 export async function applyOrder(ids) {
   if (!Array.isArray(ids)) return
   const tasks = await getTasks()
-  const map = new Map(tasks.map(t => [t.id, t]))
-  const toUpdate = []
+  const known = new Set(tasks.map(t => t.id))
+  const orderOf = new Map()
   let nextOrder = 0
   for (const id of ids) {
-    const t = map.get(id)
-    if (t) {
-      toUpdate.push({ ...t, order: nextOrder++ })
+    if (known.has(id) && !orderOf.has(id)) {
+      orderOf.set(id, nextOrder++)
     }
   }
-  if (toUpdate.length > 0) {
-    await saveTasks(toUpdate)
+  if (orderOf.size > 0) {
+    // 只換 order：鎖內對最新任務改，不拿畫面上的舊副本洗掉別人剛寫的欄位
+    await updateTasks([...orderOf.keys()], (t) => ({ ...t, order: orderOf.get(t.id) }))
   }
 }
 
-// 開啟刪除確認對話框並計算關聯紀錄數
+// 刪除確認：共用 modal（AF-21 4-D），計算關聯紀錄數；「先匯出再刪除」是 extra 那顆
 async function openDeleteDialog(ids, fromSelection = false) {
   if (!Array.isArray(ids) || ids.length === 0) return
-  const dlg = document.getElementById('task-delete-dialog')
-  if (!dlg) return
-  dialogSelectionSig = fromSelection ? selectionSig() : null
+  const sig = fromSelection ? selectionSig() : null
 
   const { total } = await countRecordsForTasks(ids)
   const count = total || 0
@@ -95,70 +162,49 @@ async function openDeleteDialog(ids, fromSelection = false) {
     msgText = `確定要刪除這 ${ids.length} 個任務嗎？此操作將一併刪除合計 ${count} 筆歷史紀錄。`
   }
 
-  const msgEl = dlg.querySelector('.dialog-message')
-  if (msgEl) {
-    msgEl.textContent = msgText
-  } else {
-    let p = dlg.querySelector('p')
-    if (!p) {
-      p = document.createElement('p')
-      dlg.prepend(p)
-    }
-    p.textContent = msgText
-  }
+  dialogSelectionSig = sig
+  const pending = confirmDialog({
+    title: '刪除任務',
+    body: msgText,
+    confirmText: '確定刪除',
+    cancelText: '取消',
+    danger: true,
+    extra: { text: '先匯出再刪除', value: 'export' }
+  })
+  const choice = await pending
+  if (dialogSelectionSig === sig) dialogSelectionSig = null
+  if (choice === false) return
+  // 開著的時候選取變了（updateSelectionUI 會先收掉對話框）：不刪，刪的永遠是訊息說的那幾個
+  if (sig !== null && sig !== selectionSig()) return
 
-  dlg.hidden = false
+  const note = document.getElementById('task-note')
+  if (choice === 'export') {
+    const d = new Date()
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    const today = `${y}-${m}-${day}`
+    // 匯出範圍從最舊的紀錄日起算（重構後 dates 不再由外層提供，改在此取得）
+    const dates = await listDates()
+    const from = dates[0] || today
+    const to = today
 
-  const cancelBtn = dlg.querySelector('[data-action="cancel"]')
-  if (cancelBtn) {
-    cancelBtn.onclick = () => {
-      dlg.hidden = true
-    }
-  }
-
-  const confirmBtn = dlg.querySelector('[data-action="confirm"]')
-  if (confirmBtn) {
-    confirmBtn.onclick = async () => {
-      await deleteTasks(ids)
-      for (const id of ids) {
-        selectedIds.delete(id)
-      }
-      dlg.hidden = true
-      const remaining = await getTasks()
-      renderTasks(remaining, currentHealth, currentMissed, currentCtx)
-    }
-  }
-
-  const exportBtn = dlg.querySelector('[data-action="export-then-delete"]')
-  if (exportBtn) {
-    exportBtn.onclick = async () => {
-      const d = new Date()
-      const y = d.getFullYear()
-      const m = String(d.getMonth() + 1).padStart(2, '0')
-      const day = String(d.getDate()).padStart(2, '0')
-      const today = `${y}-${m}-${day}`
-      // 匯出範圍從最舊的紀錄日起算（重構後 dates 不再由外層提供，改在此取得）
-      const dates = await listDates()
-      const from = dates[0] || today
-      const to = today
-
-      // 下載沒成功（使用者在另存視窗按取消、配額）就不刪：說出來，對話框留著讓他改選「確定刪除」或取消
-      try {
-        const exp = await buildExport({ from, to, format: 'csv' })
-        await download(exp)
-      } catch (e) {
-        if (msgEl) msgEl.textContent = `${msgText}匯出沒有完成（${e?.message || e}），所以還沒有刪除。`
-        return
-      }
-      await deleteTasks(ids)
-      for (const id of ids) {
-        selectedIds.delete(id)
-      }
-      dlg.hidden = true
-      const remaining = await getTasks()
-      renderTasks(remaining, currentHealth, currentMissed, currentCtx)
+    // 下載沒成功（使用者在另存視窗按取消、配額）就不刪：在任務頁說出來，要刪請再按一次
+    try {
+      const exp = await buildExport({ from, to, format: 'csv' })
+      await download(exp)
+    } catch (e) {
+      if (note) note.textContent = `匯出沒有完成（${e?.message || e}），所以還沒有刪除。`
+      return
     }
   }
+
+  await deleteTasks(ids)
+  for (const id of ids) {
+    selectedIds.delete(id)
+  }
+  const remaining = await getTasks()
+  renderTasks(remaining, currentHealth, currentMissed, currentCtx)
 }
 
 // 整批切換選取任務的啟用狀態並重建排程
@@ -175,10 +221,10 @@ async function setBulkEnabled(enabled) {
 
   try {
     const tasks = await getTasks()
-    const targetTasks = tasks.filter((t) => selectedIds.has(t.id))
-    const updated = targetTasks.map((t) => ({ ...t, enabled }))
+    const targetIds = tasks.filter((t) => selectedIds.has(t.id)).map((t) => t.id)
+    // 只換 enabled：鎖內對最新任務改，不會洗掉抓取剛寫入的 notFoundStreak 之類
+    const updated = targetIds.length > 0 ? await updateTasks(targetIds, (t) => ({ ...t, enabled })) : []
     if (updated.length > 0) {
-      await saveTasks(updated)
       await chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS })
     }
     const note = document.getElementById('task-note')
@@ -188,7 +234,7 @@ async function setBulkEnabled(enabled) {
     const freshTasks = await getTasks()
     renderTasks(freshTasks, currentHealth, currentMissed, currentCtx)
   } catch (e) {
-    // 整批寫入是全有全無（saveTasks 先驗證再寫）：失敗就是一個都沒改，要說出來，不能靜默
+    // 整批寫入是全有全無（updateTasks 先驗證再寫）：失敗就是一個都沒改，要說出來，不能靜默
     const note = document.getElementById('task-note')
     if (note) note.textContent = `${enabled ? '啟用' : '停用'}失敗，沒有任何任務被改動：${e?.message || e}`
   } finally {
@@ -229,13 +275,12 @@ async function saveRename(id, val) {
       }
       return
     }
-    const cur = await getTask(id)
+    const [cur] = await updateTasks([id], (t) => ({ ...t, name: trimmed }))
     if (!cur) {
       renaming = null
       renderListRows()
       return
     }
-    await saveTasks([{ ...cur, name: trimmed }])
     renaming = null
     const fresh = await getTasks()
     // 存檔前使用者已經按了另一列的「改名」：接著開那一列
@@ -277,10 +322,9 @@ function updateSelectionUI() {
     }
   }
 
-  const dlg = document.getElementById('task-delete-dialog')
-  if (dlg && !dlg.hidden && dialogSelectionSig !== null && dialogSelectionSig !== selectionSig()) {
-    dlg.hidden = true
+  if (dialogSelectionSig !== null && isDialogOpen() && dialogSelectionSig !== selectionSig()) {
     dialogSelectionSig = null
+    dismissDialog()
     const note = document.getElementById('task-note')
     if (note) note.textContent = '選取已經變了，刪除確認已收起；要刪除請再按一次「刪除」。'
   }
@@ -319,6 +363,12 @@ function renderListRows() {
   const failedOnly = failedCheckbox ? failedCheckbox.checked : false
   const filtered = filterTasks(currentTasks, { q, failedOnly }, currentHealth)
 
+  if (currentTasks.length === 0) {
+    taskList.appendChild(createEmptyState())
+  } else if (filtered.length === 0) {
+    taskList.appendChild(createNoMatchState(searchInput, failedCheckbox))
+  }
+
   for (const t of filtered) {
     taskList.appendChild(createTaskRow(t))
   }
@@ -337,21 +387,69 @@ function renderListRows() {
   updateSelectionUI()
 }
 
-// 建立單一任務列元素
-const AGGREGATE_TEXT = { max: '最大值', min: '最小值', avg: '平均', sum: '加總', count: '筆數' }
+// 完全沒有任務：三步引導（與 popup 同一份文字，來源 describe.js）＋使用教學（本頁唯一的主要按鈕）
+function createEmptyState() {
+  const box = document.createElement('div')
+  box.className = 'task-empty empty-state empty-guide'
+  box.dataset.empty = 'none'
+  const title = document.createElement('p')
+  title.className = 'task-empty-title'
+  title.textContent = '還沒有任何任務'
+  box.appendChild(title)
+  const lead = document.createElement('p')
+  lead.textContent = EMPTY_GUIDE.lead
+  box.appendChild(lead)
+  const ol = document.createElement('ol')
+  for (const s of EMPTY_GUIDE.steps) {
+    const li = document.createElement('li')
+    li.textContent = s
+    ol.appendChild(li)
+  }
+  box.appendChild(ol)
+  const help = document.createElement('a')
+  help.className = 'btn-primary'
+  help.dataset.action = 'open-help'
+  help.href = '../help/help.html'
+  help.target = '_blank'
+  help.rel = 'noopener'
+  help.textContent = '使用教學'
+  box.appendChild(help)
+  return box
+}
 
-// 描述抓取模式；區塊任務要看得出取哪一欄／列與聚合方式
+// 有任務但篩選後沒有結果：清除篩選（搜尋字與「只看失敗」）
+function createNoMatchState(searchInput, failedCheckbox) {
+  const box = document.createElement('div')
+  box.className = 'task-empty empty-state'
+  box.dataset.empty = 'filtered'
+  const p = document.createElement('p')
+  p.textContent = '沒有符合條件的任務'
+  box.appendChild(p)
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.dataset.action = 'clear-filter'
+  btn.textContent = '清除篩選'
+  btn.addEventListener('click', () => {
+    if (searchInput) searchInput.value = ''
+    if (failedCheckbox) failedCheckbox.checked = false
+    renderListRows()
+  })
+  box.appendChild(btn)
+  return box
+}
+
+// 描述抓取模式；區塊任務要看得出取哪一欄／列與合計方式（白話與選項文字都取自 describe.js 的 TERMS）
 function describeMode(t) {
   const mode = t.mode || 'number'
   const block = t.spec?.block
-  if (mode !== 'block' || !block) return mode
+  if (mode !== 'block' || !block) return TERMS.modes[mode] || mode
 
   const axisText = block.axis === 'row' ? '列' : '欄'
   // index 是 0 起算，顯示給人看用 1 起算
   const target = block.headerText
     ? `「${block.headerText}」`
     : (Number.isFinite(Number(block.index)) ? `第 ${Number(block.index) + 1} ${axisText}` : `某一${axisText}`)
-  const agg = AGGREGATE_TEXT[block.aggregate] || block.aggregate || '加總'
+  const agg = TERMS.aggregateOptions[block.aggregate] || block.aggregate || TERMS.aggregateOptions.sum
   return `區塊 ${target}${block.headerText ? `這一${axisText}` : ''} ${agg}`
 }
 
@@ -396,7 +494,6 @@ function createTaskRow(t) {
     lastPickedId = t.id
     updateSelectionUI()
   })
-  row.appendChild(selectBox)
 
   if (selectedIds.has(t.id)) {
     row.classList.add('selected')
@@ -407,18 +504,20 @@ function createTaskRow(t) {
   const toggle = document.createElement('input')
   toggle.type = 'checkbox'
   toggle.dataset.action = 'toggle'
+  // 啟用開關畫成 switch（report.css），與左邊的「選取」核取方塊分得開；名稱給螢幕閱讀器與滑鼠提示
+  toggle.setAttribute('role', 'switch')
+  toggle.setAttribute('aria-label', `啟用「${t.name || t.id}」`)
+  toggleLabel.title = '啟用／停用這個任務'
   toggle.checked = t.enabled !== false
   toggle.addEventListener('change', async () => {
-    const current = await getTask(t.id)
+    const [current] = await updateTasks([t.id], (task) => ({ ...task, enabled: toggle.checked }))
     if (current) {
-      current.enabled = toggle.checked
-      await saveTasks([current])
       await chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS })
     }
   })
   toggleLabel.appendChild(toggle)
-  row.appendChild(toggleLabel)
 
+  let nameNode
   if (renaming && renaming.id === t.id) {
     const nameInput = document.createElement('input')
     nameInput.type = 'text'
@@ -446,12 +545,12 @@ function createTaskRow(t) {
       if (!renaming || renaming.id !== t.id) return
       await saveRename(t.id, nameInput.value)
     })
-    row.appendChild(nameInput)
+    nameNode = nameInput
   } else {
     const nameEl = document.createElement('span')
     nameEl.className = 'task-name'
     nameEl.textContent = t.name || t.id
-    row.appendChild(nameEl)
+    nameNode = nameEl
   }
 
   const renameBtn = document.createElement('button')
@@ -482,10 +581,10 @@ function createTaskRow(t) {
       } catch {}
     }
   })
-  row.appendChild(renameBtn)
 
+  let fieldsEl = null
   if (Array.isArray(t.fields) && t.fields.length > 0) {
-    const fieldsEl = document.createElement('span')
+    fieldsEl = document.createElement('span')
     fieldsEl.className = 'task-fields'
     const fieldNames = t.fields.map(f => (f && f.name) ? f.name : (f?.key || '')).filter(Boolean)
     let text = ''
@@ -495,13 +594,11 @@ function createTaskRow(t) {
       text = fieldNames.join('、')
     }
     fieldsEl.textContent = text
-    row.appendChild(fieldsEl)
   }
 
   const urlEl = document.createElement('span')
   urlEl.className = 'task-url'
   urlEl.textContent = t.url || ''
-  row.appendChild(urlEl)
 
   const modeEl = document.createElement('span')
   modeEl.className = 'task-mode'
@@ -511,24 +608,24 @@ function createTaskRow(t) {
   // 只給區塊任務：數值／文字任務的完整句（「抓 a.test 頁面上的數字」）沒有新資訊，
   // 而且列上的 title 已經有人用（連續失敗的最後錯誤放在 title）
   if (target.mode === 'block') modeEl.title = describeTarget(target)
-  row.appendChild(modeEl)
 
   // 有設告警 / 前置動作的任務要一眼看得出來，否則只能逐一點進去看
   const activeAlerts = Array.isArray(t.alerts) ? t.alerts.filter((a) => a && a.enabled !== false) : []
+  let alertEl = null
   if (activeAlerts.length > 0) {
-    const alertEl = document.createElement('span')
+    alertEl = document.createElement('span')
     alertEl.className = 'task-alerts'
-    alertEl.textContent = `🔔 ${activeAlerts.length}`
+    alertEl.appendChild(icon('alert'))
+    alertEl.appendChild(document.createTextNode(` 告警 ${activeAlerts.length}`))
     alertEl.title = `${activeAlerts.length} 條告警條件`
-    row.appendChild(alertEl)
   }
 
+  let preEl = null
   if (Array.isArray(t.preActions) && t.preActions.length > 0) {
-    const preEl = document.createElement('span')
+    preEl = document.createElement('span')
     preEl.className = 'task-preactions'
     preEl.textContent = `前置 ${t.preActions.length}`
     preEl.title = `抓取前會先執行 ${t.preActions.length} 個動作`
-    row.appendChild(preEl)
   }
 
   const scheduleBtn = document.createElement('button')
@@ -542,32 +639,45 @@ function createTaskRow(t) {
   scheduleBtn.addEventListener('click', async () => {
     await openBulkSchedule([t.id])
   })
-  row.appendChild(scheduleBtn)
 
   const nextEl = document.createElement('span')
   nextEl.className = 'task-next'
   const nextVal = currentCtx?.nextRuns?.[t.id]
   nextEl.textContent = nextVal ? new Date(nextVal).toLocaleString() : '—'
-  row.appendChild(nextEl)
 
   const healthInfo = currentHealth?.[t.id]
   const statusEl = document.createElement('span')
-  statusEl.className = 'task-status'
-  statusEl.textContent = healthInfo?.status || 'ok'
+  statusEl.className = `task-status chip ${CHIP_OF_ROW_STATE[rowStateOf(t, healthInfo)] || 'is-ok'}`
+  // 顯示白話；代碼放 data-status 給配色用
+  const statusCode = healthInfo?.status || 'ok'
+  // 停用中的任務不會抓：chip 說「停用中」，不沿用上一次的「成功」（灰色配「成功」自相矛盾）
+  statusEl.textContent = t.enabled === false ? '停用中' : statusTextOf(statusCode)
+  statusEl.dataset.status = statusCode
   if (healthInfo && healthInfo.reason) {
     statusEl.setAttribute('title', healthInfo.reason)
   }
-  row.appendChild(statusEl)
 
-  if (typeof t.notFoundStreak === 'number' && t.notFoundStreak > 0) {
-    const streakEl = document.createElement('span')
-    streakEl.className = 'task-streak'
-    streakEl.textContent = `連續失敗 ${t.notFoundStreak} 次`
-    row.appendChild(streakEl)
+  const rowState = rowStateOf(t, healthInfo)
+  if (rowState) row.classList.add(rowState)
+  // 紅／黃燈的原因直接顯示成一行小字，不必 hover；title 留完整內容
+  let reasonEl = null
+  if ((isRed(healthInfo) || isWarn(healthInfo)) && healthInfo.reason) {
+    reasonEl = document.createElement('span')
+    reasonEl.className = 'task-reason'
+    reasonEl.textContent = healthInfo.reason
+    reasonEl.title = healthInfo.reason
   }
 
+  let streakEl = null
+  if (typeof t.notFoundStreak === 'number' && t.notFoundStreak > 0) {
+    streakEl = document.createElement('span')
+    streakEl.className = 'task-streak'
+    streakEl.textContent = `連續失敗 ${t.notFoundStreak} 次`
+  }
+
+  let suggestEl = null
   if (t.suggestForeground === true && !t.foreground) {
-    const suggestEl = document.createElement('span')
+    suggestEl = document.createElement('span')
     suggestEl.className = 'task-suggest-foreground'
     suggestEl.textContent = '連續抓不到，建議改用前景抓取'
 
@@ -576,10 +686,8 @@ function createTaskRow(t) {
     useFgBtn.dataset.action = 'use-foreground'
     useFgBtn.textContent = '改用前景抓取'
     useFgBtn.addEventListener('click', async () => {
-      const current = await getTask(t.id)
+      const [current] = await updateTasks([t.id], (task) => ({ ...task, foreground: true }))
       if (current) {
-        current.foreground = true
-        await saveTasks([current])
         const idx = currentTasks.findIndex((taskItem) => taskItem.id === t.id)
         if (idx !== -1) {
           currentTasks[idx] = current
@@ -590,7 +698,6 @@ function createTaskRow(t) {
       }
     })
     suggestEl.appendChild(useFgBtn)
-    row.appendChild(suggestEl)
   }
 
   const actionsEl = document.createElement('div')
@@ -601,13 +708,19 @@ function createTaskRow(t) {
   runBtn.dataset.action = 'run'
   runBtn.textContent = '立即抓取'
   runBtn.addEventListener('click', async () => {
-    // 每一列只有一個結果位置，重複按就地更新
-    const showResult = (msg) => {
-      let el = row.querySelector('.task-run-result')
+    // 每一列只有一個結果位置，重複按就地更新；文字記在模組層，重畫後由 createTaskRow 還原
+    const showResult = async (msg) => {
+      let at
+      try { at = (await getHealthMap())?.[t.id]?.at } catch {}
+      runResults.set(t.id, { text: msg, at })
+      // 等 health 的空檔裡列可能已被重畫換掉：寫到畫面上現在那一列
+      const liveRow = [...document.querySelectorAll('#task-list [data-task-id]')].find((el) => el.dataset.taskId === t.id) || row
+      const liveBtn = liveRow.querySelector('[data-action="run"]') || runBtn
+      let el = liveRow.querySelector('.task-run-result')
       if (!el) {
         el = document.createElement('span')
         el.className = 'task-run-result'
-        runBtn.after(el)
+        liveBtn.after(el)
       }
       el.textContent = msg
     }
@@ -616,21 +729,61 @@ function createTaskRow(t) {
       const res = await chrome.runtime.sendMessage({ type: MSG.RUN_TASK, taskId: t.id })
       if (Array.isArray(res?.values) && res.values.length > 0) {
         // 多值任務逐值回報，只說一個數字看不出其他值怎麼了
-        showResult(res.values
+        await showResult(res.values
           .map(v => `${v.name}: ${v.ok ? v.value : (v.error || '失敗')}`)
           .join('  '))
       } else if (res && res.outcome === 'done') {
-        showResult(res.value !== null && res.value !== undefined ? `抓到 ${res.value}` : '抓到值')
+        await showResult(res.value !== null && res.value !== undefined ? `抓到 ${res.value}` : '抓到值')
       } else {
-        showResult(`失敗：${res?.error || res?.status || ''}`.trim())
+        await showResult(`失敗：${res?.error || (res?.status ? statusTextOf(res.status) : '')}`.trim())
       }
     } catch (err) {
-      showResult(`失敗：${err?.message || String(err)}`)
+      // 訊息通道被拒絕（背景被回收等），與 ok:false 是兩條路，兩條都要有字
+      await showResult('抓取被中斷，請再試一次')
     } finally {
       runBtn.disabled = false
     }
   })
   actionsEl.appendChild(runBtn)
+
+  // 上一次「立即抓取」的結果：該任務之後沒有再寫紀錄就還原（health 的 at 沒變）
+  const kept = runResults.get(t.id)
+  if (kept) {
+    if (kept.at !== healthInfo?.at) {
+      runResults.delete(t.id)
+    } else {
+      const el = document.createElement('span')
+      el.className = 'task-run-result'
+      el.textContent = kept.text
+      runBtn.after(el)
+    }
+  }
+
+  // 失敗列的下一步：依狀態挑一顆，放在動作區最前面
+  let hasNextRepick = false
+  if (rowState === 'failed') {
+    const status = healthInfo.status
+    if (status === 'selector_lost' || status === 'parse_error') {
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'task-next-step'
+      btn.dataset.action = 'next-repick'
+      btn.textContent = '重選目標'
+      btn.addEventListener('click', () => startRepick(t))
+      actionsEl.prepend(btn)
+      hasNextRepick = true
+    } else if (status === 'login_failed') {
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'task-next-step'
+      btn.dataset.action = 'next-login'
+      btn.textContent = '前往登入頁'
+      btn.addEventListener('click', () => openLoginPage(t))
+      actionsEl.prepend(btn)
+    } else {
+      runBtn.classList.add('task-next-step')
+    }
+  }
 
   const editBtn = document.createElement('button')
   editBtn.type = 'button'
@@ -668,26 +821,9 @@ function createTaskRow(t) {
   repickBtn.type = 'button'
   repickBtn.dataset.action = 'repick'
   repickBtn.textContent = '重選'
-  repickBtn.addEventListener('click', async () => {
-    let res = null
-    try {
-      res = await chrome.runtime.sendMessage({
-        type: MSG.ENTER_PICK,
-        taskId: t.id,
-        purpose: 'repick'
-      })
-    } catch {}
-
-    const note = document.getElementById('task-note')
-    if (note) {
-      if (res && res.ok) {
-        note.textContent = '已開啟目標頁，請在頁面上選取要抓的元素。'
-      } else {
-        note.textContent = '無法直接啟動選取模式，請在開啟的頁面上使用右鍵選單重新選取元素。'
-      }
-    }
-  })
-  actionsEl.appendChild(repickBtn)
+  repickBtn.addEventListener('click', () => startRepick(t))
+  // 同一件事不放兩顆：失敗列最前面已經有「重選目標」
+  if (!hasNextRepick) actionsEl.appendChild(repickBtn)
 
   const delBtn = document.createElement('button')
   delBtn.type = 'button'
@@ -698,7 +834,12 @@ function createTaskRow(t) {
   })
   actionsEl.appendChild(delBtn)
 
-  row.appendChild(actionsEl)
+  // DOM 順序就是畫面順序（鍵盤 Tab 跟著走）：選取、名稱、狀態、原因、下次時間與其餘資訊、動作、啟用開關
+  row.append(...[
+    selectBox, nameNode, renameBtn, statusEl, reasonEl,
+    nextEl, scheduleBtn, modeEl, fieldsEl, urlEl, alertEl, preEl, streakEl, suggestEl,
+    actionsEl, toggleLabel
+  ].filter(Boolean))
 
   // 拖曳排序事件綁定
   let isDragging = false
@@ -752,6 +893,28 @@ function createTaskRow(t) {
   return row
 }
 
+// 依網址參數 task=<id> 定位：捲到那一列、高亮約 3 秒、焦點移到那一列第一顆按鈕；找不到就不動
+export function focusTaskRow(id) {
+  if (!id) return false
+  const taskList = document.getElementById('task-list')
+  if (!taskList) return false
+  const row = [...taskList.querySelectorAll('[data-task-id]')].find((el) => el.dataset.taskId === id)
+  if (!row) return false
+  if (typeof row.scrollIntoView === 'function') {
+    try { row.scrollIntoView({ block: 'center' }) } catch {}
+  }
+  row.classList.add('task-highlight')
+  setTimeout(() => {
+    // 期間重畫過的話舊節點已不在畫面上，移掉也無妨
+    row.classList.remove('task-highlight')
+  }, 3000)
+  const btn = row.querySelector('button')
+  if (btn) {
+    try { btn.focus() } catch {}
+  }
+  return true
+}
+
 // 渲染任務管理頁主進入點
 export function renderTasks(tasks, health = {}, missed = [], ctx = {}) {
   currentTasks = tasks || []
@@ -768,6 +931,12 @@ export function renderTasks(tasks, health = {}, missed = [], ctx = {}) {
   if (renaming && !currentTaskIds.has(renaming.id)) {
     renaming = null
   }
+  // 手動抓取的結果也跟著任務刪除清掉（模組層的東西不會被重畫洗掉）
+  for (const id of [...runResults.keys()]) {
+    if (!currentTaskIds.has(id)) {
+      runResults.delete(id)
+    }
+  }
 
   // 1. 錯過清單橫幅
   const banner = document.getElementById('missed-banner')
@@ -781,73 +950,94 @@ export function renderTasks(tasks, health = {}, missed = [], ctx = {}) {
 
       const taskMap = new Map(currentTasks.map((t) => [t.id, t.name || t.id]))
       const itemRows = []
+      // interval 的空窗（kind:'gap'）不可補抓：自己一列、只有「知道了」，不進勾選清單
+      const slotItems = currentMissed.filter((m) => !isGap(m))
+      const gapItems = currentMissed.filter((m) => isGap(m))
 
-      const header = document.createElement('div')
-      header.className = 'missed-header'
-      header.textContent = `錯過排程（共 ${currentMissed.length} 筆未執行）：`
-      banner.appendChild(header)
+      if (slotItems.length > 0) {
+        const header = document.createElement('div')
+        header.className = 'missed-header'
+        header.textContent = `錯過排程（共 ${slotItems.length} 筆未執行）：`
+        banner.appendChild(header)
 
-      const listContainer = document.createElement('div')
-      listContainer.className = 'missed-items'
+        const listContainer = document.createElement('div')
+        listContainer.className = 'missed-items'
 
-      for (const m of currentMissed) {
-        const label = document.createElement('label')
-        label.className = 'missed-item'
+        for (const m of slotItems) {
+          const label = document.createElement('label')
+          label.className = 'missed-item'
 
-        const checkbox = document.createElement('input')
-        checkbox.type = 'checkbox'
-        checkbox.checked = true
+          const checkbox = document.createElement('input')
+          checkbox.type = 'checkbox'
+          checkbox.checked = true
+
+          const tName = m.taskName || taskMap.get(m.taskId) || m.taskId
+          const textSpan = document.createElement('span')
+          textSpan.textContent = ` ${tName} (${m.slot})`
+
+          label.appendChild(checkbox)
+          label.appendChild(textSpan)
+          listContainer.appendChild(label)
+
+          itemRows.push({ checkbox, item: m })
+        }
+        banner.appendChild(listContainer)
+
+        const actions = document.createElement('div')
+        actions.className = 'missed-actions'
+
+        const catchUpBtn = document.createElement('button')
+        catchUpBtn.type = 'button'
+        catchUpBtn.dataset.action = 'catch-up'
+        catchUpBtn.textContent = '補抓勾選項目'
+        catchUpBtn.addEventListener('click', async () => {
+          for (const { checkbox, item } of itemRows) {
+            if (checkbox.checked) {
+              const ok = await sendMissedAction({ type: MSG.CATCH_UP_ONE, taskId: item.taskId, slot: item.slot }, '補抓')
+              if (!ok) return
+            }
+          }
+        })
+        actions.appendChild(catchUpBtn)
+
+        const skipBtn = document.createElement('button')
+        skipBtn.type = 'button'
+        skipBtn.dataset.action = 'skip'
+        skipBtn.textContent = '略過勾選項目'
+        skipBtn.addEventListener('click', async () => {
+          for (const { checkbox, item } of itemRows) {
+            if (checkbox.checked) {
+              const ok = await sendMissedAction({ type: MSG.SKIP_ONE, taskId: item.taskId, slot: item.slot }, '略過')
+              if (!ok) return
+            }
+          }
+        })
+        actions.appendChild(skipBtn)
+
+        banner.appendChild(actions)
+      }
+
+      for (const m of gapItems) {
+        const row = document.createElement('div')
+        row.className = 'missed-item missed-gap'
+        row.dataset.taskId = m.taskId
 
         const tName = m.taskName || taskMap.get(m.taskId) || m.taskId
         const textSpan = document.createElement('span')
-        textSpan.textContent = ` ${tName} (${m.slot})`
+        textSpan.textContent = `${tName}：${gapTextOf(m)} `
+        row.appendChild(textSpan)
 
-        label.appendChild(checkbox)
-        label.appendChild(textSpan)
-        listContainer.appendChild(label)
-
-        itemRows.push({ checkbox, item: m })
+        const ackBtn = document.createElement('button')
+        ackBtn.type = 'button'
+        ackBtn.dataset.action = 'ack-gap'
+        ackBtn.textContent = '知道了'
+        ackBtn.addEventListener('click', async () => {
+          // 空窗列要說清楚略過的是哪一種（背景據此找 kind:'gap' 那一筆，找不到會回 ok:false）
+          await sendMissedAction({ type: MSG.SKIP_ONE, taskId: m.taskId, slot: m.slot, kind: 'gap' }, '知道了')
+        })
+        row.appendChild(ackBtn)
+        banner.appendChild(row)
       }
-      banner.appendChild(listContainer)
-
-      const actions = document.createElement('div')
-      actions.className = 'missed-actions'
-
-      const catchUpBtn = document.createElement('button')
-      catchUpBtn.type = 'button'
-      catchUpBtn.dataset.action = 'catch-up'
-      catchUpBtn.textContent = '補抓勾選項目'
-      catchUpBtn.addEventListener('click', async () => {
-        for (const { checkbox, item } of itemRows) {
-          if (checkbox.checked) {
-            await chrome.runtime.sendMessage({
-              type: MSG.CATCH_UP_ONE,
-              taskId: item.taskId,
-              slot: item.slot
-            })
-          }
-        }
-      })
-      actions.appendChild(catchUpBtn)
-
-      const skipBtn = document.createElement('button')
-      skipBtn.type = 'button'
-      skipBtn.dataset.action = 'skip'
-      skipBtn.textContent = '略過勾選項目'
-      skipBtn.addEventListener('click', async () => {
-        for (const { checkbox, item } of itemRows) {
-          if (checkbox.checked) {
-            await chrome.runtime.sendMessage({
-              type: MSG.SKIP_ONE,
-              taskId: item.taskId,
-              slot: item.slot
-            })
-          }
-        }
-      })
-      actions.appendChild(skipBtn)
-
-      banner.appendChild(actions)
     }
   }
 

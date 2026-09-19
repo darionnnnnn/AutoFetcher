@@ -46,6 +46,8 @@ async function seedTable(ls, over = {}) {
 
 const fire = (win, el, type) => el.dispatchEvent(new win.Event(type, { bubbles: true }))
 const settle = () => new Promise(r => setTimeout(r, 20))
+// AF-21 批次 4 定案 5：抽屜改成草稿模型，變更按「套用」才寫進 storage
+const applyDrawer = async (doc) => { doc.getElementById('drawer-apply').click(); await settle() }
 const findCard = async (ls, did, cardId) => (await ls.getLayout()).dashboards.find(d => d.id === did).cards.find(c => c.id === cardId)
 
 test('表格卡片的抽屜有列軸標頭與容差欄位', async () => {
@@ -74,6 +76,7 @@ test('改列軸標頭會寫進卡片設定', async () => {
   el.value = '抓取時刻'
   fire(win, el, 'change')
   await settle()
+  await applyDrawer(doc)
   assert.equal((await findCard(ls, did, cardId)).options.rowHeader, '抓取時刻')
 })
 
@@ -85,6 +88,7 @@ test('改容差會寫進卡片設定,而且是數字', async () => {
   el.value = '5'
   fire(win, el, 'change')
   await settle()
+  await applyDrawer(doc)
   const saved = await findCard(ls, did, cardId)
   assert.equal(saved.options.bucketMinutes, 5)
   assert.equal(typeof saved.options.bucketMinutes, 'number', '存成字串會讓 pivot 的整數判斷失效')
@@ -98,6 +102,7 @@ test('容差選「不合併」時存 0', async () => {
   el.value = '0'
   fire(win, el, 'change')
   await settle()
+  await applyDrawer(doc)
   assert.equal((await findCard(ls, did, cardId)).options.bucketMinutes, 0)
 })
 
@@ -138,6 +143,7 @@ test('按下移會把該來源往後移一位並寫回卡片', async () => {
   await dw.openDrawer(did, cardId)
   doc.querySelector('#drawer-sources [data-source-row][data-task-id="t1"] [data-action="source-down"]').click()
   await settle()
+  await applyDrawer(doc)
   assert.deepEqual((await findCard(ls, did, cardId)).source.map(s => s.taskId), ['t2', 't1'])
 })
 
@@ -147,6 +153,7 @@ test('按上移會把該來源往前移一位', async () => {
   await dw.openDrawer(did, cardId)
   doc.querySelector('#drawer-sources [data-source-row][data-task-id="t2"] [data-action="source-up"]').click()
   await settle()
+  await applyDrawer(doc)
   assert.deepEqual((await findCard(ls, did, cardId)).source.map(s => s.taskId), ['t2', 't1'])
 })
 
@@ -171,6 +178,7 @@ test('新勾選的來源排在最後,不打亂既有欄序', async () => {
   cb.checked = true
   fire(win, cb, 'change')
   await settle()
+  await applyDrawer(doc)
   assert.deepEqual((await findCard(ls, did, cardId)).source.map(s => s.taskId), ['t2', 't1', 't3'])
 })
 
@@ -184,5 +192,6 @@ test('取消勾選會移除該欄,其餘欄序不變', async () => {
   cb.checked = false
   fire(win, cb, 'change')
   await settle()
+  await applyDrawer(doc)
   assert.deepEqual((await findCard(ls, did, cardId)).source.map(s => s.taskId), ['t2', 't3'])
 })

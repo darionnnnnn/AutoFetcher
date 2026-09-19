@@ -27,6 +27,14 @@ export function slotOf(ms) {
   return `${y}-${m}-${day}T${h}:${min}`
 }
 
+// slotOf 的反向：本地時間排程槽字串 → 該分鐘的時間戳（毫秒）；格式不合回 null
+export function slotToMs(slot) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(String(slot ?? '').slice(0, 16))
+  if (!m) return null
+  const [, y, mo, d, h, mi] = m.map(Number)
+  return new Date(y, mo - 1, d, h, mi, 0, 0).getTime()
+}
+
 // 計算下一次每日排程觸發的時間戳（毫秒）
 export function nextDailyRun(nowMs, times, weekdays) {
   if (!Array.isArray(times) || times.length === 0) return null
@@ -82,13 +90,8 @@ export function shouldRunInterval(task, nowMs) {
   return current >= from || current <= to
 }
 
-/**
- * 計算下一個對齊的排程時刻
- * @param {Object} task 任務物件
- * @param {number} nowMs 當前毫秒時間戳
- * @returns {number|null} 下一個對齊的毫秒時間戳，或 null
- */
-export function nextIntervalRun(task, nowMs) {
+// 間隔排程的候選時刻表（當天的分鐘數、星期）：nextIntervalRun 與 intervalRunsBetween 共用這一份
+function intervalPlan(task) {
   const schedule = task?.schedule
   const everyMinutes = schedule?.everyMinutes
   if (typeof everyMinutes !== 'number' || !Number.isFinite(everyMinutes) || everyMinutes <= 0) {
@@ -117,26 +120,63 @@ export function nextIntervalRun(task, nowMs) {
     for (let m = fromMins; m < 1440; m += everyMinutes) minutesOfDay.push(m)
   }
   if (minutesOfDay.length === 0) return null
+  // 星期以候選時刻自己所在的那一天判定(跨午夜的凌晨段也算它自己那天)
+  const dayOk = (day) => everyDay || weekdays.includes(day.getDay())
+  return { minutesOfDay, dayOk }
+}
+
+// 某一天某分鐘數的時間戳
+function atMinute(day, m) {
+  return new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(m / 60), m % 60, 0, 0).getTime()
+}
+
+/**
+ * 計算下一個對齊的排程時刻
+ * @param {Object} task 任務物件
+ * @param {number} nowMs 當前毫秒時間戳
+ * @returns {number|null} 下一個對齊的毫秒時間戳，或 null
+ */
+export function nextIntervalRun(task, nowMs) {
+  const plan = intervalPlan(task)
+  if (!plan) return null
 
   const base = new Date(nowMs)
   for (let offset = 0; offset < 8; offset++) {
     const day = new Date(base.getFullYear(), base.getMonth(), base.getDate() + offset)
-    // 星期以候選時刻自己所在的那一天判定(跨午夜的凌晨段也算它自己那天)
-    if (!everyDay && !weekdays.includes(day.getDay())) continue
+    if (!plan.dayOk(day)) continue
 
-    for (const m of minutesOfDay) {
-      const candidate = new Date(
-        day.getFullYear(),
-        day.getMonth(),
-        day.getDate(),
-        Math.floor(m / 60),
-        m % 60,
-        0,
-        0
-      ).getTime()
+    for (const m of plan.minutesOfDay) {
+      const candidate = atMinute(day, m)
       // 嚴格大於 now:等於 now 的格子要跳過
       if (candidate > nowMs) return candidate
     }
   }
   return null
+}
+
+/**
+ * 列出間隔排程在 (fromMs, toMs] 之間應觸發的所有時刻（與 nextIntervalRun 同一份時段／星期規則）
+ * @param {Object} task 任務物件
+ * @param {number} fromMs 起點（不含）
+ * @param {number} toMs 終點（含）
+ * @returns {number[]} 遞增的毫秒時間戳
+ */
+export function intervalRunsBetween(task, fromMs, toMs) {
+  const out = []
+  if (typeof fromMs !== 'number' || typeof toMs !== 'number' || !(fromMs < toMs)) return out
+  const plan = intervalPlan(task)
+  if (!plan) return out
+
+  const start = new Date(fromMs)
+  let day = new Date(start.getFullYear(), start.getMonth(), start.getDate())
+  while (day.getTime() <= toMs) {
+    if (plan.dayOk(day)) {
+      for (const m of plan.minutesOfDay) {
+        const candidate = atMinute(day, m)
+        if (candidate > fromMs && candidate <= toMs) out.push(candidate)
+      }
+    }
+    day = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1)
+  }
+  return out
 }

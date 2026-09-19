@@ -7,15 +7,18 @@ import {
   importRecords,
   getDiagList,
   getSites,
-  getSite,
-  saveSite,
+  updateSite,
   deleteSite,
-  getHealthMap, deleteHealthEntry } from '../../shared/storage.js'
+  getHealthMap, deleteHealthEntry,
+  countRecordsBeyondRetention } from '../../shared/storage.js'
 import { buildExport, download } from '../../shared/export.js'
-import { exportSettings, importSettings } from '../../shared/settings-io.js'
+import { exportSettings, previewSettingsImport, applySettingsImport, numericSettingProblem } from '../../shared/settings-io.js'
+import { confirmDialog, dismissDialog } from '../modal.js'
 import * as diag from '../../shared/diag.js'
 import { MSG } from '../../shared/messages.js'
-import { applyTheme } from '../theme-apply.js'
+import { statusTextOf, isRed } from '../../shared/record-status.js'
+import { applyTheme, applySavedTheme } from '../theme-apply.js'
+import { icon } from '../icons.js'
 
 // 重新繪製儲存用量區
 async function renderStorageStats() {
@@ -60,6 +63,32 @@ async function renderDiag() {
     row.textContent = `[${timeStr}] [${entry.kind || ''}] ${entry.detail || ''}`
     diagBox.appendChild(row)
   }
+}
+
+// 近 7 天本輪新增的靜默保護各發生幾次（AF-21）：它們平常不打擾使用者，管理的人要看得到有沒有在發生。
+// 純函式，測試直接呼叫：diag 取 kind 計數、中斷取紀錄的 interrupted 狀態
+export const GUARD_WINDOW_MS = 7 * 86400000
+export function countGuardEvents(diagEntries, nowMs) {
+  const since = nowMs - GUARD_WINDOW_MS
+  const recent = (Array.isArray(diagEntries) ? diagEntries : []).filter(e => e && typeof e.at === 'number' && e.at >= since)
+  const kinds = (list) => recent.filter(e => list.includes(e.kind)).length
+  return {
+    // 中斷也從 diag 數：只為了數這個就把 7 天的紀錄整批讀進來太貴（背景寫 interrupted 紀錄時同時寫一筆 diag）
+    interrupted: kinds(['interrupted']),
+    lockTimeout: kinds(['lock_timeout']),
+    forbidden: kinds(['forbidden']),
+    errors: kinds(['alarm_error', 'message_error', 'startup_error'])
+  }
+}
+
+async function renderGuards() {
+  const el = document.getElementById('health-guards')
+  if (!el) return
+  const now = Date.now()
+  let entries = []
+  try { entries = await diag.getAll() } catch {}
+  const c = countGuardEvents(entries, now)
+  el.textContent = `近 7 天：被瀏覽器中斷 ${c.interrupted} 次、取鎖逾時 ${c.lockTimeout} 次、擋下網頁送來的訊息 ${c.forbidden} 次、背景錯誤 ${c.errors} 次`
 }
 
 // 繪製看門狗上次巡檢時間
@@ -118,6 +147,44 @@ async function renderNextRuns() {
   }
 }
 
+// 匯出按鈕旁的結果（role=status）；建一次、之後沿用
+function exportResultOf(btn) {
+  let el = document.getElementById(`${btn.id}-result`)
+  if (!el) {
+    el = document.createElement('span')
+    el.id = `${btn.id}-result`
+    el.setAttribute('role', 'status')
+    btn.after(el)
+  }
+  return el
+}
+
+// 匯出：download 丟例外（含在另存視窗按取消）或沒回下載 id 都算沒完成；成功才記時間
+async function runExport(btn, work, stampKey) {
+  const resultEl = exportResultOf(btn)
+  resultEl.className = ''
+  resultEl.textContent = '匯出中…'
+  let id
+  try {
+    id = await work()
+  } catch (e) {
+    resultEl.className = 'field-error'
+    resultEl.textContent = `匯出沒有完成：${e?.message || e}`
+    return
+  }
+  if (typeof id !== 'number') {
+    resultEl.className = 'field-error'
+    resultEl.textContent = '匯出沒有完成：瀏覽器沒有開始下載'
+    return
+  }
+  resultEl.className = 'inline-status'
+  resultEl.textContent = '已開始下載'
+  try {
+    await saveSettings({ [stampKey]: new Date().toISOString() })
+    await renderStorageStats()
+  } catch {}
+}
+
 // 綁定匯出與匯入控制項事件
 function setupExportAndImportListeners() {
   const htmlOpt = document.querySelector('#export-format option[value="html"]')
@@ -138,10 +205,7 @@ function setupExportAndImportListeners() {
       const to = toEl?.value || today
       const format = formatEl?.value || 'json'
 
-      const data = await buildExport({ from, to, format })
-      await download(data)
-      await saveSettings({ lastRecordsExportAt: new Date().toISOString() })
-      await renderStorageStats()
+      await runExport(exportRunBtn, async () => download(await buildExport({ from, to, format })), 'lastRecordsExportAt')
     })
   }
 
@@ -151,10 +215,10 @@ function setupExportAndImportListeners() {
     settingsExportBtn.addEventListener('click', async () => {
       const includePasswords = document.getElementById('settings-include-passwords')?.checked || false
       const passphrase = document.getElementById('settings-passphrase')?.value || ''
-      const content = await exportSettings({ includePasswords, passphrase })
-      await download({ filename: 'AutoFetcher/autofetcher-settings.json', content })
-      await saveSettings({ lastSettingsExportAt: new Date().toISOString() })
-      await renderStorageStats()
+      await runExport(settingsExportBtn, async () => {
+        const content = await exportSettings({ includePasswords, passphrase })
+        return download({ filename: 'AutoFetcher/autofetcher-settings.json', content })
+      }, 'lastSettingsExportAt')
     })
   }
 
@@ -202,105 +266,196 @@ function setupExportAndImportListeners() {
   if (selfCheckBtn && !selfCheckBtn._afBound) {
     selfCheckBtn._afBound = true
     selfCheckBtn.addEventListener('click', async () => {
+      // 自檢沒有專屬結果位置：失敗訊息接在「最近診斷紀錄」最上面（不新增版面）
+      let failText = ''
       try {
-        await chrome.runtime.sendMessage({ type: MSG.SELF_CHECK })
-        await renderDiag()
-      } catch {}
+        const res = await chrome.runtime.sendMessage({ type: MSG.SELF_CHECK })
+        if (res && res.ok === false) failText = `自檢失敗：${res.error || '背景處理失敗'}`
+      } catch {
+        failText = '自檢沒有完成，請再試一次'
+      }
+      try { await renderDiag() } catch {}
+      const diagBox = document.getElementById('health-diag')
+      if (failText && diagBox) {
+        const row = document.createElement('div')
+        row.className = 'selfcheck-result'
+        row.textContent = failText
+        diagBox.prepend(row)
+      }
     })
   }
+}
+
+// ---- 欄位就地回饋（AF-21 4-D）：設定頁維持即時生效，每一欄寫入後說清楚存了沒 ----
+
+// 已儲存提示顯示多久
+const SAVED_HINT_MS = 2000
+
+// 欄位旁的「已儲存」＋打勾圖示（role=status）與欄位下方的原因（aria-describedby）；建一次、之後沿用
+function feedbackOf(el) {
+  if (el._afFeedback) return el._afFeedback
+  const row = el.closest('.settings-row') || el.parentElement
+  const status = document.createElement('span')
+  status.className = 'inline-status'
+  status.id = `${el.id}-status`
+  status.setAttribute('role', 'status')
+  const error = document.createElement('div')
+  error.className = 'field-error'
+  error.id = `${el.id}-error`
+  error.hidden = true
+  row.appendChild(status)
+  row.appendChild(error)
+  el.setAttribute('aria-describedby', error.id)
+  el._afFeedback = { status, error, timer: null }
+  return el._afFeedback
+}
+
+function showFieldError(el, text) {
+  const fb = feedbackOf(el)
+  clearTimeout(fb.timer)
+  fb.status.textContent = ''
+  fb.error.textContent = text
+  fb.error.hidden = false
+  el.setAttribute('aria-invalid', 'true')
+}
+
+function clearFieldError(el) {
+  const fb = feedbackOf(el)
+  fb.error.textContent = ''
+  fb.error.hidden = true
+  el.removeAttribute('aria-invalid')
+}
+
+function showFieldSaved(el) {
+  const fb = feedbackOf(el)
+  clearFieldError(el)
+  clearTimeout(fb.timer)
+  // 打勾是 SVG 圖示（不用符號字元，AF-21 批次 8）；念出來的是文字「已儲存」
+  fb.status.replaceChildren(document.createTextNode('已儲存 '), icon('check', { size: 14 }))
+  fb.timer = setTimeout(() => { fb.status.textContent = '' }, SAVED_HINT_MS)
+}
+
+// 寫一欄設定：成功顯示「已儲存」、失敗說原因；回傳有沒有寫成
+async function persistField(el, patch) {
+  try {
+    await saveSettings(patch)
+  } catch (e) {
+    showFieldError(el, `沒有儲存：${e?.message || e}`)
+    return false
+  }
+  showFieldSaved(el)
+  return true
+}
+
+// 設定頁的「今天」：與看門狗清理用的本地日期同一種算法
+function localDateText() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+// 數值欄：空白或超出值域不寫入、欄位下說原因，離開焦點恢復成上一個有效值（值域與匯入白名單同一份）
+// beforeSave(next, prev) 回 false 表示使用者取消（欄位恢復原值、不寫入）
+function bindNumericField(el, key, value, beforeSave = null) {
+  el.value = value
+  el._afLastValid = value
+  el._afInvalid = false
+  feedbackOf(el)
+  if (el._afBound) return
+  el._afBound = true
+  el.addEventListener('change', async () => {
+    const raw = String(el.value).trim()
+    const next = raw === '' ? NaN : Number(raw)
+    const problem = raw === '' ? '不能空白' : numericSettingProblem(key, next)
+    if (problem) {
+      el._afInvalid = true
+      showFieldError(el, `沒有儲存：${problem}（離開欄位後恢復成 ${el._afLastValid}）`)
+      return
+    }
+    el._afInvalid = false
+    clearFieldError(el)
+    const prev = el._afLastValid
+    if (next === prev) return
+    if (beforeSave && !(await beforeSave(next, prev))) {
+      el.value = prev
+      return
+    }
+    if (await persistField(el, { [key]: next })) el._afLastValid = next
+  })
+  el.addEventListener('blur', () => {
+    if (!el._afInvalid) return
+    el._afInvalid = false
+    el.value = el._afLastValid
+    el.removeAttribute('aria-invalid')
+  })
+}
+
+// 保留天數調低：看門狗下一輪就會不可逆地刪，先問（調高不問）
+async function confirmRetentionLowered(next, prev) {
+  if (!(next < prev)) return true
+  let count = 0
+  try {
+    count = (await countRecordsBeyondRetention(next, localDateText())).count
+  } catch {}
+  return await confirmDialog({
+    title: '調低紀錄保留天數',
+    body: `將會刪除 ${next} 天以前的紀錄（約 ${count} 筆），無法復原。`,
+    confirmText: '確定調低',
+    cancelText: '取消',
+    danger: true
+  }) === true
+}
+
+// 一般欄位（勾選／下拉／時間）：改了就寫，寫完就地回饋
+function bindField(el, patchOf, after = null) {
+  if (el._afBound) return
+  el._afBound = true
+  feedbackOf(el)
+  el.addEventListener('change', async () => {
+    const patch = patchOf()
+    if (await persistField(el, patch) && after) after(patch)
+  })
 }
 
 // 綁定偏好設定控制項事件
 function setupPreferenceListeners(settings) {
   const retentionEl = document.getElementById('pref-retention')
-  if (retentionEl) {
-    retentionEl.value = settings.retentionDays ?? 365
-    if (!retentionEl._afBound) {
-      retentionEl._afBound = true
-      retentionEl.addEventListener('change', async () => {
-        await saveSettings({ retentionDays: Number(retentionEl.value) })
-      })
-    }
-  }
+  if (retentionEl) bindNumericField(retentionEl, 'retentionDays', settings.retentionDays ?? 365, confirmRetentionLowered)
 
   const notificationsEl = document.getElementById('pref-notifications')
   if (notificationsEl) {
     notificationsEl.checked = settings.notifications ?? true
-    if (!notificationsEl._afBound) {
-      notificationsEl._afBound = true
-      notificationsEl.addEventListener('change', async () => {
-        await saveSettings({ notifications: Boolean(notificationsEl.checked) })
-      })
-    }
+    bindField(notificationsEl, () => ({ notifications: Boolean(notificationsEl.checked) }))
   }
 
   const extraDelayEl = document.getElementById('pref-extra-delay')
-  if (extraDelayEl) {
-    extraDelayEl.value = settings.extraDelaySec ?? 3
-    if (!extraDelayEl._afBound) {
-      extraDelayEl._afBound = true
-      extraDelayEl.addEventListener('change', async () => {
-        await saveSettings({ extraDelaySec: Number(extraDelayEl.value) })
-      })
-    }
-  }
+  if (extraDelayEl) bindNumericField(extraDelayEl, 'extraDelaySec', settings.extraDelaySec ?? 3)
 
   // 兩種都不會碰使用者開著的分頁；預設背景分頁（不閃）。「視窗」不佔分頁列，但建立的瞬間可能閃一下（AF-20）
   const fetchTabModeEl = document.getElementById('pref-fetch-tab-mode')
   if (fetchTabModeEl) {
     fetchTabModeEl.value = settings.fetchTabMode === 'window' ? 'window' : 'tab'
-    if (!fetchTabModeEl._afBound) {
-      fetchTabModeEl._afBound = true
-      fetchTabModeEl.addEventListener('change', async () => {
-        await saveSettings({ fetchTabMode: fetchTabModeEl.value })
-      })
-    }
+    bindField(fetchTabModeEl, () => ({ fetchTabMode: fetchTabModeEl.value }))
   }
 
   const alertCooldownEl = document.getElementById('pref-alert-cooldown')
-  if (alertCooldownEl) {
-    alertCooldownEl.value = settings.alertCooldownMin ?? 60
-    if (!alertCooldownEl._afBound) {
-      alertCooldownEl._afBound = true
-      alertCooldownEl.addEventListener('change', async () => {
-        await saveSettings({ alertCooldownMin: Number(alertCooldownEl.value) })
-      })
-    }
-  }
+  if (alertCooldownEl) bindNumericField(alertCooldownEl, 'alertCooldownMin', settings.alertCooldownMin ?? 60)
 
   const siteCheckTimeEl = document.getElementById('pref-site-check-time')
   if (siteCheckTimeEl) {
     siteCheckTimeEl.value = settings.siteCheckTime ?? '08:00'
-    if (!siteCheckTimeEl._afBound) {
-      siteCheckTimeEl._afBound = true
-      siteCheckTimeEl.addEventListener('change', async () => {
-        await saveSettings({ siteCheckTime: siteCheckTimeEl.value })
-      })
-    }
+    bindField(siteCheckTimeEl, () => ({ siteCheckTime: siteCheckTimeEl.value }))
   }
 
   const themeEl = document.getElementById('pref-theme')
   if (themeEl) {
     themeEl.value = settings.theme ?? 'system'
-    if (!themeEl._afBound) {
-      themeEl._afBound = true
-      themeEl.addEventListener('change', async () => {
-        const val = themeEl.value
-        await saveSettings({ theme: val })
-        applyTheme(val)
-      })
-    }
+    bindField(themeEl, () => ({ theme: themeEl.value }), (patch) => applyTheme(patch.theme))
   }
 
   const helpMenuEl = document.getElementById('pref-help-menu')
   if (helpMenuEl) {
     helpMenuEl.checked = settings.showHelpMenu !== false
-    if (!helpMenuEl._afBound) {
-      helpMenuEl._afBound = true
-      helpMenuEl.addEventListener('change', async () => {
-        await saveSettings({ showHelpMenu: helpMenuEl.checked })
-      })
-    }
+    bindField(helpMenuEl, () => ({ showHelpMenu: helpMenuEl.checked }))
   }
 
   const clearPinnedBtn = document.getElementById('clear-pinned-defaults')
@@ -382,19 +537,29 @@ function setupSitesListListeners() {
     if (!origin) return
     const action = btn.dataset.action
     if (action === 'site-toggle') {
-      const site = await getSite(origin)
-      if (!site) return
-      const nextEnabled = site.enabled === false ? true : false
-      site.enabled = nextEnabled
-      if (nextEnabled) {
-        site.failStreak = 0
-      } else {
+      // 在 sites 鎖內以最新站台切換，只改 enabled／failStreak（背景登入同時累加的計數不得被舊副本蓋掉）
+      let nextEnabled = null
+      await updateSite(origin, (site) => {
+        nextEnabled = site.enabled === false
+        site.enabled = nextEnabled
+        if (nextEnabled) site.failStreak = 0
+        return site
+      })
+      if (nextEnabled === null) return
+      if (!nextEnabled) {
         // 停用後不再檢查，舊的失敗狀態要一併拿掉，否則燈號永遠紅著
         await deleteHealthEntry('site:' + origin)
       }
-      await saveSite(origin, site)
       await renderSitesList()
     } else if (action === 'site-delete') {
+      const ok = await confirmDialog({
+        title: '刪除站台登入設定',
+        body: `確定要刪除「${origin}」的登入設定（含加密保存的密碼）嗎？刪除後排程抓取不會再替這個站台自動登入。`,
+        confirmText: '刪除',
+        cancelText: '取消',
+        danger: true
+      })
+      if (ok !== true) return
       await deleteSite(origin)
       await renderSitesList()
     }
@@ -445,7 +610,7 @@ async function renderSitesList() {
     const isEnabled = site.enabled !== false
 
     const statusEl = document.createElement('span')
-    statusEl.className = 'site-status'
+    statusEl.className = isEnabled ? 'site-status chip is-ok' : 'site-status chip is-off'
     statusEl.textContent = isEnabled ? '啟用中' : '已停用'
     row.appendChild(statusEl)
 
@@ -457,6 +622,7 @@ async function renderSitesList() {
     const healthEl = document.createElement('span')
     healthEl.className = 'site-health'
     const record = healthMap['site:' + origin]
+    if (isRed(record)) row.classList.add('failed')
     let healthText = '尚未檢查'
     if (record && record.status) {
       if (record.status === 'ok') {
@@ -464,7 +630,7 @@ async function renderSitesList() {
       } else if (record.status === 'login_failed') {
         healthText = record.reason || '無法登入'
       } else {
-        healthText = record.reason || record.status
+        healthText = record.reason || statusTextOf(record.status)
       }
     }
     healthEl.textContent = `最近檢查：${healthText}`
@@ -509,6 +675,7 @@ export async function renderSettings() {
   await Promise.all([
     renderNextRuns(),
     renderWatchdog(),
+    renderGuards(),
     renderDiag(),
     renderStorageStats(),
     renderSitesList()
@@ -517,21 +684,120 @@ export async function renderSettings() {
   renderPrivacyNote()
 }
 
-// 處理設定匯入
+// 待確認的設定匯入計畫（選檔後 preview 產生；確認或取消後清掉）
+let pendingSettingsImport = null
+
+// 在結果區塊加一行文字
+function appendLine(parent, text, className) {
+  const el = document.createElement('div')
+  if (className) el.className = className
+  el.textContent = text
+  parent.appendChild(el)
+  return el
+}
+
+// 在結果區塊加一段「標題＋條列」
+function appendList(parent, title, items) {
+  appendLine(parent, title)
+  const ul = document.createElement('ul')
+  for (const text of items) {
+    const li = document.createElement('li')
+    li.textContent = text
+    ul.appendChild(li)
+  }
+  parent.appendChild(ul)
+}
+
+// 設定匯入摘要：新增／覆寫／略過／要重新輸入密碼的站台／被拒絕的設定
+function renderImportSummary(resultEl, summary) {
+  resultEl.textContent = ''
+  const box = document.createElement('div')
+  box.className = 'settings-import-summary'
+  appendList(box, '內容', [
+    `任務：新增 ${summary.tasks.add} 個、覆寫 ${summary.tasks.update} 個、略過 ${summary.tasks.skipped.length} 個`,
+    `站台：新增 ${summary.sites.add} 個、覆寫 ${summary.sites.update} 個`,
+    `設定：套用 ${summary.settings.applied.length} 項、拒絕 ${summary.settings.rejected.length} 項`,
+    summary.layout ? '儀表板版面：會以設定檔的版面取代' : '儀表板版面：不變'
+  ])
+  if (summary.tasks.skipped.length > 0) {
+    appendList(box, '略過的任務', summary.tasks.skipped.map(s => `${s.name}：${s.reason}`))
+  }
+  if (summary.sites.needPassword.length > 0) {
+    appendList(box, `${summary.sites.needPassword.length} 個站台匯入後要重新輸入密碼`, summary.sites.needPassword)
+  }
+  if (summary.settings.rejected.length > 0) {
+    appendList(box, '被拒絕的設定', summary.settings.rejected.map(r => `${r.key}：${r.reason}`))
+  }
+
+  // 共用 modal（AF-21 4-D，取代 3-A 暫放在結果區的按鈕）；對話框元素掛在結果區底下，
+  // showModal 一律進最上層，掛哪裡不影響顯示；不等它關閉（選檔的處理到此結束）
+  const plan = pendingSettingsImport
+  confirmDialog({
+    title: '即將匯入（尚未寫入）',
+    body: box,
+    confirmText: '確認匯入',
+    cancelText: '取消',
+    container: resultEl,
+    ids: { confirm: 'settings-import-confirm', cancel: 'settings-import-cancel' }
+  }).then((ok) => {
+    // 已經被新的一次選檔取代：不動
+    if (pendingSettingsImport !== plan) return
+    if (ok === true) confirmSettingsImport()
+    else cancelSettingsImport()
+  })
+}
+
+// 處理設定匯入：選檔後只做 preview、顯示摘要與確認／取消（零寫入）
 export async function handleSettingsImport(jsonText) {
   const resultEl = document.getElementById('settings-import-result')
+  pendingSettingsImport = null
+  // 上一次選檔的確認框還開著（它掛在結果區底下）：先當成取消收掉。
+  // 直接覆寫結果區會把 <dialog> 從文件上丟掉，modal 的狀態卻還留著，isDialogOpen() 從此恆真
+  dismissDialog()
   try {
     const passphraseEl = document.getElementById('settings-passphrase')
     const passphrase = passphraseEl?.value || ''
-    await importSettings(jsonText, { passphrase })
-    if (resultEl) {
-      resultEl.textContent = '設定匯入成功'
-    }
+    const { plan, summary } = await previewSettingsImport(jsonText, { passphrase })
+    pendingSettingsImport = plan
+    if (resultEl) renderImportSummary(resultEl, summary)
   } catch (err) {
     if (resultEl) {
       resultEl.textContent = `設定匯入失敗：${err.message || '未知錯誤'}`
     }
   }
+}
+
+// 取消：零寫入、清掉摘要
+export function cancelSettingsImport() {
+  pendingSettingsImport = null
+  const resultEl = document.getElementById('settings-import-result')
+  if (resultEl) resultEl.textContent = ''
+  const fileEl = document.getElementById('settings-import-file')
+  if (fileEl) fileEl.value = ''
+}
+
+// 確認：寫入；成功後重畫整個設定頁（欄位才會顯示匯入後的值），失敗說明已還原
+export async function confirmSettingsImport() {
+  const plan = pendingSettingsImport
+  if (!plan) return
+  pendingSettingsImport = null
+  const resultEl = document.getElementById('settings-import-result')
+  if (resultEl) resultEl.textContent = '匯入中…'
+  try {
+    await applySettingsImport(plan)
+  } catch (err) {
+    if (resultEl) {
+      const restored = err?.restoreError ? '還原匯入前的設定時也失敗了，請重新整理後檢查' : '已還原成匯入前的設定'
+      resultEl.textContent = `設定匯入失敗：${err?.message || '未知錯誤'}；${restored}`
+    }
+    return
+  }
+  try {
+    await renderSettings()
+    // 匯入可能改了主題：當下就套用，不必重新整理頁面
+    await applySavedTheme()
+  } catch {}
+  if (resultEl) resultEl.textContent = '設定匯入成功'
 }
 
 // 處理歷史紀錄匯入
@@ -557,9 +823,12 @@ export async function handleRecordsImport(jsonTextArray) {
       }
     }
 
-    const { added, skipped } = await importRecords(allDays)
+    const { added, skipped, invalid = [] } = await importRecords(allDays)
     if (resultEl) {
       resultEl.textContent = `已新增 ${added} 筆、略過 ${skipped} 筆`
+      if (invalid.length > 0) {
+        appendList(resultEl, '不合格而略過的紀錄（前幾筆）', invalid.map(v => `${v.date} ${v.taskId || '（無 taskId）'}：${v.reason}`))
+      }
     }
     await renderStorageStats()
   } catch (err) {

@@ -38,7 +38,9 @@ export function filterRecords(records, filter = {}) {
   if (!Array.isArray(records)) return []
   if (!filter || typeof filter !== 'object') return [...records]
 
-  const { taskIds, statuses, alertOnly, alertsOnly, min, max, valueMin, valueMax, keyword } = filter
+  const { taskIds, statuses, failedOnly, alertOnly, min, max, valueMin, valueMax, keyword } = filter
+  // 舊的 alertsOnly 只剩舊網址會帶（parseHash 轉成 failedOnly），這裡不再認
+  const onlyFailed = failedOnly === true
   const hasTaskIds = Array.isArray(taskIds) && taskIds.length > 0
   const hasStatuses = Array.isArray(statuses) && statuses.length > 0
   const kw = (keyword != null && String(keyword).trim() !== '') ? String(keyword).toLowerCase() : null
@@ -49,9 +51,7 @@ export function filterRecords(records, filter = {}) {
     if (!r) return false
     if (hasTaskIds && !taskIds.includes(r.taskId)) return false
     if (hasStatuses && !statuses.includes(r.status)) return false
-    if (alertsOnly) {
-      if (isSuccess(r)) return false
-    }
+    if (onlyFailed && isSuccess(r)) return false
     if (alertOnly && r.alert !== true) return false
     if (vMin !== undefined && vMin !== null) {
       if (typeof r.value !== 'number' || Number.isNaN(r.value) || r.value < vMin) return false
@@ -321,9 +321,18 @@ export function parseHash(hash) {
       result.keyword = keyword
     }
 
-    const alertsOnly = params.get('alertsOnly')
-    if (alertsOnly === '1' || alertsOnly === 'true') {
-      result.alertsOnly = true
+    const isOn = (v) => v === '1' || v === 'true'
+    // 舊網址的 alertsOnly=1 實際一直是「只看失敗」：轉成 failedOnly
+    if (isOn(params.get('failedOnly')) || isOn(params.get('alertsOnly'))) {
+      result.failedOnly = true
+    }
+    if (isOn(params.get('alertOnly'))) {
+      result.alertOnly = true
+    }
+
+    const task = params.get('task')
+    if (task !== null && task !== '') {
+      result.task = task
     }
 
     const page = params.get('page')
@@ -365,8 +374,11 @@ export const buildHash = function (state = {}) {
   if (state.keyword) {
     params.set('keyword', state.keyword)
   }
-  if (state.alertsOnly) {
-    params.set('alertsOnly', '1')
+  if (state.failedOnly) {
+    params.set('failedOnly', '1')
+  }
+  if (state.alertOnly) {
+    params.set('alertOnly', '1')
   }
   if (state.page !== undefined && state.page !== null && !Number.isNaN(Number(state.page))) {
     params.set('page', String(state.page))
