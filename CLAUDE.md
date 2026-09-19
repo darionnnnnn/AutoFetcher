@@ -91,7 +91,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **批次畫面沒有 `currentCtx`**(AF-20 體檢):把單任務區塊露出到批次畫面時,先 grep 那個區塊裡所有 `currentCtx` 的用處——前置動作的「在頁面上選取」少了 `tabId` 就靜默無事,
   而且按過一次「全部試抓」之後 `currentCtx` 被順手填上又會好,很容易誤判成沒問題。
   **專用視窗只有一種建法**:先 `windows.create({ url, focused:false, width, height })`、立刻登記、再 `windows.update({ state:'minimized' })`。
-  直接 `state:'minimized'` 建的頁面 viewport 是 0×0;`minimized`＋`focused:false` 會靜默變一般視窗;`popup` 搶焦點;已最小化的視窗裡再開的作用中分頁(與在它之後開的背景分頁)也是 0×0(探針事實表在 SPEC §4)。
+  直接 `state:'minimized'` 建的頁面 viewport 是 0×0;`minimized`＋`focused:false` 會靜默變一般視窗;`popup` 搶焦點;已最小化的視窗裡再開的作用中分頁(與在它之後開的背景分頁)也是 0×0(探針事實表在 docs/archive/SPEC-decisions.md)。
   自建的視窗／分頁登記在 `storage.session.fetchTabs`(帶 `boot`),孤兒只看登記表判定,不得用網址猜。
 - **正式碼不得碰測試替身的 `__calls`**(AF-20 拔掉 fetcher 兩處往裡面塞假紀錄的程式碼,D14 已擋):那等於讓測試斷言正式碼自己寫的東西。
 - **量頁面可見性、計時器節流一類的探針要拿掉 puppeteer 的預設旗標**(AF-20):它預設帶 `--disable-background-timer-throttling` 等三個,

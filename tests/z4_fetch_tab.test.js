@@ -1,5 +1,5 @@
 // AF-20 作業 A:抓取分頁的唯一入口 background/fetch-tab.js
-// 建視窗的參數組合來自真實瀏覽器探針(docs/SPEC.md §4 的探針事實表),替身逐鍵驗參數:
+// 建視窗的參數組合來自真實瀏覽器探針(docs/archive/SPEC-decisions.md 的探針事實表),替身逐鍵驗參數:
 // 測試替身不驗參數曾讓「tabs.create 帶 autoDiscardable 整個呼叫被擋」藏了十幾輪(AF-13)。
 process.env.TZ = 'Asia/Taipei'
 import test from 'node:test'
