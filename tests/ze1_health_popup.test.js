@@ -125,8 +125,8 @@ test('2 applyBadge 依等級換圖示（red／yellow／green／off→gray），�
     const path = calls.pop().args[0].path
     for (const size of [16, 32, 48]) {
       const p = path[size]
-      assert.equal(p, `icons/icon-${color}-${size}.png`, `${level} ${size}`)
-      assert.ok(statSync(new URL('../src/' + p, import.meta.url)).isFile(), `${p} 要真的存在`)
+      assert.equal(p, `/icons/icon-${color}-${size}.png`, `${level} ${size}`)
+      assert.ok(statSync(new URL('../src' + p, import.meta.url)).isFile(), `${p} 要真的存在`)
     }
   }
 })

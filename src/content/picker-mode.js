@@ -124,15 +124,70 @@ const BATCH_LIMIT_NOTICE = `一次最多建立 ${MAX_BATCH_GROUPS} 個任務；�
 const BATCH_FRAME_NOTICE = '進入框架會離開這一頁的選取；請先完成這一批，再對框架內的內容另開一批'
 
 // detectKind 會掃整棵子樹，而滑鼠每移動一格都要問一次，因此記住最後一次的結果
+// （只放「不是表格」的元素，例如滑鼠下的格子；表格走下面以元素為鍵的快取，兩者不再互相逐出）
 let kindCacheEl = null, kindCache = null
-
-// 取得元素的型別描述（同一個元素連續詢問時走快取）
-function kindOf(el) {
-  if (el !== kindCacheEl) {
-    kindCacheEl = el
-    kindCache = detectKind(el)
+// 同一張表的衍生資料（型別描述、資料列、最內層表）只算一次（AF-21 批次 7）：
+// 以表格元素為鍵，內容變動由觀察器作廢；exitPickMode 整個換新、觀察器全部 disconnect
+let tableCache = new WeakMap()
+let tableObserver = null
+// 觀察器的回呼是非同步的：派發事件後同步讀快取之前，先把還沒送達的變動紀錄收進來
+function flushTableMutations() {
+  if (tableObserver) invalidateByMutations(tableObserver.takeRecords())
+}
+// 變動落在哪張表裡，就作廢那張表（與所有包著它的表）的快取
+function invalidateByMutations(records) {
+  if (!records || records.length === 0) return
+  for (const rec of records) {
+    let node = rec.target
+    while (node) {
+      tableCache.delete(node)
+      node = node.parentNode
+    }
   }
-  return kindCache
+  // 可否升級看的是外層表每一列的小表，任何一張變了都可能改變答案
+  upgradeableCache.clear()
+  kindCacheEl = null
+  kindCache = null
+}
+// 取得（必要時建立）這張表的快取項，並開始觀察它
+function tableEntryOf(el) {
+  let entry = tableCache.get(el)
+  if (entry) return entry
+  entry = {}
+  // 觀察器取元素所在文件的那一份（頁面上就是全域那個）；拿不到就不快取，每次照算
+  const MO = el?.ownerDocument?.defaultView?.MutationObserver ||
+    (typeof MutationObserver === 'function' ? MutationObserver : null)
+  if (MO && typeof el.nodeType === 'number') {
+    if (!tableObserver) tableObserver = new MO(invalidateByMutations)
+    tableObserver.observe(el, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['role', 'colspan'] })
+    tableCache.set(el, entry)
+  }
+  return entry
+}
+
+// 取得元素的型別描述（表格／假表格以元素為鍵快取，其餘同一個元素連續詢問時走單格快取）
+function kindOf(el) {
+  flushTableMutations()
+  const cached = el ? tableCache.get(el) : undefined
+  if (cached && cached.kind) return cached.kind
+  if (el === kindCacheEl && kindCache) return kindCache
+  const kind = detectKind(el)
+  if (el && (kind.kind === 'table' || kind.kind === 'grid')) {
+    tableEntryOf(el).kind = kind
+  } else {
+    kindCacheEl = el
+    kindCache = kind
+  }
+  return kind
+}
+
+// 最內層表（shared/table.js 的 innermostTable 會掃整表的格子）：同一張表只問一次
+function innermostTableCached(el) {
+  if (!el || el.tagName !== 'TABLE') return innermostTable(el)
+  flushTableMutations()
+  const entry = tableEntryOf(el)
+  if (!('innermost' in entry)) entry.innermost = innermostTable(el)
+  return entry.innermost
 }
 
 // 判定是否處於表格模式
@@ -230,7 +285,7 @@ function upgradeTarget(el, opts = {}) {
   }
   // 擷取端（shared/table.js 的 parseTable / getDataRows）對純包裝的外層表會鑽到內層，
   // 選取端不跟著鑽的話，索引以外層算、值以內層取，會靜默抓到別一格（AF-10 作業 D）
-  upgraded = innermostTable(upgraded)
+  upgraded = innermostTableCached(upgraded)
 
   // 觸發 2：已選在 T，滑鼠到 O 的別處（用途 task、T 可升級）
   if (!opts.deliberate && anchor && selectedList.length > 0 && anchor === pickedTableEl &&
@@ -259,13 +314,18 @@ function upgradeTarget(el, opts = {}) {
 }
 
 // 取得表格的所有資料列（排除表頭列）
+// 同一張表只算一次（快取在 tableCache，表格內容變動才重算）；回傳的陣列是共用的，呼叫端不得改動它
 function resolveDataRows(tableEl) {
   if (!tableEl) return []
-  if (kindOf(tableEl).kind === 'table') {
-    return getTableRows(tableEl).filter(r => !isHeaderRow(r))
-  }
+  const kind = kindOf(tableEl).kind
+  const entry = (kind === 'table' || kind === 'grid') ? tableEntryOf(tableEl) : null
+  if (entry && entry.dataRows) return entry.dataRows
   // CSS 假表格的列判準也走 shared/table.js 那一份（選取端與解析端不得各寫一份）
-  return cssGridRowsOf(tableEl)
+  const rows = kind === 'table'
+    ? getTableRows(tableEl).filter(r => !isHeaderRow(r))
+    : cssGridRowsOf(tableEl)
+  if (entry) entry.dataRows = rows
+  return rows
 }
 
 // 判定列元素是否位於屬於該表格之 tfoot
@@ -367,7 +427,7 @@ function resolveCell(target, tableEl) {
     if (!cell) return null
     row = cell.closest ? cell.closest('tr, [role="row"]') : null
     if (!row || !tableEl.contains(row)) return null
-    dataRows = getTableRows(tableEl).filter(r => !isHeaderRow(r))
+    dataRows = resolveDataRows(tableEl)
   } else {
     dataRows = Array.from(tableEl.children || [])
     row = dataRows.find(r => r === target || r.contains(target))
@@ -710,10 +770,14 @@ function candidateAt(target) {
 }
 
 // 清除所有標記為待選之表格格子
+// 只清自己畫過的（markedCellEls），不掃全文件（AF-21 批次 7）
 function clearMarkedCells(doc) {
   const d = doc || (typeof document !== 'undefined' ? document : null)
-  if (!d || typeof d.querySelectorAll !== 'function') return
-  for (const cell of d.querySelectorAll('[data-af-cell]')) {
+  if (!d) return
+  const marked = markedCellEls
+  markedCellEls = new Set()
+  for (const cell of marked) {
+    if (!cell.hasAttribute('data-af-cell')) continue
     cell.removeAttribute('data-af-cell')
     if (cell.hasAttribute('data-af-picked')) {
       cell.style.outline = `2px solid ${COLORS.primary}`
@@ -734,6 +798,7 @@ function markCells(cell, dataRows, row, mode, cIdx, inner) {
     const targetCell = hasInner(inner) ? (row ? targetAtGrid(row, cIdx, inner) : null) : cell
     if (targetCell && !isHeaderCell(targetCell)) {
       targetCell.setAttribute('data-af-cell', '')
+      markedCellEls.add(targetCell)
       targetCell.style.outline = `2px solid ${COLORS.warn}`
       targetCell.style.transition = markTransition()
     }
@@ -742,6 +807,7 @@ function markCells(cell, dataRows, row, mode, cIdx, inner) {
       const targetCell = targetAtGrid(dRow, cIdx, inner)
       if (targetCell && !isHeaderCell(targetCell)) {
         targetCell.setAttribute('data-af-cell', '')
+        markedCellEls.add(targetCell)
         targetCell.style.outline = `2px solid ${COLORS.warn}`
       }
     }
@@ -751,6 +817,7 @@ function markCells(cell, dataRows, row, mode, cIdx, inner) {
       const targetCell = targetAtGrid(row, idx, inner)
       if (targetCell && !isHeaderCell(targetCell)) {
         targetCell.setAttribute('data-af-cell', '')
+        markedCellEls.add(targetCell)
         targetCell.style.outline = `2px solid ${COLORS.warn}`
       }
     }
@@ -782,11 +849,25 @@ function clearHeldMarks(doc, purpose) {
   }
 }
 
-// 清除所有已選標記
-function clearPickedMarks(doc) {
-  const d = doc || (typeof document !== 'undefined' ? document : null)
-  if (!d || typeof d.querySelectorAll !== 'function') return
-  for (const cell of d.querySelectorAll('[data-af-chip-hover]')) {
+// 已選標示的狀態位元：P＝data-af-picked、X＝data-af-excluded（兩者可並存：先被別組排除、再被另一組選到）
+const MARK_P = 1, MARK_X = 2
+// 自己畫過的標示（AF-21 批次 7）：清理只清這些，不做全文件查詢
+let markedCellEls = new Set()
+let pickedMarkEls = new Map()
+let chipHoverEls = new Set()
+
+// 記下 chip 懸停加粗的格子（清理時只清這些）
+function trackChipHover(cell) {
+  chipHoverEls.add(cell)
+}
+
+// 收掉 chip 懸停的加粗外框；回傳這次真的被還原外框的格子
+function clearChipHoverMarks() {
+  const restored = new Set()
+  const els = chipHoverEls
+  chipHoverEls = new Set()
+  for (const cell of els) {
+    if (!cell.hasAttribute('data-af-chip-hover')) continue
     if (cell._afHoverTimer) {
       clearTimeout(cell._afHoverTimer)
       delete cell._afHoverTimer
@@ -796,25 +877,58 @@ function clearPickedMarks(doc) {
       cell.style.outline = cell._afPrevOutline
       delete cell._afPrevOutline
     }
+    restored.add(cell)
   }
-  // 保留中的標示（送出後留給面板旁邊看的那些）不在這裡清，
-  // 它們的出口是 EXIT_PICK 或下一次同用途的 ENTER_PICK
-  for (const cell of d.querySelectorAll('[data-af-picked]:not([data-af-held])')) {
+  return restored
+}
+
+// 拿掉一格的已選／排除標示（保留中的標示不動：它們的出口是 EXIT_PICK 或下一次同用途的 ENTER_PICK）
+function unmarkPicked(cell) {
+  if (cell.hasAttribute('data-af-held')) return
+  for (const attr of ['data-af-picked', 'data-af-excluded']) {
+    if (!cell.hasAttribute(attr)) continue
+    cell.removeAttribute(attr)
+    if (cell.hasAttribute('data-af-cell')) {
+      cell.style.outline = `2px solid ${COLORS.warn}`
+    } else {
+      cell.style.outline = ''
+    }
+  }
+}
+
+// 把一格畫成指定狀態（與舊版「全清再依序畫」的最終結果相同：待選格維持待選色，其餘看最後一次是選還是排除）
+function writePickedMark(cell, state) {
+  if (state & MARK_P) {
+    if (!cell.hasAttribute('data-af-picked')) cell.setAttribute('data-af-picked', '')
+  } else if (cell.hasAttribute('data-af-picked')) {
     cell.removeAttribute('data-af-picked')
-    if (cell.hasAttribute('data-af-cell')) {
-      cell.style.outline = `2px solid ${COLORS.warn}`
-    } else {
-      cell.style.outline = ''
-    }
   }
-  for (const cell of d.querySelectorAll('[data-af-excluded]:not([data-af-held])')) {
+  if (state & MARK_X) {
+    if (!cell.hasAttribute('data-af-excluded')) cell.setAttribute('data-af-excluded', '')
+  } else if (cell.hasAttribute('data-af-excluded')) {
     cell.removeAttribute('data-af-excluded')
-    if (cell.hasAttribute('data-af-cell')) {
-      cell.style.outline = `2px solid ${COLORS.warn}`
-    } else {
-      cell.style.outline = ''
-    }
   }
+  if (cell.hasAttribute('data-af-cell')) {
+    cell.style.outline = `2px solid ${COLORS.warn}`
+  } else {
+    cell.style.outline = (state & MARK_P) ? `2px solid ${COLORS.primary}` : `2px dashed ${COLORS.warn}`
+  }
+}
+
+// 標示是否已經是這個狀態（別的程式碼拿掉了屬性就要重畫）
+function markMatches(cell, state) {
+  return cell.hasAttribute('data-af-picked') === Boolean(state & MARK_P) &&
+    cell.hasAttribute('data-af-excluded') === Boolean(state & MARK_X)
+}
+
+// 清除所有已選標記
+function clearPickedMarks(doc) {
+  const d = doc || (typeof document !== 'undefined' ? document : null)
+  if (!d) return
+  clearChipHoverMarks()
+  const els = pickedMarkEls
+  pickedMarkEls = new Map()
+  for (const cell of els.keys()) unmarkPicked(cell)
 }
 
 // 目前這組以外的組（批次模式）
@@ -822,25 +936,36 @@ function otherBatchGroups() {
   return batchGroupsView().filter(g => g.picks !== selectedList)
 }
 
-// 重新在表格上貼回已選標記（批次模式時每一組都畫）
+// 重新在表格上貼回已選標記（批次模式時每一組都畫）。
+// 只對「上一次畫的」與「這一次該畫的」差集增刪（AF-21 批次 7）：hover 換欄時已選的 20 格不會全拆再全畫
 function applyPickedMarks(tableEl) {
-  clearPickedMarks(document)
-  drawPicksOn(tableEl, selectedList)
-  if (!batchMode) return
-  for (const g of otherBatchGroups()) {
-    if (g.el) {
-      g.el.setAttribute('data-af-picked', '')
-      if (!g.el.hasAttribute('data-af-cell')) g.el.style.outline = `2px solid ${COLORS.primary}`
-    } else {
-      drawPicksOn(g.tableEl, g.picks)
+  const restored = clearChipHoverMarks()
+  const next = new Map()
+  collectPickMarks(next, tableEl, selectedList)
+  if (batchMode) {
+    for (const g of otherBatchGroups()) {
+      if (g.el) {
+        next.set(g.el, (next.get(g.el) || 0) | MARK_P)
+      } else {
+        collectPickMarks(next, g.tableEl, g.picks)
+      }
     }
   }
+  for (const cell of pickedMarkEls.keys()) {
+    if (!next.has(cell)) unmarkPicked(cell)
+  }
+  for (const [cell, state] of next) {
+    if (pickedMarkEls.get(cell) !== state || restored.has(cell) || !markMatches(cell, state)) {
+      writePickedMark(cell, state)
+    }
+  }
+  pickedMarkEls = next
 }
 
 // 取得一個 pick 所涵蓋的所有格子元素
-function cellsOfPick(tableEl, pick) {
+function cellsOfPick(tableEl, pick, rows) {
   if (!tableEl || !isTableMode(tableEl) || !pick) return []
-  const dataRows = resolveDataRows(tableEl)
+  const dataRows = rows || resolveDataRows(tableEl)
   const cells = []
   if (pick.cell) {
     const row = dataRows[pick.cell.row.index]
@@ -876,16 +1001,14 @@ function cellsOfPick(tableEl, pick) {
   return cells
 }
 
-function drawPicksOn(tableEl, picks) {
+// 算出一組已選值該畫的標示（先全部標成已選、再把排除項改成排除；順序與舊版逐格畫相同）
+function collectPickMarks(marks, tableEl, picks) {
   if (!tableEl || !isTableMode(tableEl)) return
   const dataRows = resolveDataRows(tableEl)
+  const pick1 = (cell) => marks.set(cell, (marks.get(cell) || 0) | MARK_P)
+  const exclude1 = (cell) => marks.set(cell, ((marks.get(cell) || 0) & ~MARK_P) | MARK_X)
   for (const pick of picks) {
-    for (const cell of cellsOfPick(tableEl, pick)) {
-      cell.setAttribute('data-af-picked', '')
-      if (!cell.hasAttribute('data-af-cell')) {
-        cell.style.outline = `2px solid ${COLORS.primary}`
-      }
-    }
+    for (const cell of cellsOfPick(tableEl, pick, dataRows)) pick1(cell)
   }
 
   for (const pick of picks) {
@@ -896,13 +1019,7 @@ function drawPicksOn(tableEl, picks) {
           const row = dataRows[item.index]
           if (row) {
             const cell = targetAtGrid(row, pick.block.index, pick.block.inner)
-            if (cell && !isHeaderCell(cell)) {
-              cell.removeAttribute('data-af-picked')
-              cell.setAttribute('data-af-excluded', '')
-              if (!cell.hasAttribute('data-af-cell')) {
-                cell.style.outline = `2px dashed ${COLORS.warn}`
-              }
-            }
+            if (cell && !isHeaderCell(cell)) exclude1(cell)
           }
         }
       } else if (pick.block.axis === 'row') {
@@ -910,13 +1027,7 @@ function drawPicksOn(tableEl, picks) {
         if (row) {
           for (const item of excludes) {
             const cell = targetAtGrid(row, item.index, pick.block.inner)
-            if (cell && !isHeaderCell(cell)) {
-              cell.removeAttribute('data-af-picked')
-              cell.setAttribute('data-af-excluded', '')
-              if (!cell.hasAttribute('data-af-cell')) {
-                cell.style.outline = `2px dashed ${COLORS.warn}`
-              }
-            }
+            if (cell && !isHeaderCell(cell)) exclude1(cell)
           }
         }
       }
@@ -1206,6 +1317,7 @@ function buildPickChip(i, name) {
         cell._afPrevOutline = cell.style.outline
       }
       cell.setAttribute('data-af-chip-hover', '')
+      trackChipHover(cell)
       cell.style.outline = `3px solid ${COLORS.primary}`
     }
   })
@@ -3370,6 +3482,7 @@ function onClick(event) {
           cell._afPrevOutline = cell.style.outline
         }
         cell.setAttribute('data-af-chip-hover', '')
+        trackChipHover(cell)
         cell.style.outline = `3px solid ${COLORS.primary}`
         if (cell._afHoverTimer) clearTimeout(cell._afHoverTimer)
         cell._afHoverTimer = setTimeout(() => {
@@ -4126,6 +4239,14 @@ export function exitPickMode(opts = {}) {
   kindCacheEl = null
   kindCache = null
   upgradeableCache.clear()
+  // 表格快取與觀察器：觀察器全部 disconnect、快取整個換新（下一輪不得沿用上一輪的列清單）
+  if (tableObserver) tableObserver.disconnect()
+  tableObserver = null
+  tableCache = new WeakMap()
+  // 自己畫過的標示清單（上面的 clear* 已清完；保留中的標示本來就不在清理範圍）
+  markedCellEls = new Set()
+  pickedMarkEls = new Map()
+  chipHoverEls = new Set()
   // 批次模式的組：漏清會讓下一輪帶著上一輪的任務送出
   batchMode = false
   batchGroups = []

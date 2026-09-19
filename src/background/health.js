@@ -85,15 +85,16 @@ export function computeHealth(tasks = [], healthMap = {}, missed = []) {
   return { level, redCount, knownRedCount, yellowCount, summary }
 }
 
-// 各燈號對應的工具列圖示（路徑相對於擴充功能根目錄，與 manifest 同寫法）
+// 各燈號對應的工具列圖示。**一定要以 / 開頭**：service worker 在 /background/，相對路徑會解析成
+// /background/icons/…，setIcon 讀不到就整個丟例外（AF-21 煙霧測試抓到：丟出來的例外讓抓取回報失敗）
 const ICON_COLOR = { red: 'red', yellow: 'yellow', green: 'green', off: 'gray' }
 
 export function iconPathOf(level) {
   const color = ICON_COLOR[level] || 'green'
   return {
-    16: `icons/icon-${color}-16.png`,
-    32: `icons/icon-${color}-32.png`,
-    48: `icons/icon-${color}-48.png`
+    16: `/icons/icon-${color}-16.png`,
+    32: `/icons/icon-${color}-32.png`,
+    48: `/icons/icon-${color}-48.png`
   }
 }
 
@@ -175,7 +176,10 @@ export async function applyBadge(state) {
       break
   }
 
-  await chrome.action.setIcon({ path: iconPathOf(level || 'green') })
+  // 換圖示失敗只是少了顏色，不得讓燈號其餘部分（以及呼叫它的抓取流程）跟著失敗
+  try {
+    await chrome.action.setIcon({ path: iconPathOf(level || 'green') })
+  } catch {}
   await chrome.action.setBadgeText({ text })
   await chrome.action.setBadgeBackgroundColor({ color })
   await chrome.action.setTitle({ title: 'AutoFetcher — ' + (state?.summary || '') })
