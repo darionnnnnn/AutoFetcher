@@ -23,7 +23,9 @@ export const MSG = {
   PANEL_CLOSING: 'PANEL_CLOSING',
   CLOSE_PANEL: 'CLOSE_PANEL',
   // AF-21 批次 4：站台面板用尚未儲存的設定測一次登入（只給擴充功能頁送，不進 CONTENT_ALLOWED）
-  TEST_LOGIN: 'TEST_LOGIN'
+  TEST_LOGIN: 'TEST_LOGIN',
+  // AF-21 批次 5：popup／任務頁的「知道了」把 health 項目標已讀（只給擴充功能頁送，不進 CONTENT_ALLOWED）
+  MARK_READ: 'MARK_READ'
 }
 
 // content script（跑在任意網頁上）可以送給 background 的型別（AF-21 批次 3 定案 3）。

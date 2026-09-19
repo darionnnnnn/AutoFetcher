@@ -89,7 +89,7 @@ test('已讀的項目不計入燈號數字,但燈號等級不變', async () => {
   const { he } = await fresh()
   const s = he.computeHealth([task('t1')], { t1: { status: 'login_failed', read: true } }, [])
   assert.equal(s.redCount, 0)
-  assert.equal(s.level, 'green', '已讀且沒有其他問題時回綠')
+  assert.equal(s.level, 'red', '紅燈要修好才回綠，已讀只影響 badge 數字（AF-21 批次 5）')
 })
 
 test('applyBadge:紅燈設紅底與數字', async () => {

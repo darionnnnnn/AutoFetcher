@@ -761,7 +761,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       return await handleTestLogin(msg, runOpts)
     }
 
-    if (msg.type === 'MARK_READ') {
+    if (msg.type === MSG.MARK_READ) {
       if (Array.isArray(msg.taskIds)) {
         for (const id of msg.taskIds) await markRead(id)
       }

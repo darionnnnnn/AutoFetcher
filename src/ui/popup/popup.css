@@ -119,3 +119,24 @@ footer {
   margin-bottom: 8px;
   line-height: 1.4;
 }
+/* AF-21 批次 5：知道了／下一步／站台列／零任務引導／教學連結 */
+.next-step { font-size: var(--text-xs, 11px); padding: 2px 6px; color: var(--primary); border-color: var(--primary); }
+.ack, .disable-task { font-size: var(--text-xs, 11px); padding: 2px 6px; }
+.disable-task { color: var(--danger); border-color: var(--danger); }
+.ack-note { font-size: var(--text-xs, 11px); color: var(--text-muted); align-self: center; }
+.task-actions { flex-wrap: wrap; }
+.site-row {
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  padding: var(--space-2, 8px) var(--space-2, 10px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1, 4px);
+  background: var(--surface);
+}
+.site-hint { font-size: var(--text-xs, 11px); color: var(--text-muted); line-height: 1.4; }
+#ack-all { align-self: flex-end; font-size: var(--text-xs, 11px); padding: 2px 8px; }
+.empty-guide { text-align: left; }
+.empty-guide ol { margin: var(--space-2, 8px) 0 var(--space-2, 8px) var(--space-4, 18px); }
+.help-link { color: var(--primary); font-size: var(--text-xs, 12px); text-decoration: underline; cursor: pointer; }
+#open-help { align-self: center; }

@@ -532,7 +532,8 @@
         <ol class="steps" data-help-steps>
           <li>沒有數字：全部正常。</li>
           <li>黃色數字：抓到了，但有地方要留意。</li>
-          <li>紅色數字：有任務抓不到，點圖示看是哪一個。</li>
+          <li>紅色數字：有任務抓不到，點圖示看是哪一個。修好或停用才會消。</li>
+          <li>紅色「!」：問題都已經知道了，但還沒修好。</li>
           <li>灰色「II」：全部暫停中。</li>
         </ol>
         <figure class="demo" data-help-figure>
@@ -542,13 +543,16 @@
             <span class="demo-lamp"><i class="lamp-bad"></i>異常</span>
             <span class="demo-lamp"><i class="lamp-off"></i>暫停</span>
           </div>
-          <figcaption>數字是有狀況的任務數。</figcaption>
+          <figcaption>數字是還沒按「知道了」的狀況數。</figcaption>
         </figure>
         <details data-help-more>
           <summary>遇到這些狀況</summary>
           <dl>
             <dt>黃燈常見原因</dt><dd>找元素時用了備用方式、表格只讀到一部分、補抓的紀錄、或要排除的合計列找不到。</dd>
             <dt>紅燈常見原因</dt><dd>網站改版找不到元素、登入失敗、數字解析不出來、連續失敗。</dd>
+            <dt>看過了，不想再被數字提醒？</dt><dd>在圖示的清單上按那一列的「<span class="ui" data-ui-label="ui/popup/popup.js">知道了</span>」，或上方的「<span class="ui" data-ui-label="ui/popup/popup.html">全部知道了</span>」。黃燈按了就消，狀態再變才會重新亮；紅燈會留著並標「<span class="ui" data-ui-label="ui/popup/popup.js">已知悉・尚未修復</span>」，不想管它就按「<span class="ui" data-ui-label="ui/popup/popup.js">停用這個任務</span>」。只打開圖示看一眼不算知道了。</dd>
+            <dt>紅燈要怎麼修？</dt><dd>找不到元素或解析不出數字，按「<span class="ui" data-ui-label="ui/popup/popup.js">重選目標</span>」到任務管理重選；登入失敗按「<span class="ui" data-ui-label="ui/popup/popup.js">前往登入頁</span>」，在登入頁按右鍵選「<span class="ui" data-ui-label="background/main.js">設定此站台登入</span>」；其他狀況先按「<span class="ui" data-ui-label="ui/popup/popup.js">立即重試</span>」。</dd>
+            <dt>找不到這份教學？</dt><dd>點工具列圖示，最下面有「<span class="ui" data-ui-label="ui/popup/popup.html">使用教學</span>」。</dd>
             <dt>想全部先停下來？</dt><dd>點圖示按「<span class="ui" data-ui-label="ui/popup/popup.html">全部暫停 / 恢復</span>」。</dd>
           </dl>
         </details>

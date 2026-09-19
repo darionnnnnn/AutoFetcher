@@ -254,14 +254,15 @@ test('站台正常時不影響燈號', async () => {
   assert.equal(res.level, 'green')
 })
 
-test('站台的健康項目已讀後不再計入(與任務一致)', async () => {
+test('站台的紅燈項目已讀後仍是紅燈、只不進 badge 數字(與任務一致,AF-21 批次 5)', async () => {
   const { computeHealth } = await import('../src/background/health.js?t=' + Math.random())
   const res = computeHealth(
     [{ id: 't1', name: '電費', enabled: true }],
     { 'site:https://a.test': { status: 'login_failed', read: true } },
     []
   )
-  assert.equal(res.level, 'green')
+  assert.equal(res.level, 'red')
+  assert.equal(res.redCount, 0)
 })
 
 test('沒有任何任務時,站台異常也不該讓燈號亮(整體已暫停)', async () => {

@@ -1,8 +1,8 @@
 // AutoFetcher 工具列 popup 控制器 (SPEC §12.2)
-import { getTasks, updateTasks, getHealthMap, getMissedList, getLastValues } from '../../shared/storage.js'
+import { getTasks, updateTasks, getHealthMap, getMissedList, getLastValues, getSites } from '../../shared/storage.js'
 import { openPanel } from '../../shared/panel.js'
 import { MSG } from '../../shared/messages.js'
-import { statusTextOf } from '../../shared/record-status.js'
+import { statusTextOf, RED_STATUSES } from '../../shared/record-status.js'
 import { applySavedTheme } from '../theme-apply.js'
 import { seriesIdOf } from '../../shared/series-index.js'
 import { computeHealth } from '../../background/health.js'
@@ -25,8 +25,179 @@ function formatTime(ms) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
+// 健康紀錄裡站台項目的鍵前綴（與 background/health.js 相同）
+const SITE_PREFIX = 'site:'
+
+// 擴充功能內頁的網址（真實環境 getURL 是同步的，await 一個字串照樣拿到字串）
+async function extUrl(path) {
+  const fn = globalThis.chrome?.runtime?.getURL
+  return typeof fn === 'function' ? await chrome.runtime.getURL(path) : path
+}
+
+async function openExtPage(path) {
+  chrome.tabs.create({ url: await extUrl(path) })
+}
+
+function originOf(url) {
+  try { return new URL(url).origin } catch { return '' }
+}
+
+// 站台的登入頁：有設定站台登入就用它的 loginUrl，否則退回給定的網址
+function loginUrlOf(origin, sites, fallback) {
+  const site = origin ? sites?.[origin] : null
+  return (site && typeof site.loginUrl === 'string' && site.loginUrl) ? site.loginUrl : fallback
+}
+
+// 依狀態挑下一步：找不到／解析不出 → 重選目標；登入失敗 → 前往登入頁（AF-21 批次 5）
+function nextStepButton(task, status, sites) {
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.className = 'next-step'
+  if (status === 'selector_lost' || status === 'parse_error') {
+    btn.dataset.action = 'repick'
+    btn.textContent = '重選目標'
+    // 報表只讀 hash（report.js 的 initFromHash），任務頁依 task 參數捲到那一列是下一段的事
+    btn.onclick = () => openExtPage(`ui/report/report.html#view=tasks&task=${encodeURIComponent(task.id)}`)
+    return btn
+  }
+  if (status === 'login_failed') {
+    btn.dataset.action = 'go-login'
+    btn.textContent = '前往登入頁'
+    btn.onclick = () => {
+      chrome.tabs.create({ url: loginUrlOf(originOf(task.url), sites, task.url) })
+    }
+    return btn
+  }
+  return null
+}
+
+// 「知道了」：只標指定的 health 項目已讀，燈號由 background 重算；畫面就地更新（紅燈維持紅）
+export async function acknowledge(ids) {
+  const list = (ids || []).filter(Boolean)
+  if (list.length === 0) return
+  await markAllSeen(list)
+  if (!currentCtx) return
+  const healthMap = { ...(currentCtx.healthMap || {}) }
+  for (const id of list) {
+    if (healthMap[id]) healthMap[id] = { ...healthMap[id], read: true }
+  }
+  const health = computeHealth(currentCtx.tasks, healthMap, currentCtx.missed)
+  render({ ...currentCtx, healthMap, health })
+}
+
+// 「停用這個任務」：不想管的壞任務＝停用它（紅燈只有修好或停用才會消）
+export async function disableTask(taskId) {
+  await updateTasks([taskId], t => ({ ...t, enabled: false }))
+  await chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS })
+  if (!currentCtx) return
+  const tasks = await getTasks()
+  const health = computeHealth(tasks, currentCtx.healthMap, currentCtx.missed)
+  render({ ...currentCtx, tasks, health })
+}
+
+// 異常項目的「知道了」／「已知悉・尚未修復」區塊；紅項已知悉時可附停用鈕
+function appendAckControls(container, id, record, { onDisable } = {}) {
+  if (record.read !== true) {
+    const ack = document.createElement('button')
+    ack.type = 'button'
+    ack.className = 'ack'
+    ack.dataset.action = 'ack'
+    ack.textContent = '知道了'
+    ack.onclick = () => acknowledge([id])
+    container.appendChild(ack)
+    return
+  }
+  if (!RED_STATUSES.includes(record.status)) return
+  const note = document.createElement('span')
+  note.className = 'ack-note'
+  note.textContent = '已知悉・尚未修復'
+  container.appendChild(note)
+  if (onDisable) {
+    const off = document.createElement('button')
+    off.type = 'button'
+    off.className = 'disable-task'
+    off.dataset.action = 'disable'
+    off.textContent = '停用這個任務'
+    off.onclick = onDisable
+    container.appendChild(off)
+  }
+}
+
+// 站台異常列（health 的 site:<origin> 紅燈項目）：popup 開不了 side panel（手勢在網頁分頁），只能提示走右鍵
+function renderSiteRow(origin, record, sites) {
+  const row = document.createElement('div')
+  row.className = 'site-row'
+  row.dataset.origin = origin
+
+  const title = document.createElement('div')
+  title.className = 'task-main'
+  const name = document.createElement('span')
+  name.className = 'task-name'
+  name.textContent = `${origin} ${statusTextOf(record.status) || '無法登入'}`
+  title.appendChild(name)
+  row.appendChild(title)
+
+  if (record.reason) {
+    const reason = document.createElement('div')
+    reason.className = 'task-sub'
+    const span = document.createElement('span')
+    span.className = 'task-reason'
+    span.textContent = record.reason
+    reason.appendChild(span)
+    row.appendChild(reason)
+  }
+
+  const hint = document.createElement('div')
+  hint.className = 'site-hint'
+  hint.textContent = '在登入頁按右鍵 → AutoFetcher → 設定此站台登入'
+  row.appendChild(hint)
+
+  const actions = document.createElement('div')
+  actions.className = 'task-actions'
+  const go = document.createElement('button')
+  go.type = 'button'
+  go.className = 'next-step'
+  go.dataset.action = 'go-login'
+  go.textContent = '前往登入頁'
+  go.onclick = () => {
+    chrome.tabs.create({ url: loginUrlOf(origin, sites, origin) })
+  }
+  actions.appendChild(go)
+  appendAckControls(actions, SITE_PREFIX + origin, record)
+  row.appendChild(actions)
+  return row
+}
+
+// 零任務的三步引導：主要按鈕是最上面那顆「在這個頁面選取」（同一個畫面只留一顆主按鈕）
+function renderEmptyGuide() {
+  const box = document.createElement('div')
+  box.className = 'empty-hint empty-guide'
+  const lead = document.createElement('p')
+  lead.textContent = '還沒有任務。三步建立第一個：'
+  box.appendChild(lead)
+  const ol = document.createElement('ol')
+  for (const s of [
+    '到要抓的頁面，按上方「在這個頁面選取」',
+    '點要抓的數字',
+    '按「儲存」'
+  ]) {
+    const li = document.createElement('li')
+    li.textContent = s
+    ol.appendChild(li)
+  }
+  box.appendChild(ol)
+  const help = document.createElement('a')
+  help.href = '#'
+  help.className = 'help-link'
+  help.dataset.action = 'open-help'
+  help.textContent = '使用教學'
+  help.onclick = (e) => { e.preventDefault(); openExtPage('ui/help/help.html') }
+  box.appendChild(help)
+  return box
+}
+
 // 畫單一任務列（規格限制：只寫一份函式）
-function renderTaskRow(task, { lastValues, nextRuns, healthMap }) {
+function renderTaskRow(task, { lastValues, nextRuns, healthMap, sites }) {
   const row = document.createElement('div')
   row.className = 'task-row'
   if (task.enabled === false) row.classList.add('disabled')
@@ -135,6 +306,14 @@ function renderTaskRow(task, { lastValues, nextRuns, healthMap }) {
     })
     actionsDiv.appendChild(openPageBtn)
 
+    // 依狀態的下一步排在最前面；其他失敗維持「立即重試」
+    const next = nextStepButton(task, healthInfo.status, sites)
+    if (next) actionsDiv.insertBefore(next, actionsDiv.firstChild)
+
+    appendAckControls(actionsDiv, task.id, healthInfo, {
+      onDisable: task.enabled === false ? null : () => disableTask(task.id)
+    })
+
     row.appendChild(actionsDiv)
   }
 
@@ -150,7 +329,8 @@ export function render(ctx) {
     lastValues = {},
     nextRuns = {},
     healthMap = {},
-    missed = []
+    missed = [],
+    sites = {}
   } = ctx || {}
 
   // 1. 燈號摘要文字與顏色類別
@@ -170,16 +350,31 @@ export function render(ctx) {
   const taskListEl = document.getElementById('task-list')
   if (taskListEl) {
     taskListEl.textContent = ''
+    // 站台異常列在任務之前：站台登不進去，底下的任務都會跟著失敗
+    for (const [key, record] of Object.entries(healthMap || {})) {
+      if (!key.startsWith(SITE_PREFIX) || !record || !RED_STATUSES.includes(record.status)) continue
+      taskListEl.appendChild(renderSiteRow(key.slice(SITE_PREFIX.length), record, sites))
+    }
     if (!tasks || tasks.length === 0) {
-      const emptyEl = document.createElement('div')
-      emptyEl.className = 'empty-hint'
-      emptyEl.textContent = '還沒有任務。到想抓的網頁上按右鍵，選 AutoFetcher 就能建立。'
-      taskListEl.appendChild(emptyEl)
+      taskListEl.appendChild(renderEmptyGuide())
     } else {
       for (const t of tasks) {
-        taskListEl.appendChild(renderTaskRow(t, { lastValues, nextRuns, healthMap }))
+        taskListEl.appendChild(renderTaskRow(t, { lastValues, nextRuns, healthMap, sites }))
       }
     }
+  }
+
+  // 「全部知道了」：有尚未知悉的異常（任務或站台）才出現
+  const ackAllBtn = document.getElementById('ack-all')
+  if (ackAllBtn) {
+    const unreadIds = unreadAbnormalIds(tasks, healthMap)
+    ackAllBtn.hidden = unreadIds.length === 0
+    ackAllBtn.onclick = () => acknowledge(unreadAbnormalIds(currentCtx?.tasks, currentCtx?.healthMap))
+  }
+
+  const helpLink = document.getElementById('open-help')
+  if (helpLink) {
+    helpLink.onclick = (e) => { e?.preventDefault?.(); openExtPage('ui/help/help.html') }
   }
 
   // 2b. 休眠期間的空窗（interval 的 gap）：只能「知道了」，不可補抓
@@ -286,14 +481,57 @@ export async function handleToggleAll() {
   chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS })
 }
 
-// 標記異常任務為已讀
+// 畫面上尚未知悉的異常項目（任務列與站台列），「全部知道了」標的就是這些
+function unreadAbnormalIds(tasks, healthMap) {
+  const map = healthMap || {}
+  const ids = []
+  for (const t of tasks || []) {
+    const h = map[t?.id]
+    if (h && h.status !== undefined && h.status !== 'ok' && h.read !== true) ids.push(t.id)
+  }
+  for (const [key, h] of Object.entries(map)) {
+    if (key.startsWith(SITE_PREFIX) && h && RED_STATUSES.includes(h.status) && h.read !== true) ids.push(key)
+  }
+  return ids
+}
+
+// 把指定項目標成已讀（「全部知道了」用；開 popup 不再自動呼叫，AF-21 批次 5）
 export async function markAllSeen(taskIds) {
-  return chrome.runtime.sendMessage({ type: 'MARK_READ', taskIds })
+  return chrome.runtime.sendMessage({ type: MSG.MARK_READ, taskIds })
 }
 
 // 取得最後一次 render 的狀態
 export function getState() {
   return currentCtx
+}
+
+// 讀資料並畫出 popup。開啟時**不**標已讀：使用者還沒看懂就關掉的話，紅燈不能因此消失（AF-21 批次 5）
+export async function init() {
+  const tasks = await getTasks()
+  // UI 一律經 shared/storage，不直接碰 chrome.storage
+  const [healthMap, missed, lastValues, sites] = await Promise.all([
+    getHealthMap(), getMissedList(), getLastValues(), getSites()
+  ])
+  const health = computeHealth(tasks, healthMap, missed)
+
+  // 取得 alarms 下次執行時間
+  const nextRuns = {}
+  if (chrome.alarms?.getAll) {
+    const alarms = await chrome.alarms.getAll()
+    for (const a of alarms || []) {
+      if (a.name?.startsWith('task:')) {
+        const parts = a.name.slice(5).split(':')
+        const taskId = parts.slice(0, -1).join(':') || parts[0]
+        if (taskId && a.scheduledTime) {
+          if (!nextRuns[taskId] || a.scheduledTime < nextRuns[taskId]) {
+            nextRuns[taskId] = a.scheduledTime
+          }
+        }
+      }
+    }
+  }
+
+  render({ health, tasks, lastValues, nextRuns, healthMap, missed, sites })
 }
 
 // 擴充功能環境下自動初始化
@@ -302,41 +540,7 @@ if (typeof document !== 'undefined' && globalThis.chrome?.runtime?.id) {
   // 行首是括號：前面一定要有分號，否則會被接成 applySavedTheme()(async …)（真實瀏覽器煙霧抓到）
   ;(async () => {
     try {
-      const tasks = await getTasks()
-      // UI 一律經 shared/storage，不直接碰 chrome.storage
-      const [healthMap, missed, lastValues] = await Promise.all([
-        getHealthMap(), getMissedList(), getLastValues()
-      ])
-      const health = computeHealth(tasks, healthMap, missed)
-
-      // 取得 alarms 下次執行時間
-      const nextRuns = {}
-      if (chrome.alarms?.getAll) {
-        const alarms = await chrome.alarms.getAll()
-        for (const a of alarms) {
-          if (a.name?.startsWith('task:')) {
-            const parts = a.name.slice(5).split(':')
-            const taskId = parts.slice(0, -1).join(':') || parts[0]
-            if (taskId && a.scheduledTime) {
-              if (!nextRuns[taskId] || a.scheduledTime < nextRuns[taskId]) {
-                nextRuns[taskId] = a.scheduledTime
-              }
-            }
-          }
-        }
-      }
-
-      // 取得最後數值
-
-      render({ health, tasks, lastValues, nextRuns, healthMap, missed })
-
-      const abnormalIds = Object.keys(healthMap).filter(id => {
-        const h = healthMap[id]
-        return h && h.status !== undefined && h.status !== 'ok'
-      })
-      if (abnormalIds.length > 0) {
-        await markAllSeen(abnormalIds)
-      }
+      await init()
     } catch (err) {
       console.error('AutoFetcher popup 初始化失敗:', err)
     }
