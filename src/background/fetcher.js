@@ -14,6 +14,7 @@ import { ensureLoggedIn } from './login.js'
 import { locateFrame, sameOriginPath, PROBE_TIMEOUT_MS } from './frames.js'
 import { acquireFetchTab, openForegroundTab, enqueueForOrigin, waitTabReady, BOOT } from './fetch-tab.js'
 import { sendToFrame, timeoutError } from './messaging.js'
+import { normalizeTaskSources } from '../shared/task-source.js'
 
 // `locateFrame` 找到才有 frameId；失敗時回的是帶候選清單的物件（給診斷用），不是 null
 function frameFound(loc) {
@@ -471,6 +472,47 @@ async function writeRecord(input, opts = {}) {
   return record
 }
 
+// 多來源遇到擷取前的整體故障時，仍按宣告的 field 形狀留下完整結果。
+// 這條入口與成功／部分成功的 appendRecords 路徑共用帳本、health 與告警語意，
+// 避免離線、登入失敗或外層例外只留下父任務一筆而讓子序列看似沒有結果。
+async function writeMultiFailureRecords(task, slot, status, error, opts = {}) {
+  const sources = normalizeTaskSources(task)
+  if (sources.length === 0) {
+    return await writeRecord({
+      taskId: task.id, slot, capturedAt: new Date().toISOString(), status, error
+    }, { parentId: task.id, skipLedger: opts.skipLedger === true })
+  }
+  const capturedAt = new Date().toISOString()
+  const records = sources.map((field) => ({
+    taskId: seriesIdOf(task.id, field.key),
+    slot,
+    capturedAt,
+    status,
+    error
+  }))
+  const date = typeof slot === 'string' && slot.length >= 10
+    ? slot.slice(0, 10)
+    : getLocalDateStr(new Date())
+  const [y, m, d] = date.split('-').map(Number)
+  const pastDate = new Date(y, m - 1, d - 6, 12, 0, 0)
+  const fromDate = getLocalDateStr(pastDate)
+  const recordsInRange = await getRecordsInRange(fromDate, date)
+  for (const record of records) await processAlerts(record, recordsInRange)
+  await appendRecords(date, records.map(slimRecord))
+  if (opts.skipLedger !== true) await setRunStatus(task.id, slot, status)
+  await updateHealth(task.id, healthFromRecords(records, false))
+  return records[0]
+}
+
+function multiFailureResult(task, status, error) {
+  const fields = {}
+  for (const field of normalizeTaskSources(task)) {
+    const key = field?.key || `field-${Object.keys(fields).length}`
+    fields[key] = { ok: false, error: status, message: error }
+  }
+  return { ok: false, error: status, message: error, fields }
+}
+
 // 執行任務的主要入口函式
 export async function runTask(task, opts = {}) {
   const {
@@ -494,6 +536,7 @@ export async function runTask(task, opts = {}) {
     dryRun = false
   } = opts
   const isManual = reason === 'manual'
+  const isMulti = task?.mode === 'multi' || task?.spec?.mode === 'multi'
 
   let extraDelayMs
   if (opts.extraDelayMs !== undefined) {
@@ -512,9 +555,12 @@ export async function runTask(task, opts = {}) {
 
   // 2. 離線檢查：若離線則排 10 分鐘後重試，不得開分頁
   if (globalThis.navigator?.onLine === false) {
-    if (dryRun) return { ok: false, error: 'offline' }
+    if (dryRun) return isMulti ? multiFailureResult(task, 'offline', '目前離線') : { ok: false, error: 'offline' }
     // 手動抓取一律不重試，但要留一筆看得到的紀錄，否則使用者按了沒有任何反應
     if (isManual) {
+      if (isMulti) {
+        return await writeMultiFailureRecords(task, slot, 'error', '目前離線', { skipLedger: true })
+      }
       return await writeRecord({
         taskId: task.id,
         slot,
@@ -527,6 +573,9 @@ export async function runTask(task, opts = {}) {
     if (attempt < 3) {
       await scheduleRetry(task.id, attempt, true, slot)
       return null
+    }
+    if (isMulti) {
+      return await writeMultiFailureRecords(task, slot, 'error', '目前離線')
     }
     return await writeRecord({
       taskId: task.id,
@@ -678,7 +727,10 @@ export async function runTask(task, opts = {}) {
         if (login?.ok !== true) {
           // 登入途中被總時限截斷的，記成超過時限（走重試），不記成登入失敗
           checkDeadline()
-          if (dryRun) return { ok: false, error: 'login_failed' }
+          if (dryRun) return isMulti ? multiFailureResult(task, 'login_failed', login?.reason || '無法登入') : { ok: false, error: 'login_failed' }
+          if (isMulti) {
+            return await writeMultiFailureRecords(task, slot, 'login_failed', login?.reason || '無法登入', { skipLedger: isManual })
+          }
           return await writeRecord({
             taskId: task.id,
             slot,
@@ -801,48 +853,120 @@ export async function runTask(task, opts = {}) {
         // 前置動作留在這個區塊**外面**：它有副作用，重放就是把按鈕再按一次。
         let res
         let lastLiveErr = null
-        const maxAttempts = 1 + reviveDelaysMs.length
-        for (let a = 0; a < maxAttempts; a++) {
-          if (a > 0) await pause(reviveDelaysMs[a - 1])
-          checkDeadline()
-          loc = await locate(task.frame, task.locator, opts.frameTimeoutMs ?? 20000)
-          if (!frameFound(loc)) break
-          try {
-            await injectContent(tabId, { frameId: loc.frameId })
-            // 捲動到可視區是**盡力而為**：它逾時不代表擷取也會失敗，
-            // 為它重試就是把 10 秒乘以四卡住同站台佇列，所以逾時就往下走，讓擷取自己去判定。
-            // 但捲動「送不到」是另一回事——那是文件被換掉的訊號，要讓它往上冒出去觸發重試。
-            try {
-              await send({ type: MSG.SCROLL_INTO_VIEW, locator: task.locator }, loc.frameId, scrollTimeoutMs, 'Scroll')
-            } catch (err) {
-              // 總時限到了不算「盡力而為」的那種逾時
-              if (!err?.afTimeout || err.afDeadline) throw err
+        if (isMulti) {
+          // AF-22 E1：每個來源都是獨立的定位／注入／擷取單位；共用前置動作已在上方只執行一次。
+          // 來源失敗只填自己的 field，不能退回 task.locator 或用第一個來源的結果遮住其他值。
+          const fields = {}
+          const sourceFields = normalizeTaskSources(task)
+          let retryWholeTask = false
+          for (const field of sourceFields) {
+            const key = field?.key
+            let fieldRes = null
+            let fieldLoc = null
+            let fieldLiveErr = null
+            if (typeof key !== 'string' || key.length === 0 || !field?.source?.locator) {
+              fields[key || `field-${Object.keys(fields).length}`] = {
+                ok: false, error: 'invalid_source', message: '多來源欄位缺少有效來源'
+              }
+              continue
             }
-            // 已知找不到元素的任務不必每次再多等短等待（3 秒）：連一次都沒抓到過，等了也是白等
-            const extractMsg = { type: MSG.EXTRACT, locator: task.locator, spec: task.spec }
-            if ((task.notFoundStreak || 0) >= 1) extractMsg.settleMs = 0
-            res = await send(extractMsg, loc.frameId, extractTimeoutMs, 'Extract')
-            lastLiveErr = null
-            break
-          } catch (err) {
-            if (err?.afTimeout) throw err
-            lastLiveErr = err
+            const maxFieldAttempts = 1 + reviveDelaysMs.length
+            for (let a = 0; a < maxFieldAttempts; a++) {
+              if (a > 0) await pause(reviveDelaysMs[a - 1])
+              checkDeadline()
+              fieldLoc = await locate(field.source.frame, field.source.locator, opts.frameTimeoutMs ?? 20000)
+              loc = fieldLoc
+              if (!frameFound(fieldLoc)) {
+                fieldRes = { ok: false, error: 'frame_not_found', message: '找不到目標所在的框架' }
+                break
+              }
+              try {
+                await injectContent(tabId, { frameId: fieldLoc.frameId })
+                try {
+                  await send({ type: MSG.SCROLL_INTO_VIEW, locator: field.source.locator }, fieldLoc.frameId, scrollTimeoutMs, 'Scroll')
+                } catch (err) {
+                  if (!err?.afTimeout || err.afDeadline) throw err
+                }
+                const extractMsg = { type: MSG.EXTRACT, locator: field.source.locator, spec: field.spec }
+                if ((task.notFoundStreak || 0) >= 1) extractMsg.settleMs = 0
+                fieldRes = await send(extractMsg, fieldLoc.frameId, extractTimeoutMs, 'Extract')
+                fieldLiveErr = null
+                break
+              } catch (err) {
+                if (err?.afDeadline) throw err
+                // 一個 field 的 message timeout 不應中斷同批其他來源；文件通訊錯誤則在本 field 內有界重試。
+                if (err?.afTimeout) {
+                  fieldRes = { ok: false, error: 'timeout', message: String(err?.message || '擷取逾時') }
+                  fieldLiveErr = null
+                  break
+                }
+                fieldLiveErr = err
+              }
+            }
+            if (!fieldRes) {
+              const raw = String(fieldLiveErr?.message || fieldLiveErr || '擷取失敗')
+              fieldRes = { ok: false, error: 'error', message: raw }
+            }
+            // all-field not_found 仍沿用任務層的有限 alarm retry；已有成功值時先完整寫下部分結果。
+            if (fieldRes.ok !== true && fieldRes.error === 'not_found') retryWholeTask = true
+            fields[key] = fieldRes
           }
-        }
-        if (!frameFound(loc)) {
-          if (dryRun) return { ok: false, error: 'frame_not_found', debug: await buildDebug(task, tabId, loc, preActionTrace, { error: 'frame_not_found' }) }
-          return await writeRecord({
-            taskId: task.id,
-            slot,
-            capturedAt: new Date().toISOString(),
-            status: 'not_found',
-            error: '找不到目標所在的框架'
-          }, { parentId: task.id, skipLedger: isManual })
-        }
-        if (lastLiveErr !== null) {
-          // 重試耗盡：標成「頁面沒了」，錯誤訊息在最外層的 catch 統一轉譯
-          lastLiveErr.afPageGone = true
-          throw lastLiveErr
+          const fieldList = Object.values(fields)
+          if (fieldList.length === 0) {
+            res = { ok: false, error: 'invalid_multi', message: '多來源任務沒有可執行欄位' }
+          } else {
+            const anySuccess = fieldList.some(field => field?.ok === true)
+            const anyFailure = fieldList.some(field => field?.ok !== true)
+            res = { ok: true, fields, ...(anyFailure ? { partial: true } : {}) }
+            if (!anySuccess && retryWholeTask && !isManual && attempt < 3) {
+              await scheduleRetry(task.id, attempt, false, slot)
+              return null
+            }
+          }
+        } else {
+          const maxAttempts = 1 + reviveDelaysMs.length
+          for (let a = 0; a < maxAttempts; a++) {
+            if (a > 0) await pause(reviveDelaysMs[a - 1])
+            checkDeadline()
+            loc = await locate(task.frame, task.locator, opts.frameTimeoutMs ?? 20000)
+            if (!frameFound(loc)) break
+            try {
+              await injectContent(tabId, { frameId: loc.frameId })
+              // 捲動到可視區是**盡力而為**：它逾時不代表擷取也會失敗，
+              // 為它重試就是把 10 秒乘以四卡住同站台佇列，所以逾時就往下走，讓擷取自己去判定。
+              // 但捲動「送不到」是另一回事——那是文件被換掉的訊號，要讓它往上冒出去觸發重試。
+              try {
+                await send({ type: MSG.SCROLL_INTO_VIEW, locator: task.locator }, loc.frameId, scrollTimeoutMs, 'Scroll')
+              } catch (err) {
+                // 總時限到了不算「盡力而為」的那種逾時
+                if (!err?.afTimeout || err.afDeadline) throw err
+              }
+              // 已知找不到元素的任務不必每次再多等短等待（3 秒）：連一次都沒抓到過，等了也是白等
+              const extractMsg = { type: MSG.EXTRACT, locator: task.locator, spec: task.spec }
+              if ((task.notFoundStreak || 0) >= 1) extractMsg.settleMs = 0
+              res = await send(extractMsg, loc.frameId, extractTimeoutMs, 'Extract')
+              lastLiveErr = null
+              break
+            } catch (err) {
+              if (err?.afTimeout) throw err
+              lastLiveErr = err
+            }
+          }
+          if (!frameFound(loc)) {
+            if (dryRun) return { ok: false, error: 'frame_not_found', debug: await buildDebug(task, tabId, loc, preActionTrace, { error: 'frame_not_found' }) }
+            return await writeRecord({
+              taskId: task.id,
+              slot,
+              capturedAt: new Date().toISOString(),
+              status: 'not_found',
+              error: '找不到目標所在的框架'
+            }, { parentId: task.id, skipLedger: isManual })
+          }
+          if (lastLiveErr !== null) {
+            // 重試耗盡：標成「頁面沒了」，錯誤訊息在最外層的 catch 統一轉譯
+            lastLiveErr.afPageGone = true
+            throw lastLiveErr
+          }
         }
 
         // 演練模式：直接回傳 content script 擷取回覆（附上前置動作做了哪幾步）
@@ -886,6 +1010,12 @@ export async function runTask(task, opts = {}) {
                 rec.value = r.value
                 rec.raw = r.raw
                 rec.status = (reason === 'late' || lateRun) ? 'late' : (r.status || 'ok')
+                if (r.strategyUsed !== undefined) {
+                  rec.strategyUsed = r.strategyUsed
+                }
+                if (r.layer !== undefined) {
+                  rec.layer = r.layer
+                }
                 if (r.used !== undefined) {
                   rec.used = r.used
                 }
@@ -1012,6 +1142,17 @@ export async function runTask(task, opts = {}) {
           return await writeRecord(record, { parentId: task.id, skipLedger: isManual })
         }
 
+        // multi 的格式／協調錯誤也要依 field 產生結果；不能回到單值父任務紀錄。
+        if (isMulti) {
+          const error = contentErrorText(res) || res?.message || '擷取失敗'
+          if (dryRun) return multiFailureResult(task, res?.error || 'error', error)
+          if (!isManual && attempt < 3) {
+            await scheduleRetry(task.id, attempt, false, slot)
+            return null
+          }
+          return await writeMultiFailureRecords(task, slot, res?.error || 'error', error, { skipLedger: isManual })
+        }
+
         // 結果處理：元素未找到（可重試）
         if (res?.error === 'not_found') {
           if (!isManual && attempt < 3) {
@@ -1080,6 +1221,7 @@ export async function runTask(task, opts = {}) {
         // 立即測試失敗時也要帶軌跡：使用者最需要知道的是「hover 有做、卡在第幾步」，
         // 只回一句錯誤訊息就是把軌跡丟掉
         if (dryRun) {
+          if (isMulti) return multiFailureResult(task, 'error', shown)
           const out = { ok: false, error: shown }
           if (preActionTrace.length > 0) out.preActionTrace = preActionTrace
           out.debug = await buildDebug(task, tabId, loc, preActionTrace, { error: shown, raw })
@@ -1088,6 +1230,9 @@ export async function runTask(task, opts = {}) {
         if (!isManual && attempt < 3) {
           await scheduleRetry(task.id, attempt, false, slot)
           return null
+        }
+        if (isMulti) {
+          return await writeMultiFailureRecords(task, slot, 'error', shown, { skipLedger: isManual })
         }
         return await writeRecord({
           taskId: task.id,
