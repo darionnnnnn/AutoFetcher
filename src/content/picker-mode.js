@@ -42,15 +42,13 @@ let overlayEl = null, highlightEl = null, panelEl = null, toolbarEl = null, menu
 // 面板拆兩層：內文每次重建，動作列建一次只更新文字——
 // 每次 hover 重建按鈕會把焦點與正在按下的那一顆整個換掉，使用者會覺得「完成鈕點了沒反應」
 let panelBodyEl = null, panelDoneEl = null, panelUndoEl = null, panelTrimHeadEl = null, panelTrimTailEl = null
+let panelMoveEl = null, toolbarMoveEl = null
 // 「取代」前的已選清單快照：取代是最容易誤觸的動作，要留一步可以反悔
 let undoSnapshot = null
-// 面板固定在右下角，但游標靠近時要閃到左下角，否則它就擋在使用者要選的內容上
+// 面板預設固定在右下角；要讓開時由使用者按移位鈕明確切換
 let panelCorner = 'right'
-// 換角之後先鎖住，等游標離開面板附近才允許再換（避免沿邊緣移動時來回彈跳）
-let panelAvoidLatched = false
-// 工具列同一套閃避（右上 ↔ 左上）：要抓的數字在右上角時工具列不能一直擋著（AF-21 定案 7-2）
+// 工具列預設固定在右上角；要讓開時由使用者按移位鈕明確切換
 let toolbarCorner = 'right'
-let toolbarAvoidLatched = false
 // 送出前發現已選的表格／目標已離開文件（SPA 重繪）：清掉失效的選取並請使用者重點（AF-21 定案 7-3）
 let staleNotice = false
 // 滑鼠底下那個帶 shadowRoot 的元素（升級後的目標可能是它的祖先，要另外記）
@@ -1482,15 +1480,9 @@ function updatePanel(panel, el) {
     const removeLastBtn = document.createElement('button')
     removeLastBtn.type = 'button'
     removeLastBtn.setAttribute('data-af-remove-last', '')
-    removeLastBtn.textContent = '移除最後一項'
-    removeLastBtn.style.padding = '2px 8px'
-    removeLastBtn.style.fontSize = '12px'
-    removeLastBtn.style.backgroundColor = COLORS.surface
-    removeLastBtn.style.color = COLORS.primary
-    removeLastBtn.style.border = `1px solid ${COLORS.border}`
-    removeLastBtn.style.borderRadius = '3px'
-    removeLastBtn.style.cursor = 'pointer'
-    removeLastBtn.style.minHeight = '28px'
+    setButtonText(removeLastBtn, '移除最後一項')
+    styleActionButton(removeLastBtn, false)
+    removeLastBtn.style.setProperty('color', COLORS.primary, 'important')
     removeLastBtn.style.marginBottom = '4px'
     removeLastBtn.style.transition = reduceMotion ? '' : 'background-color 150ms ease'
     addFocusRing(removeLastBtn)
@@ -1648,6 +1640,31 @@ function appendPanelText(panel, lines) {
   panel.appendChild(div)
 }
 
+// 浮動面板注入在宿主頁面裡，頁面的 `button { ... }` 可能把文字縮成 0 或變透明。
+// 只對自己的操作鈕套最小範圍的 inline reset，避免重設整個 overlay。
+function setButtonText(btn, text) {
+  btn.textContent = text
+  btn.setAttribute('aria-label', text)
+}
+
+function buildMoveButton(kind, label) {
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.setAttribute(`data-af-${kind}-move`, '')
+  styleActionButton(btn, false)
+  addFocusRing(btn)
+  updateMoveButton(btn, 'right', label)
+  return btn
+}
+
+function updateMoveButton(btn, corner, label) {
+  if (!btn) return
+  const next = corner === 'right' ? 'left' : 'right'
+  const text = `移到${next === 'left' ? '左' : '右'}側`
+  setButtonText(btn, text)
+  btn.title = `手動將${label}移到${next === 'left' ? '左' : '右'}側`
+}
+
 // 面板底部的動作列：畫面上看得見的「完成／取消／復原」，不必先知道 Enter 與 Esc。
 // **建一次，之後只更新文字與狀態**——每次 hover 重建會把使用者正要按的那顆換掉。
 function buildPanelActions() {
@@ -1662,6 +1679,7 @@ function buildPanelActions() {
   const done = document.createElement('button')
   done.type = 'button'
   done.setAttribute('data-af-done', '')
+  setButtonText(done, '完成')
   // 主色由 updatePanelActions 依「有沒有已選」切換：沒東西可完成時就不該長得像主要動作
   styleActionButton(done, false)
   addFocusRing(done)
@@ -1670,7 +1688,7 @@ function buildPanelActions() {
   const cancel = document.createElement('button')
   cancel.type = 'button'
   cancel.setAttribute('data-af-cancel', '')
-  cancel.textContent = '取消'
+  setButtonText(cancel, '取消')
   styleActionButton(cancel, false)
   addFocusRing(cancel)
   bar.appendChild(cancel)
@@ -1678,7 +1696,7 @@ function buildPanelActions() {
   const undo = document.createElement('button')
   undo.type = 'button'
   undo.setAttribute('data-af-undo', '')
-  undo.textContent = '復原'
+  setButtonText(undo, '復原')
   styleActionButton(undo, false)
   addFocusRing(undo)
   undo.hidden = true
@@ -1687,7 +1705,7 @@ function buildPanelActions() {
   const trimHead = document.createElement('button')
   trimHead.type = 'button'
   trimHead.setAttribute('data-af-trim-head', '')
-  trimHead.textContent = '去掉第一格'
+  setButtonText(trimHead, '去掉第一格')
   styleActionButton(trimHead, false)
   addFocusRing(trimHead)
   trimHead.hidden = true
@@ -1696,11 +1714,14 @@ function buildPanelActions() {
   const trimTail = document.createElement('button')
   trimTail.type = 'button'
   trimTail.setAttribute('data-af-trim-tail', '')
-  trimTail.textContent = '去掉最後一格'
+  setButtonText(trimTail, '去掉最後一格')
   styleActionButton(trimTail, false)
   addFocusRing(trimTail)
   trimTail.hidden = true
   bar.appendChild(trimTail)
+
+  panelMoveEl = buildMoveButton('panel', '面板')
+  bar.appendChild(panelMoveEl)
 
   panelDoneEl = done
   panelUndoEl = undo
@@ -1710,15 +1731,20 @@ function buildPanelActions() {
 }
 
 function styleActionButton(btn, primary) {
-  btn.style.padding = '4px 12px'
-  btn.style.fontSize = '12px'
-  btn.style.fontFamily = 'inherit'
-  btn.style.minHeight = '28px'
-  btn.style.borderRadius = '4px'
-  btn.style.cursor = 'pointer'
-  btn.style.backgroundColor = primary ? COLORS.primary : COLORS.surface
-  btn.style.color = primary ? COLORS.text : COLORS.textMuted
-  btn.style.border = primary ? 'none' : `1px solid ${COLORS.border}`
+  // 只對操作鈕使用 inline !important，壓過宿主頁面的 button reset。
+  btn.style.setProperty('padding', '4px 12px', 'important')
+  btn.style.setProperty('font-size', '12px', 'important')
+  btn.style.setProperty('font-family', 'inherit', 'important')
+  btn.style.setProperty('line-height', '1.2', 'important')
+  btn.style.setProperty('min-width', '44px', 'important')
+  btn.style.setProperty('min-height', '28px', 'important')
+  btn.style.setProperty('width', 'auto', 'important')
+  btn.style.setProperty('box-sizing', 'border-box', 'important')
+  btn.style.setProperty('border-radius', '4px', 'important')
+  btn.style.setProperty('cursor', 'pointer', 'important')
+  btn.style.setProperty('background-color', primary ? COLORS.primary : COLORS.surface, 'important')
+  btn.style.setProperty('color', primary ? COLORS.text : COLORS.textMuted, 'important')
+  btn.style.setProperty('border', primary ? 'none' : `1px solid ${COLORS.border}`, 'important')
 }
 
 // 只更新既有按鈕的文字與可用狀態（不重建節點）
@@ -1728,15 +1754,15 @@ function updatePanelActions(el) {
   const n = selectedCount()
   done.removeAttribute('aria-disabled')
   if (n > 0) {
-    done.textContent = `完成（${n} 個值）`
+    setButtonText(done, `完成（${n} 個值）`)
   } else if (iframeOf(el)) {
-    done.textContent = '進入這個框架'
+    setButtonText(done, '進入這個框架')
   } else if (!el || isTableMode(el)) {
     // 表格上還沒選任何一格：沒有東西可以完成，說出來比讓它送出空值好
-    done.textContent = '完成'
+    setButtonText(done, '完成')
     done.setAttribute('aria-disabled', 'true')
   } else {
-    done.textContent = '完成（這個元素）'
+    setButtonText(done, '完成（這個元素）')
   }
   const disabled = done.getAttribute('aria-disabled') === 'true'
   // 有東西可以完成時才是主要動作（未選時長得跟「取消」一樣重會誘導誤按）；
@@ -3053,60 +3079,6 @@ function applyPreselect(preselect, tableEl) {
   }
 }
 
-/**
- * 面板閃避：游標靠近面板 24px 內就換到另一角。
- * 面板本身正在被使用（滑鼠在它上面、或它裡面有焦點）時不動——
- * 移動會讓使用者按到一半的按鈕跑掉。
- */
-const PANEL_AVOID_MARGIN = 24
-// 工具列不留外擴邊界：要點工具列的人游標一定會先靠近它，留 24px 的話工具列會在指尖前一直換邊、點不到；
-// 游標壓進它的範圍或滑鼠停著的元素被它蓋住才讓開
-const TOOLBAR_AVOID_MARGIN = 0
-/**
- * 浮動元件（面板、工具列）共用的閃避判定：游標在 24px 內、或 hoverRect（目前 hover 的元素）與它重疊，
- * 就換到另一側；換過之後要等「不再靠近」才解除鎖定。回傳 'flip'／'clear'／null 讓呼叫端記狀態。
- */
-function dodgeDecision(el, event, latched, hoverRect, margin) {
-  if (!el || !el.getBoundingClientRect) return null
-  if (overlayEl && el.contains(event.target)) return null
-  const focused = typeof document !== 'undefined' ? document.activeElement : null
-  if (focused && el.contains(focused)) return null
-  const r = el.getBoundingClientRect()
-  if (!r || (r.width === 0 && r.height === 0)) return null
-  const nearCursor = event.clientX >= r.left - margin &&
-    event.clientX <= r.right + margin &&
-    event.clientY >= r.top - margin &&
-    event.clientY <= r.bottom + margin
-  const overlapsHover = Boolean(hoverRect) && !(hoverRect.width === 0 && hoverRect.height === 0) &&
-    hoverRect.left < r.right && hoverRect.right > r.left && hoverRect.top < r.bottom && hoverRect.bottom > r.top
-  if (!nearCursor && !overlapsHover) {
-    // 離開之後才解除鎖定，否則游標沿著邊緣走會左右來回彈跳
-    return 'clear'
-  }
-  if (latched) return null
-  return 'flip'
-}
-
-function avoidPanel(event) {
-  const d = dodgeDecision(panelEl, event, panelAvoidLatched, null, PANEL_AVOID_MARGIN)
-  if (d === 'clear') panelAvoidLatched = false
-  if (d !== 'flip') return
-  panelAvoidLatched = true
-  setPanelCorner(panelCorner === 'right' ? 'left' : 'right')
-}
-
-// 工具列：除了游標，滑鼠停著的那一格（或非表格目標）被它蓋住也要讓開
-function avoidToolbar(event) {
-  const hovered = currentCellEl || (currentTargetEl && !isTableMode(currentTargetEl) &&
-    currentTargetEl !== document.body && currentTargetEl !== document.documentElement ? currentTargetEl : null)
-  const hoverRect = hovered && hovered.getBoundingClientRect ? hovered.getBoundingClientRect() : null
-  const d = dodgeDecision(toolbarEl, event, toolbarAvoidLatched, hoverRect, TOOLBAR_AVOID_MARGIN)
-  if (d === 'clear') toolbarAvoidLatched = false
-  if (d !== 'flip') return
-  toolbarAvoidLatched = true
-  setToolbarCorner(toolbarCorner === 'right' ? 'left' : 'right')
-}
-
 function placeCorner(el, corner) {
   if (!el) return
   if (corner === 'left') {
@@ -3121,19 +3093,19 @@ function placeCorner(el, corner) {
 function setPanelCorner(corner) {
   panelCorner = corner
   placeCorner(panelEl, corner)
+  updateMoveButton(panelMoveEl, corner, '面板')
 }
 
 function setToolbarCorner(corner) {
   toolbarCorner = corner
   placeCorner(toolbarEl, corner)
+  updateMoveButton(toolbarMoveEl, corner, '工具列')
 }
 
 // 事件監聽處理常式
 function onMouseMove(event) {
   if (!active) return
   let target = event.target
-  avoidPanel(event)
-  avoidToolbar(event)
   syncProxyRects()
   // 指標已經離開讓路的那個元素：把代理層裝回去，不然 iframe 從此選不到
   if (yieldedEl && !stillOnYielded(target)) rearmProxies()
@@ -3189,12 +3161,14 @@ function onKeyDown(event) {
   } else if (event.key === 'Enter') {
     // 焦點在面板的按鈕上時，Enter 是「按那顆按鈕」，不是「送出」——
     // 焦點停在「取消」上卻送出，是鍵盤使用者最容易踩到的陷阱
-    // 只有「完成／取消」這兩顆要讓 Enter 交給按鈕（它們本來就會結束流程）；
-    // 工具列與「移除最後一項」不能列進來——點過它們焦點就留在上面（頁面上的 mousedown
-    // 都被擋掉，焦點永遠不會離開），列進來等於碰過工具列之後 Enter 就再也不能送出
+    // 「完成／取消」與位置移位鈕要讓 Enter 交給按鈕（前兩顆會結束流程，移位鈕要切換位置）；
+    // 工具列與「移除最後一項」仍不能列進來——點過它們焦點就留在上面（頁面上的 mousedown
+    // 都被擋掉，焦點永遠不會離開），列進來等於碰過工具列之後 Enter 就再也不能送出。
+    // 位置移位鈕是例外：它本身就是鍵盤操作的出口，Enter 要交給原生 button click。
     const focused = document?.activeElement
     if (focused && typeof focused.closest === 'function' &&
-        (focused.closest('[data-af-cancel]') || focused.closest('[data-af-done]'))) {
+        (focused.closest('[data-af-cancel]') || focused.closest('[data-af-done]') ||
+         focused.closest('[data-af-panel-move]') || focused.closest('[data-af-toolbar-move]'))) {
       return
     }
     if (!currentTargetEl) return
@@ -3446,7 +3420,21 @@ function onClick(event) {
     return
   }
 
-  // 2. 工具列按鈕點擊
+  // 2. 面板／工具列位置由使用者明確切換；游標靠近時不自動換邊。
+  const panelMoveBtn = event.target && event.target.closest ? event.target.closest('[data-af-panel-move]') : null
+  if (panelMoveBtn) {
+    setPanelCorner(panelCorner === 'right' ? 'left' : 'right')
+    if (typeof panelMoveBtn.blur === 'function') panelMoveBtn.blur()
+    return
+  }
+  const toolbarMoveBtn = event.target && event.target.closest ? event.target.closest('[data-af-toolbar-move]') : null
+  if (toolbarMoveBtn) {
+    setToolbarCorner(toolbarCorner === 'right' ? 'left' : 'right')
+    if (typeof toolbarMoveBtn.blur === 'function') toolbarMoveBtn.blur()
+    return
+  }
+
+  // 3. 工具列按鈕點擊
   const toolBtn = event.target && event.target.closest ? event.target.closest('[data-af-tool]') : null
   if (toolBtn) {
     if (toolBtn.getAttribute('aria-disabled') === 'true') {
@@ -4243,6 +4231,8 @@ export function enterPickMode(opts) {
   }
   // 移除最後一個按鈕的右邊框
   if (toolbarEl.lastChild) toolbarEl.lastChild.style.borderRight = 'none'
+  toolbarMoveEl = buildMoveButton('toolbar', '工具列')
+  toolbarEl.appendChild(toolbarMoveEl)
   overlayEl.appendChild(toolbarEl)
 
   panelEl = document.createElement('div')
@@ -4390,11 +4380,11 @@ export function exitPickMode(opts = {}) {
   panelUndoEl = null
   panelTrimHeadEl = null
   panelTrimTailEl = null
+  panelMoveEl = null
+  toolbarMoveEl = null
   pendingFooterNotice = 0
   panelCorner = 'right'
-  panelAvoidLatched = false
   toolbarCorner = 'right'
-  toolbarAvoidLatched = false
   staleNotice = false
   shadowHoverEl = null
   // 這兩個漏清會讓下一次選取沿用上一次的預選、以及舊的表格列欄數快取
