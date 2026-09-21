@@ -1,0 +1,264 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { JSDOM } from 'jsdom'
+import { installChromeMock, resetChromeMock } from './chrome-mock.js'
+
+const html = readFileSync(new URL('../src/ui/picker/picker.html', import.meta.url), 'utf8')
+
+async function fresh({ liveBatch = false } = {}) {
+  resetChromeMock()
+  const chromeMock = installChromeMock()
+  const jd = new JSDOM(html)
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  let storage = null
+  if (liveBatch) {
+    chromeMock.runtime.id = 'autofetcher-test'
+    Object.defineProperty(jd.window.document, 'visibilityState', { configurable: true, value: 'visible' })
+    storage = await import('../src/shared/storage.js?t=' + Math.random())
+    await storage.setPanelCtx(17, { kind: 'waiting', purpose: 'task', batch: true })
+    let liveDraft = null
+    chromeMock.__setRuntimeResponder(async message => {
+      if (message.type === 'RESOLVE_PANEL_TAB') return { tabId: 17 }
+      if (message.type === 'PICK_DRAFT_READ') return { ok: true, draft: liveDraft }
+      if (message.type === 'PICK_DRAFT_BEGIN') {
+        liveDraft = {
+          sessionId: message.sessionId,
+          revision: 0,
+          tabId: 17,
+          documentGeneration: message.documentGeneration,
+          routeIdentity: message.routeIdentity,
+          groups: [],
+          activeGroupKey: null,
+          stage: 'empty'
+        }
+        return {
+          ok: true,
+          revision: 0,
+          draft: liveDraft
+        }
+      }
+      if (message.type === 'PICK_DRAFT_OPERATION') {
+        const operation = message.operation
+        if (operation.type === 'create-group') liveDraft.groups.push(structuredClone(operation.group))
+        if (operation.type === 'rename') {
+          const group = liveDraft.groups.find(item => item.key === operation.groupKey)
+          if (group) group.name = operation.name
+        }
+        if (operation.type === 'set-active') liveDraft.activeGroupKey = operation.groupKey
+        liveDraft = { ...liveDraft, revision: liveDraft.revision + 1, stage: 'naming' }
+        return { ok: true, revision: liveDraft.revision, draft: structuredClone(liveDraft) }
+      }
+      return undefined
+    })
+  }
+  const picker = await import('../src/ui/picker/picker.js?t=' + Math.random())
+  return { chromeMock, picker, doc: jd.window.document, storage }
+}
+
+const draft = (over = {}) => ({
+  sessionId: 'session-d1a',
+  revision: 0,
+  tabId: 17,
+  documentGeneration: 'doc-1',
+  documentIdentity: { load: 1 },
+  routeIdentity: { path: '/prices', dataset: 'main' },
+  groups: [],
+  activeGroupKey: null,
+  stage: 'empty',
+  ...over
+})
+
+const ack = (base, operation, revision = base.revision + 1, over = {}) => {
+  const groups = structuredClone(base.groups)
+  if (operation.type === 'create-group') groups.push(structuredClone(operation.group))
+  if (operation.type === 'rename') {
+    const g = groups.find(item => item.key === operation.groupKey)
+    if (g) g.name = operation.name
+  }
+  if (operation.type === 'set-active') base = { ...base, activeGroupKey: operation.groupKey }
+  return {
+    ok: true,
+    sessionId: base.sessionId,
+    tabId: base.tabId,
+    revision,
+    draft: { ...structuredClone(base), groups, revision, activeGroupKey: operation.groupKey ?? base.activeGroupKey, stage: 'naming', ...over }
+  }
+}
+
+test('D1a 初始側欄先顯示新增第一個群組，不偷進入選值', async () => {
+  const { picker, doc } = await fresh()
+  picker.renderPickDraft(draft())
+  assert.equal(doc.getElementById('group-draft-section').hidden, false)
+  assert.equal(doc.getElementById('group-start-first').hidden, false)
+  assert.equal(doc.getElementById('group-name-editor').hidden, true)
+  assert.match(doc.getElementById('group-draft-section').textContent, /新增第一個群組/)
+  assert.equal(doc.getElementById('group-finish').hidden, true)
+})
+
+test('D1a 現有一次建立多個任務入口會先 begin 草稿，側欄可見第一個群組入口', async () => {
+  const { chromeMock, doc } = await fresh({ liveBatch: true })
+  assert.equal(chromeMock.runtime.id, 'autofetcher-test')
+  await new Promise(resolve => setTimeout(resolve, 25))
+  const begin = chromeMock.__calls.find(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICK_DRAFT_BEGIN')
+  assert.ok(begin, '既有 batch waiting 入口要建立 C1b draft')
+  assert.equal(doc.getElementById('group-draft-section').hidden, false)
+  assert.equal(doc.getElementById('group-start-first').hidden, false)
+  assert.match(doc.getElementById('group-draft-title').textContent, /先建立群組/)
+  await doc.getElementById('group-start-first').click()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const name = doc.getElementById('group-name')
+  name.value = '入口命名'
+  name.dispatchEvent(new window.Event('input', { bubbles: true }))
+  await doc.getElementById('group-name-confirm').click()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  const enter = chromeMock.__calls.find(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'ENTER_PICK')
+  assert.ok(enter, '現有入口命名確認後要進入頁面選值')
+  assert.equal(enter.args[0].groupKey.startsWith('group-'), true)
+})
+
+test('D1a 新增群組先建空組並聚焦名稱；名稱 ACK 後才可開始選值', async () => {
+  const { chromeMock, picker, doc } = await fresh()
+  let current = draft()
+  chromeMock.__setRuntimeResponder(async message => {
+    if (message.type !== 'PICK_DRAFT_OPERATION') return undefined
+    const operation = message.operation
+    const response = ack(current, operation)
+    current = response.draft
+    return response
+  })
+  picker.setPickDraftContext(current)
+  picker.renderPickDraft(current)
+  await doc.getElementById('group-start-first').click()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const create = chromeMock.__calls.find(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICK_DRAFT_OPERATION')
+  assert.equal(create.args[0].operation.type, 'create-group')
+  assert.equal(create.args[0].expectedRevision, 0)
+  assert.equal(doc.getElementById('group-name-editor').hidden, false)
+  assert.equal(doc.activeElement, doc.getElementById('group-name'))
+  assert.equal(doc.getElementById('group-start-selection').hidden, true)
+
+  const name = doc.getElementById('group-name')
+  name.value = '現價'
+  name.setSelectionRange(1, 2)
+  name.dispatchEvent(new window.Event('input', { bubbles: true }))
+  assert.equal(doc.getElementById('group-start-selection').hidden, false)
+  await doc.getElementById('group-name-confirm').click()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const operations = chromeMock.__calls
+    .filter(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICK_DRAFT_OPERATION')
+    .map(call => call.args[0].operation.type)
+  assert.ok(operations.includes('rename'))
+  assert.ok(operations.includes('set-active'))
+  const enter = chromeMock.__calls.find(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'ENTER_PICK')
+  assert.ok(enter, '名稱確認後才請求頁面選值')
+  assert.equal(enter.args[0].purpose, 'task')
+  assert.equal(enter.args[0].groupKey, current.groups[0].key)
+})
+
+test('D1a 頁面取名只回填名稱，不送 PICKED／ENTER_PICK；空文字保留原名', async () => {
+  const { chromeMock, picker, doc } = await fresh()
+  const g = { key: 'g1', name: '手動名', values: [] }
+  const value = draft({ groups: [g], activeGroupKey: 'g1', stage: 'naming' })
+  picker.setPickDraftContext(value)
+  picker.renderPickDraft(value)
+  await doc.getElementById('group-name-from-page').click()
+  const request = chromeMock.__calls.find(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICK_GROUP_NAME')
+  assert.ok(request)
+  assert.equal(request.args[0].groupKey, 'g1')
+  await picker.consumeGroupNameResult({ type: 'PICK_GROUP_NAME_RESULT', sessionId: value.sessionId, groupKey: 'g1', text: '頁面標題' })
+  assert.equal(doc.getElementById('group-name').value, '頁面標題')
+  await picker.consumeGroupNameResult({ type: 'PICK_GROUP_NAME_RESULT', sessionId: value.sessionId, groupKey: 'g1', text: '   ' })
+  assert.equal(doc.getElementById('group-name').value, '頁面標題')
+  const messages = chromeMock.__calls.filter(call => call.api === 'runtime.sendMessage').map(call => call.args[0])
+  assert.equal(messages.some(message => message.type === 'PICKED'), false)
+  assert.equal(messages.some(message => message.type === 'ENTER_PICK'), false)
+})
+
+test('D1a 同名保留來源與穩定 key，20 組後新增按鈕停用；輸入框重畫保留焦點與文字', async () => {
+  const { picker, doc } = await fresh()
+  const groups = Array.from({ length: 20 }, (_, i) => ({
+    key: `g${i}`,
+    name: '同名',
+    values: [{ key: `v${i}`, name: '價格', source: { frameUrl: `https://f${i}.test` } }]
+  }))
+  const value = draft({ groups, activeGroupKey: 'g0', stage: 'naming' })
+  picker.setPickDraftContext(value)
+  picker.renderPickDraft(value)
+  const rows = [...doc.querySelectorAll('[data-group-row]')]
+  assert.equal(rows.length, 20)
+  assert.equal(rows[0].dataset.groupKey, 'g0')
+  assert.match(rows[0].textContent, /f0\.test/)
+  assert.equal(doc.getElementById('group-add').disabled, true)
+  const input = doc.getElementById('group-name')
+  input.focus()
+  input.value = '正在輸入'
+  input.setSelectionRange(1, 2)
+  picker.renderPickDraft({ ...value, revision: 1 })
+  assert.equal(doc.activeElement, input)
+  assert.equal(input.value, '正在輸入')
+  assert.equal(input.selectionStart, 1)
+})
+
+test('D1a input 的 Ctrl+Z/Delete/Ctrl+A 留給欄位，不觸發完成操作', async () => {
+  const { chromeMock, picker, doc } = await fresh()
+  const value = draft({ groups: [{ key: 'g1', name: '同名', values: [] }], activeGroupKey: 'g1', stage: 'naming' })
+  picker.setPickDraftContext(value)
+  picker.renderPickDraft(value)
+  const input = doc.getElementById('group-name')
+  for (const key of ['z', 'Delete', 'a']) {
+    input.dispatchEvent(new window.KeyboardEvent('keydown', { key, ctrlKey: true, bubbles: true }))
+  }
+  assert.equal(chromeMock.__calls.some(call => call.args[0]?.type === 'PICK_DRAFT_COMPLETE'), false)
+})
+
+test('D1a session write failure 不顯示成功，保留可重試名稱', async () => {
+  const { chromeMock, picker, doc } = await fresh()
+  const value = draft({ groups: [{ key: 'g1', name: '', values: [] }], activeGroupKey: 'g1', stage: 'naming' })
+  chromeMock.__setRuntimeResponder(async message => {
+    if (message.type === 'PICK_DRAFT_OPERATION') return { ok: false, error: 'storage_failure', message: 'session full' }
+    return undefined
+  })
+  picker.setPickDraftContext(value)
+  picker.renderPickDraft(value)
+  const input = doc.getElementById('group-name')
+  input.value = '保留這個字'
+  input.dispatchEvent(new window.Event('input', { bubbles: true }))
+  await doc.getElementById('group-name-confirm').click()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(doc.getElementById('group-name').value, '保留這個字')
+  assert.match(doc.getElementById('group-draft-status').textContent, /session full|同步失敗/)
+  assert.equal(chromeMock.__calls.some(call => call.args[0]?.type === 'ENTER_PICK'), false)
+})
+
+test('D1a 完成前等待最後名稱 ACK，完成屏障使用最新 revision', async () => {
+  const { chromeMock, picker, doc } = await fresh()
+  let current = draft({
+    groups: [{ key: 'g1', name: '舊名', values: [{ key: 'v1', name: '值' }] }],
+    activeGroupKey: 'g1',
+    stage: 'selecting'
+  })
+  chromeMock.__setRuntimeResponder(async message => {
+    if (message.type === 'PICK_DRAFT_OPERATION') {
+      const op = message.operation
+      if (op.type === 'rename') current.groups[0].name = op.name
+      current = { ...current, revision: current.revision + 1 }
+      return { ok: true, revision: current.revision, draft: structuredClone(current) }
+    }
+    if (message.type === 'PICK_DRAFT_COMPLETE') return { ok: true, synchronized: true, revision: current.revision }
+    return undefined
+  })
+  picker.setPickDraftContext(current)
+  picker.renderPickDraft(current)
+  const input = doc.getElementById('group-name')
+  input.value = '新名'
+  input.dispatchEvent(new window.Event('input', { bubbles: true }))
+  await doc.getElementById('group-finish').click()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  const messages = chromeMock.__calls.filter(call => call.api === 'runtime.sendMessage').map(call => call.args[0])
+  const rename = messages.find(message => message.type === 'PICK_DRAFT_OPERATION')
+  const complete = messages.find(message => message.type === 'PICK_DRAFT_COMPLETE')
+  assert.equal(rename.operation.type, 'rename')
+  assert.equal(complete.expectedRevision, 1)
+})

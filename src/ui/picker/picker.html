@@ -59,6 +59,43 @@
     [data-batch-result] { font-family: var(--font-mono, monospace); }
     [data-batch-remove] { grid-column: 2; grid-row: 1; }
     #batch-note { font-size: var(--text-xs, 12px); color: var(--text-muted); }
+    #group-draft-section {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2, 10px);
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: var(--space-2, 10px) 0;
+    }
+    #group-draft-section[hidden] { display: none; }
+    #group-draft-head { display: flex; flex-direction: column; gap: 4px; }
+    #group-draft-title { margin: 0; font-size: var(--text-md, 15px); }
+    #group-draft-help, [data-group-source], [data-group-value-source] {
+      color: var(--text-muted);
+      font-size: var(--text-xs, 12px);
+      overflow-wrap: anywhere;
+    }
+    #group-list { display: flex; flex-direction: column; gap: 8px; }
+    [data-group-row] {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 8px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm, 4px);
+    }
+    [data-group-row][data-active="true"] { border-color: var(--focus); }
+    [data-group-row] [data-group-row-head] { display: flex; gap: 6px; align-items: center; }
+    [data-group-row] [data-group-name] { font-weight: 600; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    [data-group-values] { display: flex; flex-direction: column; gap: 2px; padding-left: 8px; }
+    [data-group-value] { font-size: var(--text-xs, 12px); overflow-wrap: anywhere; }
+    #group-name-editor { display: flex; flex-direction: column; gap: 6px; }
+    #group-name-editor[hidden] { display: none; }
+    #group-name-actions, #group-draft-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+    #group-draft-status { min-height: 1.3em; }
+    #group-draft-status[hidden] { display: none; }
+    #group-start-first[hidden], #group-finish[hidden], #group-add[hidden] { display: none; }
     #bulk-list { display: flex; flex-direction: column; gap: 6px; }
     #bulk-note { font-size: var(--text-xs, 12px); color: var(--text-muted); }
     .settings-body {
@@ -427,6 +464,30 @@
   </div>
   <div id="retarget-note" role="status" hidden></div>
   <div id="panel-notice" role="status" hidden></div>
+  <section id="group-draft-section" hidden aria-labelledby="group-draft-title">
+    <div id="group-draft-head">
+      <h2 id="group-draft-title">先建立群組</h2>
+      <div id="group-draft-help">每組先命名，再到頁面選入要抓的值。</div>
+    </div>
+    <div id="group-list" aria-live="polite"></div>
+    <button type="button" id="group-start-first">新增第一個群組</button>
+    <div id="group-name-editor" hidden>
+      <label for="group-name">群組名稱</label>
+      <input type="text" id="group-name" autocomplete="off" placeholder="替這組取個名字">
+      <div id="group-name-help" class="field-hint">名稱確認後才會進入頁面選值。</div>
+      <div id="group-name-actions">
+        <button type="button" id="group-name-from-page">從頁面取名稱</button>
+        <button type="button" id="group-name-confirm" class="btn-primary">確認名稱並開始選值</button>
+      </div>
+    </div>
+    <div id="group-draft-status" role="status" hidden></div>
+    <div id="group-draft-actions">
+      <button type="button" id="group-start-selection" hidden>開始選值</button>
+      <button type="button" id="group-add" hidden>新增群組</button>
+      <button type="button" id="group-finish" class="btn-primary" hidden>完成選取</button>
+      <button type="button" id="group-abandon">放棄這輪選取</button>
+    </div>
+  </section>
   <form id="picker-form" onsubmit="return false;">
     <div class="settings-body">
       <fieldset id="batch-section" hidden>

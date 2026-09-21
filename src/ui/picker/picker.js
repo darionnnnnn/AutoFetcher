@@ -3277,6 +3277,424 @@ let draftTimer = null
 // 面板會再收到同一份 ctx（只多了 draft）——這時不能重畫，使用者正在打字
 let lastPanelSig = null
 
+// AF-22 D1a：側欄先建群組／命名入口。草稿本身仍以 C1b session 為唯一事實來源；
+// 這裡只保留目前畫面與尚未送出的輸入，不能在記憶體另維護一份可提交清單。
+const PICK_GROUP_NAME_REQUEST = 'PICK_GROUP_NAME'
+const PICK_GROUP_NAME_RESULT = 'PICK_GROUP_NAME_RESULT'
+const MAX_PICK_GROUPS = 20
+let pickDraftState = null
+let pickDraftOperationQueue = Promise.resolve()
+let pickDraftNameTimers = new Map()
+let pickDraftPendingNames = new Map()
+let pickDraftNameRequestPending = false
+
+function clonePickDraft(value) {
+  if (value === undefined || value === null) return value
+  try { return structuredClone(value) } catch { return value }
+}
+
+function groupKeyOf(group) { return typeof group?.key === 'string' ? group.key : '' }
+
+function activePickGroup() {
+  const key = pickDraftState?.activeGroupKey
+  return pickDraftState?.groups?.find(group => group.key === key) || null
+}
+
+function newPickGroupKey() {
+  try {
+    if (typeof globalThis.crypto?.randomUUID === 'function') return `group-${globalThis.crypto.randomUUID()}`
+  } catch {}
+  return `group-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+function pickDraftIdentity(draft = pickDraftState) {
+  const out = {
+    sessionId: draft?.sessionId,
+    tabId: draft?.tabId,
+    documentGeneration: draft?.documentGeneration,
+    documentIdentity: draft?.documentIdentity,
+    routeIdentity: draft?.routeIdentity,
+    frame: draft?.frame
+  }
+  return Object.fromEntries(Object.entries(out).filter(([, value]) => value !== undefined))
+}
+
+function groupSourceSummary(group) {
+  const values = Array.isArray(group?.values) ? group.values : []
+  const sources = []
+  for (const value of values) {
+    const source = value?.source || {}
+    const locator = source.locator || source
+    const text = source.frameUrl || source.url || locator?.css || locator?.xpath || locator?.path
+    if (typeof text === 'string' && text.trim() && !sources.includes(text.trim())) sources.push(text.trim())
+  }
+  if (sources.length === 0) return '尚未選值，來源待選取'
+  if (sources.length === 1) return `來源：${sources[0]}`
+  return `來源 ${sources.length} 處：${sources.slice(0, 2).join('、')}${sources.length > 2 ? '…' : ''}`
+}
+
+export function groupSourceText(group) { return groupSourceSummary(group) }
+
+function setGroupDraftStatus(text, { error = false } = {}) {
+  const el = document.getElementById('group-draft-status')
+  if (!el) return
+  el.hidden = !text
+  el.textContent = text || ''
+  el.dataset.state = error ? 'error' : 'info'
+}
+
+function hidePickDraftView() {
+  const section = document.getElementById('group-draft-section')
+  if (section) section.hidden = true
+}
+
+function showPickDraftView() {
+  const section = document.getElementById('group-draft-section')
+  if (section) section.hidden = false
+  const waiting = document.getElementById('panel-waiting')
+  if (waiting) waiting.hidden = true
+  const form = document.getElementById('picker-form') || document.querySelector('.settings-body')
+  if (form) form.hidden = true
+  const footer = document.querySelector('.settings-footer') || document.querySelector('.action-bar')
+  if (footer) footer.hidden = true
+}
+
+function operationIdOf(type) { return `picker-${type}-${Date.now()}-${Math.random().toString(36).slice(2)}` }
+
+function queuePickDraftOperation(operation) {
+  const run = pickDraftOperationQueue.then(async () => {
+    const draft = pickDraftState
+    if (!draft) throw new Error('找不到選取草稿')
+    const message = {
+      type: MSG.PICK_DRAFT_OPERATION,
+      ...pickDraftIdentity(draft),
+      operationId: operationIdOf(operation.type),
+      expectedRevision: Number.isInteger(draft.revision) ? draft.revision : 0,
+      operation
+    }
+    const response = await chrome.runtime.sendMessage(message)
+    if (!response || response.ok === false || !response.draft) {
+      const error = new Error(response?.message || response?.error || '草稿同步失敗，請重新整理')
+      error.response = response
+      throw error
+    }
+    pickDraftState = clonePickDraft(response.draft)
+    setPickDraftContext(pickDraftState, { render: false })
+    renderPickDraft(pickDraftState)
+    return response
+  })
+  pickDraftOperationQueue = run.catch(() => {})
+  return run
+}
+
+async function refreshPickDraftAfterConflict() {
+  const draft = pickDraftState
+  if (!draft) return null
+  try {
+    const response = await chrome.runtime.sendMessage({ type: MSG.PICK_DRAFT_READ, ...pickDraftIdentity(draft) })
+    if (response?.draft) {
+      pickDraftState = clonePickDraft(response.draft)
+      setPickDraftContext(pickDraftState, { render: false })
+      renderPickDraft(pickDraftState)
+      setGroupDraftStatus('草稿已更新，請確認目前名稱與作用組。', { error: true })
+    }
+    return response?.draft || null
+  } catch { return null }
+}
+
+async function sendPickDraftOperation(operation) {
+  try {
+    return await queuePickDraftOperation(operation)
+  } catch (error) {
+    if (/revision|同步|conflict/i.test(`${error?.message || ''} ${error?.response?.error || ''}`)) await refreshPickDraftAfterConflict()
+    setGroupDraftStatus(error?.message || '草稿同步失敗，請再試一次。', { error: true })
+    return null
+  }
+}
+
+async function beginPickDraftFromBatchEntry(ctx, tabId) {
+  if (!ctx || ctx.batch !== true || !Number.isInteger(tabId)) return null
+  const now = Date.now()
+  const sessionId = `picker-${tabId}-${now}-${Math.random().toString(36).slice(2)}`
+  const documentGeneration = ctx.documentGeneration ?? { pickerLoad: now }
+  const routeIdentity = ctx.routeIdentity ?? ctx.documentIdentity ?? { url: ctx.url || '' }
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: MSG.PICK_DRAFT_BEGIN,
+      sessionId,
+      tabId,
+      documentGeneration,
+      ...(ctx.documentIdentity !== undefined ? { documentIdentity: ctx.documentIdentity } : {}),
+      routeIdentity,
+      groups: [],
+      activeGroupKey: null,
+      stage: 'empty',
+      form: {}
+    })
+    if (response?.ok !== true || !response.draft) return null
+    // session ctx 仍是面板的重開入口；真正的群組與 revision 以 pick-draft session 為準。
+    try { await mergePanelCtx(tabId, { pickDraft: response.draft, pickSessionId: response.draft.sessionId }) } catch {}
+    return response.draft
+  } catch (error) {
+    // 不假裝已進入命名；renderFromPanelCtx 會保留既有等待畫面，並在 notice 顯示失敗。
+    try { await mergePanelCtx(tabId, { notice: `無法建立選取草稿：${error?.message || error}` }) } catch {}
+    return null
+  }
+}
+
+function pendingNameOf(group) {
+  const key = groupKeyOf(group)
+  if (pickDraftPendingNames.has(key)) return pickDraftPendingNames.get(key)
+  return typeof group?.name === 'string' ? group.name : ''
+}
+
+function schedulePickGroupRename(value) {
+  const group = activePickGroup()
+  if (!group) return
+  const key = group.key
+  pickDraftPendingNames.set(key, value)
+  const timer = pickDraftNameTimers.get(key)
+  if (timer) clearTimeout(timer)
+  pickDraftNameTimers.set(key, setTimeout(() => {
+    pickDraftNameTimers.delete(key)
+    const latest = pickDraftPendingNames.get(key)
+    if (latest === undefined || latest.trim() === (group.name || '').trim()) return
+    void sendPickDraftOperation({ type: 'rename', groupKey: key, name: latest.trim() })
+  }, 250))
+}
+
+async function flushPickGroupRename() {
+  const group = activePickGroup()
+  if (!group) return true
+  const key = group.key
+  const timer = pickDraftNameTimers.get(key)
+  if (timer) clearTimeout(timer)
+  pickDraftNameTimers.delete(key)
+  const input = document.getElementById('group-name')
+  const value = input ? input.value : pendingNameOf(group)
+  pickDraftPendingNames.set(key, value)
+  if (value.trim() === (group.name || '').trim()) return true
+  return Boolean(await sendPickDraftOperation({ type: 'rename', groupKey: key, name: value.trim() }))
+}
+
+function groupValueLabel(value) {
+  const name = typeof value?.name === 'string' && value.name.trim() ? value.name.trim() : '未命名值'
+  const key = typeof value?.key === 'string' ? value.key : '未知 key'
+  return `${name}（識別：${key}）`
+}
+
+function bindPickDraftEvents() {
+  const start = document.getElementById('group-start-first')
+  if (!start || start.dataset.bound === 'true') return
+  start.dataset.bound = 'true'
+  const add = document.getElementById('group-add')
+  const input = document.getElementById('group-name')
+  const fromPage = document.getElementById('group-name-from-page')
+  const confirm = document.getElementById('group-name-confirm')
+  const startSelection = document.getElementById('group-start-selection')
+  const finish = document.getElementById('group-finish')
+  const abandon = document.getElementById('group-abandon')
+
+  const createGroup = async () => {
+    const current = pickDraftState
+    if (!current || current.groups.length >= MAX_PICK_GROUPS) {
+      setGroupDraftStatus(`最多 ${MAX_PICK_GROUPS} 組，請先移除一組。`, { error: true })
+      return
+    }
+    const group = { key: newPickGroupKey(), name: '', values: [] }
+    const response = await sendPickDraftOperation({ type: 'create-group', group })
+    if (!response) return
+    if (pickDraftState.activeGroupKey !== group.key) await sendPickDraftOperation({ type: 'set-active', groupKey: group.key })
+    document.getElementById('group-name')?.focus()
+    setGroupDraftStatus('請輸入名稱，或從頁面取名稱；確認後才會開始選值。')
+  }
+  start.addEventListener('click', () => { void createGroup() })
+  add?.addEventListener('click', () => { void createGroup() })
+  input?.addEventListener('input', () => {
+    schedulePickGroupRename(input.value)
+    const startButton = document.getElementById('group-start-selection')
+    if (startButton) startButton.hidden = !input.value.trim()
+  })
+  input?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.isComposing && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault()
+      void confirm?.click()
+    }
+  })
+  fromPage?.addEventListener('click', async () => {
+    const draft = pickDraftState
+    const group = activePickGroup()
+    if (!draft || !group || pickDraftNameRequestPending) return
+    pickDraftNameRequestPending = true
+    setGroupDraftStatus('請在頁面上點要用作名稱的文字或欄位；這次只會命名，不會選入值。')
+    try {
+      const response = await chrome.runtime.sendMessage({ type: PICK_GROUP_NAME_REQUEST, ...pickDraftIdentity(draft), groupKey: group.key, purpose: 'group-name' })
+      if (response?.ok === false) setGroupDraftStatus(response.message || '無法開始取名，請再試一次。', { error: true })
+    } catch (error) {
+      setGroupDraftStatus(`無法開始取名：${error?.message || error}`, { error: true })
+    } finally { pickDraftNameRequestPending = false }
+  })
+  const beginSelection = async () => {
+    const group = activePickGroup()
+    const draft = pickDraftState
+    if (!group || !draft) return
+    const inputValue = document.getElementById('group-name')?.value || ''
+    if (!inputValue.trim()) {
+      setGroupDraftStatus('請先輸入群組名稱，再開始選值。', { error: true })
+      document.getElementById('group-name')?.focus()
+      return
+    }
+    if (!(await flushPickGroupRename())) return
+    if (pickDraftState.activeGroupKey !== group.key && !(await sendPickDraftOperation({ type: 'set-active', groupKey: group.key }))) return
+    const latest = pickDraftState
+    try {
+      const response = await chrome.runtime.sendMessage({ type: MSG.ENTER_PICK, purpose: 'task', batch: true, tabId: latest.tabId, frameId: 0, sessionId: latest.sessionId, groupKey: group.key, pickStage: 'selecting' })
+      if (response?.ok === false) throw new Error(response.error || '背景拒絕選取')
+      setGroupDraftStatus(`目前選入「${pendingNameOf(activePickGroup())}」；點頁面值加入這一組。`)
+    } catch (error) { setGroupDraftStatus(`沒有進入選值模式：${error?.message || error}`, { error: true }) }
+  }
+  confirm?.addEventListener('click', () => { void beginSelection() })
+  startSelection?.addEventListener('click', () => { void beginSelection() })
+  finish?.addEventListener('click', async () => {
+    if (!pickDraftState) return
+    // 最後一字可能仍在 debounce 或前一個 ACK queue；完成屏障一定要站在最新 revision 上。
+    if (!(await flushPickGroupRename())) return
+    try { await pickDraftOperationQueue } catch { return }
+    const draft = pickDraftState
+    if (!draft) return
+    if (draft.groups.some(group => !Array.isArray(group.values) || group.values.length === 0)) {
+      setGroupDraftStatus('還有空組，請繼續選值或移除該組後再完成。', { error: true })
+      return
+    }
+    try {
+      const response = await chrome.runtime.sendMessage({ type: MSG.PICK_DRAFT_COMPLETE, ...pickDraftIdentity(draft), expectedRevision: draft.revision })
+      if (response?.ok !== true || response.synchronized !== true) throw new Error(response?.message || '草稿尚未同步')
+      setGroupDraftStatus('選取已同步，正在等待設定畫面。')
+    } catch (error) {
+      if (/revision|同步|conflict/i.test(error?.message || '')) await refreshPickDraftAfterConflict()
+      setGroupDraftStatus(error?.message || '選取尚未同步，請稍候再完成。', { error: true })
+    }
+  })
+  abandon?.addEventListener('click', async () => {
+    const draft = pickDraftState
+    if (!draft) return
+    try {
+      const response = await chrome.runtime.sendMessage({ type: MSG.PICK_DRAFT_ABANDON, ...pickDraftIdentity(draft) })
+      if (response?.ok !== true) throw new Error(response?.message || '放棄失敗')
+      pickDraftState = null
+      hidePickDraftView()
+      setGroupDraftStatus('')
+    } catch (error) { setGroupDraftStatus(`放棄失敗：${error?.message || error}`, { error: true }) }
+  })
+}
+
+export function setPickDraftContext(draft, { render = true } = {}) {
+  pickDraftState = clonePickDraft(draft)
+  if (Number.isInteger(pickDraftState?.tabId)) panelTabId = pickDraftState.tabId
+  if (render && pickDraftState) renderPickDraft(pickDraftState)
+  return pickDraftState
+}
+
+export async function consumeGroupNameResult(message) {
+  if (!message || message.type !== PICK_GROUP_NAME_RESULT) return false
+  const draft = pickDraftState
+  const group = activePickGroup()
+  if (!draft || !group || message.sessionId !== draft.sessionId || message.groupKey !== group.key) return false
+  if (message.tabId !== undefined && message.tabId !== draft.tabId) return false
+  const text = typeof message.text === 'string' ? message.text : (typeof message.name === 'string' ? message.name : message.preview)
+  if (typeof text !== 'string' || text.trim() === '') {
+    setGroupDraftStatus('這次沒有讀到可用文字，原名稱保留；請重新選取。', { error: true })
+    return false
+  }
+  const input = document.getElementById('group-name')
+  if (!input) return false
+  input.value = text.trim()
+  pickDraftPendingNames.set(group.key, input.value)
+  setGroupDraftStatus('已帶回頁面文字，可編輯後確認；這次沒有加入值。')
+  input.focus()
+  input.setSelectionRange(input.value.length, input.value.length)
+  return true
+}
+
+function renderGroupRow(group, activeKey) {
+  const row = document.createElement('div')
+  row.setAttribute('data-group-row', '')
+  row.dataset.groupKey = group.key
+  row.dataset.active = String(group.key === activeKey)
+  const head = document.createElement('div')
+  head.setAttribute('data-group-row-head', '')
+  const name = document.createElement('span')
+  name.setAttribute('data-group-name', '')
+  name.textContent = pendingNameOf(group) || '尚未命名'
+  const active = document.createElement('span')
+  active.className = 'chip'
+  active.textContent = group.key === activeKey ? '目前選入此組' : '可切換'
+  const select = document.createElement('button')
+  select.type = 'button'
+  select.textContent = group.key === activeKey ? '目前' : '切換'
+  select.disabled = group.key === activeKey
+  select.addEventListener('click', () => { void sendPickDraftOperation({ type: 'set-active', groupKey: group.key }) })
+  const remove = document.createElement('button')
+  remove.type = 'button'
+  remove.textContent = '移除組'
+  remove.addEventListener('click', () => { void sendPickDraftOperation({ type: 'remove', groupKey: group.key }) })
+  head.append(name, active, select, remove)
+  row.appendChild(head)
+  const source = document.createElement('div')
+  source.setAttribute('data-group-source', '')
+  source.textContent = `${groupSourceSummary(group)}；群組識別：${group.key}`
+  row.appendChild(source)
+  const values = document.createElement('div')
+  values.setAttribute('data-group-values', '')
+  for (const value of Array.isArray(group.values) ? group.values : []) {
+    const item = document.createElement('div')
+    item.setAttribute('data-group-value', '')
+    item.textContent = groupValueLabel(value)
+    values.appendChild(item)
+  }
+  if (values.childElementCount === 0) {
+    const empty = document.createElement('div')
+    empty.setAttribute('data-group-value-source', '')
+    empty.textContent = '空組仍保留；完成前需繼續選值或移除。'
+    values.appendChild(empty)
+  }
+  row.appendChild(values)
+  return row
+}
+
+export function renderPickDraft(draft = pickDraftState) {
+  if (!draft) { hidePickDraftView(); return }
+  setPickDraftContext(draft, { render: false })
+  showPickDraftView()
+  bindPickDraftEvents()
+  const groups = Array.isArray(draft.groups) ? draft.groups : []
+  const list = document.getElementById('group-list')
+  if (list) list.replaceChildren(...groups.map(group => renderGroupRow(group, draft.activeGroupKey)))
+  const start = document.getElementById('group-start-first')
+  const add = document.getElementById('group-add')
+  const finish = document.getElementById('group-finish')
+  const editor = document.getElementById('group-name-editor')
+  const startSelection = document.getElementById('group-start-selection')
+  if (start) start.hidden = groups.length !== 0
+  if (add) { add.hidden = groups.length === 0; add.disabled = groups.length >= MAX_PICK_GROUPS }
+  const active = activePickGroup()
+  const input = document.getElementById('group-name')
+  const focused = input && document.activeElement === input
+  const selection = focused ? { start: input.selectionStart, end: input.selectionEnd } : null
+  if (editor) editor.hidden = !active
+  if (input && active && !focused) input.value = pendingNameOf(active)
+  if (startSelection) startSelection.hidden = !active || !pendingNameOf(active).trim()
+  if (finish) finish.hidden = groups.length === 0
+  const title = document.getElementById('group-draft-title')
+  if (title) title.textContent = groups.length === 0 ? '先建立群組' : `群組與選值（${groups.length}/${MAX_PICK_GROUPS}）`
+  const help = document.getElementById('group-draft-help')
+  if (help) help.textContent = groups.length === 0 ? '先建立群組並命名；目前還沒有任何值會被偷選。' : '目前組會接收頁面上的選值；同名群組也保留各自識別與來源。'
+  if (focused && input && selection) {
+    input.focus()
+    try { input.setSelectionRange(selection.start, selection.end) } catch {}
+  }
+}
+
 // 批次進行中被擋下來的那一份 ctx（只留最後一份：它已經是最新狀態），結束後補畫
 let pendingPanelCtx = null
 
@@ -3317,7 +3735,7 @@ export async function renderFromPanelCtx(ctx, { reload = () => globalThis.locati
   // saved 的第一筆結果（first）也算進簽章：它換了要照 ctx 重畫回饋區（沒有它的 ctx 簽章與以前相同）。
   // 批次的 items 與 bulk 的 taskIds 同口徑：漏了它，第二輪批次選取會被當成沒變，
   // 畫面不更新、「全部儲存」存的是舊目標（AF-21 體檢 C P1）
-  const sig = ctx ? JSON.stringify({ kind: ctx.kind, ctx: ctx.ctx, taskId: ctx.taskId, retarget: ctx.retarget, batch: ctx.batch, taskIds: ctx.taskIds, items: ctx.items, first: ctx.first }) : 'null'
+  const sig = ctx ? JSON.stringify({ kind: ctx.kind, ctx: ctx.ctx, taskId: ctx.taskId, retarget: ctx.retarget, batch: ctx.batch, taskIds: ctx.taskIds, items: ctx.items, first: ctx.first, pickDraft: ctx.pickDraft }) : 'null'
   if (sig === lastPanelSig) return { rendered: false }
   // 批次「全部試抓」「全部儲存」進行中：兩條流程都在同一份表單上逐項 render，
   // 這時重畫會把清單整份換掉、結果寫進孤兒節點。只延後、不丟：結束後補畫一次（AF-21 體檢 C P3）
@@ -3343,6 +3761,11 @@ export async function renderFromPanelCtx(ctx, { reload = () => globalThis.locati
   if (form) form.hidden = kind === 'waiting'
   const footer = document.querySelector('.settings-footer') || document.getElementById('picker-actions')
   if (footer) footer.hidden = kind === 'waiting'
+  if (ctx?.pickDraft) {
+    renderPickDraft(ctx.pickDraft)
+    return { rendered: true }
+  }
+  hidePickDraftView()
   if (kind !== 'saved') {
     const header = document.querySelector('[data-picker-header]')
     if (header) header.hidden = false
@@ -3627,12 +4050,15 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
         const response = await chrome.runtime.sendMessage({ type: MSG.PICK_DRAFT_READ, tabId })
         protocolDraft = response?.draft || null
       } catch {}
+      if (!protocolDraft && ctx?.batch === true) {
+        protocolDraft = await beginPickDraftFromBatchEntry(ctx, tabId)
+      }
       // 舊 ctx 仍保留目標／批次形狀；表單內容以安全協定草稿為準。
       // 沒有 ctx 時也先建立可恢復的空目標畫面，使用者仍可回頁面重新選目標。
       const merged = protocolDraft
         ? (ctx
-            ? { ...ctx, draft: { ...(ctx.draft || {}), ...(protocolDraft.form || {}) } }
-            : { kind: 'new', ctx: { tabId }, draft: protocolDraft.form || {} })
+            ? { ...ctx, pickDraft: protocolDraft, draft: { ...(ctx.draft || {}), ...(protocolDraft.form || {}) } }
+            : { kind: 'pick-draft', pickDraft: protocolDraft, ctx: { tabId }, draft: protocolDraft.form || {} })
         : ctx
       if (changed || merged) await renderFromPanelCtx(merged)
     }
@@ -3644,6 +4070,11 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
     if (document.visibilityState === 'visible') boot()
     // ctx 變了（例如使用者在頁面上選好了目標）就重畫
     subscribe(() => { boot() }, { area: 'session' })
+    document.addEventListener('af:pick-group-name-result', event => { consumeGroupNameResult(event.detail) })
+    chrome.runtime.onMessage?.addListener((message) => {
+      if (message?.type === PICK_GROUP_NAME_RESULT) return consumeGroupNameResult(message)
+      return undefined
+    })
     document.addEventListener('input', scheduleDraftSave, true)
     document.addEventListener('change', scheduleDraftSave, true)
     document.getElementById('panel-cancel-pick')?.addEventListener('click', () => {
