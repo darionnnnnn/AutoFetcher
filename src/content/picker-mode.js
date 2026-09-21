@@ -35,6 +35,9 @@ const COLORS = {
 }
 
 let active = false, currentPurpose = null, currentTaskId = undefined, currentTargetEl = null, backStack = []
+// AF-22 C2a：短命選取工作階段的協調欄位；永久草稿仍由 background 保存。
+let pickSessionId = undefined, pickGroupKey = undefined, pickFrame = undefined, pickRevision = undefined, parentFrameId = undefined
+let pickOperationSeq = 0
 // 進不去框架時要說出來；代理層是 iframe 的替身（見 frameOfProxy）
 let currentHint = null
 let pendingPreselect = null
@@ -1432,6 +1435,15 @@ function renderBatchGroups(panel, groups, el) {
   updatePanelActions(el)
 }
 
+function frameErrorNotice() {
+  if (currentHint === 'frame_ambiguous') return '找到多個相同網址的框架，請重新選取要進入的框架'
+  if (currentHint === 'frame_unavailable' || currentHint === 'inject_denied' || currentHint === 'parent_inject_denied') {
+    return '目前無法進入這個框架，請重試'
+  }
+  if (currentHint === 'frame_not_found') return '無法進入這個框架'
+  return ''
+}
+
 // 產生說明面板文字與已選清單
 function updatePanel(panel, el) {
   if (!panel) return
@@ -1539,7 +1551,8 @@ function updatePanel(panel, el) {
     } catch {}
     if (host) lines.push(host)
     lines.push('確認即進入這個框架選取')
-    if (currentHint === 'frame_not_found') lines.push('無法進入這個框架')
+    const frameNotice = frameErrorNotice()
+    if (frameNotice) lines.push(frameNotice)
     lines.push('點一下即進入這個框架')
     appendPanelText(panel, lines)
     updatePanelActions(el)
@@ -1548,7 +1561,8 @@ function updatePanel(panel, el) {
 
   if (!el) {
     const lines = []
-    if (currentHint === 'frame_not_found') lines.push('無法進入這個框架')
+    const frameNotice = frameErrorNotice()
+    if (frameNotice) lines.push(frameNotice)
     if (limitReached || selectedList.length >= maxPicks) lines.push('（已達選取上限）')
     if (headerChangedNotice) lines.push('（位置已變）')
     if (toolbarNotice) lines.push(toolbarNotice)
@@ -1571,7 +1585,8 @@ function updatePanel(panel, el) {
   lines.push(typeDesc)
   // 非表格沒有欄／列可挑，工具列會整排停用；要說出為什麼，不然使用者只看到點不動
   if (!isTableMode(el)) lines.push('非表格：抓整個元素')
-  if (currentHint === 'frame_not_found') lines.push('無法進入這個框架')
+  const frameNotice = frameErrorNotice()
+  if (frameNotice) lines.push(frameNotice)
   if (limitReached || selectedList.length >= maxPicks) lines.push('（已達選取上限）')
   if (headerChangedNotice) lines.push('（位置已變）')
   if (lockedEl && el === lockedEl) lines.push('（已鎖定：滑鼠移開也不會換目標，點別處解除）')
@@ -2293,7 +2308,22 @@ function buildPickPayload(targetEl, picks, hint) {
   const payload = {
     locator: describe(targetEl),
     blockInfo,
-    picks
+    picks,
+    // mode is a per-value hint because a multi-value selection can mix
+    // numeric and text cells. It is transient coordination data, not spec.
+    pickModes: picks.map((pick) => {
+      if (pick?.block) return 'block'
+      if (pick?.cell) {
+        const text = getCellText(pick.cell, targetEl)
+        return parseNumber(text) === null ? 'text' : 'number'
+      }
+      const text = (targetEl?.textContent || '').trim()
+      return parseNumber(text) === null ? 'text' : 'number'
+    }),
+    ...(pickSessionId !== undefined ? { sessionId: pickSessionId } : {}),
+    ...(pickGroupKey !== undefined ? { groupKey: pickGroupKey, activeGroupKey: pickGroupKey } : {}),
+    ...(pickRevision !== undefined ? { draftRevision: pickRevision } : {}),
+    ...(pickFrame ? { frame: structuredClone(pickFrame) } : {})
   }
 
   if (isTable) {
@@ -2328,6 +2358,14 @@ function buildPickPayload(targetEl, picks, hint) {
     }
   }
   return payload
+}
+
+function nextPickOperationId() {
+  pickOperationSeq += 1
+  let token = ''
+  try { token = globalThis.crypto?.randomUUID?.() || '' } catch {}
+  if (!token) token = `${Date.now()}-${pickOperationSeq}-${Math.random().toString(36).slice(2)}`
+  return `content-pick:${pickSessionId ?? 'legacy'}:${pickGroupKey ?? 'none'}:${token}`
 }
 
 /**
@@ -2384,7 +2422,7 @@ function dropGoneSelection() {
 }
 
 // 送出確認訊息並離開
-function confirmPick() {
+async function confirmPick() {
   if (selectionGone()) {
     dropGoneSelection()
     return
@@ -2411,6 +2449,9 @@ function confirmPick() {
       const msg = batchGroups.length === 1
         ? { type: MSG.PICKED, purpose: currentPurpose, ...payloads[0] }
         : { type: MSG.PICKED, purpose: currentPurpose, batch: payloads }
+      if (currentPurpose === 'task' && pickSessionId !== undefined && pickGroupKey !== undefined) {
+        msg.operationId = nextPickOperationId()
+      }
       if (currentTaskId !== undefined) msg.taskId = currentTaskId
       applyPickedMarks(pickedTableEl)
       chrome.runtime.sendMessage(msg)
@@ -2419,7 +2460,7 @@ function confirmPick() {
     }
   }
   // 已選了值就以那張表格為準：滑鼠可能正停在表格外的一段文字上
-  if (selectedList.length > 0 && pickedTableEl && currentTargetEl !== pickedTableEl) {
+  if (selectedList.length > 0 && pickedTableEl && currentTargetEl !== pickedTableEl && !iframeOf(currentTargetEl)) {
     setTarget(pickedTableEl)
   }
   if (!currentTargetEl) return
@@ -2437,12 +2478,59 @@ function confirmPick() {
   // 目標是 iframe(或它的代理層):值在框架裡面，選這個殼沒有意義，改成鑽進去
   const descendTarget = iframeOf(currentTargetEl)
   if (descendTarget) {
-    const msg = { type: MSG.DESCEND_FRAME, purpose: currentPurpose, src: frameSrcOf(descendTarget) }
+    const frameAnchor = describe(descendTarget)
+    const msg = {
+      type: MSG.DESCEND_FRAME,
+      purpose: currentPurpose,
+      src: frameSrcOf(descendTarget),
+      ...(frameAnchor ? { frameAnchor } : {}),
+      ...(pickSessionId !== undefined ? { sessionId: pickSessionId } : {}),
+      ...(pickGroupKey !== undefined ? { groupKey: pickGroupKey, activeGroupKey: pickGroupKey } : {}),
+      ...(pickRevision !== undefined ? { draftRevision: pickRevision } : {})
+    }
     if (batchMode) msg.batch = true
     if (currentTaskId !== undefined) msg.taskId = currentTaskId
+    // 先把這一層已選的值寫進同一份 panel ctx；下鑽成功／失敗都不能丟掉前面草稿。
+    let partial = null
+    if (selectedList.length > 0 && currentPurpose === 'task') {
+      const base = pickedTableEl || currentTargetEl
+      if (base) {
+        partial = {
+          type: MSG.PICKED,
+          purpose: currentPurpose,
+          partial: true,
+          operationId: nextPickOperationId(),
+          ...buildPickPayload(base, selectedList.slice(), { index: currentCellIndex(), headerText: getHeaderText() })
+        }
+        if (currentTaskId !== undefined) partial.taskId = currentTaskId
+      }
+    }
     if (pendingPreselect) msg.preselect = pendingPreselect
-    chrome.runtime.sendMessage(msg)
-    exitPickMode()
+    else if (selectedList.length > 0) msg.preselect = selectedList.slice()
+    // partial 是跨 frame 草稿的前置 ACK：未確認寫入成功以前不能切 active frame，
+    // 否則 background 可能先記住新 frame，舊層的值才姍姍來遲而被拒絕。
+    if (partial) {
+      let ack
+      try { ack = await chrome.runtime.sendMessage(partial) } catch (error) {
+        ack = { ok: false, message: String(error?.message || error) }
+      }
+      if (!ack || ack.ok !== true) {
+        toolbarNotice = ack?.message || '這些值還沒同步完成，請再試一次'
+        if (panelEl) updatePanel(panelEl, currentTargetEl)
+        return
+      }
+      if (Number.isInteger(ack.revision)) msg.draftRevision = ack.revision
+    }
+    // 草稿 ACK 成功後才停止舊文件的事件攔截，再讓 background 進入目的 frame。
+    exitPickMode({ hold: currentPurpose })
+    try {
+      const transition = await chrome.runtime.sendMessage(msg)
+      if (transition?.ok === false && transition.message) {
+        // background 會把舊 frame 重新 ENTER；這裡只留下可見的本地原因，
+        // 不再自行清掉持久草稿或猜測要回哪一層。
+        toolbarNotice = transition.message
+      }
+    } catch {}
     return
   }
 
@@ -2536,6 +2624,7 @@ function confirmPick() {
   const msg = {
     type: MSG.PICKED,
     purpose: currentPurpose,
+    ...(pickSessionId !== undefined && pickGroupKey !== undefined ? { operationId: nextPickOperationId() } : {}),
     ...buildPickPayload(currentTargetEl, picks, { index: currentCellIndex(), headerText: getHeaderText() })
   }
   if (currentTaskId !== undefined) msg.taskId = currentTaskId
@@ -2544,6 +2633,47 @@ function confirmPick() {
   // 設定面板就開在旁邊，使用者要看得到自己剛剛選的是哪一格；
   // repick 沒有面板（存檔就結束），維持全清
   exitPickMode(currentPurpose === 'repick' ? {} : { hold: currentPurpose })
+}
+
+// C2a：在 frame 文件的根層按 ↑ 返回父 frame。這只送短命協調訊息，值仍先以
+// partial PICKED 交給 background 併入同組草稿；沒有 parentFrameId 就維持既有行為。
+async function ascendFrame() {
+  if (currentPurpose !== 'task' || !Number.isInteger(parentFrameId)) return false
+  const base = pickedTableEl || (selectedList.length > 0 ? currentTargetEl : null)
+  let partial = null
+  let partialAck = null
+  if (base && selectedList.length > 0) {
+    partial = {
+      type: MSG.PICKED,
+      purpose: currentPurpose,
+      partial: true,
+      operationId: nextPickOperationId(),
+      ...buildPickPayload(base, selectedList.slice(), { index: currentCellIndex(), headerText: getHeaderText() }),
+      ...(currentTaskId !== undefined ? { taskId: currentTaskId } : {})
+    }
+    try { partialAck = await chrome.runtime.sendMessage(partial) } catch (error) {
+      partialAck = { ok: false, message: String(error?.message || error) }
+    }
+    if (!partialAck || partialAck.ok !== true) {
+      toolbarNotice = partialAck?.message || '這些值還沒同步完成，請再試一次'
+      if (panelEl) updatePanel(panelEl, currentTargetEl)
+      return false
+    }
+  }
+  const msg = {
+    type: MSG.DESCEND_FRAME,
+    direction: 'ascend',
+    purpose: currentPurpose,
+    ...(currentTaskId !== undefined ? { taskId: currentTaskId } : {}),
+    ...(pickSessionId !== undefined ? { sessionId: pickSessionId } : {}),
+    ...(pickGroupKey !== undefined ? { groupKey: pickGroupKey, activeGroupKey: pickGroupKey } : {}),
+    ...(pickRevision !== undefined ? { draftRevision: pickRevision } : {}),
+    parentFrameId
+  }
+  if (partialAck && Number.isInteger(partialAck.revision)) msg.draftRevision = partialAck.revision
+  try { await chrome.runtime.sendMessage(msg) } catch {}
+  exitPickMode({ hold: currentPurpose })
+  return true
 }
 
 // 請求取消選取模式（已選 2 個以上需二段確認）
@@ -3295,7 +3425,10 @@ function onKeyDown(event) {
     }
   } else if (event.key === 'ArrowUp') {
     event.preventDefault()
-    if (!currentTargetEl || currentTargetEl === document.body) return
+    if (!currentTargetEl || currentTargetEl === document.body || currentTargetEl === document.documentElement) {
+      ascendFrame()
+      return
+    }
     const lastHover = currentHoverEl
 
     // 觸發 3：已選非空時按 ↑（只在 pickedTableEl 是 T、而且 T 有 O 時套用；其他情況 ↑ 行為完全不變）
@@ -3834,6 +3967,9 @@ function onClick(event) {
   // 8. iframe 代理層與一次一個的用途：點一下就送出（鑽進框架是導覽，不是選取）
   // 批次模式已有組時點到框架：不下鑽、也不送出，說明原因
   if (iframeOf(event.target) && batchBlocksDescend()) return
+  // 已選表格的目標會被 upgradeTarget 鎖住；點到 iframe 代理層仍要把
+  // 這次導覽目標交給 confirmPick，否則會把前面的值當成主頁完成送出。
+  if (iframeOf(event.target)) setTarget(iframeOf(event.target))
   confirmPick()
 }
 
@@ -4161,6 +4297,11 @@ export function enterPickMode(opts) {
   active = true
   currentPurpose = opts?.purpose || null
   currentTaskId = opts?.taskId !== undefined ? opts.taskId : undefined
+  pickSessionId = opts?.sessionId !== undefined ? opts.sessionId : undefined
+  pickGroupKey = opts?.groupKey ?? opts?.activeGroupKey
+  pickFrame = opts?.frame && typeof opts.frame === 'object' ? structuredClone(opts.frame) : undefined
+  pickRevision = opts?.draftRevision
+  parentFrameId = Number.isInteger(opts?.parentFrameId) ? opts.parentFrameId : undefined
   // 批次只對建立新任務有意義（重選、前置動作、登入一次就是一個目標）
   batchMode = opts?.batch === true && currentPurpose === 'task'
   maxPicks = (typeof opts?.maxPicks === 'number' && opts.maxPicks > 0) ? opts.maxPicks : 100
@@ -4176,7 +4317,7 @@ export function enterPickMode(opts) {
   clearPendingConfirms()
   selectAllNotice = null
   lastDragEndAt = 0
-  currentHint = opts?.hint || null
+  currentHint = opts?.frameError || opts?.hint || null
   // 下鑽之後要把原本要勾回的值一起帶過去
   pendingPreselect = opts?.preselect || null
   if (typeof document === 'undefined' || !document.body) return
@@ -4348,6 +4489,7 @@ export function exitPickMode(opts = {}) {
   }
   yieldedEl = null; lastProxySync = 0
   active = false; currentPurpose = null; currentTaskId = undefined; currentTargetEl = null; backStack = []
+  pickSessionId = undefined; pickGroupKey = undefined; pickFrame = undefined; pickRevision = undefined; parentFrameId = undefined
   overlayEl = null; highlightEl = null; panelEl = null; toolbarEl = null; menuEl = null
   pickMode = 'cell'; cellIndex = null; colIndex = null; rowIndex = null; currentCellEl = null; nestedNoticeOn = false
   currentDataRows = []; currentRowEl = null

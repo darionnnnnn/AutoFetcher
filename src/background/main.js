@@ -31,7 +31,8 @@ import { injectContent } from './inject.js'
 import { sendToFrame } from './messaging.js'
 import { locateFrame, listFrames, matchFrameByUrl } from './frames.js'
 import { isAnchorText, putSkip } from '../shared/table.js'
-import { pickSpecOf, reconcileFields } from '../shared/field-match.js'
+import { pickSpecOf, pickSourceOf, reconcileFields, sameSpec, stripPos } from '../shared/field-match.js'
+import { parseNumber } from '../shared/extract.js'
 import { withInnerLabel } from '../shared/describe.js'
 import { scheduleSiteCheck, runSiteCheck } from './sitecheck.js'
 import { testLogin } from './login.js'
@@ -48,10 +49,70 @@ import {
   clearPickDraftForTab,
   protocolErrorResponse
 } from '../shared/pick-protocol.js'
+import { getPickDraft } from '../shared/pick-draft.js'
 
 // 面板 ctx 可能尚未寫入就收到 pagehide；用短命記號避免無 ctx 時重複清場，
 // 同時讓新一輪開啟能再次廣播 EXIT_PICK。
 const exitedPickTabs = new Set()
+
+// AF-22 C2a：選取中的 frame 是短命執行期狀態，不能寫進草稿（frameId 每次載入都會變）。
+// 這份索引只用來讓進出 frame 有一個可核對的來源，避免舊 frame 的延遲回報改到新階段。
+const activePickFrames = new Map()
+
+function frameDescriptorOf(sender, extra = {}) {
+  const frameId = sender?.frameId
+  if (frameId === undefined || frameId === 0) return undefined
+  const url = typeof sender?.url === 'string' && sender.url.trim() !== ''
+    ? sender.url
+    : (typeof extra.frameUrl === 'string' ? extra.frameUrl : '')
+  if (!url) return undefined
+  const anchor = extra.frameAnchor ?? extra.frame?.anchor
+  return {
+    url,
+    ...(anchor && typeof anchor === 'object' ? { anchor: structuredClone(anchor) } : {})
+  }
+}
+
+// task/source 與 draft value 的持久格式只允許穩定網址；iframe 的 anchor
+// 只供本輪進出 frame 時核對，不能混進日後 buildTask 會保存的 source。
+function stableFrameOf(sender, extra = {}) {
+  const frame = frameDescriptorOf(sender, extra)
+  return frame ? { url: frame.url } : undefined
+}
+
+function frameStateOf(tabId) {
+  return activePickFrames.get(tabId) || null
+}
+
+function rememberPickFrame(tabId, state) {
+  if (!Number.isInteger(tabId) || !state || !Number.isInteger(state.frameId)) return
+  activePickFrames.set(tabId, { ...state })
+}
+
+function forgetPickFrame(tabId) {
+  activePickFrames.delete(tabId)
+}
+
+function pickIdentityOf(msg = {}) {
+  const activeGroupKey = msg.activeGroupKey ?? msg.groupKey
+  return {
+    ...(msg.sessionId !== undefined ? { sessionId: msg.sessionId } : {}),
+    ...(msg.groupKey !== undefined ? { groupKey: msg.groupKey } : {}),
+    ...(activeGroupKey !== undefined ? { activeGroupKey } : {})
+  }
+}
+
+function pickTransitionError(hint, candidates = []) {
+  const ambiguous = hint === 'frame_ambiguous'
+  return {
+    ok: false,
+    error: ambiguous ? 'frame_ambiguous' : 'frame_unavailable',
+    retryable: true,
+    hint,
+    candidates: Array.isArray(candidates) ? candidates : [],
+    message: ambiguous ? '找到了多個相同網址的框架，請重新選取要進入的框架' : '目前無法進入這個框架，請重試'
+  }
+}
 
 
 // 重選時把選好的值寫回任務：沒動的值保留原本的 key 與名稱（紀錄靠 key），新值配新 key。
@@ -390,13 +451,19 @@ export async function handleAlarm(alarm, testOpts = {}) {
 
 // 處理內部訊息分派
 // 送訊息那個 frame 的身分；最上層不留欄位（舊任務零遷移的前提）
-function frameIdentityOf(sender) {
+function frameIdentityOf(sender, extra = {}) {
   if (sender?.frameId === undefined || sender.frameId === 0) return {}
-  return { frameId: sender.frameId, frameUrl: sender.url }
+  const frame = stableFrameOf(sender, extra)
+  return {
+    frameId: sender.frameId,
+    frameUrl: sender.url,
+    ...(frame ? { frame } : {})
+  }
 }
 
 // 選取結果 → 面板要的 payload（逐欄挑，補上分頁與框架身分）；單任務與批次每一組共用這一份
-function taskPayloadOf(src, sender) {
+function taskPayloadOf(src, sender, msg = {}) {
+  const frame = stableFrameOf(sender, msg)
   const payload = {
     locator: src?.locator,
     preview: src?.preview,
@@ -407,10 +474,168 @@ function taskPayloadOf(src, sender) {
     url: sender?.tab?.url,
     nameHint: src?.nameHint,
     // 使用者一次挑的那幾個值；漏掉這一個欄位，多值任務就會退化成單值
-    picks: src?.picks
+    picks: src?.picks,
+    ...(frame ? { source: { frame } } : {}),
+    ...pickIdentityOf(msg)
   }
-  Object.assign(payload, frameIdentityOf(sender))
+  Object.assign(payload, frameIdentityOf(sender, msg))
+  // C2a 的跨 frame 草稿尚未進入正式 task schema；先把每個值的來源以可序列化
+  // 形狀留在 panel ctx，後續設定頁接線時不必猜「這批值原本在哪一層」。
+  if (Array.isArray(payload.picks)) {
+    payload.valueSources = payload.picks.map((spec) => ({
+      locator: payload.locator,
+      ...(frame ? { frame } : {}),
+      spec: structuredClone(spec)
+    }))
+  }
   return payload
+}
+
+function hashStable(value) {
+  const text = stableValue(value)
+  let hash = 2166136261
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
+function valueModeOf(pick, payload, index = 0) {
+  if (typeof pick?.mode === 'string' && pick.mode.trim() !== '') return pick.mode
+  const hinted = payload?.pickModes?.[index] ?? payload?.valueModes?.[index]
+  if (hinted === 'number' || hinted === 'text' || hinted === 'block') return hinted
+  if (pick?.block) return 'block'
+  // A single value can use its actual preview as a fallback. For multiple
+  // values content supplies one explicit mode per value; otherwise remain
+  // undecided instead of guessing text from a missing preview.
+  if (Array.isArray(payload?.picks) && payload.picks.length === 1 && typeof payload.preview === 'string') {
+    return parseNumber(payload.preview) !== null ? 'number' : 'text'
+  }
+  return 'pending'
+}
+
+function draftValueOf(payload, pick, sender, msg, index = 0) {
+  const frame = stableFrameOf(sender, msg)
+  const locator = payload?.locator ? structuredClone(payload.locator) : {}
+  const rawSpec = pickSpecOf(pick) || {}
+  // pickSpecOf keeps optional fields explicit for comparison; the draft
+  // serializer accepts JSON data only, so drop undefined optional members.
+  const spec = JSON.parse(JSON.stringify(rawSpec))
+  const source = pickSourceOf({
+    locator,
+    ...(frame ? { frame } : {})
+  }) || { locator }
+  // B2 identity ignores position-only and block skip/exclude settings.
+  const identitySpec = stripPos(spec)
+  const identity = {
+    source,
+    spec: identitySpec
+  }
+  const value = {
+    key: `pick-${hashStable(identity)}`,
+    mode: valueModeOf(pick, payload, index),
+    source,
+    spec,
+    locator,
+    ...(payload?.preview !== undefined ? { preview: payload.preview } : {}),
+    ...(payload?.previewValue !== undefined ? { previewValue: payload.previewValue } : {})
+  }
+  return value
+}
+
+async function extensionDraftSender(tabId) {
+  let url = 'chrome-extension://autofetcher/ui/picker/picker.html'
+  try {
+    if (typeof chrome?.runtime?.getURL === 'function') url = await chrome.runtime.getURL('ui/picker/picker.html')
+  } catch {}
+  return { url, tab: { id: tabId }, frameId: 0 }
+}
+
+// Content 端仍只能送 PICKED；background 在收到它後，以 C1b add operation
+// 逐值寫入同一份 draft。operation id 由 content 的一次 PICKED 操作加值索引
+// 派生；同一 source/spec 則即使換了 operation id 也保持冪等。
+async function appendPickedToDraft(msg, sender, payload = msg) {
+  const tabId = sender?.tab?.id
+  const groupKey = msg?.groupKey ?? msg?.activeGroupKey
+  if (msg?.purpose !== 'task' || !Number.isInteger(tabId) || typeof msg?.sessionId !== 'string' ||
+      typeof groupKey !== 'string' || !Array.isArray(payload?.picks)) return null
+
+  const draft = await getPickDraft(tabId, { sessionId: msg.sessionId })
+  if (!draft) {
+    return { ok: false, error: 'missing_draft', retryable: true, message: '選取草稿已不存在，請重新開始這一輪選取' }
+  }
+  if (!draft.groups.some(group => group.key === groupKey)) {
+    return { ok: false, error: 'group_not_found', retryable: true, message: '目前作用中的選取組已不存在，請重新選取' }
+  }
+
+  const operationSender = await extensionDraftSender(tabId)
+  let latest = draft
+  try {
+    const operationBase = typeof msg.operationId === 'string' && msg.operationId.trim() !== ''
+      ? msg.operationId
+      : `background-pick:${draft.sessionId}:${groupKey}:${Date.now()}-${Math.random().toString(36).slice(2)}`
+    for (const [index, pick] of payload.picks.entries()) {
+      const value = draftValueOf(payload, pick, sender, msg, index)
+      const group = latest.groups.find(item => item.key === groupKey)
+      if (group?.values.some(existing => sameSpec(existing, value))) continue
+      const operationId = `${operationBase}:${index}`
+      const result = await handlePickDraftOperation({
+        type: MSG.PICK_DRAFT_OPERATION,
+        operationId,
+        expectedRevision: latest.revision,
+        sessionId: draft.sessionId,
+        tabId,
+        operation: { type: 'add', groupKey, value }
+      }, operationSender)
+      if (!result?.ok || !result.draft) return result || { ok: false, error: 'draft_write_failed', retryable: true }
+      latest = result.draft
+    }
+  } catch (error) {
+    const response = protocolErrorResponse(error)
+    return response || { ok: false, error: 'draft_write_failed', retryable: true, message: String(error?.message || error) }
+  }
+
+  await mergePanelCtx(tabId, {
+    pickDraft: latest,
+    pickSessionId: latest.sessionId,
+    pickGroupKey: groupKey
+  })
+  return { ok: true, draft: latest, revision: latest.revision }
+}
+
+function stableValue(value) {
+  if (Array.isArray(value)) return `[${value.map(stableValue).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${stableValue(value[k])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+// 同一草稿／同一組收到另一個 frame 的 PICKED 時追加值；跨 frame 不能把前一層
+// 的 ctx 當成 retarget 覆寫掉。相同來源重送只留一份，避免重試製造重複值。
+function mergeFramePickPayload(previous, next) {
+  if (!previous || !next || !Array.isArray(previous.picks) || !Array.isArray(next.picks)) return next
+  const oldSources = Array.isArray(previous.valueSources) ? previous.valueSources : []
+  const newSources = Array.isArray(next.valueSources) ? next.valueSources : []
+  const keys = new Set(oldSources.map(stableValue))
+  const picks = previous.picks.slice()
+  const valueSources = oldSources.map((item) => structuredClone(item))
+  next.picks.forEach((pick, i) => {
+    const source = newSources[i] || { locator: next.locator, spec: pick }
+    const key = stableValue(source)
+    if (keys.has(key)) return
+    keys.add(key)
+    picks.push(structuredClone(pick))
+    valueSources.push(structuredClone(source))
+  })
+  return {
+    ...next,
+    picks,
+    valueSources,
+    // 顯示用的共用預覽取最新 frame，但保留前面各值的來源清單。
+    source: next.source || previous.source
+  }
 }
 
 /**
@@ -653,6 +878,19 @@ export async function handleMessage(msg, sender, runOpts = {}) {
     }
 
     if (msg.type === MSG.PICKED) {
+      const pickedTabId = sender?.tab?.id
+      const activeFrame = Number.isInteger(pickedTabId) ? frameStateOf(pickedTabId) : null
+      // 進入下一個 frame 後，舊文件晚到的完成回報不可覆蓋新階段。
+      // 沒有 C2a session 欄位的舊單任務仍沿用既有相容路徑。
+      if (activeFrame && msg.sessionId !== undefined) {
+        if (activeFrame.sessionId !== msg.sessionId || activeFrame.frameId !== (sender?.frameId ?? 0)) {
+          await logForbidden(sender, 'PICKED:stale-frame', `選取回報來自非作用中的框架 ${sender?.frameId ?? 0}`)
+          return { ok: false, error: 'stale_frame', retryable: true, message: '這個框架的選取階段已經變更，請重試' }
+        }
+        if (activeFrame.groupKey !== undefined && msg.groupKey !== undefined && activeFrame.groupKey !== msg.groupKey) {
+          return { ok: false, error: 'group_conflict', retryable: true, message: '目前作用中的群組已變更，請重新選取' }
+        }
+      }
       // 取消也要轉發給面板：不轉的話「在頁面上選取」那顆按鈕會一直卡在等待狀態
       // （AF-10 修正：原本 cancelled 在轉發之前就 return 了）
       if (msg.purpose === 'preaction' || (typeof msg.purpose === 'string' && msg.purpose.startsWith('login-'))) {
@@ -672,6 +910,14 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         return { ok: true }
       }
 
+      // AF-22 C2a：有 C1b session/group 的選取結果，先在鎖內寫回 draft；
+      // 舊的無 session PICKED 才走下面相容的 panel ctx 路徑。
+      if (msg.purpose === 'task' && msg.sessionId !== undefined &&
+          (msg.groupKey !== undefined || msg.activeGroupKey !== undefined)) {
+        const draftResult = await appendPickedToDraft(msg, sender)
+        if (draftResult) return draftResult
+      }
+
       if (msg.purpose === 'task') {
         const tabId = sender?.tab?.id
         // 批次（一次建立多個任務）：每一組補上與單任務相同的欄位，另給穩定鍵；不帶舊草稿、不算換目標
@@ -680,7 +926,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
           await setPanelCtx(tabId, { kind: 'batch', items })
           return { ok: true }
         }
-        const payload = taskPayloadOf(msg, sender)
+        let payload = taskPayloadOf(msg, sender, msg)
         // 面板已經開著、使用者也填了一半的表單時，**只換目標**：
         // 名稱、排程、儀表板、進階設定全部留著（右鍵重選一個目標不該把表單清空）
         const existing = await getPanelCtx(tabId)
@@ -690,9 +936,17 @@ export async function handleMessage(msg, sender, runOpts = {}) {
           await diag.log('panel_missing_on_pick', { tabId, purpose: msg.purpose })
         }
         const keepDraft = existing && (existing.kind === 'new' || existing.kind === 'edit')
+        const sameFrameDraft = existing && existing.pickSessionId !== undefined &&
+          msg.sessionId !== undefined && existing.pickSessionId === msg.sessionId &&
+          (existing.pickGroupKey === undefined || msg.groupKey === undefined || existing.pickGroupKey === msg.groupKey)
+        if (sameFrameDraft) {
+          payload = mergeFramePickPayload(existing.ctx, payload)
+        }
         await mergePanelCtx(tabId, {
           kind: 'new',
           ctx: payload,
+          ...(msg.sessionId !== undefined ? { pickSessionId: msg.sessionId } : {}),
+          ...(msg.groupKey !== undefined ? { pickGroupKey: msg.groupKey } : {}),
           retarget: Boolean(keepDraft && existing.ctx),
           // 淺層合併：被擋時留下的說明與等待態的多任務旗標不得跟到新表單上（AF-18 終檢）
           notice: undefined,
@@ -741,35 +995,138 @@ export async function handleMessage(msg, sender, runOpts = {}) {
     if (msg.type === MSG.DESCEND_FRAME) {
       const tabId = sender?.tab?.id
       if (!tabId) return { ok: true }
+      const fromFrameId = sender?.frameId ?? 0
+      const activeFrame = frameStateOf(tabId)
+      if (msg.sessionId !== undefined && activeFrame &&
+          (activeFrame.sessionId !== msg.sessionId || activeFrame.frameId !== fromFrameId)) {
+        return { ok: false, error: 'stale_frame', retryable: true, message: '這個框架的選取階段已經變更，請重試' }
+      }
+      if (msg.direction === 'ascend') {
+        if (!activeFrame || activeFrame.frameId !== fromFrameId || !Number.isInteger(activeFrame.parentFrameId)) {
+          return { ok: false, error: 'frame_parent_unknown', retryable: true, message: '找不到這個框架的上一層，請重新進入選取' }
+        }
+        const parentId = activeFrame.parentFrameId
+        const enterParent = {
+          type: MSG.ENTER_PICK,
+          purpose: msg.purpose,
+          taskId: msg.taskId,
+          ...pickIdentityOf(msg),
+          ...(msg.draftRevision !== undefined ? { draftRevision: msg.draftRevision } : {}),
+          ...(activeFrame.parentFrame ? { frame: activeFrame.parentFrame } : {})
+        }
+        try { await sendToFrame(tabId, { type: MSG.EXIT_PICK, ...pickIdentityOf(msg) }, fromFrameId, contentMs, 'Exit child pick frame') } catch {}
+        try {
+          await injectContent(tabId, { frameId: parentId })
+          const entered = await sendToFrame(tabId, enterParent, parentId, contentMs, 'Enter parent pick frame')
+          const expectedGroup = msg.activeGroupKey ?? msg.groupKey
+          if (expectedGroup !== undefined && entered?.activeGroupKey !== expectedGroup) {
+            const err = new Error('active_group_not_confirmed')
+            err.code = 'group_conflict'
+            throw err
+          }
+          rememberPickFrame(tabId, {
+            frameId: parentId,
+            sessionId: msg.sessionId,
+            groupKey: msg.groupKey,
+            ...(activeFrame.parentFrame ? { frame: activeFrame.parentFrame } : {})
+          })
+          return { ok: true, frameId: parentId, activeGroupKey: msg.activeGroupKey ?? msg.groupKey }
+        } catch (err) {
+          try {
+            await injectContent(tabId, { frameId: fromFrameId })
+            await sendToFrame(tabId, { ...enterParent, hint: 'frame_not_found', frameError: 'parent_inject_denied' }, fromFrameId, contentMs, 'Resume child pick frame')
+          } catch {}
+          return { ...pickTransitionError('frame_unavailable'), detail: String(err?.message || err) }
+        }
+      }
       const enter = {
         type: MSG.ENTER_PICK,
         purpose: msg.purpose,
         taskId: msg.taskId,
-        preselect: msg.preselect
+        preselect: msg.preselect,
+        ...pickIdentityOf(msg),
+        ...(msg.frameAnchor ? { frameAnchor: msg.frameAnchor } : {}),
+        ...(msg.draftRevision !== undefined ? { draftRevision: msg.draftRevision } : {})
       }
       // 鑽進 iframe 之後仍是同一輪批次選取
       if (msg.batch === true) enter.batch = true
       // 選取當下沒有目標的 locator 可以驗證，所以只用網址比對；
       // 不是唯一命中就退回原本那一層，硬猜會鑽錯 iframe
-      const matched = matchFrameByUrl(await listFrames(tabId), msg.src)
+      let frames = []
+      try { frames = await listFrames(tabId) } catch {}
+      const matched = matchFrameByUrl(frames, msg.src)
       if (matched?.frameId !== undefined) {
-        await injectContent(tabId, { frameId: matched.frameId })
-        await sendToFrame(tabId, enter, matched.frameId, contentMs, 'Enter pick')
-        return { ok: true }
+        // 舊 frame 先停掉；失敗時會在同一層重新進入並帶明確可重試原因。
+        try { await sendToFrame(tabId, { type: MSG.EXIT_PICK, ...pickIdentityOf(msg) }, fromFrameId, contentMs, 'Exit old pick frame') } catch {}
+        try {
+          await injectContent(tabId, { frameId: matched.frameId })
+          const entered = await sendToFrame(tabId, {
+            ...enter,
+            parentFrameId: fromFrameId,
+            frame: { url: frames.find(f => f.frameId === matched.frameId)?.url || msg.src,
+              ...(msg.frameAnchor ? { anchor: msg.frameAnchor } : {}) }
+          }, matched.frameId, contentMs, 'Enter pick')
+          const expectedGroup = msg.activeGroupKey ?? msg.groupKey
+          if (expectedGroup !== undefined && entered?.activeGroupKey !== expectedGroup) {
+            const err = new Error('active_group_not_confirmed')
+            err.code = 'group_conflict'
+            throw err
+          }
+          rememberPickFrame(tabId, {
+            frameId: matched.frameId,
+            sessionId: msg.sessionId,
+            groupKey: msg.groupKey,
+            parentFrameId: fromFrameId,
+            ...(fromFrameId !== 0 && typeof sender?.url === 'string' ? { parentFrame: { url: sender.url } } : {}),
+            frame: { url: frames.find(f => f.frameId === matched.frameId)?.url || msg.src,
+              ...(msg.frameAnchor ? { anchor: structuredClone(msg.frameAnchor) } : {}) }
+          })
+          return { ok: true, frameId: matched.frameId, frame: frameStateOf(tabId).frame, activeGroupKey: msg.activeGroupKey ?? msg.groupKey }
+        } catch (err) {
+          // 目的 frame 可能拒絕注入（權限／文件剛換）；不退回頂層靜默繼續。
+          rememberPickFrame(tabId, { frameId: fromFrameId, sessionId: msg.sessionId, groupKey: msg.groupKey })
+          try {
+            await injectContent(tabId, { frameId: fromFrameId })
+            await sendToFrame(tabId, { ...enter, hint: 'frame_not_found', frameError: 'inject_denied' }, fromFrameId, contentMs, 'Resume old pick frame')
+          } catch {}
+          return { ...pickTransitionError('frame_unavailable', frames), detail: String(err?.message || err) }
+        }
       }
-      const backTo = sender?.frameId ?? 0
-      await sendToFrame(tabId, { ...enter, hint: 'frame_not_found' }, backTo, contentMs, 'Enter pick')
-      return { ok: true }
+      // 舊 content 只認 frame_not_found；詳細的 ambiguous/unavailable 留在回傳狀態，
+      // 讓既有頁面仍能顯示可重試提示而不誤當成成功。
+      const hint = 'frame_not_found'
+      const transitionHint = matched?.ambiguous ? 'frame_ambiguous' : (frames.length === 0 ? 'frame_unavailable' : hint)
+      const backTo = fromFrameId
+      // 只退回發出要求的那一層，並保留 session／group；絕不猜成 top frame。
+      try {
+        await sendToFrame(tabId, { ...enter, hint, frameError: transitionHint }, backTo, contentMs, 'Resume pick frame')
+      } catch {}
+      return { ...pickTransitionError(transitionHint, matched?.ambiguous || frames), frameId: backTo }
     }
 
     if (msg.type === MSG.ENTER_PICK) {
       if (msg.tabId) {
-        const frameId = msg.frameId ?? 0
+        let frameId = msg.frameId ?? null
+        let frameCandidates = []
+        if (frameId === null && msg.frame?.url) {
+          try { frameCandidates = await listFrames(msg.tabId) } catch {}
+          const matched = matchFrameByUrl(frameCandidates, msg.frame.url)
+          if (matched?.frameId === undefined) {
+            const hint = matched?.ambiguous ? 'frame_ambiguous' : 'frame_unavailable'
+            return pickTransitionError(hint, matched?.ambiguous || frameCandidates)
+          }
+          frameId = matched.frameId
+        }
+        if (frameId === null) frameId = 0
         // popup 的「選取要抓的內容」走這裡：面板已由 popup 自己開好，
         // 但沒有表單時要先顯示等待態（同右鍵入口），否則面板是一張空白表單
         const batch = msg.batch === true
         // popup 送完就關視窗：被擋時一定要把說明留在面板上，不能只回 ok:false（靜默無事）
         if (msg.purpose === 'task' && !(await applyPickEntry(msg.tabId, batch))) return { ok: false }
+        const previousFrame = frameStateOf(msg.tabId)
+        if (previousFrame && previousFrame.frameId !== frameId) {
+          try { await sendToFrame(msg.tabId, { type: MSG.EXIT_PICK, ...pickIdentityOf(msg) }, previousFrame.frameId, contentMs, 'Exit old pick frame') } catch {}
+        }
         await injectContent(msg.tabId, { frameId })
         const known = msg.taskId ? await getTask(msg.taskId) : null
         const enter = {
@@ -781,9 +1138,18 @@ export async function handleMessage(msg, sender, runOpts = {}) {
           locator: msg.locator || known?.locator,
           preselect: msg.preselect || preselectOf(known)
         }
+        Object.assign(enter, pickIdentityOf(msg))
+        if (msg.frameAnchor) enter.frameAnchor = msg.frameAnchor
         if (batch) enter.batch = true
         await sendToFrame(msg.tabId, enter, frameId, contentMs, 'Enter pick')
-        return { ok: true }
+        const frameUrl = frameCandidates.find(f => f.frameId === frameId)?.url || msg.frame?.url
+        rememberPickFrame(msg.tabId, {
+          frameId,
+          sessionId: msg.sessionId,
+          groupKey: msg.groupKey,
+          ...(frameUrl ? { frame: { url: frameUrl, ...(msg.frameAnchor ? { anchor: structuredClone(msg.frameAnchor) } : {}) } } : {})
+        })
+        return { ok: true, frameId, activeGroupKey: msg.activeGroupKey ?? msg.groupKey }
       }
 
       const task = await getTask(msg.taskId)
@@ -950,6 +1316,7 @@ export async function closePanelFor(tabId, opts = {}) {
   const pending = await getPanelCtx(tabId)
   await clearPanelCtx(tabId)
   if (opts.keepMarks) {
+    forgetPickFrame(tabId)
     exitedPickTabs.delete(tabId)
     if (opts.clearDraft) {
       try { await clearPickDraftForTab(tabId) } catch (err) {
@@ -959,6 +1326,7 @@ export async function closePanelFor(tabId, opts = {}) {
     return pauseError ? { ok: false, error: String(pauseError?.message || pauseError) } : { ok: true }
   }
   if (!pending && exitedPickTabs.has(tabId)) {
+    forgetPickFrame(tabId)
     if (opts.clearDraft) {
       try { await clearPickDraftForTab(tabId) } catch (err) {
         try { await diag.log('pick_draft_clear_failed', { tabId, message: String(err?.message || err) }) } catch {}
@@ -981,6 +1349,7 @@ export async function closePanelFor(tabId, opts = {}) {
     try { await sendToFrame(tabId, { type: MSG.EXIT_PICK }, frameId, opts.contentTimeoutMs ?? CONTENT_MESSAGE_TIMEOUT_MS, 'Exit pick') } catch {}
   }
   exitedPickTabs.add(tabId)
+  forgetPickFrame(tabId)
   if (opts.clearDraft) {
     try { await clearPickDraftForTab(tabId) } catch (err) {
       try { await diag.log('pick_draft_clear_failed', { tabId, message: String(err?.message || err) }) } catch {}

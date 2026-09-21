@@ -492,14 +492,21 @@ function route(msg, sendResponse) {
     enterPickMode({
       purpose: msg.purpose,
       taskId: msg.taskId,
+      sessionId: msg.sessionId,
+      groupKey: msg.groupKey,
+      activeGroupKey: msg.activeGroupKey,
+      frame: msg.frame,
+      draftRevision: msg.draftRevision,
+      parentFrameId: msg.parentFrameId,
       initialTarget: target,
       preselect: msg.preselect,
       // 下鑽失敗被退回來時 background 會帶 hint，面板要讓使用者知道為什麼還在原地
       hint: msg.hint,
+      frameError: msg.frameError,
       // 右鍵「一次建立多個任務」：每個不同的目標自成一組（picker-mode 只認字面 true）
       ...(msg.batch === true ? { batch: true } : {})
     })
-    sendResponse({ ok: true })
+    sendResponse({ ok: true, activeGroupKey: msg.activeGroupKey ?? msg.groupKey, frame: msg.frame })
     return true
   }
 
