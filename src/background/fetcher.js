@@ -513,6 +513,21 @@ function multiFailureResult(task, status, error) {
   return { ok: false, error: status, message: error, fields }
 }
 
+// 失敗診斷只保留可辨識來源所需的資訊。frame URL 的 query/hash 可能含 token，
+// 因此只記 origin + pathname；locator 本身仍由規格／紀錄索引提供，不把它整包倒進 diag。
+function sourceDiagLabel(field) {
+  const frameUrl = field?.source?.frame?.url
+  if (typeof frameUrl === 'string' && frameUrl.trim() !== '') {
+    try {
+      const url = new URL(frameUrl)
+      return `${url.origin}${url.pathname}`
+    } catch {
+      return '嵌入框架'
+    }
+  }
+  return '主文件'
+}
+
 // 執行任務的主要入口函式
 export async function runTask(task, opts = {}) {
   const {
@@ -537,6 +552,19 @@ export async function runTask(task, opts = {}) {
   } = opts
   const isManual = reason === 'manual'
   const isMulti = task?.mode === 'multi' || task?.spec?.mode === 'multi'
+  const multiSources = isMulti ? normalizeTaskSources(task) : null
+
+  // multi 沒有任何宣告值是設定錯誤，不應為了最後才發現空欄位而開分頁、登入或
+  // 寫入一筆看似抓取失敗的父紀錄。立即測試仍回傳可供 UI 顯示的明確結果，正式
+  // 執行則維持「不寫紀錄、不動帳本」的拒絕語意。
+  if (isMulti && multiSources.length === 0) {
+    return {
+      ok: false,
+      error: 'invalid_multi',
+      message: '多來源任務沒有可執行欄位',
+      fields: {}
+    }
+  }
 
   let extraDelayMs
   if (opts.extraDelayMs !== undefined) {
@@ -857,13 +885,22 @@ export async function runTask(task, opts = {}) {
           // AF-22 E1：每個來源都是獨立的定位／注入／擷取單位；共用前置動作已在上方只執行一次。
           // 來源失敗只填自己的 field，不能退回 task.locator 或用第一個來源的結果遮住其他值。
           const fields = {}
-          const sourceFields = normalizeTaskSources(task)
+          const sourceFields = multiSources
           let retryWholeTask = false
+          let deadlineFailure = null
           for (const field of sourceFields) {
             const key = field?.key
             let fieldRes = null
             let fieldLoc = null
             let fieldLiveErr = null
+            if (deadlineFailure) {
+              fields[key || `field-${Object.keys(fields).length}`] = {
+                ok: false,
+                error: 'error',
+                message: deadlineFailure.message || DEADLINE_MESSAGE
+              }
+              continue
+            }
             if (typeof key !== 'string' || key.length === 0 || !field?.source?.locator) {
               fields[key || `field-${Object.keys(fields).length}`] = {
                 ok: false, error: 'invalid_source', message: '多來源欄位缺少有效來源'
@@ -871,37 +908,45 @@ export async function runTask(task, opts = {}) {
               continue
             }
             const maxFieldAttempts = 1 + reviveDelaysMs.length
-            for (let a = 0; a < maxFieldAttempts; a++) {
-              if (a > 0) await pause(reviveDelaysMs[a - 1])
-              checkDeadline()
-              fieldLoc = await locate(field.source.frame, field.source.locator, opts.frameTimeoutMs ?? 20000)
-              loc = fieldLoc
-              if (!frameFound(fieldLoc)) {
-                fieldRes = { ok: false, error: 'frame_not_found', message: '找不到目標所在的框架' }
-                break
-              }
-              try {
-                await injectContent(tabId, { frameId: fieldLoc.frameId })
-                try {
-                  await send({ type: MSG.SCROLL_INTO_VIEW, locator: field.source.locator }, fieldLoc.frameId, scrollTimeoutMs, 'Scroll')
-                } catch (err) {
-                  if (!err?.afTimeout || err.afDeadline) throw err
-                }
-                const extractMsg = { type: MSG.EXTRACT, locator: field.source.locator, spec: field.spec }
-                if ((task.notFoundStreak || 0) >= 1) extractMsg.settleMs = 0
-                fieldRes = await send(extractMsg, fieldLoc.frameId, extractTimeoutMs, 'Extract')
-                fieldLiveErr = null
-                break
-              } catch (err) {
-                if (err?.afDeadline) throw err
-                // 一個 field 的 message timeout 不應中斷同批其他來源；文件通訊錯誤則在本 field 內有界重試。
-                if (err?.afTimeout) {
-                  fieldRes = { ok: false, error: 'timeout', message: String(err?.message || '擷取逾時') }
-                  fieldLiveErr = null
+            try {
+              for (let a = 0; a < maxFieldAttempts; a++) {
+                if (a > 0) await pause(reviveDelaysMs[a - 1])
+                checkDeadline()
+                fieldLoc = await locate(field.source.frame, field.source.locator, opts.frameTimeoutMs ?? 20000)
+                loc = fieldLoc
+                if (!frameFound(fieldLoc)) {
+                  fieldRes = { ok: false, error: 'frame_not_found', message: '找不到目標所在的框架' }
                   break
                 }
-                fieldLiveErr = err
+                try {
+                  await injectContent(tabId, { frameId: fieldLoc.frameId })
+                  try {
+                    await send({ type: MSG.SCROLL_INTO_VIEW, locator: field.source.locator }, fieldLoc.frameId, scrollTimeoutMs, 'Scroll')
+                  } catch (err) {
+                    if (!err?.afTimeout || err.afDeadline) throw err
+                  }
+                  const extractMsg = { type: MSG.EXTRACT, locator: field.source.locator, spec: field.spec }
+                  if ((task.notFoundStreak || 0) >= 1) extractMsg.settleMs = 0
+                  fieldRes = await send(extractMsg, fieldLoc.frameId, extractTimeoutMs, 'Extract')
+                  fieldLiveErr = null
+                  break
+                } catch (err) {
+                  if (err?.afDeadline) throw err
+                  // 一個 field 的 message timeout 不應中斷同批其他來源；文件通訊錯誤則在本 field 內有界重試。
+                  if (err?.afTimeout) {
+                    fieldRes = { ok: false, error: 'timeout', message: String(err?.message || '擷取逾時') }
+                    fieldLiveErr = null
+                    break
+                  }
+                  fieldLiveErr = err
+                }
               }
+            } catch (err) {
+              // 共享 deadline 到期時保留前面已完成的 field，並把本欄與尚未處理
+              // 的欄位補成同一個可判別結果；不可落到外層 all-failure，否則成功值會被覆寫。
+              if (!err?.afDeadline) throw err
+              deadlineFailure = err
+              fieldRes = { ok: false, error: 'error', message: String(err.message || DEADLINE_MESSAGE) }
             }
             if (!fieldRes) {
               const raw = String(fieldLiveErr?.message || fieldLiveErr || '擷取失敗')
@@ -1094,7 +1139,12 @@ export async function runTask(task, opts = {}) {
             // 診斷頁是用字串串接顯示；環形緩衝只有 500 筆，全成功就不占位子（否則會把看門狗紀錄擠掉）
             const failedNames = records
               .filter(r => !isSuccess(r))
-              .map(r => buildSeriesIndex([task]).byId[r.taskId]?.shortName || r.taskId)
+              .map(r => {
+                const key = r.taskId.slice(`${task.id}#`.length)
+                const field = multiSources.find(one => one?.key === key)
+                const name = buildSeriesIndex([task]).byId[r.taskId]?.shortName || r.taskId
+                return `${name}（${sourceDiagLabel(field)}）`
+              })
             if (failedNames.length > 0) {
               await diag.log('fetch_fields', `「${task.name}」${records.length} 個值，失敗 ${failedNames.length}：${failedNames.join('、')}`)
             }
