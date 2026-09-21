@@ -38,6 +38,20 @@ import { testLogin } from './login.js'
 import { decryptSecret } from '../shared/crypto.js'
 import { isSuccess, statusTextOf } from '../shared/record-status.js'
 import { parentIdOf, buildSeriesIndex, nameOf, seriesIdOf } from '../shared/series-index.js'
+import {
+  beginPickDraft,
+  readPickDraftMessage,
+  handlePickDraftOperation,
+  completePickDraft,
+  abandonPickDraft,
+  pausePickDraft,
+  clearPickDraftForTab,
+  protocolErrorResponse
+} from '../shared/pick-protocol.js'
+
+// 面板 ctx 可能尚未寫入就收到 pagehide；用短命記號避免無 ctx 時重複清場，
+// 同時讓新一輪開啟能再次廣播 EXIT_PICK。
+const exitedPickTabs = new Set()
 
 
 // 重選時把選好的值寫回任務：沒動的值保留原本的 key 與名稱（紀錄靠 key），新值配新 key。
@@ -524,6 +538,24 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       return { ok: false, error: 'forbidden' }
     }
 
+    // C1b：草稿訊息只由 extension page 送出，所有變更都在 pick-protocol
+    // 的 session 鎖內完成。這條路與舊 PICKED／repick 路徑分開，保留舊單任務相容性。
+    if (msg.type === MSG.PICK_DRAFT_BEGIN) return await beginPickDraft(msg, sender)
+    if (msg.type === MSG.PICK_DRAFT_READ) return await readPickDraftMessage(msg, sender)
+    if (msg.type === MSG.PICK_DRAFT_OPERATION) return await handlePickDraftOperation(msg, sender)
+    if (msg.type === MSG.PICK_DRAFT_COMPLETE) return await completePickDraft(msg, sender)
+    if (msg.type === MSG.PICK_DRAFT_ABANDON || msg.type === MSG.PICK_DRAFT_FINALIZE) {
+      return await abandonPickDraft(msg, sender)
+    }
+    if (msg.type === MSG.PICK_DRAFT_PAUSE) {
+      const tabId = Number.isInteger(sender?.tab?.id) ? sender.tab.id : msg.tabId
+      if (msg.operationId !== undefined || msg.expectedRevision !== undefined || msg.operation) {
+        return await handlePickDraftOperation({ ...msg, operation: msg.operation || { type: 'pause' } }, sender)
+      }
+      const draft = await pausePickDraft(tabId)
+      return { ok: true, paused: Boolean(draft), draft }
+    }
+
     if (msg.type === MSG.TEST_TASK) {
       const task = msg.task
       if (!task || typeof task !== 'object' || !task.url || !task.locator || !task.spec) {
@@ -825,6 +857,8 @@ export async function handleMessage(msg, sender, runOpts = {}) {
 
     return undefined
   } catch (err) {
+    const protocolError = protocolErrorResponse(err)
+    if (protocolError) return protocolError
     // 背景出錯不得靜默：UI 等結果的按鈕要拿得到 ok:false 與原因
     const message = String(err?.message || err)
     try { await diag.log('message_error', `${msg?.type}：${message}`) } catch {}
@@ -899,11 +933,39 @@ async function closeRepickTab(taskId) {
  */
 export async function closePanelFor(tabId, opts = {}) {
   if (tabId === undefined || tabId === null) return
+  // AF-22 D02/C1b：關閉面板只暫停本輪選取，session 草稿留給 side panel
+  // 或 fallback 視窗恢復；分頁真正關閉時才由 onRemoved 明確清除。
+  let pauseError = null
+  try { await pausePickDraft(tabId) } catch (err) {
+    pauseError = err
+    const protocolError = protocolErrorResponse(err)
+    try {
+      await diag.log('pick_draft_pause_failed', {
+        tabId, error: protocolError?.error || 'storage', message: String(err?.message || err)
+      })
+    } catch {}
+  }
   // 三條通道會重複觸發（onClosed + 分頁關閉…），暫存還在才代表「這一輪還沒清過」。
   // 不擋的話每次都對頁面廣播一輪 EXIT_PICK，白花訊息也可能清到下一輪剛貼上的標示
   const pending = await getPanelCtx(tabId)
   await clearPanelCtx(tabId)
-  if (opts.keepMarks || !pending) return
+  if (opts.keepMarks) {
+    exitedPickTabs.delete(tabId)
+    if (opts.clearDraft) {
+      try { await clearPickDraftForTab(tabId) } catch (err) {
+        try { await diag.log('pick_draft_clear_failed', { tabId, message: String(err?.message || err) }) } catch {}
+      }
+    }
+    return pauseError ? { ok: false, error: String(pauseError?.message || pauseError) } : { ok: true }
+  }
+  if (!pending && exitedPickTabs.has(tabId)) {
+    if (opts.clearDraft) {
+      try { await clearPickDraftForTab(tabId) } catch (err) {
+        try { await diag.log('pick_draft_clear_failed', { tabId, message: String(err?.message || err) }) } catch {}
+      }
+    }
+    return pauseError ? { ok: false, error: String(pauseError?.message || pauseError) } : { ok: true, alreadyClosed: true }
+  }
   // 「面板關掉了、頁面上的標示也清了」要留痕跡：使用者回報「藍框自己不見了」時，
   // 診斷區看得到是哪一次清場、當時面板停在哪個狀態
   await diag.log('panel_closed', { tabId, kind: pending?.kind })
@@ -918,6 +980,13 @@ export async function closePanelFor(tabId, opts = {}) {
   for (const frameId of targets) {
     try { await sendToFrame(tabId, { type: MSG.EXIT_PICK }, frameId, opts.contentTimeoutMs ?? CONTENT_MESSAGE_TIMEOUT_MS, 'Exit pick') } catch {}
   }
+  exitedPickTabs.add(tabId)
+  if (opts.clearDraft) {
+    try { await clearPickDraftForTab(tabId) } catch (err) {
+      try { await diag.log('pick_draft_clear_failed', { tabId, message: String(err?.message || err) }) } catch {}
+    }
+  }
+  return pauseError ? { ok: false, error: String(pauseError?.message || pauseError) } : { ok: true }
 }
 
 // 處理右鍵選單點擊事件
@@ -940,6 +1009,7 @@ export async function handleContextMenu(info, tab) {
 
     if (info.menuItemId === 'af-site-login') {
       if (!tab?.id) return
+      exitedPickTabs.delete(tab.id)
       let origin = ''
       try {
         origin = tab.url ? new URL(tab.url).origin : ''
@@ -956,6 +1026,7 @@ export async function handleContextMenu(info, tab) {
 
     if (info.menuItemId === 'af-pick') {
       if (!tab?.id) return
+      exitedPickTabs.delete(tab.id)
       const frameId = info.frameId ?? 0
       // 面板先開起來顯示「正在頁面上選取…」，使用者才知道東西在哪裡、也才有地方可以取消。
       // **`open` 要排在最前面**：手勢跨越非同步等待有失效風險
@@ -970,6 +1041,7 @@ export async function handleContextMenu(info, tab) {
 
     if (info.menuItemId === 'af-pick-batch') {
       if (!tab?.id) return
+      exitedPickTabs.delete(tab.id)
       const frameId = info.frameId ?? 0
       // 手勢規則同 af-pick：`open` 必須是第一個 await
       await openPanel(tab.id, 'picker', `tabId=${tab.id}`)
@@ -1005,7 +1077,7 @@ chrome.contextMenus.onClicked.addListener(handleContextMenu)
 if (chrome.sidePanel?.onClosed?.addListener) {
   chrome.sidePanel.onClosed.addListener((info) => { closePanelFor(info?.tabId) })
 }
-chrome.tabs?.onRemoved?.addListener?.((tabId) => { closePanelFor(tabId, { keepMarks: true }) })
+chrome.tabs?.onRemoved?.addListener?.((tabId) => { closePanelFor(tabId, { keepMarks: true, clearDraft: true }) })
 
 // worker 每次啟動（不只瀏覽器啟動）：上一個 worker 留下的抓取分頁與排隊中／執行中的排程槽。
 // storage 是空的時候兩者都只讀不寫

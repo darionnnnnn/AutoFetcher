@@ -10,6 +10,7 @@ import {
   mutateSessionValue,
   REMOVE_SESSION_VALUE
 } from './storage.js'
+import { withLock, lockNameOf } from './lock.js'
 
 export const PICK_DRAFT_VERSION = 1
 export const MAX_PICK_DRAFT_GROUPS = 20
@@ -29,8 +30,9 @@ const STAGES = new Set([
 ])
 const DRAFT_KEYS = new Set([
   'sessionId', 'version', 'revision', 'tabId', 'documentGeneration', 'routeIdentity',
+  'documentIdentity', 'frame',
   'groups', 'activeGroupKey', 'stage', 'form', 'preActions', 'saveStates',
-  'operationId', 'paused', 'createdAt', 'updatedAt'
+  'operationId', 'appliedOperationIds', 'paused', 'createdAt', 'updatedAt'
 ])
 const GROUP_KEYS = new Set(['key', 'name', 'values', 'saveState', 'taskId', 'error'])
 const VALUE_KEYS = new Set([
@@ -178,6 +180,12 @@ export function normalizePickDraft(input) {
   if (!Number.isInteger(result.tabId) || result.tabId < 0) fail('tabId 必須是非負整數')
   result.documentGeneration = identityValue(result.documentGeneration, 'documentGeneration')
   result.routeIdentity = identityValue(result.routeIdentity, 'routeIdentity')
+  if (result.documentIdentity !== undefined) result.documentIdentity = cloneJson(result.documentIdentity, 'documentIdentity')
+  if (result.frame !== undefined) result.frame = cloneJson(result.frame, 'frame')
+  if (result.appliedOperationIds !== undefined) {
+    if (!Array.isArray(result.appliedOperationIds)) fail('appliedOperationIds 必須是陣列')
+    result.appliedOperationIds = result.appliedOperationIds.map((id, i) => stringField(id, `appliedOperationIds[${i}]`))
+  }
   if (!Array.isArray(result.groups)) fail('groups 必須是陣列')
   if (result.groups.length > MAX_PICK_DRAFT_GROUPS) fail(`最多 ${MAX_PICK_DRAFT_GROUPS} 組`)
   result.groups = result.groups.map(normalizeGroup)
@@ -249,6 +257,8 @@ export function isCurrentPickDraft(draft, identity = {}) {
   if (identity.revision !== undefined && value.revision !== identity.revision) return false
   if (identity.documentGeneration !== undefined && stableJson(value.documentGeneration) !== stableJson(identity.documentGeneration)) return false
   if (identity.routeIdentity !== undefined && stableJson(value.routeIdentity) !== stableJson(identity.routeIdentity)) return false
+  if (identity.documentIdentity !== undefined && stableJson(value.documentIdentity) !== stableJson(identity.documentIdentity)) return false
+  if (identity.frame !== undefined && stableJson(value.frame) !== stableJson(identity.frame)) return false
   return true
 }
 
@@ -268,6 +278,8 @@ function assertExpected(current, tabId, options = {}) {
   if (options.revision !== undefined && current.revision !== options.revision) conflict('revision 不符')
   if (options.documentGeneration !== undefined && stableJson(current.documentGeneration) !== stableJson(options.documentGeneration)) conflict('文件世代不符')
   if (options.routeIdentity !== undefined && stableJson(current.routeIdentity) !== stableJson(options.routeIdentity)) conflict('route identity 不符')
+  if (options.documentIdentity !== undefined && stableJson(current.documentIdentity) !== stableJson(options.documentIdentity)) conflict('文件身分不符')
+  if (options.frame !== undefined && stableJson(current.frame) !== stableJson(options.frame)) conflict('frame 身分不符')
 }
 
 // 所有 session 寫入都先經同一份序列化大小守門；實際仍存 JSON-safe 物件，
@@ -300,6 +312,17 @@ export async function savePickDraft(tabId, input, options = {}) {
   return updateSessionValue(key, (current) => current, (current) => {
     if (current !== undefined) {
       const existing = typeof current === 'string' ? deserializePickDraft(current) : normalizePickDraft(current)
+      // 身分守門必須先於去重；否則舊 session 可冒用已見 operationId。
+      const identityOptions = { ...options }
+      delete identityOptions.revision
+      delete identityOptions.allowDuplicateOperationId
+      assertExpected(existing, tabId, identityOptions)
+      // 可重送操作的去重只略過 revision 守門：同一 operationId 重送時
+      // current revision 已經前進，仍應回原結果而不是被誤報為過期。
+      if (options.allowDuplicateOperationId &&
+        Array.isArray(existing.appliedOperationIds) && existing.appliedOperationIds.includes(options.allowDuplicateOperationId)) {
+        return existing
+      }
       assertExpected(existing, tabId, options)
       if (existing.sessionId === draft.sessionId) {
         if (draft.revision < existing.revision) conflict('revision 太舊')
@@ -321,6 +344,16 @@ export async function updatePickDraft(tabId, patchOrMutator, options = {}) {
   return updateSessionValue(key, (current) => current, (current) => {
     if (current === undefined || current === null) conflict('找不到草稿')
     const existing = typeof current === 'string' ? deserializePickDraft(current) : normalizePickDraft(current)
+    // 身分守門先做，再判斷 operationId。重送時草稿可能已前進，
+    // 但同一操作仍必須回原稿 ACK，而不是被誤判為舊 revision。
+    const identityOptions = { ...options }
+    delete identityOptions.revision
+    delete identityOptions.allowDuplicateOperationId
+    assertExpected(existing, tabId, identityOptions)
+    if (options.allowDuplicateOperationId &&
+      Array.isArray(existing.appliedOperationIds) && existing.appliedOperationIds.includes(options.allowDuplicateOperationId)) {
+      return existing
+    }
     assertExpected(existing, tabId, options)
     let next
     if (typeof patchOrMutator === 'function') {
@@ -352,6 +385,24 @@ export async function clearPickDraft(tabId, identity = {}) {
     return
   }
   await clearSessionValue(key)
+}
+
+/**
+ * 在指定草稿鍵的 session lock 內讀取並執行唯讀操作。
+ * 用於完成屏障等必須把最後 revision 檢查與 snapshot 取得綁在一起的流程；
+ * callback 的回傳值不會寫回 storage。
+ */
+export async function withPickDraftLock(tabId, callback) {
+  const key = tabKey(tabId)
+  if (typeof callback !== 'function') throw new TypeError('草稿 lock callback 必須是函式')
+  return withLock(lockNameOf(key, 'session'), async () => {
+    // getSessionValue 本身不取鎖；這裡已持有同一把 key lock，
+    // 因此可以把讀取與 callback 的 revision 檢查維持在同一臨界區。
+    const stored = await getSessionValue(key)
+    if (stored === undefined || stored === null) return callback(null)
+    const draft = typeof stored === 'string' ? deserializePickDraft(stored) : normalizePickDraft(stored)
+    return callback(draft)
+  })
 }
 
 export const putPickDraft = savePickDraft

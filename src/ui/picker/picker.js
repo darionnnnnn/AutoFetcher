@@ -3610,8 +3610,9 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
 
   const search = typeof window !== 'undefined' ? window.location?.search : ''
   const params = new URLSearchParams(search || '')
-  // side panel：沒有網址參數可用，改由 session 的 ctx 決定畫面
-  if (!params.has('taskId') && !params.has('ctx') && globalThis.chrome?.sidePanel) {
+  // side panel：沒有網址參數可用，改由 session 的 ctx 決定畫面。
+  // fallback popup 會帶 tabId；它同樣向 background 取 protocol draft，不能另開一份本地草稿。
+  if (!params.has('taskId') && !params.has('ctx') && (globalThis.chrome?.sidePanel || params.has('tabId'))) {
     // 退路的彈出視窗不是面板：它的作用分頁是它自己，解析不到目標分頁。
     // 開它的人會在網址上寫明「你服務的是哪個分頁」
     const forcedTab = params.has('tabId') ? Number(params.get('tabId')) : null
@@ -3621,7 +3622,19 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
       const changed = tabId !== panelTabId
       panelTabId = tabId
       const ctx = await getPanelCtx(tabId)
-      if (changed || ctx) await renderFromPanelCtx(ctx)
+      let protocolDraft = null
+      try {
+        const response = await chrome.runtime.sendMessage({ type: MSG.PICK_DRAFT_READ, tabId })
+        protocolDraft = response?.draft || null
+      } catch {}
+      // 舊 ctx 仍保留目標／批次形狀；表單內容以安全協定草稿為準。
+      // 沒有 ctx 時也先建立可恢復的空目標畫面，使用者仍可回頁面重新選目標。
+      const merged = protocolDraft
+        ? (ctx
+            ? { ...ctx, draft: { ...(ctx.draft || {}), ...(protocolDraft.form || {}) } }
+            : { kind: 'new', ctx: { tabId }, draft: protocolDraft.form || {} })
+        : ctx
+      if (changed || merged) await renderFromPanelCtx(merged)
     }
     // 載入當下就解析會拿到切換前的舊分頁；轉為可見時再解析才正確，
     // 而且每次轉為可見都重解析一次（自癒）
@@ -4299,4 +4312,3 @@ async function handleBulkSave() {
     busySave()
   }
 }
-
