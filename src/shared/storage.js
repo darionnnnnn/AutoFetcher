@@ -2,6 +2,7 @@
 import { pruneCardsForTask } from './layout-store.js'
 import { encryptSecret } from './crypto.js'
 import { parentIdOf, SERIES_SEP } from './series-index.js'
+import { validateMultiTask, normalizeTaskSources } from './task-source.js'
 import { withLock, lockNameOf } from './lock.js'
 import { isSuccess, isWarn, isRed } from './record-status.js'
 
@@ -148,7 +149,10 @@ async function forEachBatch(keys, onBatch) {
   }
 }
 
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
+
+// 供設定匯入與其他共用讀取端使用；正規化本身是純函式，不會改寫 storage。
+export { normalizeTaskSources }
 
 // ---- 讀-改-寫的唯一一份（AF-21 批次 1）----
 // 規則：對某鍵的 set／remove 一律在 lockNameOf(那個鍵) 的鎖內，讀也在同一次持有內；
@@ -347,6 +351,19 @@ export function validateTask(task, index, { keptUrl } = {}) {
     const err = new Error(`任務 id 不得包含保留字元 ${SERIES_SEP}`)
     err.index = index
     throw err
+  }
+
+  // AF-22 新契約採 task.mode/spec.mode = multi；舊單值與舊 block fields
+  // 仍沿用下面的寬鬆相容驗證，不會因讀取而被改寫。
+  if (task.mode === 'multi' || task.spec?.mode === 'multi') {
+    try {
+      validateMultiTask(task)
+    } catch (cause) {
+      const err = new Error(cause?.message || 'multi 任務格式錯誤')
+      err.index = index
+      throw err
+    }
+    return
   }
 
   if (Array.isArray(task.fields)) {
@@ -1341,4 +1358,3 @@ export function subscribe(handler, opts = {}) {
     subscribers.delete(handler)
   }
 }
-

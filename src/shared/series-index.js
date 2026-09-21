@@ -5,6 +5,7 @@
 // 排程 alarm、執行帳本、health、missed 一律用父任務 id。
 //
 // 組合與拆解只有這一份，其他模組不得自行字串處理。
+import { normalizeTaskSources } from './task-source.js'
 
 // 分隔字元（保留字元，task.id 與 field key 都不得包含它）
 export const SERIES_SEP = '#'
@@ -64,6 +65,11 @@ export function buildSeriesIndex(tasks) {
     }
 
     const hasFields = Array.isArray(task.fields) && task.fields.length > 0
+    const normalizedByKey = new Map(
+      normalizeTaskSources(task)
+        .filter(field => typeof field?.key === 'string' && field.key !== '')
+        .map(field => [field.key, field])
+    )
     const children = []
     parents[task.id] = task
 
@@ -75,13 +81,17 @@ export function buildSeriesIndex(tasks) {
         const sid = seriesIdOf(task.id, field.key)
         const fieldName = typeof field.name === 'string' ? field.name : ''
         const taskName = typeof task.name === 'string' ? task.name : ''
+        // 新 multi 的型別由唯一的 task-source 正規化契約提供；舊單值／舊
+        // block fields 仍回傳 task.mode，確保既有 id/name/mode byte-compatible。
+        const normalized = normalizedByKey.get(field.key)
+        const fieldMode = typeof normalized?.mode === 'string' ? normalized.mode : task.mode
         byId[sid] = {
           id: sid,
           parentId: task.id,
           name: `${taskName} · ${fieldName}`,
           shortName: fieldName,
           fieldKey: field.key,
-          mode: task.mode
+          mode: fieldMode
         }
         seriesIds.push(sid)
         children.push(sid)
