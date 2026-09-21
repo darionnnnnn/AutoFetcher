@@ -167,13 +167,55 @@ test('D1a 頁面取名只回填名稱，不送 PICKED／ENTER_PICK；空文字�
   const request = chromeMock.__calls.find(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICK_GROUP_NAME')
   assert.ok(request)
   assert.equal(request.args[0].groupKey, 'g1')
-  await picker.consumeGroupNameResult({ type: 'PICK_GROUP_NAME_RESULT', sessionId: value.sessionId, groupKey: 'g1', text: '頁面標題' })
+  assert.ok(request.args[0].requestId)
+  await picker.consumeGroupNameResult({
+    type: 'PICK_GROUP_NAME_RESULT', requestId: request.args[0].requestId,
+    sessionId: value.sessionId, groupKey: 'g1',
+    documentGeneration: value.documentGeneration, routeIdentity: value.routeIdentity,
+    text: '頁面標題'
+  })
   assert.equal(doc.getElementById('group-name').value, '頁面標題')
-  await picker.consumeGroupNameResult({ type: 'PICK_GROUP_NAME_RESULT', sessionId: value.sessionId, groupKey: 'g1', text: '   ' })
+  await picker.consumeGroupNameResult({
+    type: 'PICK_GROUP_NAME_RESULT', requestId: request.args[0].requestId,
+    sessionId: value.sessionId, groupKey: 'g1',
+    documentGeneration: value.documentGeneration, routeIdentity: value.routeIdentity,
+    text: '   '
+  })
   assert.equal(doc.getElementById('group-name').value, '頁面標題')
   const messages = chromeMock.__calls.filter(call => call.api === 'runtime.sendMessage').map(call => call.args[0])
   assert.equal(messages.some(message => message.type === 'PICKED'), false)
   assert.equal(messages.some(message => message.type === 'ENTER_PICK'), false)
+})
+
+test('D1b 取名結果需吻合 requestId 與文件身分；舊結果不覆蓋名稱', async () => {
+  const { picker, doc, chromeMock } = await fresh()
+  const value = draft({ groups: [{ key: 'g1', name: '原名', values: [] }], activeGroupKey: 'g1', stage: 'naming' })
+  picker.setPickDraftContext(value)
+  picker.renderPickDraft(value)
+  await doc.getElementById('group-name-from-page').click()
+  const request = chromeMock.__calls.find(call => call.args[0]?.type === 'PICK_GROUP_NAME')?.args[0]
+  assert.ok(request?.requestId)
+  const stale = await picker.consumeGroupNameResult({
+    type: 'PICK_GROUP_NAME_RESULT', requestId: 'old-request', sessionId: value.sessionId,
+    groupKey: 'g1', documentGeneration: value.documentGeneration, routeIdentity: value.routeIdentity,
+    text: '不應套用'
+  })
+  assert.equal(stale, false)
+  assert.equal(doc.getElementById('group-name').value, '原名')
+  const staleDocument = await picker.consumeGroupNameResult({
+    type: 'PICK_GROUP_NAME_RESULT', requestId: request.requestId, sessionId: value.sessionId,
+    groupKey: 'g1', documentGeneration: 'new-document', routeIdentity: value.routeIdentity,
+    text: '也不應套用'
+  })
+  assert.equal(staleDocument, false)
+  assert.equal(doc.getElementById('group-name').value, '原名')
+  const accepted = await picker.consumeGroupNameResult({
+    type: 'PICK_GROUP_NAME_RESULT', requestId: request.requestId, sessionId: value.sessionId,
+    groupKey: 'g1', documentGeneration: value.documentGeneration, routeIdentity: value.routeIdentity,
+    text: '新名稱'
+  })
+  assert.equal(accepted, true)
+  assert.equal(doc.getElementById('group-name').value, '新名稱')
 })
 
 test('D1a 同名保留來源與穩定 key，20 組後新增按鈕停用；輸入框重畫保留焦點與文字', async () => {
@@ -213,6 +255,19 @@ test('D1a input 的 Ctrl+Z/Delete/Ctrl+A 留給欄位，不觸發完成操作', 
   assert.equal(chromeMock.__calls.some(call => call.args[0]?.type === 'PICK_DRAFT_COMPLETE'), false)
 })
 
+test('D1b Ctrl/Cmd+Enter 才能從側欄完成；命名輸入欄快捷鍵留給欄位', async () => {
+  const { chromeMock, picker, doc } = await fresh()
+  const value = draft({ groups: [{ key: 'g1', name: '同名', values: [{ key: 'v1', name: '值' }] }], activeGroupKey: 'g1', stage: 'selecting' })
+  picker.setPickDraftContext(value)
+  picker.renderPickDraft(value)
+  const input = doc.getElementById('group-name')
+  input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }))
+  assert.equal(chromeMock.__calls.some(call => call.args[0]?.type === 'PICK_DRAFT_COMPLETE'), false)
+  doc.body.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true }))
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(chromeMock.__calls.some(call => call.args[0]?.type === 'PICK_DRAFT_COMPLETE'), true)
+})
+
 test('D1a session write failure 不顯示成功，保留可重試名稱', async () => {
   const { chromeMock, picker, doc } = await fresh()
   const value = draft({ groups: [{ key: 'g1', name: '', values: [] }], activeGroupKey: 'g1', stage: 'naming' })
@@ -230,6 +285,43 @@ test('D1a session write failure 不顯示成功，保留可重試名稱', async 
   assert.equal(doc.getElementById('group-name').value, '保留這個字')
   assert.match(doc.getElementById('group-draft-status').textContent, /session full|同步失敗/)
   assert.equal(chromeMock.__calls.some(call => call.args[0]?.type === 'ENTER_PICK'), false)
+})
+
+test('D1b Undo 只在移除 ACK 成功後出現；失敗不留下可誤套的 inverse', async () => {
+  const { chromeMock, picker, doc } = await fresh()
+  let current = draft({ groups: [{ key: 'g1', name: '群組名', values: [{ key: 'v1', name: '值' }] }], activeGroupKey: 'g1', stage: 'selecting' })
+  let failRemove = true
+  chromeMock.__setRuntimeResponder(async message => {
+    if (message.type !== 'PICK_DRAFT_OPERATION') return undefined
+    if (message.operation.type === 'remove' && failRemove) return { ok: false, error: 'conflict', message: '同步失敗' }
+    const next = structuredClone(current)
+    const op = message.operation
+    const group = next.groups.find(item => item.key === (op.groupKey || op.fromGroupKey))
+    if (op.type === 'remove') group.values = group.values.filter(value => value.key !== op.valueKey)
+    if (op.type === 'add') group.values.push(structuredClone(op.value))
+    next.revision += 1
+    current = next
+    return { ok: true, draft: structuredClone(next), revision: next.revision }
+  })
+  picker.setPickDraftContext(current)
+  picker.renderPickDraft(current)
+  await doc.querySelector('[data-group-value] button').click()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(doc.getElementById('group-undo').hidden, true)
+  assert.match(doc.getElementById('group-draft-status').textContent, /同步失敗/)
+
+  failRemove = false
+  picker.renderPickDraft(current)
+  await doc.querySelector('[data-group-value] button').click()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(current.groups[0].values.length, 0)
+  assert.equal(doc.getElementById('group-undo').hidden, false)
+
+  await doc.getElementById('group-undo').click()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(current.groups[0].values.length, 1)
+  assert.equal(current.groups[0].name, '群組名')
+  assert.equal(doc.getElementById('group-undo').hidden, true)
 })
 
 test('D1a 完成前等待最後名稱 ACK，完成屏障使用最新 revision', async () => {

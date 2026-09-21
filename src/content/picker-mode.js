@@ -6,6 +6,7 @@ import { describe } from '../shared/selector.js'
 import { detectKind } from '../shared/block-detect.js'
 import { parseNumber, resolveByPosition, locateByHeader } from '../shared/extract.js'
 import { withInnerLabel, TERMS } from '../shared/describe.js'
+import { pickSourceOf, pickSpecOf, stripPos } from '../shared/field-match.js'
 import {
   columnHeaders, rowHeader, innermostTable,
   // 「哪些列／格屬於這張表」的判準只有 shared/table.js 一份（AF-10 作業 D）：
@@ -37,6 +38,8 @@ const COLORS = {
 let active = false, currentPurpose = null, currentTaskId = undefined, currentTargetEl = null, backStack = []
 // AF-22 C2a：短命選取工作階段的協調欄位；永久草稿仍由 background 保存。
 let pickSessionId = undefined, pickGroupKey = undefined, pickFrame = undefined, pickRevision = undefined, parentFrameId = undefined
+let pickDocumentGeneration = undefined, pickRouteIdentity = undefined
+let pickImmediateDraft = false
 let pickOperationSeq = 0
 // 進不去框架時要說出來；代理層是 iframe 的替身（見 frameOfProxy）
 let currentHint = null
@@ -128,6 +131,190 @@ let originalUserSelect = '', dragStart = null, isDragging = false, suppressClick
 // currentGroupIdx 是目前這組在 batchGroups 的位置（還沒寫進去時為 -1）。
 // 表格組 { tableEl, picks }、元素組 { el }
 let batchMode = false, batchGroups = [], currentGroupIdx = -1
+// AF-22 D1b：有 session/group 的新群組模式不再以表格自動切組。
+// 每次頁面點選是一筆 PICKED，群組身分由面板／background 草稿協定決定。
+let draftPickEntries = new Map()
+let draftPickSendQueue = Promise.resolve()
+let draftPickGeneration = 0
+const draftPickFailures = new Map()
+
+function isDraftGroupMode() {
+  return currentPurpose === 'task' && typeof pickSessionId === 'string' && pickSessionId !== '' &&
+    typeof pickGroupKey === 'string' && pickGroupKey !== ''
+}
+
+function isImmediateDraftGroupMode() {
+  return isDraftGroupMode() && pickImmediateDraft
+}
+
+function stableDraftIdentity(value) {
+  if (Array.isArray(value)) return value.map(stableDraftIdentity)
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableDraftIdentity(value[key])]))
+  }
+  return value
+}
+
+function draftPickKeyFor(locator, pick, frame = pickFrame) {
+  // Keep the browser-side toggle key identical to B2's source-aware value
+  // identity.  The background strips positional metadata and block skip/
+  // exclude options before comparing, so the rehydrated draft value must do
+  // the same or a second click would append instead of remove.
+  const source = pickSourceOf({ locator, ...(frame?.url ? { frame: { url: frame.url } } : {}) })
+  const spec = pickSpecOf(pick)
+  return JSON.stringify(stableDraftIdentity({ source, spec: stripPos(spec) }))
+}
+
+function draftPickKey(target, pick) {
+  let locator = null
+  try { locator = target ? describe(target) : null } catch {}
+  return draftPickKeyFor(locator, pick)
+}
+
+function draftPickScopeKey(identity) {
+  return JSON.stringify(stableDraftIdentity({
+    sessionId: identity?.sessionId,
+    groupKey: identity?.groupKey,
+    documentGeneration: identity?.documentGeneration,
+    routeIdentity: identity?.routeIdentity,
+    frame: identity?.frame?.url ? { url: identity.frame.url } : undefined
+  }))
+}
+
+function draftPickOperationKey(identity, key) {
+  return `${draftPickScopeKey(identity)}\u0000${key}`
+}
+
+function pendingDraftPickFailure(identity) {
+  const prefix = `${draftPickScopeKey(identity)}\u0000`
+  for (const [key, failure] of draftPickFailures) {
+    if (key.startsWith(prefix)) return failure
+  }
+  return null
+}
+
+function draftPickPayload(target, pick, identity = {}) {
+  const payload = buildPickPayload(target, [pick], {
+    index: currentCellIndex(),
+    headerText: getHeaderText()
+  })
+  if (identity.sessionId !== undefined) payload.sessionId = identity.sessionId
+  if (identity.groupKey !== undefined) {
+    payload.groupKey = identity.groupKey
+    payload.activeGroupKey = identity.groupKey
+  }
+  if (identity.purpose !== undefined) payload.purpose = identity.purpose
+  if (identity.documentGeneration !== undefined) payload.documentGeneration = structuredClone(identity.documentGeneration)
+  if (identity.routeIdentity !== undefined) payload.routeIdentity = structuredClone(identity.routeIdentity)
+  if (identity.frame !== undefined) payload.frame = structuredClone(identity.frame)
+  return payload
+}
+
+function draftElementPick(target) {
+  const text = (target?.textContent || '').trim()
+  return {
+    locator: describe(target),
+    spec: { mode: parseNumber(text) === null ? 'text' : 'number' }
+  }
+}
+
+function syncDraftPickEntries(values) {
+  const next = new Map()
+  for (const value of Array.isArray(values) ? values : []) {
+    const locator = value?.source?.locator || value?.locator
+    const spec = value?.spec
+    if (!locator || !spec) continue
+    const pick = spec.cell || spec.block ? spec : { spec }
+    next.set(draftPickKeyFor(locator, pick, value?.source?.frame), {
+      target: null,
+      pick,
+      source: value?.source ? structuredClone(value.source) : undefined
+    })
+  }
+  draftPickEntries = next
+}
+
+function queueDraftPick(target, pick, remove = false) {
+  const key = draftPickKey(target, pick)
+  const had = draftPickEntries.has(key)
+  if (remove !== had) return
+  const generation = draftPickGeneration
+  const identity = {
+    purpose: currentPurpose,
+    sessionId: pickSessionId,
+    groupKey: pickGroupKey,
+    documentGeneration: pickDocumentGeneration,
+    routeIdentity: pickRouteIdentity,
+    frame: pickFrame
+  }
+  const operationId = nextPickOperationId()
+  // Build the message while this target/mode is still current.  The send
+  // queue may drain after a fast group switch; reading global picker state in
+  // the queued callback would otherwise mix the old value with the new group.
+  const queuedPayload = draftPickPayload(target, pick, identity)
+  queuedPayload.type = MSG.PICKED
+  queuedPayload.operationId = operationId
+  if (remove) {
+    queuedPayload.picks = []
+    queuedPayload.removePicks = [structuredClone(pick)]
+  }
+  const operationKey = draftPickOperationKey(identity, key)
+  if (remove) draftPickEntries.delete(key)
+  else draftPickEntries.set(key, { target, pick })
+
+  const run = draftPickSendQueue.then(async () => {
+    let response
+    try {
+      response = await chrome.runtime.sendMessage(queuedPayload)
+    } catch (error) {
+      response = { ok: false, message: String(error?.message || error) }
+    }
+    if (!response || response.ok !== true) {
+      // ACK 失敗時保留原本的選取意圖，讓使用者可重試；移除失敗則補回值。
+      draftPickFailures.set(operationKey, {
+        message: response?.message || '這個值尚未同步，請再試一次',
+        retryable: true
+      })
+      if (generation === draftPickGeneration) {
+        if (remove) draftPickEntries.set(key, { target, pick })
+        else draftPickEntries.delete(key)
+      }
+      if (generation !== draftPickGeneration || identity.sessionId !== pickSessionId || identity.groupKey !== pickGroupKey) return false
+      toolbarNotice = response?.message || '這個值尚未同步，請再試一次'
+      selectedList = [pick]
+      pickedTableEl = target && isTableMode(target) ? target : null
+      if (panelEl) updatePanel(panelEl, currentTargetEl)
+      return false
+    }
+    draftPickFailures.delete(operationKey)
+    if (generation !== draftPickGeneration || identity.sessionId !== pickSessionId || identity.groupKey !== pickGroupKey) return true
+    if (Number.isInteger(response.revision)) pickRevision = response.revision
+    if (response.draft) {
+      const group = response.draft.groups?.find(item => item.key === identity.groupKey)
+      syncDraftPickEntries(group?.values)
+    }
+    selectedList = []
+    pickedTableEl = null
+    limitReached = false
+    toolbarNotice = null
+    if (panelEl) updatePanel(panelEl, currentTargetEl)
+    return true
+  })
+  draftPickSendQueue = run.catch(() => {})
+  return run
+}
+
+function toggleDraftPick(target, pick, suppressRemove = false) {
+  const key = draftPickKey(target, pick)
+  const remove = draftPickEntries.has(key)
+  // 第二個 click 會緊接 dblclick；D03 規定雙擊已選值維持選取，避免 click→click
+  // 先加後刪。單獨的第二次點擊沒有 detail=2，仍保留 toggle 語意。
+  if (remove && suppressRemove) return
+  selectedList = [pick]
+  pickedTableEl = target && isTableMode(target) ? target : null
+  if (target && isTableMode(target)) applyPickedMarks(target)
+  queueDraftPick(target, pick, remove)
+}
 // 各表最後一次 hover 的列欄（送出時非目前這張表的組要用它組 blockInfo，與非批次送出同一口徑）
 const batchHover = new Map()
 const MAX_BATCH_GROUPS = MAX_BATCH_TASKS
@@ -2322,6 +2509,8 @@ function buildPickPayload(targetEl, picks, hint) {
     }),
     ...(pickSessionId !== undefined ? { sessionId: pickSessionId } : {}),
     ...(pickGroupKey !== undefined ? { groupKey: pickGroupKey, activeGroupKey: pickGroupKey } : {}),
+    ...(pickDocumentGeneration !== undefined ? { documentGeneration: structuredClone(pickDocumentGeneration) } : {}),
+    ...(pickRouteIdentity !== undefined ? { routeIdentity: structuredClone(pickRouteIdentity) } : {}),
     ...(pickRevision !== undefined ? { draftRevision: pickRevision } : {}),
     ...(pickFrame ? { frame: structuredClone(pickFrame) } : {})
   }
@@ -2423,6 +2612,12 @@ function dropGoneSelection() {
 
 // 送出確認訊息並離開
 async function confirmPick() {
+  // 新群組模式的完成屏障在側欄；頁面上的普通 Enter／雙擊只應完成一次加值，
+  // 不得把目前頁面內容再次送成整批結果。
+  if (isImmediateDraftGroupMode() && !iframeOf(currentTargetEl)) {
+    if (panelEl) updatePanel(panelEl, currentTargetEl)
+    return
+  }
   if (selectionGone()) {
     dropGoneSelection()
     return
@@ -2486,6 +2681,8 @@ async function confirmPick() {
       ...(frameAnchor ? { frameAnchor } : {}),
       ...(pickSessionId !== undefined ? { sessionId: pickSessionId } : {}),
       ...(pickGroupKey !== undefined ? { groupKey: pickGroupKey, activeGroupKey: pickGroupKey } : {}),
+      ...(pickDocumentGeneration !== undefined ? { documentGeneration: structuredClone(pickDocumentGeneration) } : {}),
+      ...(pickRouteIdentity !== undefined ? { routeIdentity: structuredClone(pickRouteIdentity) } : {}),
       ...(pickRevision !== undefined ? { draftRevision: pickRevision } : {})
     }
     if (batchMode) msg.batch = true
@@ -3275,6 +3472,11 @@ function onMouseMove(event) {
 
 function onKeyDown(event) {
   if (!active) return
+  // 頁面輸入欄／contenteditable 的快捷鍵交回網站；尤其不能攔 Enter、Delete
+  // 來誤完成或移除選取值（群組命名輸入在擴充功能頁，不會走這裡）。
+  const keyTarget = event.target
+  if (keyTarget && (keyTarget.matches?.('input, textarea, select') || keyTarget.isContentEditable ||
+      keyTarget.closest?.('[contenteditable="true"]'))) return
   if (event.key === 'Escape') {
     event.preventDefault()
     if (event.repeat) return
@@ -3289,6 +3491,7 @@ function onKeyDown(event) {
       removeLastPick()
     }
   } else if (event.key === 'Enter') {
+    if (isDraftGroupMode()) return
     // 焦點在面板的按鈕上時，Enter 是「按那顆按鈕」，不是「送出」——
     // 焦點停在「取消」上卻送出，是鍵盤使用者最容易踩到的陷阱
     // 「完成／取消」與位置移位鈕要讓 Enter 交給按鈕（前兩顆會結束流程，移位鈕要切換位置）；
@@ -3767,6 +3970,21 @@ function onClick(event) {
   }
   if (!currentTargetEl) return
 
+  // AF-22 D1b：session 群組模式每次點擊只處理目前這一個值，來源可跨表／跨元素；
+  // 不經舊 batchGroups，也不以換表作為取代或建組的訊號。
+  if (isImmediateDraftGroupMode() && !iframeOf(event.target)) {
+    if (isTableMode(currentTargetEl) && currentTargetEl.contains(event.target)) {
+      const candidate = candidateAt(event.target)
+      if (candidate) {
+        toggleDraftPick(currentTargetEl, candidate, event.detail === 2)
+        return
+      }
+    } else if (!isTableMode(currentTargetEl) && currentTargetEl !== document.body && currentTargetEl !== document.documentElement) {
+      toggleDraftPick(currentTargetEl, draftElementPick(currentTargetEl), event.detail === 2)
+      return
+    }
+  }
+
   // 已選值後目標被鎖在某張表，點到那張表以外（例如外層表的格子）：什麼都不做。
   // 往下落會走到第 8 段直接送出，等於點外層一下就把內層的已選送走了
   if (isTableMode(currentTargetEl) && isMultiPickPurpose() &&
@@ -4167,6 +4385,19 @@ function onDblClick(event) {
   if (overlayEl && overlayEl.contains(event.target) && !frameOfProxy(event.target)) return
   if (!currentTargetEl) return
 
+  if (isImmediateDraftGroupMode() && !iframeOf(event.target)) {
+    if (isTableMode(currentTargetEl) && currentTargetEl.contains(event.target)) {
+      const candidate = candidateAt(event.target)
+      if (candidate && !draftPickEntries.has(draftPickKey(currentTargetEl, candidate))) {
+        toggleDraftPick(currentTargetEl, candidate)
+      }
+    } else if (!isTableMode(currentTargetEl) && currentTargetEl !== document.body && currentTargetEl !== document.documentElement) {
+      const pick = draftElementPick(currentTargetEl)
+      if (!draftPickEntries.has(draftPickKey(currentTargetEl, pick))) toggleDraftPick(currentTargetEl, pick)
+    }
+    return
+  }
+
   // 批次模式雙擊非表格元素也是結果式：click、click 會加再移除那一組，雙擊結束時它一定要是一組（AF-18 終檢）
   if (batchMode) {
     const onTable = isTableMode(currentTargetEl) && currentTargetEl.contains(event.target)
@@ -4299,15 +4530,36 @@ export function enterPickMode(opts) {
   currentTaskId = opts?.taskId !== undefined ? opts.taskId : undefined
   pickSessionId = opts?.sessionId !== undefined ? opts.sessionId : undefined
   pickGroupKey = opts?.groupKey ?? opts?.activeGroupKey
+  pickImmediateDraft = opts?.batch === true || opts?.pickStage === 'selecting'
   pickFrame = opts?.frame && typeof opts.frame === 'object' ? structuredClone(opts.frame) : undefined
   pickRevision = opts?.draftRevision
+  pickDocumentGeneration = opts?.documentGeneration !== undefined ? structuredClone(opts.documentGeneration) : undefined
+  pickRouteIdentity = opts?.routeIdentity !== undefined ? structuredClone(opts.routeIdentity) : undefined
   parentFrameId = Number.isInteger(opts?.parentFrameId) ? opts.parentFrameId : undefined
   // 批次只對建立新任務有意義（重選、前置動作、登入一次就是一個目標）
-  batchMode = opts?.batch === true && currentPurpose === 'task'
+  // 新群組 session 雖沿用 batch 入口訊息以相容舊端，但組別由草稿 activeGroupKey
+  // 決定；只有沒有 session 的舊批次才使用 batchGroups 表格分組。
+  batchMode = opts?.batch === true && currentPurpose === 'task' && !isDraftGroupMode()
   maxPicks = (typeof opts?.maxPicks === 'number' && opts.maxPicks > 0) ? opts.maxPicks : 100
   limitReached = false
   headerChangedNotice = false
   selectedList = []
+  draftPickEntries = new Map()
+  syncDraftPickEntries(opts?.draftValues)
+  draftPickGeneration++
+  // Keep the previous queue chained across a group/frame switch.  A value
+  // clicked just before the switch still has to reach its captured group and
+  // be ACKed before the new group's work can run; resetting here detached it
+  // from the new completion/drain chain.
+  draftPickSendQueue = draftPickSendQueue.catch(() => {})
+  const failed = pendingDraftPickFailure({
+    sessionId: pickSessionId,
+    groupKey: pickGroupKey,
+    documentGeneration: pickDocumentGeneration,
+    routeIdentity: pickRouteIdentity,
+    frame: pickFrame
+  })
+  if (failed) toolbarNotice = failed.message
   dragStart = null
   isDragging = false
   suppressClick = false
@@ -4490,10 +4742,18 @@ export function exitPickMode(opts = {}) {
   yieldedEl = null; lastProxySync = 0
   active = false; currentPurpose = null; currentTaskId = undefined; currentTargetEl = null; backStack = []
   pickSessionId = undefined; pickGroupKey = undefined; pickFrame = undefined; pickRevision = undefined; parentFrameId = undefined
+  pickDocumentGeneration = undefined; pickRouteIdentity = undefined
+  pickImmediateDraft = false
   overlayEl = null; highlightEl = null; panelEl = null; toolbarEl = null; menuEl = null
   pickMode = 'cell'; cellIndex = null; colIndex = null; rowIndex = null; currentCellEl = null; nestedNoticeOn = false
   currentDataRows = []; currentRowEl = null
   selectedList = []
+  draftPickEntries = new Map()
+  draftPickGeneration++
+  // Do not discard an in-flight PICKED ACK when leaving a group.  The queued
+  // operation carries its own immutable session/group identity and the next
+  // enter will append behind it.
+  draftPickSendQueue = draftPickSendQueue.catch(() => {})
   // 這一個漏清會讓下一次選取沿用上一張表的 locator，配上新表的列欄索引送出去（AF-7 體檢）
   pickedTableEl = null
   deliberateTableEl = null

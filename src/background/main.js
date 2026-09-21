@@ -58,6 +58,7 @@ const exitedPickTabs = new Set()
 // AF-22 C2a：選取中的 frame 是短命執行期狀態，不能寫進草稿（frameId 每次載入都會變）。
 // 這份索引只用來讓進出 frame 有一個可核對的來源，避免舊 frame 的延遲回報改到新階段。
 const activePickFrames = new Map()
+const groupNamePickRequests = new Map()
 
 function frameDescriptorOf(sender, extra = {}) {
   const frameId = sender?.frameId
@@ -568,6 +569,9 @@ async function appendPickedToDraft(msg, sender, payload = msg) {
   if (!draft.groups.some(group => group.key === groupKey)) {
     return { ok: false, error: 'group_not_found', retryable: true, message: '目前作用中的選取組已不存在，請重新選取' }
   }
+  if (!draftIdentityMatches(msg, draft)) {
+    return { ok: false, error: 'stale_document', retryable: true, message: '頁面已變更，請重新整理後再選取' }
+  }
 
   const operationSender = await extensionDraftSender(tabId)
   let latest = draft
@@ -591,6 +595,27 @@ async function appendPickedToDraft(msg, sender, payload = msg) {
       if (!result?.ok || !result.draft) return result || { ok: false, error: 'draft_write_failed', retryable: true }
       latest = result.draft
     }
+    // 新群組模式點已選值＝移除；仍沿用 PICKED content 白名單，background
+    // 以同一份 source/spec 找回穩定 value key，再走正式 remove operation。
+    if (Array.isArray(payload?.removePicks)) {
+      for (const [index, pick] of payload.removePicks.entries()) {
+        const value = draftValueOf(payload, pick, sender, msg, index)
+        const group = latest.groups.find(item => item.key === groupKey)
+        const existing = group?.values.find(item => sameSpec(item, value))
+        if (!existing) continue
+        const operationId = `${operationBase}:remove:${index}`
+        const result = await handlePickDraftOperation({
+          type: MSG.PICK_DRAFT_OPERATION,
+          operationId,
+          expectedRevision: latest.revision,
+          sessionId: draft.sessionId,
+          tabId,
+          operation: { type: 'remove', groupKey, valueKey: existing.key }
+        }, operationSender)
+        if (!result?.ok || !result.draft) return result || { ok: false, error: 'draft_write_failed', retryable: true }
+        latest = result.draft
+      }
+    }
   } catch (error) {
     const response = protocolErrorResponse(error)
     return response || { ok: false, error: 'draft_write_failed', retryable: true, message: String(error?.message || error) }
@@ -602,6 +627,60 @@ async function appendPickedToDraft(msg, sender, payload = msg) {
     pickGroupKey: groupKey
   })
   return { ok: true, draft: latest, revision: latest.revision }
+}
+
+// D1a/D1b 取名請求只啟動 content 的取名狀態；不得把頁面文字當成 PICKED 或寫進值草稿。
+async function requestGroupNamePick(msg) {
+  const tabId = msg?.tabId
+  if (!Number.isInteger(tabId) || typeof msg?.sessionId !== 'string' || typeof msg?.groupKey !== 'string' ||
+      typeof msg?.requestId !== 'string' || msg.requestId.trim() === '') {
+    return { ok: false, error: 'invalid_group_name_request', message: '取名請求缺少工作階段身分' }
+  }
+  const draft = await getPickDraft(tabId, { sessionId: msg.sessionId })
+  if (!draft || !draft.groups.some(group => group.key === msg.groupKey)) {
+    return { ok: false, error: 'group_not_found', message: '目前群組已不存在，請重新整理面板' }
+  }
+  if (!draftIdentityMatches(msg, draft)) {
+    return { ok: false, error: 'stale_document', message: '頁面已變更，請重新整理後再取名' }
+  }
+  const active = frameStateOf(tabId)
+  if (active && (active.sessionId !== msg.sessionId || (active.groupKey && active.groupKey !== msg.groupKey) ||
+      !draftIdentityMatches(msg, active))) {
+    return { ok: false, error: 'group_conflict', message: '目前頁面選取階段已切換，請重新取名' }
+  }
+  const frameId = active?.frameId ?? 0
+  let expectedUrl = ''
+  try { expectedUrl = (await chrome.tabs.get(tabId))?.url || '' } catch {}
+  try {
+    await sendToFrame(tabId, {
+      type: MSG.PICK_GROUP_NAME,
+      tabId,
+      requestId: msg.requestId,
+      sessionId: msg.sessionId,
+      groupKey: msg.groupKey,
+      documentGeneration: draft.documentGeneration,
+      routeIdentity: draft.routeIdentity
+    }, frameId, CONTENT_MESSAGE_TIMEOUT_MS, 'Enter group name pick')
+    groupNamePickRequests.set(tabId, {
+      requestId: msg.requestId,
+      sessionId: msg.sessionId,
+      groupKey: msg.groupKey,
+      documentGeneration: structuredClone(draft.documentGeneration),
+      routeIdentity: structuredClone(draft.routeIdentity),
+      frameId,
+      expectedUrl
+    })
+    return { ok: true, frameId }
+  } catch (error) {
+    return { ok: false, error: 'name_pick_unavailable', message: String(error?.message || error), retryable: true }
+  }
+}
+
+function draftIdentityMatches(message, draft) {
+  for (const field of ['documentGeneration', 'routeIdentity']) {
+    if (message?.[field] !== undefined && stableValue(message[field]) !== stableValue(draft?.[field])) return false
+  }
+  return true
 }
 
 function stableValue(value) {
@@ -763,6 +842,43 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       return { ok: false, error: 'forbidden' }
     }
 
+    if (msg.type === MSG.PICK_GROUP_NAME) return await requestGroupNamePick(msg)
+    if (msg.type === MSG.PICK_GROUP_NAME_RESULT) {
+      const tabId = sender?.tab?.id
+      const active = Number.isInteger(tabId) ? frameStateOf(tabId) : null
+      const request = Number.isInteger(tabId) ? groupNamePickRequests.get(tabId) : null
+      let currentTabUrl = ''
+      try { currentTabUrl = Number.isInteger(tabId) ? ((await chrome.tabs.get(tabId))?.url || '') : '' } catch {}
+      if (!Number.isInteger(tabId) || typeof msg.sessionId !== 'string' || typeof msg.groupKey !== 'string' ||
+          typeof msg.requestId !== 'string' || !request || request.requestId !== msg.requestId ||
+          request.sessionId !== msg.sessionId || request.groupKey !== msg.groupKey ||
+          !draftIdentityMatches(msg, request) ||
+          (request.expectedUrl && currentTabUrl && request.expectedUrl !== currentTabUrl) ||
+          (active && (active.sessionId !== msg.sessionId || (active.groupKey && active.groupKey !== msg.groupKey) ||
+            active.frameId !== (sender?.frameId ?? 0) || !draftIdentityMatches(msg, active))) ||
+          (!active && (sender?.frameId ?? 0) !== 0)) {
+        return { ok: false, error: 'stale_frame', message: '取名回報來自已失效的選取階段' }
+      }
+      const draft = await getPickDraft(tabId, { sessionId: msg.sessionId })
+      if (!draft || !draft.groups.some(group => group.key === msg.groupKey) || !draftIdentityMatches(msg, draft)) {
+        return { ok: false, error: 'group_not_found', message: '目前群組已不存在' }
+      }
+      try {
+        await chrome.runtime.sendMessage({
+          type: MSG.PICK_GROUP_NAME_RESULT,
+          tabId,
+          requestId: msg.requestId,
+          sessionId: msg.sessionId,
+          groupKey: msg.groupKey,
+          documentGeneration: draft.documentGeneration,
+          routeIdentity: draft.routeIdentity,
+          text: typeof msg.text === 'string' ? msg.text : ''
+        })
+      } catch {}
+      groupNamePickRequests.delete(tabId)
+      return { ok: true }
+    }
+
     // C1b：草稿訊息只由 extension page 送出，所有變更都在 pick-protocol
     // 的 session 鎖內完成。這條路與舊 PICKED／repick 路徑分開，保留舊單任務相容性。
     if (msg.type === MSG.PICK_DRAFT_BEGIN) return await beginPickDraft(msg, sender)
@@ -890,6 +1006,9 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         if (activeFrame.groupKey !== undefined && msg.groupKey !== undefined && activeFrame.groupKey !== msg.groupKey) {
           return { ok: false, error: 'group_conflict', retryable: true, message: '目前作用中的群組已變更，請重新選取' }
         }
+        if (!draftIdentityMatches(msg, activeFrame)) {
+          return { ok: false, error: 'stale_document', retryable: true, message: '頁面已變更，請重新整理後再選取' }
+        }
       }
       // 取消也要轉發給面板：不轉的話「在頁面上選取」那顆按鈕會一直卡在等待狀態
       // （AF-10 修正：原本 cancelled 在轉發之前就 return 了）
@@ -1011,6 +1130,9 @@ export async function handleMessage(msg, sender, runOpts = {}) {
           purpose: msg.purpose,
           taskId: msg.taskId,
           ...pickIdentityOf(msg),
+          ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
+          ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {}),
+          ...(msg.draftValues !== undefined ? { draftValues: structuredClone(msg.draftValues) } : {}),
           ...(msg.draftRevision !== undefined ? { draftRevision: msg.draftRevision } : {}),
           ...(activeFrame.parentFrame ? { frame: activeFrame.parentFrame } : {})
         }
@@ -1028,6 +1150,8 @@ export async function handleMessage(msg, sender, runOpts = {}) {
             frameId: parentId,
             sessionId: msg.sessionId,
             groupKey: msg.groupKey,
+            ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
+            ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {}),
             ...(activeFrame.parentFrame ? { frame: activeFrame.parentFrame } : {})
           })
           return { ok: true, frameId: parentId, activeGroupKey: msg.activeGroupKey ?? msg.groupKey }
@@ -1045,6 +1169,9 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         taskId: msg.taskId,
         preselect: msg.preselect,
         ...pickIdentityOf(msg),
+        ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
+        ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {}),
+        ...(msg.draftValues !== undefined ? { draftValues: structuredClone(msg.draftValues) } : {}),
         ...(msg.frameAnchor ? { frameAnchor: msg.frameAnchor } : {}),
         ...(msg.draftRevision !== undefined ? { draftRevision: msg.draftRevision } : {})
       }
@@ -1076,6 +1203,8 @@ export async function handleMessage(msg, sender, runOpts = {}) {
             frameId: matched.frameId,
             sessionId: msg.sessionId,
             groupKey: msg.groupKey,
+            ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
+            ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {}),
             parentFrameId: fromFrameId,
             ...(fromFrameId !== 0 && typeof sender?.url === 'string' ? { parentFrame: { url: sender.url } } : {}),
             frame: { url: frames.find(f => f.frameId === matched.frameId)?.url || msg.src,
@@ -1084,7 +1213,13 @@ export async function handleMessage(msg, sender, runOpts = {}) {
           return { ok: true, frameId: matched.frameId, frame: frameStateOf(tabId).frame, activeGroupKey: msg.activeGroupKey ?? msg.groupKey }
         } catch (err) {
           // 目的 frame 可能拒絕注入（權限／文件剛換）；不退回頂層靜默繼續。
-          rememberPickFrame(tabId, { frameId: fromFrameId, sessionId: msg.sessionId, groupKey: msg.groupKey })
+          rememberPickFrame(tabId, {
+            frameId: fromFrameId,
+            sessionId: msg.sessionId,
+            groupKey: msg.groupKey,
+            ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
+            ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {})
+          })
           try {
             await injectContent(tabId, { frameId: fromFrameId })
             await sendToFrame(tabId, { ...enter, hint: 'frame_not_found', frameError: 'inject_denied' }, fromFrameId, contentMs, 'Resume old pick frame')
@@ -1106,6 +1241,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
 
     if (msg.type === MSG.ENTER_PICK) {
       if (msg.tabId) {
+        groupNamePickRequests.delete(msg.tabId)
         let frameId = msg.frameId ?? null
         let frameCandidates = []
         if (frameId === null && msg.frame?.url) {
@@ -1139,6 +1275,9 @@ export async function handleMessage(msg, sender, runOpts = {}) {
           preselect: msg.preselect || preselectOf(known)
         }
         Object.assign(enter, pickIdentityOf(msg))
+        if (msg.documentGeneration !== undefined) enter.documentGeneration = structuredClone(msg.documentGeneration)
+        if (msg.routeIdentity !== undefined) enter.routeIdentity = structuredClone(msg.routeIdentity)
+        if (msg.draftValues !== undefined) enter.draftValues = structuredClone(msg.draftValues)
         if (msg.frameAnchor) enter.frameAnchor = msg.frameAnchor
         if (batch) enter.batch = true
         await sendToFrame(msg.tabId, enter, frameId, contentMs, 'Enter pick')
@@ -1147,6 +1286,8 @@ export async function handleMessage(msg, sender, runOpts = {}) {
           frameId,
           sessionId: msg.sessionId,
           groupKey: msg.groupKey,
+          ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
+          ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {}),
           ...(frameUrl ? { frame: { url: frameUrl, ...(msg.frameAnchor ? { anchor: structuredClone(msg.frameAnchor) } : {}) } } : {})
         })
         return { ok: true, frameId, activeGroupKey: msg.activeGroupKey ?? msg.groupKey }
@@ -1299,6 +1440,7 @@ async function closeRepickTab(taskId) {
  */
 export async function closePanelFor(tabId, opts = {}) {
   if (tabId === undefined || tabId === null) return
+  groupNamePickRequests.delete(tabId)
   // AF-22 D02/C1b：關閉面板只暫停本輪選取，session 草稿留給 side panel
   // 或 fallback 視窗恢復；分頁真正關閉時才由 onRemoved 明確清除。
   let pauseError = null

@@ -10,6 +10,52 @@ import { enterPickMode, exitPickMode } from './picker-mode.js'
 
 // 記住使用者最後右鍵點擊的元素
 let lastTarget = null
+let groupNamePickState = null
+
+function endGroupNamePick() {
+  if (!groupNamePickState) return
+  document.removeEventListener('click', groupNamePickState.onClick, true)
+  document.removeEventListener('keydown', groupNamePickState.onKeyDown, true)
+  groupNamePickState = null
+}
+
+function beginGroupNamePick(msg) {
+  // 取名狀態與選值互斥；先拆掉舊 overlay 的 capture listener，頁面點文字
+  // 只會回傳名稱，不會同時加值或觸發連結。
+  exitPickMode({ clearOnly: 'task' })
+  endGroupNamePick()
+  const onClick = (event) => {
+    const target = event.target
+    if (!target || target.closest?.('[data-af-overlay]')) return
+    event.preventDefault()
+    event.stopPropagation()
+    const tag = String(target.tagName || '').toLowerCase()
+    const type = String(target.type || '').toLowerCase()
+    // password／敏感可編輯欄位永遠只回空文字，不能把秘密送回面板。
+    const text = type === 'password' ? ''
+      : (tag === 'input' || tag === 'textarea' ? String(target.value || '').trim() : String(target.textContent || '').trim())
+    endGroupNamePick()
+    const pending = chrome.runtime.sendMessage({
+      type: MSG.PICK_GROUP_NAME_RESULT,
+      requestId: msg.requestId,
+      sessionId: msg.sessionId,
+      groupKey: msg.groupKey,
+      documentGeneration: msg.documentGeneration,
+      routeIdentity: msg.routeIdentity,
+      text
+    })
+    if (pending?.catch) pending.catch(() => {})
+  }
+  const onKeyDown = (event) => {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    event.stopPropagation()
+    endGroupNamePick()
+  }
+  groupNamePickState = { onClick, onKeyDown }
+  document.addEventListener('click', onClick, true)
+  document.addEventListener('keydown', onKeyDown, true)
+}
 
 
 // 處理 DESCRIBE 訊息：回傳目標元素的四層定位與預覽數值
@@ -482,6 +528,12 @@ function route(msg, sendResponse) {
     return true
   }
 
+  if (msg.type === MSG.PICK_GROUP_NAME) {
+    beginGroupNamePick(msg)
+    sendResponse({ ok: true })
+    return true
+  }
+
   if (msg.type === MSG.ENTER_PICK) {
     // 重選是在新分頁開的，沒有「上次右鍵的元素」；先用任務自己的 locator 找回目標
     let target = lastTarget
@@ -495,6 +547,10 @@ function route(msg, sendResponse) {
       sessionId: msg.sessionId,
       groupKey: msg.groupKey,
       activeGroupKey: msg.activeGroupKey,
+      pickStage: msg.pickStage,
+      documentGeneration: msg.documentGeneration,
+      routeIdentity: msg.routeIdentity,
+      draftValues: msg.draftValues,
       frame: msg.frame,
       draftRevision: msg.draftRevision,
       parentFrameId: msg.parentFrameId,
@@ -511,6 +567,7 @@ function route(msg, sendResponse) {
   }
 
   if (msg.type === MSG.EXIT_PICK) {
+    endGroupNamePick()
     exitPickMode()
     sendResponse({ ok: true })
     return true
