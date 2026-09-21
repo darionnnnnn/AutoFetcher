@@ -160,6 +160,9 @@ export { normalizeTaskSources }
 
 // mutator 回傳它表示刪掉這個鍵
 const REMOVE = Symbol('remove')
+// 供少數需要在同一把 session 鎖內條件刪除的資料層使用；一般呼叫端請用
+// clearSessionValue，避免把 storage 的刪除語意散落到各模組。
+export const REMOVE_SESSION_VALUE = REMOVE
 
 const asObject = (v) => (v && typeof v === 'object' && !Array.isArray(v)) ? v : {}
 const asArray = (v) => Array.isArray(v) ? v : []
@@ -1160,6 +1163,38 @@ export async function getRepickTabs() {
 // 在 session:repickTabs 鎖內讀 → mutator(副本) 回傳新值 → 寫回
 export async function updateRepickTabs(mutator) {
   return updateValue('repickTabs', asObject, mutator, 'session')
+}
+
+// ---- session 共用小入口 -------------------------------------------------
+// 新增的 session 資料仍必須和既有 runState／repickTabs 一樣，讀改寫在單一
+// storage key 的鎖內完成。資料層（例如 pick-draft）只透過這幾個入口碰
+// chrome.storage.session，避免各模組自行複製鎖與錯誤處理。
+export async function getSessionValue(key) {
+  if (typeof key !== 'string' || key === '') return undefined
+  const res = await chrome.storage.session.get(key)
+  return res?.[key]
+}
+
+export async function setSessionValue(key, value) {
+  if (typeof key !== 'string' || key === '') throw new TypeError('session key 必須是非空字串')
+  return writeKey(key, value, 'session')
+}
+
+export async function updateSessionValue(key, shape, mutator) {
+  if (typeof key !== 'string' || key === '') throw new TypeError('session key 必須是非空字串')
+  if (typeof mutator !== 'function') throw new TypeError('session mutator 必須是函式')
+  return updateValue(key, shape, mutator, 'session')
+}
+
+export async function mutateSessionValue(key, mutator) {
+  if (typeof key !== 'string' || key === '') throw new TypeError('session key 必須是非空字串')
+  if (typeof mutator !== 'function') throw new TypeError('session mutator 必須是函式')
+  return mutateKey(key, mutator, 'session')
+}
+
+export async function clearSessionValue(key) {
+  if (typeof key !== 'string' || key === '') return
+  await mutateKey(key, () => REMOVE, 'session')
 }
 
 // 查詢多個任務在所有日期的紀錄總數與各任務筆數
