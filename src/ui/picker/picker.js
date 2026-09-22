@@ -13,6 +13,7 @@ import { reconcileFields } from '../../shared/field-match.js'
 import { download } from '../../shared/export.js'
 import { statusTextOf } from '../../shared/record-status.js'
 import { createSaveGuard, setFieldError } from '../save-guard.js'
+import { MAX_PICK_DRAFT_BYTES } from '../../shared/pick-draft.js'
 
 let currentCtx = null
 let currentBlock = null
@@ -2609,8 +2610,8 @@ function taskFromForm(values, ctx, taskId) {
  * @param {Object} ctx 目前 render 的 ctx
  * @returns {Promise<Object>} 存好的 task
  */
-async function saveTaskFromForm(values, ctx, { taskId } = {}) {
-  const task = taskFromForm(values, ctx, taskId)
+async function saveTaskFromForm(values, ctx, { taskId, preparedTask } = {}) {
+  const task = preparedTask || taskFromForm(values, ctx, taskId)
   await saveTask(task)
   return task
 }
@@ -4498,6 +4499,7 @@ function reconcileBatchItemsWithDraft(items, draft) {
       firstRunState: group.firstRunState || old.firstRunState || 'pending',
       saveState: group.taskSaveState || group.saveState || old.taskSaveState || old.saveState || 'pending',
       ...(group.taskId || old.taskId ? { taskId: group.taskId || old.taskId } : {}),
+      ...(group.taskCheckpoint || old.taskCheckpoint ? { taskCheckpoint: group.taskCheckpoint || old.taskCheckpoint } : {}),
       ...(group.error || old.error ? { error: group.error || old.error } : {})
     }
   })
@@ -4700,14 +4702,51 @@ function batchEntries() {
   })).filter(e => e.item)
 }
 
+function stableTaskValue(value) {
+  if (Array.isArray(value)) return value.map(stableTaskValue)
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableTaskValue(value[key])]))
+  }
+  return value
+}
+
+// 儲存庫會在 task 上補 createdAt/order/notFoundStreak 等執行欄位；對帳只比對
+// 保存時由表單產生的使用者設定，避免這些欄位讓同一筆固定 task 被誤判不相容。
+function taskComparablePayload(task) {
+  const keys = ['name', 'url', 'mode', 'locator', 'spec', 'schedule', 'frame', 'fields', 'alerts', 'preActions']
+  return Object.fromEntries(keys
+    .filter(key => task && task[key] !== undefined)
+    .map(key => [key, task[key]]))
+}
+
+function taskFingerprintOf(task) {
+  return JSON.stringify(stableTaskValue(taskComparablePayload(task)))
+}
+
+function jsonTaskPayloadOf(task) {
+  try { return JSON.parse(JSON.stringify(task)) } catch { return null }
+}
+
+function checkpointFingerprintOf(item) {
+  return item?.taskCheckpoint?.taskFingerprint || ''
+}
+
 // 批次保存進度回寫 C1b 草稿；這條通道不重畫選值畫面，避免設定頁保存時被
 // 背景 session 事件切回選值。taskId 先寫 pending/inflight，再寫 done，讓重載
 // 能辨認已完成項目與結果不明的項目。
-async function updateBatchSaveState(item, phase, state, taskId, error) {
+async function updateBatchSaveState(item, phase, state, taskId, error, taskPayload = null) {
   if (!batchDraftManaged) return { legacy: true }
   if (!pickDraftState || !globalThis.chrome?.runtime?.sendMessage) return null
   if (batchDraftSessionId && pickDraftState.sessionId !== batchDraftSessionId) return null
   if (Number.isInteger(item?.tabId) && pickDraftState.tabId !== item.tabId) return null
+  const safePayload = taskPayload ? jsonTaskPayloadOf(taskPayload) : null
+  if (taskPayload && !safePayload) return null
+  if (safePayload) {
+    const encoded = JSON.stringify(safePayload)
+    const bytes = typeof TextEncoder === 'function' ? new TextEncoder().encode(encoded).byteLength : encoded.length
+    if (bytes > MAX_PICK_DRAFT_BYTES) return null
+  }
+  const taskFingerprint = safePayload ? taskFingerprintOf(safePayload) : ''
   try {
     await pickDraftOperationQueue
     const draft = pickDraftState
@@ -4719,7 +4758,12 @@ async function updateBatchSaveState(item, phase, state, taskId, error) {
       operation: {
         type: 'save-state', groupKey: item.key, phase, state,
         ...(taskId ? { taskId } : {}),
-        ...(error ? { error: String(error) } : {})
+        ...(error ? { error: String(error) } : {}),
+        ...(safePayload ? {
+          taskFingerprint,
+          taskName: typeof safePayload.name === 'string' ? safePayload.name : '',
+          taskUrl: typeof safePayload.url === 'string' ? safePayload.url : ''
+        } : {})
       }
     })
     if (response?.ok !== true || !response.draft) return null
@@ -4727,6 +4771,12 @@ async function updateBatchSaveState(item, phase, state, taskId, error) {
     if (phase === 'task') {
       item.taskSaveState = state
       item.saveState = state
+      if (safePayload) item.taskCheckpoint = {
+        taskId,
+        taskFingerprint,
+        taskName: typeof safePayload.name === 'string' ? safePayload.name : '',
+        taskUrl: typeof safePayload.url === 'string' ? safePayload.url : ''
+      }
     } else {
       item.firstRunState = state
     }
@@ -4783,6 +4833,7 @@ async function runBatchSave() {
   let failure = null
   let postError = null
   const cardErrors = []
+  const reconcileWarnings = []
   for (let i = 0; i < entries.length; i++) {
     const { item, name } = entries[i]
     try {
@@ -4800,7 +4851,35 @@ async function runBatchSave() {
         break
       }
       if (batchDraftManaged && ['inflight', 'uncertain'].includes(item.taskSaveState || item.saveState)) {
-        failure = { k: i + 1, name, message: '保存結果不明，請先確認任務清單後再重試' }
+        const values = collectBatchValues(item, name, shared)
+        const checkpointFingerprint = checkpointFingerprintOf(item)
+        const candidate = checkpointFingerprint ? taskFromForm(values, currentCtx, item.taskId) : null
+        const existing = item.taskId ? await getTask(item.taskId) : null
+        if (existing && checkpointFingerprint && taskFingerprintOf(existing) === checkpointFingerprint) {
+          const reconciled = await updateBatchSaveState(item, 'task', 'done', item.taskId)
+          if (!reconciled) {
+            failure = { k: i + 1, name, message: '已找到固定任務，但保存狀態無法回寫；請稍後重試' }
+            break
+          }
+          if (candidate && taskFingerprintOf(candidate) !== checkpointFingerprint) {
+            reconcileWarnings.push(`「${name}」已沿用中斷前的既有任務；之後的名稱或設定修改未覆寫，請移除這組後重新建立以套用。`)
+          }
+          saved.push({ key: item.key, item, task: existing })
+          lastValues = null
+          continue
+        }
+        const reason = existing && checkpointFingerprint
+          ? (taskFingerprintOf(existing) === checkpointFingerprint
+              ? '已找到既有任務，但保存狀態無法回寫'
+              : '已寫入任務與保存前快照不相容')
+          : (existing ? '缺少可核對的保存前快照' : '固定任務不存在，無法確認是否曾寫入')
+        failure = {
+          k: i + 1,
+          name,
+          message: existing && checkpointFingerprint && taskFingerprintOf(existing) === checkpointFingerprint
+            ? `保存結果不明（${reason}）；請稍後重試保存狀態`
+            : `保存結果不明（${reason}）；請移除這組後按「在頁面上選取」重新建立`
+        }
         break
       }
       const values = collectBatchValues(item, name, shared)
@@ -4814,14 +4893,14 @@ async function runBatchSave() {
       }
       const taskId = item.taskId || crypto.randomUUID()
       item.taskId = taskId
-      const checkpoint = await updateBatchSaveState(item, 'task', 'inflight', taskId)
+      let task = taskFromForm(values, currentCtx, taskId)
+      const checkpoint = await updateBatchSaveState(item, 'task', 'inflight', taskId, undefined, task)
       if (batchDraftManaged && !checkpoint) {
         failure = { k: i + 1, name, message: '保存進度同步失敗，任務尚未寫入；請重新整理後重試' }
         break
       }
-      let task
       try {
-        task = await saveTaskFromForm(values, currentCtx, { taskId })
+        task = await saveTaskFromForm(values, currentCtx, { taskId, preparedTask: task })
       } catch (error) {
         await updateBatchSaveState(item, 'task', 'uncertain', taskId, error?.message || error)
         throw error
@@ -4882,6 +4961,7 @@ async function runBatchSave() {
   batchItems = null
   // 有後段錯誤時不自動關面板：這一句使用者一定要看得到
   const warnings = []
+  warnings.push(...reconcileWarnings)
   if (postError) warnings.push(`任務已經存好，但排程重建沒有完成：${postError}。請到報表的「任務管理」確認下次抓取時間。`)
   if (cardErrors.length > 0) warnings.push(`任務已經存好，但有卡片沒加進儀表板：${cardErrors.join('；')}。`)
   await showSavedFeedback(saved[0].task, {

@@ -41,7 +41,7 @@ const DRAFT_KEYS = new Set([
   'groups', 'activeGroupKey', 'stage', 'form', 'preActions', 'saveStates',
   'operationId', 'appliedOperationIds', 'paused', 'createdAt', 'updatedAt'
 ])
-const GROUP_KEYS = new Set(['key', 'name', 'values', 'saveState', 'taskSaveState', 'firstRunState', 'taskId', 'error'])
+const GROUP_KEYS = new Set(['key', 'name', 'values', 'saveState', 'taskSaveState', 'firstRunState', 'taskId', 'taskCheckpoint', 'error'])
 const VALUE_KEYS = new Set([
   'key', 'name', 'source', 'spec', 'mode', 'preview', 'previewValue', 'locator', 'frame'
 ])

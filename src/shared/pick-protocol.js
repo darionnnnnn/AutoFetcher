@@ -218,6 +218,19 @@ function applySaveState(draft, source) {
     // 舊批次草稿仍讀 saveState；新流程以 taskSaveState/firstRunState 分開。
     group.saveState = state
     next.taskState = state
+    if (source.taskFingerprint !== undefined) {
+      if (!source.taskId) fail('invalid_operation', 'taskFingerprint 必須綁定 taskId')
+      if (typeof source.taskFingerprint !== 'string' || source.taskFingerprint.trim() === '') {
+        fail('invalid_operation', 'taskFingerprint 必須是非空字串')
+      }
+      group.taskCheckpoint = {
+        taskId: source.taskId,
+        taskFingerprint: source.taskFingerprint,
+        ...(typeof source.taskName === 'string' ? { taskName: source.taskName } : {}),
+        ...(typeof source.taskUrl === 'string' ? { taskUrl: source.taskUrl } : {})
+      }
+      next.taskFingerprint = source.taskFingerprint
+    }
   } else {
     group.firstRunState = state
     next.firstRunState = state
