@@ -1,5 +1,5 @@
 // AutoFetcher 擷取流程：開分頁、注入、擷取、寫紀錄、重試
-import { getTask, updateTasks, appendRecord, appendRecords, getRecordsByDate, getRecordsInRange, getSettings, getAlertCommitLog, updateAlertLog, updateAlertCommitLog, setLastValue, setLastValues, getLastValues, getHealthMap, getRunStatus, setRunStatus, getRunState, updateRunState, updateMissedList } from '../shared/storage.js'
+import { getTask, checkTaskExecution, updateTasks, appendRecord, appendRecords, getRecordsByDate, getRecordsInRange, getSettings, getAlertCommitLog, updateAlertLog, updateAlertCommitLog, setLastValue, setLastValues, getLastValues, getHealthMap, getRunStatus, setRunStatus, getRunState, updateRunState, updateMissedList } from '../shared/storage.js'
 import { waitMsOf, timeoutMsOf, preActionFailure, DEFAULT_WAIT_TIMEOUT_MS, messageTimeoutMs, holdMsOf, capStepMs, PRE_ACTION_STEP_MAX_MS, PRE_ACTION_STEP_CAP_NOTE } from '../shared/preaction.js'
 import { seriesIdOf, parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
 import { MSG } from '../shared/messages.js'
@@ -551,13 +551,13 @@ function hasAnySuccess(records) {
 // setRunStatus 前被回收。以父 task + slot + field key 辨識同一輪提交，讓復原或
 // 重試只補缺少的子序列，不把已耐久的成功值再追加一份；手動抓取不使用這條
 // 去重路徑，保留同一分鐘手動抓取也各自留紀錄的既有語意。
-async function appendMultiRecordsOnce(date, records, parentId, slot, commitId, dedupe = true) {
+async function appendMultiRecordsOnce(date, records, parentId, slot, commitId, dedupe = true, executionFingerprint) {
   if (!dedupe) {
     await appendRecords(date, records)
     return { records, fresh: records }
   }
 
-  let committed = await getCommittedMultiRecords(date, parentId, slot, commitId)
+  let committed = await getCommittedMultiRecords(date, parentId, slot, commitId, executionFingerprint)
   const byId = new Map(committed.map(record => [record.taskId, record]))
   const pending = records.filter(record => !byId.has(record.taskId))
   if (pending.length > 0) {
@@ -566,7 +566,7 @@ async function appendMultiRecordsOnce(date, records, parentId, slot, commitId, d
     } catch (err) {
       // storage.set 可能在實際寫入後才把例外傳回；確認所有 field 已落盤時，
       // 視為提交成功並繼續補帳本，不進外層 failure path 追加第二份紀錄。
-      committed = await getCommittedMultiRecords(date, parentId, slot, commitId)
+      committed = await getCommittedMultiRecords(date, parentId, slot, commitId, executionFingerprint)
       const afterIds = new Set(committed.map(record => record.taskId))
       if (!records.every(record => afterIds.has(record.taskId))) throw err
       byId.clear()
@@ -627,23 +627,28 @@ async function finalizeMultiRecords(task, slot, records, { skipLedger = false, p
   return records.find(record => isSuccess(record)) || records[0] || null
 }
 
-async function getCommittedMultiRecords(date, parentId, slot, commitId) {
+async function getCommittedMultiRecords(date, parentId, slot, commitId, executionFingerprint) {
   const all = await getRecordsByDate(date)
   return all.filter(record => (
     record?.slot === slot &&
     parentIdOf(record.taskId) === parentId &&
-    record?.commitId === commitId
+    record?.commitId === commitId &&
+    (executionFingerprint === undefined || record?.executionFingerprint === executionFingerprint)
   ))
 }
 
-async function recoverCommittedMulti(task, slot, sources, commitId) {
+async function recoverCommittedMulti(task, slot, sources, commitId, executionFingerprint) {
   const date = typeof slot === 'string' && slot.length >= 10
     ? slot.slice(0, 10)
     : getLocalDateStr(new Date())
-  const byId = new Map(
-    (await getCommittedMultiRecords(date, task.id, slot, commitId))
-      .map(record => [record.taskId, record])
-  )
+  const all = await getCommittedMultiRecords(date, task.id, slot, commitId)
+  // Older records have no specification identity.  They remain readable, but
+  // cannot be safely attributed to this execution after the task is edited.
+  // Refuse recovery rather than guessing and publishing them under a new spec.
+  if (all.length > 0 && all.some(record => record?.executionFingerprint !== executionFingerprint)) {
+    return { invalid: true }
+  }
+  const byId = new Map(all.map(record => [record.taskId, record]))
   const records = sources.map(field => byId.get(seriesIdOf(task.id, field.key))).filter(Boolean)
   return records.length === sources.length ? records : null
 }
@@ -700,7 +705,8 @@ async function writeMultiFailureRecords(task, slot, status, error, opts = {}) {
     status,
     error,
     ...(commitId ? { commitId } : {}),
-    ...(opts.executionId ? { executionId: opts.executionId } : {})
+    ...(opts.executionId ? { executionId: opts.executionId } : {}),
+    ...(opts.executionFingerprint ? { executionFingerprint: opts.executionFingerprint } : {})
   }))
   const date = typeof slot === 'string' && slot.length >= 10
     ? slot.slice(0, 10)
@@ -712,6 +718,9 @@ async function writeMultiFailureRecords(task, slot, status, error, opts = {}) {
   let existing = []
   if (dedupe) {
     try { existing = await getCommittedMultiRecords(date, task.id, slot, commitId) } catch {}
+    if (existing.length > 0 && existing.some(record => record?.executionFingerprint !== opts.executionFingerprint)) {
+      return { ...TASK_CHANGED_RESULT }
+    }
   }
   const existingIds = new Set(existing.map(record => record.taskId))
   const alertEvaluations = []
@@ -720,7 +729,15 @@ async function writeMultiFailureRecords(task, slot, status, error, opts = {}) {
       alertEvaluations.push({ taskId: record.taskId, evaluation: await evaluateRecordAlerts(record, recordsInRange) })
     }
   }
-  const committedResult = await appendMultiRecordsOnce(date, records.map(slimRecord), task.id, slot, commitId, dedupe)
+  if (opts.executionSnapshot && !(await multiExecutionStillValid(task, opts.executionSnapshot))) {
+    return { ...TASK_CHANGED_RESULT }
+  }
+  const committedResult = await appendMultiRecordsOnce(
+    date, records.map(slimRecord), task.id, slot, commitId, dedupe, opts.executionFingerprint
+  )
+  if (opts.executionSnapshot && !(await multiExecutionStillValid(task, opts.executionSnapshot))) {
+    return { ...TASK_CHANGED_RESULT }
+  }
   for (const { taskId, evaluation } of alertEvaluations) {
     const committed = committedResult.records.find(record => record.taskId === taskId)
     await notifyEvaluatedAlerts(committed, evaluation)
@@ -728,6 +745,9 @@ async function writeMultiFailureRecords(task, slot, status, error, opts = {}) {
   // append 若只落了部分 field 後回錯，這裡也要把已落盤且帶標記的 field
   // 補上通知；cooldown 會擋住上面剛通知過的同一執行。
   await notifyCommittedMultiAlerts(committedResult.records)
+  if (opts.executionSnapshot && !(await multiExecutionStillValid(task, opts.executionSnapshot))) {
+    return { ...TASK_CHANGED_RESULT }
+  }
   await finalizeMultiRecords(task, slot, committedResult.records, { skipLedger: opts.skipLedger === true })
   return committedResult.records[0]
 }
@@ -765,6 +785,52 @@ function manualExecutionId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
 }
 
+// 任務名稱／顯示順序不是抓取身分；其餘會影響這次 multi 擷取的規格固定成快照。
+function stableExecutionJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableExecutionJson).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableExecutionJson(value[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+function multiExecutionSnapshot(task) {
+  return stableExecutionJson({
+    url: task?.url,
+    enabled: task?.enabled,
+    foreground: task?.foreground,
+    mode: task?.mode,
+    specMode: task?.spec?.mode,
+    preActions: task?.preActions,
+    sources: normalizeTaskSources(task)
+      .map(({ key, mode, source, spec }) => ({ key, mode, source, spec }))
+      .sort((a, b) => String(a.key).localeCompare(String(b.key)))
+  })
+}
+
+// Durable records only need a bounded identity for the captured specification.
+// Keep the full snapshot in memory for the publish gate, but persist a SHA-256
+// digest so a task with many sources does not copy its whole spec into every row.
+export async function executionFingerprintOf(task) {
+  const subtle = globalThis.crypto?.subtle
+  if (!subtle) throw new Error('Web Crypto is required for execution fingerprints')
+  const bytes = new TextEncoder().encode(multiExecutionSnapshot(task))
+  const digest = new Uint8Array(await subtle.digest('SHA-256', bytes))
+  return Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
+async function multiExecutionStillValid(task, snapshot) {
+  return checkTaskExecution(task?.id, (current) => (
+    multiExecutionSnapshot(current) === snapshot
+  ))
+}
+
+const TASK_CHANGED_RESULT = Object.freeze({
+  ok: false,
+  error: 'task_changed',
+  message: '任務在擷取期間已刪除或變更，這次結果未發布'
+})
+
 // 執行任務的主要入口函式
 export async function runTask(task, opts = {}) {
   const {
@@ -790,6 +856,8 @@ export async function runTask(task, opts = {}) {
   const isManual = reason === 'manual'
   const isMulti = task?.mode === 'multi' || task?.spec?.mode === 'multi'
   const executionId = isManual ? manualExecutionId() : undefined
+  const executionSnapshot = isMulti ? multiExecutionSnapshot(task) : null
+  const executionFingerprint = isMulti ? await executionFingerprintOf(task) : null
   // 來源索引也要供 legacy `fields` 回覆的診斷使用；舊 block 任務不是
   // `isMulti`，但擷取結果仍可能帶 fields，不能讓診斷分支對 null 呼叫 find。
   const multiSources = normalizeTaskSources(task)
@@ -816,16 +884,25 @@ export async function runTask(task, opts = {}) {
     extraDelayMs = typeof settings?.extraDelaySec === 'number' ? settings.extraDelaySec * 1000 : 3000
   }
 
+  // 在任何既有提交恢復或早期失敗寫入前先核對；刪除／改規格的舊執行只收尾，不發布結果。
+  if (!dryRun && isMulti && !(await multiExecutionStillValid(task, executionSnapshot))) {
+    return { ...TASK_CHANGED_RESULT }
+  }
+
   // appendRecords 已成功但 worker 在帳本前中斷時，下一輪先對同一 task/slot
   // 對帳；完整 field 集存在就只補後續狀態，不重開頁面、不重跑前置動作，也不
   // 重新追加紀錄。即使舊 worker 已先寫帳本，只要後續狀態缺漏也要補完；
   // 讀取失敗則退回既有執行流程，讓原本的錯誤處理接手。
   if (!dryRun && !isManual && isMulti) {
     try {
-      const committed = await recoverCommittedMulti(task, slot, multiSources, commitIdOf(task, slot))
+      const recovered = await recoverCommittedMulti(task, slot, multiSources, commitIdOf(task, slot), executionFingerprint)
+      if (recovered?.invalid) return { ...TASK_CHANGED_RESULT }
+      const committed = recovered
       const ledgerStatus = committed ? await getRunStatus(task.id, slot) : undefined
       if (committed && (!ledgerStatus || (await multiFinalizeMissing(task, committed)))) {
+        if (!(await multiExecutionStillValid(task, executionSnapshot))) return { ...TASK_CHANGED_RESULT }
         await notifyCommittedMultiAlerts(committed)
+        if (!(await multiExecutionStillValid(task, executionSnapshot))) return { ...TASK_CHANGED_RESULT }
         return await finalizeMultiRecords(task, slot, committed, { preserveExisting: true })
       }
     } catch {}
@@ -842,7 +919,7 @@ export async function runTask(task, opts = {}) {
     // 手動抓取一律不重試，但要留一筆看得到的紀錄，否則使用者按了沒有任何反應
     if (isManual) {
       if (isMulti) {
-        return await writeMultiFailureRecords(task, slot, 'error', '目前離線', { skipLedger: true, executionId })
+        return await writeMultiFailureRecords(task, slot, 'error', '目前離線', { skipLedger: true, executionId, executionSnapshot, executionFingerprint })
       }
       return await writeRecord({
         taskId: task.id,
@@ -858,7 +935,7 @@ export async function runTask(task, opts = {}) {
       return null
     }
     if (isMulti) {
-      return await writeMultiFailureRecords(task, slot, 'error', '目前離線')
+      return await writeMultiFailureRecords(task, slot, 'error', '目前離線', { executionSnapshot, executionFingerprint })
     }
     return await writeRecord({
       taskId: task.id,
@@ -1012,7 +1089,7 @@ export async function runTask(task, opts = {}) {
           checkDeadline()
           if (dryRun) return isMulti ? multiFailureResult(task, 'login_failed', login?.reason || '無法登入') : { ok: false, error: 'login_failed' }
           if (isMulti) {
-            return await writeMultiFailureRecords(task, slot, 'login_failed', login?.reason || '無法登入', { skipLedger: isManual, executionId })
+            return await writeMultiFailureRecords(task, slot, 'login_failed', login?.reason || '無法登入', { skipLedger: isManual, executionId, executionSnapshot, executionFingerprint })
           }
           return await writeRecord({
             taskId: task.id,
@@ -1287,6 +1364,10 @@ export async function runTask(task, opts = {}) {
           return out
         }
 
+        if (!dryRun && isMulti && !(await multiExecutionStillValid(task, executionSnapshot))) {
+          return { ...TASK_CHANGED_RESULT }
+        }
+
         // 結果處理：成功路徑
         if (res?.ok === true) {
           if (res.fields && typeof res.fields === 'object' && Object.keys(res.fields).length === 0) {
@@ -1306,7 +1387,8 @@ export async function runTask(task, opts = {}) {
                 taskId: seriesIdOf(task.id, key),
                 slot,
                 capturedAt,
-                ...(isManual ? { executionId } : { commitId: commitIdOf(task, slot) })
+                ...(isManual ? { executionId } : { commitId: commitIdOf(task, slot) }),
+                ...(executionFingerprint ? { executionFingerprint } : {})
               }
               if (r?.ok) {
                 rec.value = r.value
@@ -1363,6 +1445,9 @@ export async function runTask(task, opts = {}) {
             const commitId = isManual ? undefined : commitIdOf(task, slot)
             if (!isManual) {
               try { existing = await getCommittedMultiRecords(date, task.id, slot, commitId) } catch {}
+              if (isMulti && existing.length > 0 && existing.some(record => record?.executionFingerprint !== executionFingerprint)) {
+                return { ...TASK_CHANGED_RESULT }
+              }
             }
             const existingIds = new Set(existing.map(record => record.taskId))
             const alertEvaluations = []
@@ -1374,16 +1459,27 @@ export async function runTask(task, opts = {}) {
               }
             }
 
+            if (isMulti && !(await multiExecutionStillValid(task, executionSnapshot))) {
+              return { ...TASK_CHANGED_RESULT }
+            }
+
             // 批次寫入：排程同一 task/slot 只補缺少的 field；手動抓取保留
             // 每次獨立紀錄。若 storage 在寫入後回錯，helper 會先核對已耐久資料，
             // 避免外層 catch 再追加一整批重複結果。
             const committedResult = await appendMultiRecordsOnce(
-              date, records, task.id, slot, commitId, !isManual
+              date, records, task.id, slot, commitId, !isManual,
+              isMulti ? executionFingerprint : undefined
             )
             const committedRecords = committedResult.records
+            if (isMulti && !(await multiExecutionStillValid(task, executionSnapshot))) {
+              return { ...TASK_CHANGED_RESULT }
+            }
             for (const { taskId, evaluation } of alertEvaluations) {
               const committed = committedRecords.find(record => record.taskId === taskId)
               await notifyEvaluatedAlerts(committed, evaluation)
+            }
+            if (isMulti && !(await multiExecutionStillValid(task, executionSnapshot))) {
+              return { ...TASK_CHANGED_RESULT }
             }
             await finalizeMultiRecords(task, slot, committedRecords, {
               skipLedger: isManual,
@@ -1454,7 +1550,7 @@ export async function runTask(task, opts = {}) {
             await scheduleRetry(task.id, attempt, false, slot)
             return null
           }
-          return await writeMultiFailureRecords(task, slot, res?.error || 'error', error, { skipLedger: isManual, executionId })
+          return await writeMultiFailureRecords(task, slot, res?.error || 'error', error, { skipLedger: isManual, executionId, executionSnapshot, executionFingerprint })
         }
 
         // 結果處理：元素未找到（可重試）
@@ -1531,12 +1627,15 @@ export async function runTask(task, opts = {}) {
           out.debug = await buildDebug(task, tabId, loc, preActionTrace, { error: shown, raw })
           return out
         }
+        if (isMulti && !(await multiExecutionStillValid(task, executionSnapshot))) {
+          return { ...TASK_CHANGED_RESULT }
+        }
         if (!isManual && attempt < 3) {
           await scheduleRetry(task.id, attempt, false, slot)
           return null
         }
         if (isMulti) {
-            return await writeMultiFailureRecords(task, slot, 'error', shown, { skipLedger: isManual, executionId })
+          return await writeMultiFailureRecords(task, slot, 'error', shown, { skipLedger: isManual, executionId, executionSnapshot, executionFingerprint })
         }
         return await writeRecord({
           taskId: task.id,

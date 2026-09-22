@@ -471,6 +471,17 @@ export async function updateTasks(ids, mutator) {
   return savedTasks
 }
 
+// 在 tasks 鎖內檢查目前任務；predicate 只能讀鎖內副本，不得在其中再碰 storage。
+// 用 updateTasks 保持與任務改寫相同的鎖與最新值語意，回傳 false 代表已刪除或規格不符。
+export async function checkTaskExecution(id, predicate) {
+  let matched = false
+  await updateTasks([id], (task) => {
+    matched = typeof predicate === 'function' && predicate(task) === true
+    return null
+  })
+  return matched
+}
+
 // 新增或更新任務（驗證 id, name, url；未指定 order 給目前最大 + 1）
 export async function saveTask(task) {
   const [saved] = await saveTasks([task])

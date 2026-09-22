@@ -32,6 +32,11 @@ async function fresh() {
   return { c, st, fe }
 }
 
+async function durableRecords(fe, task, records) {
+  const executionFingerprint = await fe.executionFingerprintOf(task)
+  return records.map(record => ({ ...record, executionFingerprint }))
+}
+
 function framesResponder() {
   return (injection) => Array.isArray(injection?.args)
     ? []
@@ -327,10 +332,10 @@ test('E2c：告警通知在 multi record append 成功後才發送，恢復重�
   await st.saveSettings({ alertCooldownMin: 60 })
   const slot = '2026-09-21T12:55'
   const capturedAt = '2026-09-21T04:55:01.000Z'
-  await st.appendRecords('2026-09-21', [
+  await st.appendRecords('2026-09-21', await durableRecords(fe, task, [
     { taskId: 'multi-e2#price', slot, commitId: `multi-e2@${slot}`, capturedAt, value: 12, raw: '12', status: 'ok', alert: true, alertHits: ['price-high'] },
     { taskId: 'multi-e2#label', slot, commitId: `multi-e2@${slot}`, capturedAt, value: '標籤', raw: '標籤', status: 'ok' }
-  ])
+  ]))
   c.__calls.length = 0
   const first = await fe.runTask(task, { slot, attempt: 2, ...FAST })
   assert.equal(first.taskId, 'multi-e2#price')
@@ -375,20 +380,20 @@ test('E2c：claim 超過有界保留後，過舊 durable execution 保守跳過�
   const currentCapturedAt = new Date().toISOString()
   const currentDate = currentCapturedAt.slice(0, 10)
   const currentSlot = `${currentDate}T00:00`
-  await st.appendRecords(currentDate, [
+  await st.appendRecords(currentDate, await durableRecords(fe, task, [
     { taskId: 'multi-e2#price', slot: currentSlot, commitId: `multi-e2@${currentSlot}`, capturedAt: currentCapturedAt, value: 12, raw: '12', status: 'ok', alert: true, alertHits: ['price-high'] },
     { taskId: 'multi-e2#label', slot: currentSlot, commitId: `multi-e2@${currentSlot}`, capturedAt: currentCapturedAt, value: '標籤', raw: '標籤', status: 'ok' }
-  ])
+  ]))
   c.__calls.length = 0
   await fe.runTask(task, { slot: currentSlot, attempt: 2, ...FAST })
   assert.equal(c.__calls.filter(x => x.api === 'notifications.create').length, 1)
   const firstAlertAt = (await c.storage.local.get('alertLog')).alertLog['multi-e2#price']['price-high']
 
   const oldSlot = '2025-12-31T23:00'
-  await st.appendRecords('2025-12-31', [
+  await st.appendRecords('2025-12-31', await durableRecords(fe, task, [
     { taskId: 'multi-e2#price', slot: oldSlot, commitId: `multi-e2@${oldSlot}`, capturedAt: '2025-12-31T23:00:01.000Z', value: 12, raw: '12', status: 'ok', alert: true, alertHits: ['price-high'] },
     { taskId: 'multi-e2#label', slot: oldSlot, commitId: `multi-e2@${oldSlot}`, capturedAt: '2025-12-31T23:00:01.000Z', value: '標籤', raw: '標籤', status: 'ok' }
-  ])
+  ]))
   c.__calls.length = 0
   const recovered = await fe.runTask(task, { slot: oldSlot, attempt: 2, ...FAST })
   assert.equal(recovered.taskId, 'multi-e2#price')
@@ -426,10 +431,10 @@ test('E2c：已有完整 field 結果但帳本尚未完成時，下一輪直接�
   const task = multiTask()
   await st.saveTask(task)
   const slot = '2026-09-21T12:30'
-  await st.appendRecords('2026-09-21', [
+  await st.appendRecords('2026-09-21', await durableRecords(fe, task, [
     { taskId: 'multi-e2#price', slot, commitId: `multi-e2@${slot}`, capturedAt: '2026-09-21T12:30:01.000Z', value: 12, raw: '12', status: 'ok' },
     { taskId: 'multi-e2#label', slot, commitId: `multi-e2@${slot}`, capturedAt: '2026-09-21T12:30:01.000Z', value: '標籤', raw: '標籤', status: 'ok' }
-  ])
+  ]))
   c.__calls.length = 0
   const result = await fe.runTask(task, { slot, attempt: 2, ...FAST })
   assert.equal(result.taskId, 'multi-e2#price')
@@ -444,10 +449,10 @@ test('E2c：舊執行先寫帳本但 lastValues／health 未完成時，下一�
   const task = multiTask()
   await st.saveTask(task)
   const slot = '2026-09-21T12:40'
-  await st.appendRecords('2026-09-21', [
+  await st.appendRecords('2026-09-21', await durableRecords(fe, task, [
     { taskId: 'multi-e2#price', slot, commitId: `multi-e2@${slot}`, capturedAt: '2026-09-21T12:40:01.000Z', value: 12, raw: '12', status: 'ok' },
     { taskId: 'multi-e2#label', slot, commitId: `multi-e2@${slot}`, capturedAt: '2026-09-21T12:40:01.000Z', value: '標籤', raw: '標籤', status: 'ok' }
-  ])
+  ]))
   await st.setRunStatus(task.id, slot, 'ok')
   c.__calls.length = 0
   const result = await fe.runTask(task, { slot, attempt: 2, ...FAST })
@@ -466,10 +471,10 @@ test('E2c：舊 slot 重入遇到較新的 lastValues／health 不回寫舊值�
   await st.saveTask(task)
   const oldSlot = '2026-09-21T12:30'
   const oldCapturedAt = '2026-09-21T04:30:01.000Z'
-  await st.appendRecords('2026-09-21', [
+  await st.appendRecords('2026-09-21', await durableRecords(fe, task, [
     { taskId: 'multi-e2#price', slot: oldSlot, commitId: `multi-e2@${oldSlot}`, capturedAt: oldCapturedAt, value: 12, raw: '12', status: 'ok' },
     { taskId: 'multi-e2#label', slot: oldSlot, commitId: `multi-e2@${oldSlot}`, capturedAt: oldCapturedAt, value: '舊標籤', raw: '舊標籤', status: 'ok' }
-  ])
+  ]))
   await st.setRunStatus(task.id, oldSlot, 'ok')
   const newerLast = {
     'multi-e2#price': { value: 13, capturedAt: '2026-09-21T04:31:01.000Z' },
