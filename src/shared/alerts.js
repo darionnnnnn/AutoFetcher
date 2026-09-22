@@ -1,5 +1,21 @@
 import { isSuccess } from './record-status.js';
 import { fieldKeyOf } from './series-index.js';
+import { normalizeTaskSources } from './task-source.js';
+
+function isMultiTask(task) {
+  return task?.mode === 'multi' || task?.spec?.mode === 'multi';
+}
+
+// 多值任務的 mode 屬於子序列，不可拿父 task.mode（multi）判斷。
+// key 的拆解一律經 series-index，避免告警邏輯自行處理保留字元。
+function modeOfRecord(task, record) {
+  const fieldKey = fieldKeyOf(record?.taskId || '');
+  if (!isMultiTask(task) || !fieldKey) return task?.mode;
+
+  const sourceField = normalizeTaskSources(task)
+    .find(field => field?.key === fieldKey);
+  return typeof sourceField?.mode === 'string' ? sourceField.mode : undefined;
+}
 
 // AutoFetcher 告警判定（SPEC §10）：純函式，去重與通知由呼叫端負責
 export function evaluateAlerts(task, record, prevRecords, displayName) {
@@ -20,6 +36,10 @@ export function evaluateAlerts(task, record, prevRecords, displayName) {
     }
 
     const { id, type, value } = alert;
+    const fieldMode = modeOfRecord(task, record);
+    const multi = isMultiTask(task);
+    const textMode = fieldMode === 'text';
+    const numericMode = fieldMode === 'number' || fieldMode === 'block' || (!multi && fieldMode !== 'text');
 
     if (type === 'failStreak') {
       // failStreak 只在 record 不成功時可能命中
@@ -48,6 +68,7 @@ export function evaluateAlerts(task, record, prevRecords, displayName) {
     const currentValue = record.value;
 
     if (type === 'gt') {
+      if (!numericMode) continue;
       if (currentValue > value) {
         hits.push({
           alertId: id,
@@ -56,6 +77,7 @@ export function evaluateAlerts(task, record, prevRecords, displayName) {
         });
       }
     } else if (type === 'lt') {
+      if (!numericMode) continue;
       if (currentValue < value) {
         hits.push({
           alertId: id,
@@ -65,9 +87,9 @@ export function evaluateAlerts(task, record, prevRecords, displayName) {
       }
     } else if (type === 'eq') {
       let isMatch = false;
-      if (task.mode === 'text') {
+      if (textMode) {
         isMatch = String(currentValue) === String(value);
-      } else {
+      } else if (numericMode) {
         // 容忍浮點誤差：門檻隨數量級放大，否則大數只剩精確比較
         const scale = Math.max(1, Math.abs(currentValue), Math.abs(value));
         isMatch = Math.abs(currentValue - value) < Number.EPSILON * scale * 4;
@@ -81,6 +103,7 @@ export function evaluateAlerts(task, record, prevRecords, displayName) {
         });
       }
     } else if (type === 'deltaPct') {
+      if (!numericMode) continue;
       // 尋找最近一筆成功紀錄
       let prevSuccessRecord = null;
       for (let i = prevRecords.length - 1; i >= 0; i--) {
