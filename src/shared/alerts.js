@@ -26,6 +26,10 @@ export function evaluateAlerts(task, record, prevRecords, displayName) {
 
   const name = displayName || task.name || '';
   const currentSuccess = isSuccess(record);
+  const fieldMode = modeOfRecord(task, record);
+  const multi = isMultiTask(task);
+  const textMode = fieldMode === 'text';
+  const numericMode = fieldMode === 'number' || fieldMode === 'block' || (!multi && fieldMode !== 'text');
 
   for (const alert of task.alerts) {
     if (!alert.enabled) continue;
@@ -36,10 +40,6 @@ export function evaluateAlerts(task, record, prevRecords, displayName) {
     }
 
     const { id, type, value } = alert;
-    const fieldMode = modeOfRecord(task, record);
-    const multi = isMultiTask(task);
-    const textMode = fieldMode === 'text';
-    const numericMode = fieldMode === 'number' || fieldMode === 'block' || (!multi && fieldMode !== 'text');
 
     if (type === 'failStreak') {
       // failStreak 只在 record 不成功時可能命中
