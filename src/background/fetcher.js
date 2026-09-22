@@ -1,5 +1,5 @@
 // AutoFetcher 擷取流程：開分頁、注入、擷取、寫紀錄、重試
-import { getTask, updateTasks, appendRecord, appendRecords, getRecordsInRange, getSettings, updateAlertLog, setLastValue, setLastValues, getRunStatus, setRunStatus, getRunState, updateRunState, updateMissedList } from '../shared/storage.js'
+import { getTask, updateTasks, appendRecord, appendRecords, getRecordsByDate, getRecordsInRange, getSettings, updateAlertLog, setLastValue, setLastValues, getLastValues, getHealthMap, getRunStatus, setRunStatus, getRunState, updateRunState, updateMissedList } from '../shared/storage.js'
 import { waitMsOf, timeoutMsOf, preActionFailure, DEFAULT_WAIT_TIMEOUT_MS, messageTimeoutMs, holdMsOf, capStepMs, PRE_ACTION_STEP_MAX_MS, PRE_ACTION_STEP_CAP_NOTE } from '../shared/preaction.js'
 import { seriesIdOf, parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
 import { MSG } from '../shared/messages.js'
@@ -453,6 +453,119 @@ function hasAnySuccess(records) {
   return records.some(r => isSuccess(r))
 }
 
+// 排程 multi 的紀錄與帳本不是跨鍵交易：worker 可能在 appendRecords 後、
+// setRunStatus 前被回收。以父 task + slot + field key 辨識同一輪提交，讓復原或
+// 重試只補缺少的子序列，不把已耐久的成功值再追加一份；手動抓取不使用這條
+// 去重路徑，保留同一分鐘手動抓取也各自留紀錄的既有語意。
+async function appendMultiRecordsOnce(date, records, parentId, slot, commitId, dedupe = true) {
+  if (!dedupe) {
+    await appendRecords(date, records)
+    return { records, fresh: records }
+  }
+
+  let committed = await getCommittedMultiRecords(date, parentId, slot, commitId)
+  const byId = new Map(committed.map(record => [record.taskId, record]))
+  const pending = records.filter(record => !byId.has(record.taskId))
+  if (pending.length > 0) {
+    try {
+      await appendRecords(date, pending)
+    } catch (err) {
+      // storage.set 可能在實際寫入後才把例外傳回；確認所有 field 已落盤時，
+      // 視為提交成功並繼續補帳本，不進外層 failure path 追加第二份紀錄。
+      committed = await getCommittedMultiRecords(date, parentId, slot, commitId)
+      const afterIds = new Set(committed.map(record => record.taskId))
+      if (!records.every(record => afterIds.has(record.taskId))) throw err
+      byId.clear()
+      for (const record of committed) byId.set(record.taskId, record)
+    }
+  }
+
+  // 已有紀錄是同一排程輪次的固定結果；新結果只用來填尚未耐久的 field。
+  return {
+    records: records.map(record => byId.get(record.taskId) || record),
+    fresh: pending
+  }
+}
+
+function isOlderCapturedAt(existing, incoming) {
+  if (existing === undefined || existing === null || existing === '') return true
+  const existingMs = Date.parse(String(existing))
+  const incomingMs = Date.parse(String(incoming))
+  if (Number.isFinite(existingMs) && Number.isFinite(incomingMs)) return existingMs < incomingMs
+  return String(existing) < String(incoming)
+}
+
+function healthOlderThanRecords(healthEntry, records) {
+  if (!healthEntry) return true
+  const healthAt = Number(healthEntry.at)
+  if (!Number.isFinite(healthAt)) return false
+  const recordTimes = records
+    .map(record => Date.parse(String(record?.capturedAt || '')))
+    .filter(Number.isFinite)
+  return recordTimes.length > 0 && healthAt < Math.max(...recordTimes)
+}
+
+async function finalizeMultiRecords(task, slot, records, { skipLedger = false, partial = false, preserveExisting = false } = {}) {
+  const hasSuccess = records.some(record => isSuccess(record))
+  const firstFail = records.find(record => !isSuccess(record))
+  const ledgerStatus = hasSuccess ? 'ok' : (firstFail ? firstFail.status : 'error')
+  const currentLastValues = await getLastValues()
+  const currentHealth = preserveExisting ? await getHealthMap() : null
+  const preserveHealth = preserveExisting && !healthOlderThanRecords(currentHealth?.[task.id], records)
+  const lastEntries = {}
+  for (const record of records) {
+    if (isSuccess(record)) {
+      const current = currentLastValues?.[record.taskId]
+      if (!current || isOlderCapturedAt(current.capturedAt, record.capturedAt)) {
+        lastEntries[record.taskId] = { value: record.value, capturedAt: record.capturedAt }
+      }
+    }
+  }
+  await setLastValues(lastEntries)
+  if (!preserveHealth) {
+    await updateHealth(task.id, healthFromRecords(records, partial))
+    if (hasSuccess) await clearNotifyLog(task.id)
+    if (records.every(record => isSuccess(record))) await clearNotFoundStreak(task.id)
+  }
+  // 帳本是「這一輪已完成」的最後標記。先寫它會讓 worker 在
+  // lastValues／health 之後被回收時，下一輪誤以為沒有待補工作。
+  if (!skipLedger) await setRunStatus(task.id, slot, ledgerStatus)
+  return records.find(record => isSuccess(record)) || records[0] || null
+}
+
+async function getCommittedMultiRecords(date, parentId, slot, commitId) {
+  const all = await getRecordsByDate(date)
+  return all.filter(record => (
+    record?.slot === slot &&
+    parentIdOf(record.taskId) === parentId &&
+    record?.commitId === commitId
+  ))
+}
+
+async function recoverCommittedMulti(task, slot, sources, commitId) {
+  const date = typeof slot === 'string' && slot.length >= 10
+    ? slot.slice(0, 10)
+    : getLocalDateStr(new Date())
+  const byId = new Map(
+    (await getCommittedMultiRecords(date, task.id, slot, commitId))
+      .map(record => [record.taskId, record])
+  )
+  const records = sources.map(field => byId.get(seriesIdOf(task.id, field.key))).filter(Boolean)
+  return records.length === sources.length ? records : null
+}
+
+// 舊 worker 可能已先寫帳本才在後續狀態中斷；只要成功值的 lastValue
+// 或父任務 health 尚未對上，就仍要走補完路徑，而不是被帳本冪等門擋住。
+async function multiFinalizeMissing(task, records) {
+  const [lastValues, health] = await Promise.all([getLastValues(), getHealthMap()])
+  if (healthOlderThanRecords(health?.[task.id], records)) return true
+  return records.some(record => {
+    if (!isSuccess(record)) return false
+    const last = lastValues?.[record.taskId]
+    return !last || isOlderCapturedAt(last.capturedAt, record.capturedAt)
+  })
+}
+
 // 寫入抓取紀錄並更新帳本與 health
 async function writeRecord(input, opts = {}) {
   const { parentId, skipLedger } = opts
@@ -482,13 +595,16 @@ async function writeMultiFailureRecords(task, slot, status, error, opts = {}) {
       taskId: task.id, slot, capturedAt: new Date().toISOString(), status, error
     }, { parentId: task.id, skipLedger: opts.skipLedger === true })
   }
+  const dedupe = opts.dedupe !== undefined ? opts.dedupe : opts.skipLedger !== true
+  const commitId = dedupe ? (opts.commitId || commitIdOf(task, slot)) : undefined
   const capturedAt = new Date().toISOString()
   const records = sources.map((field) => ({
     taskId: seriesIdOf(task.id, field.key),
     slot,
     capturedAt,
     status,
-    error
+    error,
+    ...(commitId ? { commitId } : {})
   }))
   const date = typeof slot === 'string' && slot.length >= 10
     ? slot.slice(0, 10)
@@ -497,11 +613,17 @@ async function writeMultiFailureRecords(task, slot, status, error, opts = {}) {
   const pastDate = new Date(y, m - 1, d - 6, 12, 0, 0)
   const fromDate = getLocalDateStr(pastDate)
   const recordsInRange = await getRecordsInRange(fromDate, date)
-  for (const record of records) await processAlerts(record, recordsInRange)
-  await appendRecords(date, records.map(slimRecord))
-  if (opts.skipLedger !== true) await setRunStatus(task.id, slot, status)
-  await updateHealth(task.id, healthFromRecords(records, false))
-  return records[0]
+  let existing = []
+  if (dedupe) {
+    try { existing = await getCommittedMultiRecords(date, task.id, slot, commitId) } catch {}
+  }
+  const existingIds = new Set(existing.map(record => record.taskId))
+  for (const record of records) {
+    if (!existingIds.has(record.taskId)) await processAlerts(record, recordsInRange)
+  }
+  const committedResult = await appendMultiRecordsOnce(date, records.map(slimRecord), task.id, slot, commitId, dedupe)
+  await finalizeMultiRecords(task, slot, committedResult.records, { skipLedger: opts.skipLedger === true })
+  return committedResult.records[0]
 }
 
 function multiFailureResult(task, status, error) {
@@ -528,6 +650,10 @@ function sourceDiagLabel(field) {
   return '主文件'
 }
 
+function commitIdOf(task, slot) {
+  return `${typeof task?.id === 'string' ? task.id : ''}@${String(slot || '')}`
+}
+
 // 執行任務的主要入口函式
 export async function runTask(task, opts = {}) {
   const {
@@ -552,7 +678,9 @@ export async function runTask(task, opts = {}) {
   } = opts
   const isManual = reason === 'manual'
   const isMulti = task?.mode === 'multi' || task?.spec?.mode === 'multi'
-  const multiSources = isMulti ? normalizeTaskSources(task) : null
+  // 來源索引也要供 legacy `fields` 回覆的診斷使用；舊 block 任務不是
+  // `isMulti`，但擷取結果仍可能帶 fields，不能讓診斷分支對 null 呼叫 find。
+  const multiSources = normalizeTaskSources(task)
 
   // multi 沒有任何宣告值是設定錯誤，不應為了最後才發現空欄位而開分頁、登入或
   // 寫入一筆看似抓取失敗的父紀錄。立即測試仍回傳可供 UI 顯示的明確結果，正式
@@ -576,7 +704,21 @@ export async function runTask(task, opts = {}) {
     extraDelayMs = typeof settings?.extraDelaySec === 'number' ? settings.extraDelaySec * 1000 : 3000
   }
 
-  // 1. 冪等檢查：已在帳本中則直接返回 null（dryRun 與手動抓取略過）
+  // appendRecords 已成功但 worker 在帳本前中斷時，下一輪先對同一 task/slot
+  // 對帳；完整 field 集存在就只補後續狀態，不重開頁面、不重跑前置動作，也不
+  // 重新追加紀錄。即使舊 worker 已先寫帳本，只要後續狀態缺漏也要補完；
+  // 讀取失敗則退回既有執行流程，讓原本的錯誤處理接手。
+  if (!dryRun && !isManual && isMulti) {
+    try {
+      const committed = await recoverCommittedMulti(task, slot, multiSources, commitIdOf(task, slot))
+      const ledgerStatus = committed ? await getRunStatus(task.id, slot) : undefined
+      if (committed && (!ledgerStatus || (await multiFinalizeMissing(task, committed)))) {
+        return await finalizeMultiRecords(task, slot, committed, { preserveExisting: true })
+      }
+    } catch {}
+  }
+
+  // 1. 冪等檢查：已在帳本中且後續狀態完整則直接返回 null（dryRun 與手動抓取略過）
   if (!dryRun && !isManual) {
     if (await getRunStatus(task.id, slot)) return null
   }
@@ -962,7 +1104,8 @@ export async function runTask(task, opts = {}) {
           } else {
             const anySuccess = fieldList.some(field => field?.ok === true)
             const anyFailure = fieldList.some(field => field?.ok !== true)
-            res = { ok: true, fields, ...(anyFailure ? { partial: true } : {}) }
+            const anyPartial = fieldList.some(field => field?.partial === true)
+            res = { ok: true, fields, ...((anyFailure || anyPartial) ? { partial: true } : {}) }
             if (!anySuccess && retryWholeTask && !isManual && attempt < 3) {
               await scheduleRetry(task.id, attempt, false, slot)
               return null
@@ -1049,7 +1192,8 @@ export async function runTask(task, opts = {}) {
               const rec = {
                 taskId: seriesIdOf(task.id, key),
                 slot,
-                capturedAt
+                capturedAt,
+                ...(isManual ? {} : { commitId: commitIdOf(task, slot) })
               }
               if (r?.ok) {
                 rec.value = r.value
@@ -1102,42 +1246,33 @@ export async function runTask(task, opts = {}) {
             const fromDate = getLocalDateStr(pastDate)
             const recordsInRange = await getRecordsInRange(fromDate, date)
 
-            for (const rec of records) {
-              await processAlerts(rec, recordsInRange)
-            }
-
-            // 批次寫入：整組紀錄只呼叫一次 appendRecords
-            await appendRecords(date, records)
-
-            // 帳本：整組只寫一次，用父任務 id（手動抓取不寫帳本）
+            let existing = []
+            const commitId = isManual ? undefined : commitIdOf(task, slot)
             if (!isManual) {
-              const hasSuccess = records.some(r => isSuccess(r))
-              const firstFail = records.find(r => !isSuccess(r))
-              const ledgerStatus = hasSuccess ? 'ok' : (firstFail ? firstFail.status : 'error')
-              await setRunStatus(task.id, slot, ledgerStatus)
+              try { existing = await getCommittedMultiRecords(date, task.id, slot, commitId) } catch {}
             }
-
-            // lastValues：成功的值各自以子序列 id 寫入（整組一次寫完，不逐個讀寫）
-            const lastEntries = {}
+            const existingIds = new Set(existing.map(record => record.taskId))
             for (const rec of records) {
-              if (isSuccess(rec)) {
-                lastEntries[rec.taskId] = { value: rec.value, capturedAt: rec.capturedAt }
-              }
+              // 重試／復原只對本次尚未提交的新 field 評估告警，避免帳本
+              // 寫入中斷後同一批結果再次觸發相同通知。
+              if (!existingIds.has(rec.taskId)) await processAlerts(rec, recordsInRange)
             }
-            await setLastValues(lastEntries)
 
-            // health：整個任務只寫一次，寫在父任務 id 上；狀態的算法與單值共用同一份
-            const failCount = records.filter(r => !isSuccess(r)).length
-            await updateHealth(task.id, healthFromRecords(records, res.partial))
-            if (hasAnySuccess(records)) await clearNotifyLog(task.id)
-
-            if (failCount === 0) {
-              await clearNotFoundStreak(task.id)
-            }
+            // 批次寫入：排程同一 task/slot 只補缺少的 field；手動抓取保留
+            // 每次獨立紀錄。若 storage 在寫入後回錯，helper 會先核對已耐久資料，
+            // 避免外層 catch 再追加一整批重複結果。
+            const committedResult = await appendMultiRecordsOnce(
+              date, records, task.id, slot, commitId, !isManual
+            )
+            const committedRecords = committedResult.records
+            await finalizeMultiRecords(task, slot, committedRecords, {
+              skipLedger: isManual,
+              partial: res.partial === true
+            })
 
             // 設定頁的診斷要看得出這一次抓了幾個值、哪幾個沒抓到
             // 診斷頁是用字串串接顯示；環形緩衝只有 500 筆，全成功就不占位子（否則會把看門狗紀錄擠掉）
-            const failedNames = records
+            const failedNames = committedRecords
               .filter(r => !isSuccess(r))
               .map(r => {
                 const key = r.taskId.slice(`${task.id}#`.length)
@@ -1146,11 +1281,10 @@ export async function runTask(task, opts = {}) {
                 return `${name}（${sourceDiagLabel(field)}）`
               })
             if (failedNames.length > 0) {
-              await diag.log('fetch_fields', `「${task.name}」${records.length} 個值，失敗 ${failedNames.length}：${failedNames.join('、')}`)
+              await diag.log('fetch_fields', `「${task.name}」${committedRecords.length} 個值，失敗 ${failedNames.length}：${failedNames.join('、')}`)
             }
 
-            const firstSuccess = records.find(r => isSuccess(r))
-            return firstSuccess || records[0] || null
+            return committedRecords.find(r => isSuccess(r)) || committedRecords[0] || null
           }
 
           await clearNotFoundStreak(task.id)

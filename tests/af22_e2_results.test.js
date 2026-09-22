@@ -192,3 +192,188 @@ test('E2a：items／blank 只屬預覽明細，不進正式紀錄', async () => 
     assert.equal(Object.hasOwn(record, 'blank'), false)
   }
 })
+
+test('E2c：擷取回報 partial 時保留 partial 語意到子紀錄與父任務 health', async () => {
+  const { c, st, fe } = await fresh()
+  c.__setScriptResponder(framesResponder())
+  c.__setTabResponder((tabId, msg) => msg.type === 'EXTRACT'
+    ? { ok: true, value: msg.locator?.css === '#price' ? 12 : '標籤', raw: msg.locator?.css === '#price' ? '12' : '標籤', status: 'ok', partial: true }
+    : { ok: true })
+  const task = multiTask()
+  await st.saveTask(task)
+  const slot = '2026-09-21T11:45'
+  const result = await fe.runTask(task, { slot, attempt: 3, ...FAST })
+  assert.equal(result.taskId, 'multi-e2#price')
+  const records = await st.getRecordsByDate('2026-09-21')
+  assert.equal(records.length, 2)
+  assert.equal(records.every(record => record.partial === true), true)
+  assert.equal(await st.getRunStatus(task.id, slot), 'ok')
+  assert.equal((await st.getHealthMap())[task.id].status, 'partial')
+})
+
+test('E2c：append 已寫入但帳本第一次失敗時，補帳本不重複追加 field 紀錄', async () => {
+  const { c, st, fe } = await fresh()
+  c.__setScriptResponder(framesResponder())
+  c.__setTabResponder((tabId, msg) => msg.type === 'EXTRACT'
+    ? { ok: true, value: msg.locator?.css === '#price' ? 12 : '標籤', raw: msg.locator?.css === '#price' ? '12' : '標籤', status: 'ok' }
+    : { ok: true })
+  const task = multiTask()
+  await st.saveTask(task)
+  const realSet = c.storage.local.set.bind(c.storage.local)
+  let failLedgerOnce = true
+  c.storage.local.set = async (value) => {
+    if (failLedgerOnce && value && Object.keys(value).some(key => key.startsWith('runs:'))) {
+      failLedgerOnce = false
+      throw new Error('ledger write interrupted')
+    }
+    return realSet(value)
+  }
+  const slot = '2026-09-21T12:00'
+  const result = await fe.runTask(task, { slot, attempt: 3, ...FAST })
+  c.storage.local.set = realSet
+  const records = await st.getRecordsByDate('2026-09-21')
+  assert.equal(result.taskId, 'multi-e2#price')
+  assert.equal(records.length, 2)
+  assert.equal(new Set(records.map(record => record.taskId + '@' + record.slot)).size, 2)
+  assert.equal(await st.getRunStatus(task.id, slot), 'ok')
+  assert.deepEqual(Object.keys(await st.getLastValues()).sort(), ['multi-e2#label', 'multi-e2#price'])
+})
+
+test('E2c：append 回報失敗但資料已耐久時，確認提交後不走全失敗追加', async () => {
+  const { c, st, fe } = await fresh()
+  c.__setScriptResponder(framesResponder())
+  c.__setTabResponder((tabId, msg) => msg.type === 'EXTRACT'
+    ? { ok: true, value: msg.locator?.css === '#price' ? 12 : '標籤', raw: msg.locator?.css === '#price' ? '12' : '標籤', status: 'ok' }
+    : { ok: true })
+  const task = multiTask()
+  await st.saveTask(task)
+  const realSet = c.storage.local.set.bind(c.storage.local)
+  let failAfterWriteOnce = true
+  c.storage.local.set = async (value) => {
+    if (failAfterWriteOnce && value && Object.keys(value).some(key => key.startsWith('rec2:'))) {
+      failAfterWriteOnce = false
+      await realSet(value)
+      throw new Error('record acknowledgement interrupted')
+    }
+    return realSet(value)
+  }
+  const slot = '2026-09-21T12:15'
+  const result = await fe.runTask(task, { slot, attempt: 3, ...FAST })
+  c.storage.local.set = realSet
+  const records = await st.getRecordsByDate('2026-09-21')
+  assert.equal(result.taskId, 'multi-e2#price')
+  assert.equal(records.length, 2)
+  assert.equal(await st.getRunStatus(task.id, slot), 'ok')
+})
+
+test('E2c：提交重入只對尚未存在的 field 評估告警，不重複發送通知', async () => {
+  const { c, st, fe } = await fresh()
+  c.__setScriptResponder(framesResponder())
+  c.__setTabResponder((tabId, msg) => msg.type === 'EXTRACT'
+    ? { ok: true, value: msg.locator?.css === '#price' ? 12 : '標籤', raw: msg.locator?.css === '#price' ? '12' : '標籤', status: 'ok' }
+    : { ok: true })
+  const task = multiTask({ alerts: [{ id: 'price-high', field: 'price', type: 'gt', value: 10, enabled: true }] })
+  await st.saveTask(task)
+  const realSet = c.storage.local.set.bind(c.storage.local)
+  let failLedgerOnce = true
+  c.storage.local.set = async (value) => {
+    if (failLedgerOnce && value && Object.keys(value).some(key => key.startsWith('runs:'))) {
+      failLedgerOnce = false
+      throw new Error('ledger write interrupted')
+    }
+    return realSet(value)
+  }
+  const result = await fe.runTask(task, { slot: '2026-09-21T12:45', attempt: 3, ...FAST })
+  c.storage.local.set = realSet
+  assert.equal(result.taskId, 'multi-e2#price')
+  assert.equal(c.__calls.filter(x => x.api === 'notifications.create').length, 1)
+  const records = await st.getRecordsByDate('2026-09-21')
+  assert.equal(records.filter(record => record.alert === true).length, 1)
+})
+
+test('E2c：已有完整 field 結果但帳本尚未完成時，下一輪直接對帳，不重開頁面或重跑前置動作', async () => {
+  const { c, st, fe } = await fresh()
+  const task = multiTask()
+  await st.saveTask(task)
+  const slot = '2026-09-21T12:30'
+  await st.appendRecords('2026-09-21', [
+    { taskId: 'multi-e2#price', slot, commitId: `multi-e2@${slot}`, capturedAt: '2026-09-21T12:30:01.000Z', value: 12, raw: '12', status: 'ok' },
+    { taskId: 'multi-e2#label', slot, commitId: `multi-e2@${slot}`, capturedAt: '2026-09-21T12:30:01.000Z', value: '標籤', raw: '標籤', status: 'ok' }
+  ])
+  c.__calls.length = 0
+  const result = await fe.runTask(task, { slot, attempt: 2, ...FAST })
+  assert.equal(result.taskId, 'multi-e2#price')
+  assert.equal((await st.getRecordsByDate('2026-09-21')).length, 2)
+  assert.equal(await st.getRunStatus(task.id, slot), 'ok')
+  assert.equal(c.__calls.filter(x => x.api === 'tabs.create').length, 0)
+  assert.equal(c.__calls.filter(x => x.api === 'tabs.sendMessage').length, 0)
+})
+
+test('E2c：舊執行先寫帳本但 lastValues／health 未完成時，下一輪仍補完狀態', async () => {
+  const { c, st, fe } = await fresh()
+  const task = multiTask()
+  await st.saveTask(task)
+  const slot = '2026-09-21T12:40'
+  await st.appendRecords('2026-09-21', [
+    { taskId: 'multi-e2#price', slot, commitId: `multi-e2@${slot}`, capturedAt: '2026-09-21T12:40:01.000Z', value: 12, raw: '12', status: 'ok' },
+    { taskId: 'multi-e2#label', slot, commitId: `multi-e2@${slot}`, capturedAt: '2026-09-21T12:40:01.000Z', value: '標籤', raw: '標籤', status: 'ok' }
+  ])
+  await st.setRunStatus(task.id, slot, 'ok')
+  c.__calls.length = 0
+  const result = await fe.runTask(task, { slot, attempt: 2, ...FAST })
+  assert.equal(result.taskId, 'multi-e2#price')
+  assert.deepEqual(Object.keys(await st.getLastValues()).sort(), ['multi-e2#label', 'multi-e2#price'])
+  assert.equal((await st.getHealthMap())[task.id].status, 'ok')
+  assert.equal((await st.getRecordsByDate('2026-09-21')).length, 2)
+  assert.equal(c.__calls.filter(x => x.api === 'tabs.create').length, 0)
+  assert.equal(c.__calls.filter(x => x.api === 'tabs.sendMessage').length, 0)
+})
+
+test('E2c：舊 slot 重入遇到較新的 lastValues／health 不回寫舊值或重抓', async () => {
+  const { c, st, fe } = await fresh()
+  const health = await import('../src/background/health.js?t=' + Math.random())
+  const task = multiTask()
+  await st.saveTask(task)
+  const oldSlot = '2026-09-21T12:30'
+  const oldCapturedAt = '2026-09-21T04:30:01.000Z'
+  await st.appendRecords('2026-09-21', [
+    { taskId: 'multi-e2#price', slot: oldSlot, commitId: `multi-e2@${oldSlot}`, capturedAt: oldCapturedAt, value: 12, raw: '12', status: 'ok' },
+    { taskId: 'multi-e2#label', slot: oldSlot, commitId: `multi-e2@${oldSlot}`, capturedAt: oldCapturedAt, value: '舊標籤', raw: '舊標籤', status: 'ok' }
+  ])
+  await st.setRunStatus(task.id, oldSlot, 'ok')
+  const newerLast = {
+    'multi-e2#price': { value: 13, capturedAt: '2026-09-21T04:31:01.000Z' },
+    'multi-e2#label': { value: '新標籤', capturedAt: '2026-09-21T04:31:01.000Z' }
+  }
+  await st.setLastValues(newerLast)
+  await health.setTaskHealth(task.id, { status: 'partial', reason: '較新 slot' })
+  c.__calls.length = 0
+
+  const result = await fe.runTask(task, { slot: oldSlot, attempt: 2, ...FAST })
+  assert.equal(result, null)
+  assert.deepEqual(await st.getLastValues(), newerLast)
+  const currentHealth = (await st.getHealthMap())[task.id]
+  assert.equal(currentHealth.status, 'partial')
+  assert.equal(currentHealth.reason, '較新 slot')
+  assert.equal(c.__calls.filter(x => x.api === 'tabs.create').length, 0)
+  assert.equal(c.__calls.filter(x => x.api === 'tabs.sendMessage').length, 0)
+})
+
+test('E2c：同一 slot 的兩次手動 multi 抓取各自保留，不套用排程去重', async () => {
+  const { c, st, fe } = await fresh()
+  c.__setScriptResponder(framesResponder())
+  let value = 12
+  c.__setTabResponder((tabId, msg) => msg.type === 'EXTRACT'
+    ? { ok: true, value, raw: String(value), status: 'ok' }
+    : { ok: true })
+  const task = multiTask()
+  await st.saveTask(task)
+  const slot = '2026-09-21T13:00'
+  await fe.runTask(task, { slot, reason: 'manual', attempt: 3, ...FAST })
+  value = 13
+  await fe.runTask(task, { slot, reason: 'manual', attempt: 3, ...FAST })
+  const records = await st.getRecordsByDate('2026-09-21')
+  assert.equal(records.length, 4)
+  assert.deepEqual(records.filter(record => record.taskId === 'multi-e2#price').map(record => record.value), [12, 13])
+  assert.equal(await st.getRunStatus(task.id, slot), undefined)
+})
