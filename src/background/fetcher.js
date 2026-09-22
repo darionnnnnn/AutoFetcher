@@ -1,5 +1,5 @@
 // AutoFetcher 擷取流程：開分頁、注入、擷取、寫紀錄、重試
-import { getTask, updateTasks, appendRecord, appendRecords, getRecordsByDate, getRecordsInRange, getSettings, updateAlertLog, setLastValue, setLastValues, getLastValues, getHealthMap, getRunStatus, setRunStatus, getRunState, updateRunState, updateMissedList } from '../shared/storage.js'
+import { getTask, updateTasks, appendRecord, appendRecords, getRecordsByDate, getRecordsInRange, getSettings, getAlertCommitLog, updateAlertLog, updateAlertCommitLog, setLastValue, setLastValues, getLastValues, getHealthMap, getRunStatus, setRunStatus, getRunState, updateRunState, updateMissedList } from '../shared/storage.js'
 import { waitMsOf, timeoutMsOf, preActionFailure, DEFAULT_WAIT_TIMEOUT_MS, messageTimeoutMs, holdMsOf, capStepMs, PRE_ACTION_STEP_MAX_MS, PRE_ACTION_STEP_CAP_NOTE } from '../shared/preaction.js'
 import { seriesIdOf, parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
 import { MSG } from '../shared/messages.js'
@@ -333,14 +333,14 @@ function getLocalDateStr(d) {
   return `${y}-${m}-${day}`
 }
 
-// 評估告警並發送通知
-async function processAlerts(record, cachedRecordsInRange) {
-  if (!record || !record.taskId) return
+// 只計算告警並把命中標記放進即將寫入的紀錄；這一步不能有通知或 alertLog 副作用。
+async function evaluateRecordAlerts(record, cachedRecordsInRange) {
+  if (!record || !record.taskId) return null
 
   // 1. 取任務：沒有 alerts 或空陣列直接返回
   const task = await getTask(parentIdOf(record.taskId))
   if (!task || !Array.isArray(task.alerts) || task.alerts.length === 0) {
-    return
+    return null
   }
 
   const sIndex = buildSeriesIndex([task])
@@ -367,24 +367,93 @@ async function processAlerts(record, cachedRecordsInRange) {
   // 3. 評估告警
   const { hits } = evaluateAlerts(task, record, prevRecords, displayName)
   if (!Array.isArray(hits) || hits.length === 0) {
-    return
+    return { task, displayName, today, hits: [] }
   }
 
-  // 4. hits 非空時標記紀錄
+  // 命中標記會和紀錄一起 append，通知只能在 append 成功後才做。
   record.alert = true
   record.alertHits = hits.map(h => h.alertId)
+  return { task, displayName, today, hits }
+}
 
-  // 5. 去重與通知：冷卻判斷與蓋章在 alertLog 鎖內一起做（同時兩筆命中不會各通知一次）；
-  //    通知在鎖外發（notify 可能寫診斷，鎖不巢狀）
+// 只保留最近 1000 次 claim；這是有限重入保護，不宣稱跨越淘汰後的永久 exactly-once。
+// durable record 仍保留 alert/alertHits，claim 未被淘汰時恢復不會盲目重播。
+const ALERT_COMMIT_LOG_MAX = 1000
+const ALERT_COMMIT_WATERMARK_KEY = '__watermark__'
+
+// 排程 multi 紀錄帶著穩定 commitId；手動抓取由該次 run 產生並持久化 executionId。
+// 舊紀錄沒有 executionId 時才退回 capturedAt，維持既有資料相容。
+function alertExecutionKey(record, alertId) {
+  const execution = typeof record.commitId === 'string' && record.commitId
+    ? `commit:${record.commitId}`
+    : typeof record.executionId === 'string' && record.executionId
+      ? `manual:${record.executionId}`
+      : `legacy:${record.taskId}\u0000${record.slot || ''}\u0000${record.capturedAt || ''}`
+  return `${execution}\u0000${record.taskId}\u0000${alertId}`
+}
+
+function alertCommitWatermark(log) {
+  return typeof log?.[ALERT_COMMIT_WATERMARK_KEY] === 'number'
+    ? log[ALERT_COMMIT_WATERMARK_KEY]
+    : NaN
+}
+
+function isBeyondAlertClaimWindow(record, log) {
+  const capturedAt = Date.parse(String(record?.capturedAt || ''))
+  const watermark = alertCommitWatermark(log)
+  // 淘汰後只保守跳過更舊的 durable record，不把它猜成新的 execution。
+  return Number.isFinite(capturedAt) && Number.isFinite(watermark) && capturedAt <= watermark
+}
+
+// claim 只在既有 cooldown 通過後執行；寫入前固定上限，避免重入帳本無界增長。
+async function claimAlertExecution(record, alertId, recovery = false) {
+  const key = alertExecutionKey(record, alertId)
+  const now = Date.now()
+  let claimed = false
+  await updateAlertCommitLog((log) => {
+    if (typeof log[key] === 'number' || (recovery && isBeyondAlertClaimWindow(record, log))) return undefined
+    const entries = Object.entries(log)
+      .filter(([entryKey, value]) => entryKey !== ALERT_COMMIT_WATERMARK_KEY && typeof value === 'number')
+      .concat([[key, now]])
+      .sort((a, b) => Number(a[1]) - Number(b[1]))
+    const evicted = entries.length > ALERT_COMMIT_LOG_MAX
+      ? entries.slice(0, entries.length - ALERT_COMMIT_LOG_MAX)
+      : []
+    const kept = entries.slice(-ALERT_COMMIT_LOG_MAX)
+    const next = Object.fromEntries(kept)
+    const previousWatermark = alertCommitWatermark(log)
+    const evictedWatermark = evicted.length > 0 ? Number(evicted[evicted.length - 1][1]) : NaN
+    const watermark = Number.isFinite(evictedWatermark)
+      ? Math.max(Number.isFinite(previousWatermark) ? previousWatermark : -Infinity, evictedWatermark)
+      : previousWatermark
+    if (Number.isFinite(watermark)) next[ALERT_COMMIT_WATERMARK_KEY] = watermark
+    claimed = true
+    return next
+  })
+  return claimed
+}
+
+// 對已耐久的紀錄做 cooldown claim、stable execution claim 與通知。通知失敗仍沿用既有 notify 封裝的吞錯語意；
+// 這裡不再承擔紀錄評估，恢復時可安全重播同一份已落盤結果。
+async function notifyEvaluatedAlerts(record, evaluation, opts = {}) {
+  if (!record || !evaluation || !Array.isArray(evaluation.hits) || evaluation.hits.length === 0) return
+  const { displayName, today, hits } = evaluation
   const settings = await getSettings()
   const cooldownMin = typeof settings?.alertCooldownMin === 'number' ? settings.alertCooldownMin : 60
   const cooldownMs = cooldownMin * 60 * 1000
   const now = Date.now()
+  const recovery = opts.recovery === true
+  const claimedLog = await getAlertCommitLog()
+  const freshHits = hits.filter(hit => (
+    typeof claimedLog[alertExecutionKey(record, hit.alertId)] !== 'number' &&
+    (!recovery || !isBeyondAlertClaimWindow(record, claimedLog))
+  ))
+  if (freshHits.length === 0) return
 
   let toNotify = []
   await updateAlertLog((alertLog) => {
     const taskAlerts = alertLog[record.taskId] ? { ...alertLog[record.taskId] } : {}
-    toNotify = hits.filter((hit) => {
+    toNotify = freshHits.filter((hit) => {
       const lastNotified = taskAlerts[hit.alertId]
       return !(typeof lastNotified === 'number' && (now - lastNotified) < cooldownMs)
     })
@@ -394,10 +463,35 @@ async function processAlerts(record, cachedRecordsInRange) {
     return alertLog
   })
 
+  const claimed = []
   for (const hit of toNotify) {
+    if (await claimAlertExecution(record, hit.alertId, recovery)) claimed.push(hit)
+  }
+
+  for (const hit of claimed) {
     const notificationId = `${record.taskId}:alert:${hit.alertId}:${today}`
     const title = `AutoFetcher: ${displayName}`
     await notify(notificationId, { title, message: hit.message })
+  }
+}
+
+// 恢復只重播已帶 alert 標記的耐久紀錄；兩層 claim 共同保留既有 cooldown 與執行身分去重。
+async function notifyCommittedMultiAlerts(records) {
+  const candidates = records.filter(record => record?.alert === true)
+  if (candidates.length === 0) return
+  const first = candidates[0]
+  const date = typeof first.slot === 'string' && first.slot.length >= 10
+    ? first.slot.slice(0, 10)
+    : getLocalDateStr(new Date())
+  const [y, m, d] = date.split('-').map(Number)
+  const pastDate = new Date(y, m - 1, d - 6, 12, 0, 0)
+  const fromDate = getLocalDateStr(pastDate)
+  const identity = new Set(records.map(record => `${record.taskId}\u0000${record.capturedAt || ''}`))
+  const previous = (await getRecordsInRange(fromDate, date))
+    .filter(record => !identity.has(`${record.taskId}\u0000${record.capturedAt || ''}`))
+  for (const record of candidates) {
+    const evaluation = await evaluateRecordAlerts(record, previous)
+    await notifyEvaluatedAlerts(record, evaluation, { recovery: true })
   }
 }
 
@@ -568,10 +662,11 @@ async function multiFinalizeMissing(task, records) {
 
 // 寫入抓取紀錄並更新帳本與 health
 async function writeRecord(input, opts = {}) {
-  const { parentId, skipLedger } = opts
-  const record = slimRecord(input)
-  await processAlerts(record)
+  const { parentId, skipLedger, executionId } = opts
+  const record = slimRecord(executionId ? { ...input, executionId } : input)
+  const alertEvaluation = await evaluateRecordAlerts(record)
   await appendRecord(record.slot.slice(0, 10), record)
+  await notifyEvaluatedAlerts(record, alertEvaluation)
   if (!skipLedger) {
     await setRunStatus(parentId, record.slot, record.status)
   }
@@ -593,7 +688,7 @@ async function writeMultiFailureRecords(task, slot, status, error, opts = {}) {
   if (sources.length === 0) {
     return await writeRecord({
       taskId: task.id, slot, capturedAt: new Date().toISOString(), status, error
-    }, { parentId: task.id, skipLedger: opts.skipLedger === true })
+    }, { parentId: task.id, skipLedger: opts.skipLedger === true, executionId: opts.executionId })
   }
   const dedupe = opts.dedupe !== undefined ? opts.dedupe : opts.skipLedger !== true
   const commitId = dedupe ? (opts.commitId || commitIdOf(task, slot)) : undefined
@@ -604,7 +699,8 @@ async function writeMultiFailureRecords(task, slot, status, error, opts = {}) {
     capturedAt,
     status,
     error,
-    ...(commitId ? { commitId } : {})
+    ...(commitId ? { commitId } : {}),
+    ...(opts.executionId ? { executionId: opts.executionId } : {})
   }))
   const date = typeof slot === 'string' && slot.length >= 10
     ? slot.slice(0, 10)
@@ -618,10 +714,20 @@ async function writeMultiFailureRecords(task, slot, status, error, opts = {}) {
     try { existing = await getCommittedMultiRecords(date, task.id, slot, commitId) } catch {}
   }
   const existingIds = new Set(existing.map(record => record.taskId))
+  const alertEvaluations = []
   for (const record of records) {
-    if (!existingIds.has(record.taskId)) await processAlerts(record, recordsInRange)
+    if (!existingIds.has(record.taskId)) {
+      alertEvaluations.push({ taskId: record.taskId, evaluation: await evaluateRecordAlerts(record, recordsInRange) })
+    }
   }
   const committedResult = await appendMultiRecordsOnce(date, records.map(slimRecord), task.id, slot, commitId, dedupe)
+  for (const { taskId, evaluation } of alertEvaluations) {
+    const committed = committedResult.records.find(record => record.taskId === taskId)
+    await notifyEvaluatedAlerts(committed, evaluation)
+  }
+  // append 若只落了部分 field 後回錯，這裡也要把已落盤且帶標記的 field
+  // 補上通知；cooldown 會擋住上面剛通知過的同一執行。
+  await notifyCommittedMultiAlerts(committedResult.records)
   await finalizeMultiRecords(task, slot, committedResult.records, { skipLedger: opts.skipLedger === true })
   return committedResult.records[0]
 }
@@ -654,6 +760,11 @@ function commitIdOf(task, slot) {
   return `${typeof task?.id === 'string' ? task.id : ''}@${String(slot || '')}`
 }
 
+function manualExecutionId() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID()
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
+}
+
 // 執行任務的主要入口函式
 export async function runTask(task, opts = {}) {
   const {
@@ -678,6 +789,7 @@ export async function runTask(task, opts = {}) {
   } = opts
   const isManual = reason === 'manual'
   const isMulti = task?.mode === 'multi' || task?.spec?.mode === 'multi'
+  const executionId = isManual ? manualExecutionId() : undefined
   // 來源索引也要供 legacy `fields` 回覆的診斷使用；舊 block 任務不是
   // `isMulti`，但擷取結果仍可能帶 fields，不能讓診斷分支對 null 呼叫 find。
   const multiSources = normalizeTaskSources(task)
@@ -713,6 +825,7 @@ export async function runTask(task, opts = {}) {
       const committed = await recoverCommittedMulti(task, slot, multiSources, commitIdOf(task, slot))
       const ledgerStatus = committed ? await getRunStatus(task.id, slot) : undefined
       if (committed && (!ledgerStatus || (await multiFinalizeMissing(task, committed)))) {
+        await notifyCommittedMultiAlerts(committed)
         return await finalizeMultiRecords(task, slot, committed, { preserveExisting: true })
       }
     } catch {}
@@ -729,7 +842,7 @@ export async function runTask(task, opts = {}) {
     // 手動抓取一律不重試，但要留一筆看得到的紀錄，否則使用者按了沒有任何反應
     if (isManual) {
       if (isMulti) {
-        return await writeMultiFailureRecords(task, slot, 'error', '目前離線', { skipLedger: true })
+        return await writeMultiFailureRecords(task, slot, 'error', '目前離線', { skipLedger: true, executionId })
       }
       return await writeRecord({
         taskId: task.id,
@@ -737,7 +850,7 @@ export async function runTask(task, opts = {}) {
         capturedAt: new Date().toISOString(),
         status: 'error',
         error: '目前離線'
-      }, { parentId: task.id, skipLedger: true })
+      }, { parentId: task.id, skipLedger: true, executionId })
     }
     // 重試也有上限：沒有上限的話 alarm 會自己無限接力下去，一直離線就永遠不留紀錄
     if (attempt < 3) {
@@ -899,7 +1012,7 @@ export async function runTask(task, opts = {}) {
           checkDeadline()
           if (dryRun) return isMulti ? multiFailureResult(task, 'login_failed', login?.reason || '無法登入') : { ok: false, error: 'login_failed' }
           if (isMulti) {
-            return await writeMultiFailureRecords(task, slot, 'login_failed', login?.reason || '無法登入', { skipLedger: isManual })
+            return await writeMultiFailureRecords(task, slot, 'login_failed', login?.reason || '無法登入', { skipLedger: isManual, executionId })
           }
           return await writeRecord({
             taskId: task.id,
@@ -907,7 +1020,7 @@ export async function runTask(task, opts = {}) {
             capturedAt: new Date().toISOString(),
             status: 'login_failed',
             error: login?.reason || '無法登入'
-          }, { parentId: task.id, skipLedger: isManual })
+          }, { parentId: task.id, skipLedger: isManual, executionId })
         }
 
         // 9. 注入 content script（必須在送訊息之前）
@@ -1148,7 +1261,7 @@ export async function runTask(task, opts = {}) {
               capturedAt: new Date().toISOString(),
               status: 'not_found',
               error: '找不到目標所在的框架'
-            }, { parentId: task.id, skipLedger: isManual })
+            }, { parentId: task.id, skipLedger: isManual, executionId })
           }
           if (lastLiveErr !== null) {
             // 重試耗盡：標成「頁面沒了」，錯誤訊息在最外層的 catch 統一轉譯
@@ -1193,7 +1306,7 @@ export async function runTask(task, opts = {}) {
                 taskId: seriesIdOf(task.id, key),
                 slot,
                 capturedAt,
-                ...(isManual ? {} : { commitId: commitIdOf(task, slot) })
+                ...(isManual ? { executionId } : { commitId: commitIdOf(task, slot) })
               }
               if (r?.ok) {
                 rec.value = r.value
@@ -1252,10 +1365,13 @@ export async function runTask(task, opts = {}) {
               try { existing = await getCommittedMultiRecords(date, task.id, slot, commitId) } catch {}
             }
             const existingIds = new Set(existing.map(record => record.taskId))
+            const alertEvaluations = []
             for (const rec of records) {
               // 重試／復原只對本次尚未提交的新 field 評估告警，避免帳本
               // 寫入中斷後同一批結果再次觸發相同通知。
-              if (!existingIds.has(rec.taskId)) await processAlerts(rec, recordsInRange)
+              if (!existingIds.has(rec.taskId)) {
+                alertEvaluations.push({ taskId: rec.taskId, evaluation: await evaluateRecordAlerts(rec, recordsInRange) })
+              }
             }
 
             // 批次寫入：排程同一 task/slot 只補缺少的 field；手動抓取保留
@@ -1265,6 +1381,10 @@ export async function runTask(task, opts = {}) {
               date, records, task.id, slot, commitId, !isManual
             )
             const committedRecords = committedResult.records
+            for (const { taskId, evaluation } of alertEvaluations) {
+              const committed = committedRecords.find(record => record.taskId === taskId)
+              await notifyEvaluatedAlerts(committed, evaluation)
+            }
             await finalizeMultiRecords(task, slot, committedRecords, {
               skipLedger: isManual,
               partial: res.partial === true
@@ -1323,7 +1443,7 @@ export async function runTask(task, opts = {}) {
             record.partial = true
           }
 
-          return await writeRecord(record, { parentId: task.id, skipLedger: isManual })
+          return await writeRecord(record, { parentId: task.id, skipLedger: isManual, executionId })
         }
 
         // multi 的格式／協調錯誤也要依 field 產生結果；不能回到單值父任務紀錄。
@@ -1334,7 +1454,7 @@ export async function runTask(task, opts = {}) {
             await scheduleRetry(task.id, attempt, false, slot)
             return null
           }
-          return await writeMultiFailureRecords(task, slot, res?.error || 'error', error, { skipLedger: isManual })
+          return await writeMultiFailureRecords(task, slot, res?.error || 'error', error, { skipLedger: isManual, executionId })
         }
 
         // 結果處理：元素未找到（可重試）
@@ -1365,7 +1485,7 @@ export async function runTask(task, opts = {}) {
             // 「標題找不到，改用位置定位」這種訊息要留在紀錄裡，
             // 只寫 not_found 的話使用者看到的永遠是同一句沒有解法的話
             ...(res.message !== undefined ? { error: res.message } : {})
-          }, { parentId: task.id, skipLedger: isManual })
+          }, { parentId: task.id, skipLedger: isManual, executionId })
         }
 
         // 結果處理：解析錯誤（不重試，不得含 value 欄位）
@@ -1376,7 +1496,7 @@ export async function runTask(task, opts = {}) {
             capturedAt: new Date().toISOString(),
             status: 'parse_error',
             raw: res.raw
-          }, { parentId: task.id, skipLedger: isManual })
+          }, { parentId: task.id, skipLedger: isManual, executionId })
         }
 
         // 其他未知錯誤
@@ -1390,7 +1510,7 @@ export async function runTask(task, opts = {}) {
           capturedAt: new Date().toISOString(),
           status: 'error',
           error: contentErrorText(res) || '擷取失敗'
-        }, { parentId: task.id, skipLedger: isManual })
+        }, { parentId: task.id, skipLedger: isManual, executionId })
 
       } catch (err) {
         // 存活重試耗盡才會走到這裡：把 Chrome 的英文原文換成說得出怎麼辦的中文，
@@ -1416,7 +1536,7 @@ export async function runTask(task, opts = {}) {
           return null
         }
         if (isMulti) {
-          return await writeMultiFailureRecords(task, slot, 'error', shown, { skipLedger: isManual })
+            return await writeMultiFailureRecords(task, slot, 'error', shown, { skipLedger: isManual, executionId })
         }
         return await writeRecord({
           taskId: task.id,
@@ -1424,7 +1544,7 @@ export async function runTask(task, opts = {}) {
           capturedAt: new Date().toISOString(),
           status: 'error',
           error: shown
-        }, { parentId: task.id, skipLedger: isManual })
+        }, { parentId: task.id, skipLedger: isManual, executionId })
       } finally {
         if (restoreForeground) {
           try {

@@ -286,9 +286,139 @@ test('E2c：提交重入只對尚未存在的 field 評估告警，不重複發�
   const result = await fe.runTask(task, { slot: '2026-09-21T12:45', attempt: 3, ...FAST })
   c.storage.local.set = realSet
   assert.equal(result.taskId, 'multi-e2#price')
+  const noteIndex = c.__calls.findIndex(x => x.api === 'notifications.create')
+  const appendIndex = c.__calls.findIndex(x => x.api === 'storage.local.set'
+    && Object.keys(x.args[0] || {}).some(key => key.startsWith('rec2:')))
+  assert.ok(appendIndex >= 0 && noteIndex > appendIndex, '通知必須排在紀錄耐久之後')
   assert.equal(c.__calls.filter(x => x.api === 'notifications.create').length, 1)
   const records = await st.getRecordsByDate('2026-09-21')
   assert.equal(records.filter(record => record.alert === true).length, 1)
+})
+
+test('E2c：multi append 未耐久時不發送成功值告警', async () => {
+  const { c, st, fe } = await fresh()
+  c.__setScriptResponder(framesResponder())
+  c.__setTabResponder((tabId, msg) => msg.type === 'EXTRACT'
+    ? { ok: true, value: msg.locator?.css === '#price' ? 12 : '標籤', raw: msg.locator?.css === '#price' ? '12' : '標籤', status: 'ok' }
+    : { ok: true })
+  const task = multiTask({ alerts: [{ id: 'price-high', field: 'price', type: 'gt', value: 10, enabled: true }] })
+  await st.saveTask(task)
+  const realSet = c.storage.local.set.bind(c.storage.local)
+  let failAppendOnce = true
+  c.storage.local.set = async (value) => {
+    if (failAppendOnce && value && Object.keys(value).some(key => key.startsWith('rec2:'))) {
+      failAppendOnce = false
+      throw new Error('record write interrupted')
+    }
+    return realSet(value)
+  }
+  const result = await fe.runTask(task, { slot: '2026-09-21T12:50', attempt: 3, ...FAST })
+  c.storage.local.set = realSet
+  assert.equal(result.status, 'error')
+  assert.equal((await st.getRecordsByDate('2026-09-21')).length, 2)
+  assert.equal((await st.getRecordsByDate('2026-09-21')).some(record => record.alert === true), false)
+  assert.equal(c.__calls.filter(x => x.api === 'notifications.create').length, 0)
+})
+
+test('E2c：告警通知在 multi record append 成功後才發送，恢復重入不重送', async () => {
+  const { c, st, fe } = await fresh()
+  const task = multiTask({ alerts: [{ id: 'price-high', field: 'price', type: 'gt', value: 10, enabled: true }] })
+  await st.saveTask(task)
+  await st.saveSettings({ alertCooldownMin: 60 })
+  const slot = '2026-09-21T12:55'
+  const capturedAt = '2026-09-21T04:55:01.000Z'
+  await st.appendRecords('2026-09-21', [
+    { taskId: 'multi-e2#price', slot, commitId: `multi-e2@${slot}`, capturedAt, value: 12, raw: '12', status: 'ok', alert: true, alertHits: ['price-high'] },
+    { taskId: 'multi-e2#label', slot, commitId: `multi-e2@${slot}`, capturedAt, value: '標籤', raw: '標籤', status: 'ok' }
+  ])
+  c.__calls.length = 0
+  const first = await fe.runTask(task, { slot, attempt: 2, ...FAST })
+  assert.equal(first.taskId, 'multi-e2#price')
+  const noteIndex = c.__calls.findIndex(x => x.api === 'notifications.create')
+  assert.ok(noteIndex >= 0, '恢復必須補送尚未發出的已耐久告警')
+  assert.equal(c.__calls.filter(x => x.api === 'notifications.create').length, 1)
+  const firstAlertAt = (await c.storage.local.get('alertLog')).alertLog['multi-e2#price']['price-high']
+
+  // 模擬通知後帳本寫入遺失；即使 cooldown 已過，同一 durable execution 也不得重送，
+  // 且舊重播不能把既有 cooldown 時間往後延。
+  await c.storage.local.remove(`runs:${slot.slice(0, 10)}`)
+  c.__calls.length = 0
+  const realNow = Date.now
+  let second
+  Date.now = () => firstAlertAt + 61 * 60 * 1000
+  try {
+    second = await fe.runTask(task, { slot, attempt: 2, ...FAST })
+  } finally {
+    Date.now = realNow
+  }
+  assert.equal(second.taskId, 'multi-e2#price')
+  assert.equal(c.__calls.filter(x => x.api === 'notifications.create').length, 0)
+  const afterReplayAlertAt = (await c.storage.local.get('alertLog')).alertLog['multi-e2#price']['price-high']
+  assert.equal(afterReplayAlertAt, firstAlertAt)
+})
+
+test('E2c：claim 超過有界保留後，過舊 durable execution 保守跳過且不延後 cooldown', async () => {
+  const { c, st, fe } = await fresh()
+  const task = multiTask({ alerts: [{ id: 'price-high', field: 'price', type: 'gt', value: 10, enabled: true }] })
+  await st.saveTask(task)
+  await st.saveSettings({ alertCooldownMin: 0 })
+
+  // 讓被淘汰的舊 claim 時間落在新 claim 之後，watermark 會等於這次新 claim 的時間；
+  // 因而能驗證同毫秒的新 manual execution 不會被 recovery 專用窗口誤吞。
+  const watermarkSeed = Date.now() + 1000
+  const claims = {}
+  for (let i = 0; i < 1000; i++) {
+    claims[`commit:old-${i}\u0000multi-e2#price\u0000price-high`] = watermarkSeed + i
+  }
+  await st.updateAlertCommitLog(() => claims)
+
+  const currentCapturedAt = new Date().toISOString()
+  const currentDate = currentCapturedAt.slice(0, 10)
+  const currentSlot = `${currentDate}T00:00`
+  await st.appendRecords(currentDate, [
+    { taskId: 'multi-e2#price', slot: currentSlot, commitId: `multi-e2@${currentSlot}`, capturedAt: currentCapturedAt, value: 12, raw: '12', status: 'ok', alert: true, alertHits: ['price-high'] },
+    { taskId: 'multi-e2#label', slot: currentSlot, commitId: `multi-e2@${currentSlot}`, capturedAt: currentCapturedAt, value: '標籤', raw: '標籤', status: 'ok' }
+  ])
+  c.__calls.length = 0
+  await fe.runTask(task, { slot: currentSlot, attempt: 2, ...FAST })
+  assert.equal(c.__calls.filter(x => x.api === 'notifications.create').length, 1)
+  const firstAlertAt = (await c.storage.local.get('alertLog')).alertLog['multi-e2#price']['price-high']
+
+  const oldSlot = '2025-12-31T23:00'
+  await st.appendRecords('2025-12-31', [
+    { taskId: 'multi-e2#price', slot: oldSlot, commitId: `multi-e2@${oldSlot}`, capturedAt: '2025-12-31T23:00:01.000Z', value: 12, raw: '12', status: 'ok', alert: true, alertHits: ['price-high'] },
+    { taskId: 'multi-e2#label', slot: oldSlot, commitId: `multi-e2@${oldSlot}`, capturedAt: '2025-12-31T23:00:01.000Z', value: '標籤', raw: '標籤', status: 'ok' }
+  ])
+  c.__calls.length = 0
+  const recovered = await fe.runTask(task, { slot: oldSlot, attempt: 2, ...FAST })
+  assert.equal(recovered.taskId, 'multi-e2#price')
+  assert.equal(c.__calls.filter(x => x.api === 'notifications.create').length, 0)
+  const afterReplayAlertAt = (await c.storage.local.get('alertLog')).alertLog['multi-e2#price']['price-high']
+  assert.equal(afterReplayAlertAt, firstAlertAt)
+  const commitLog = await st.getAlertCommitLog()
+  assert.equal(typeof commitLog.__watermark__, 'number')
+
+  c.__setScriptResponder(framesResponder())
+  let manualValue = 12
+  c.__setTabResponder((tabId, msg) => msg.type === 'EXTRACT'
+    ? { ok: true, value: msg.locator?.css === '#price' ? manualValue : '標籤', raw: msg.locator?.css === '#price' ? String(manualValue) : '標籤', status: 'ok' }
+    : { ok: true })
+  const RealDate = Date
+  class FixedDate extends RealDate {
+    constructor(...args) {
+      super(...(args.length === 0 ? [firstAlertAt] : args))
+    }
+    static now() { return firstAlertAt }
+  }
+  const priorDate = globalThis.Date
+  globalThis.Date = FixedDate
+  try {
+    const manualResult = await fe.runTask(task, { slot: currentSlot, reason: 'manual', attempt: 3, ...FAST })
+    assert.equal(manualResult.taskId, 'multi-e2#price')
+  } finally {
+    globalThis.Date = priorDate
+  }
+  assert.equal(c.__calls.filter(x => x.api === 'notifications.create').length, 1)
 })
 
 test('E2c：已有完整 field 結果但帳本尚未完成時，下一輪直接對帳，不重開頁面或重跑前置動作', async () => {
@@ -366,14 +496,25 @@ test('E2c：同一 slot 的兩次手動 multi 抓取各自保留，不套用排�
   c.__setTabResponder((tabId, msg) => msg.type === 'EXTRACT'
     ? { ok: true, value, raw: String(value), status: 'ok' }
     : { ok: true })
-  const task = multiTask()
+  const task = multiTask({ alerts: [{ id: 'price-high', field: 'price', type: 'gt', value: 10, enabled: true }] })
   await st.saveTask(task)
+  await st.saveSettings({ alertCooldownMin: 0 })
   const slot = '2026-09-21T13:00'
-  await fe.runTask(task, { slot, reason: 'manual', attempt: 3, ...FAST })
-  value = 13
-  await fe.runTask(task, { slot, reason: 'manual', attempt: 3, ...FAST })
+  const realNow = Date.now
+  Date.now = () => 1758411600000
+  try {
+    await fe.runTask(task, { slot, reason: 'manual', attempt: 3, ...FAST })
+    value = 13
+    await fe.runTask(task, { slot, reason: 'manual', attempt: 3, ...FAST })
+  } finally {
+    Date.now = realNow
+  }
   const records = await st.getRecordsByDate('2026-09-21')
   assert.equal(records.length, 4)
   assert.deepEqual(records.filter(record => record.taskId === 'multi-e2#price').map(record => record.value), [12, 13])
+  assert.equal(c.__calls.filter(x => x.api === 'notifications.create').length, 2)
+  const executions = records.filter(record => record.taskId === 'multi-e2#price').map(record => record.executionId)
+  assert.equal(executions.every(id => typeof id === 'string' && id.length > 0), true)
+  assert.notEqual(executions[0], executions[1])
   assert.equal(await st.getRunStatus(task.id, slot), undefined)
 })

@@ -1002,6 +1002,17 @@ export async function updateAlertLog(mutator) {
   return updateValue('alertLog', asObject, mutator)
 }
 
+// 在獨立帳本鎖內記錄已對某次 durable execution claim 的告警；不改變既有 alertLog 數字契約。
+export async function updateAlertCommitLog(mutator) {
+  return updateValue('alertCommitLog', asObject, mutator)
+}
+
+// 讀取 stable execution claim（只讀；通知流程先用它排除已 claim hit，再更新 alertLog）。
+export async function getAlertCommitLog() {
+  const res = await chrome.storage.local.get('alertCommitLog')
+  return asObject(res?.alertCommitLog)
+}
+
 // 取得失敗通知冷卻帳本（{ [key]: { status, at } }；無資料回傳空物件）
 export async function getNotifyLog() {
   const res = await chrome.storage.local.get('notifyLog')
