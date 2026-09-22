@@ -17,6 +17,9 @@ import { createSaveGuard, setFieldError } from '../save-guard.js'
 let currentCtx = null
 let currentBlock = null
 const fieldSpecs = new Map()
+// multi 每個值可以有自己的 block 設定；只有使用者真的改動共用 controls
+// 時才把它們套用到所有適用值。render 時記下畫面基準，避免單純重畫／儲存洗掉來源規格。
+let multiControlBaseline = null
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
 // 批次畫面（AF-18 G-3）的模組狀態：放在檔頭，面板啟動流程（檔尾的正式接線）不論先後都讀得到
 let batchItems = null
@@ -116,6 +119,38 @@ function skipFromForm() {
   const tail = Number(document.getElementById('skip-tail')?.value)
   const blank = document.getElementById('skip-blank')?.checked ?? false
   return skipOf({ head, tail, blank })
+}
+
+function multiControlStateOf() {
+  return {
+    aggregate: document.getElementById('block-aggregate')?.value || 'sum',
+    rowPos: posValueOf('row-pos'),
+    colPos: posValueOf('col-pos'),
+    skip: skipFromForm()
+  }
+}
+
+function sameMultiControlState(a, b) {
+  return Boolean(a && b) && a.aggregate === b.aggregate && a.rowPos === b.rowPos &&
+    a.colPos === b.colPos && a.skip?.head === b.skip?.head &&
+    a.skip?.tail === b.skip?.tail && a.skip?.blank === b.skip?.blank
+}
+
+function multiControlsChanged() {
+  return multiControlBaseline !== null && !sameMultiControlState(multiControlBaseline, multiControlStateOf())
+}
+
+function multiControlChanges() {
+  const current = multiControlStateOf()
+  if (multiControlBaseline === null) {
+    return { aggregate: true, rowPos: true, colPos: true, skip: true }
+  }
+  return {
+    aggregate: current.aggregate !== multiControlBaseline.aggregate,
+    rowPos: current.rowPos !== multiControlBaseline.rowPos,
+    colPos: current.colPos !== multiControlBaseline.colPos,
+    skip: !sameMultiControlState({ ...multiControlBaseline, aggregate: current.aggregate, rowPos: current.rowPos, colPos: current.colPos }, current)
+  }
 }
 
 // 整欄用「列」、整列用「格」、混著用「筆」：略過欄位的標籤與儲存摘要共用這一份
@@ -232,6 +267,7 @@ export function getFormData() {
   const aggregateValue = document.getElementById('block-aggregate')?.value || 'sum'
   const rowPos = posValueOf('row-pos')
   const colPos = posValueOf('col-pos')
+  const sharedControlChanges = multiControlChanges()
   const fieldRows = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
   let fields = undefined
   if (fieldRows.length > 0) {
@@ -241,14 +277,42 @@ export function getFormData() {
       const name = rawName || `值 ${index + 1}`
       const spec = row._spec || fieldSpecs.get(key) || {}
       const item = { key, name }
-      if (spec.cell) item.cell = applyPosToCell(spec.cell, rowPos, colPos)
+      // AF-22 F1a：完成選取後的每個值可以來自不同元素／frame；
+      // 這些欄位不屬於舊同表 block 格式，必須沿著表單原樣帶到 buildTask。
+      if (row._source) {
+        item.mode = row._mode || 'number'
+        item.source = structuredClone(row._source)
+        item.spec = structuredClone(spec)
+      }
+      if (spec.cell && (!row._source || sharedControlChanges.rowPos || sharedControlChanges.colPos)) {
+        const effectiveRowPos = !row._source || sharedControlChanges.rowPos ? rowPos : (spec.cell.row?.pos || '')
+        const effectiveColPos = !row._source || sharedControlChanges.colPos ? colPos : (spec.cell.col?.pos || '')
+        item.cell = applyPosToCell(spec.cell, effectiveRowPos, effectiveColPos)
+      }
       // 整欄／整列的值要合計，合計方式來自表單（全任務一份）；
       // 少了這一行，抓取端會拿不到設定而預設成加總，下拉等於裝飾品
-      if (spec.block) {
-        const block = { ...spec.block, aggregate: aggregateValue }
-        delete block.skip
-        putSkip(block, skipFromForm())
-        item.block = applyPosToBlock(block, rowPos, colPos)
+      if (spec.block && (!row._source || sharedControlChanges.aggregate || sharedControlChanges.skip || sharedControlChanges.rowPos || sharedControlChanges.colPos)) {
+        const block = { ...spec.block }
+        if (!row._source || sharedControlChanges.aggregate) block.aggregate = aggregateValue
+        if (!row._source || sharedControlChanges.skip) {
+          delete block.skip
+          putSkip(block, skipFromForm())
+        }
+        const crossPosChanged = block.axis === 'row' ? sharedControlChanges.colPos : sharedControlChanges.rowPos
+        if (!row._source || crossPosChanged) item.block = applyPosToBlock(block, rowPos, colPos)
+        else item.block = block
+      }
+      if (item.source && (sharedControlChanges.aggregate || sharedControlChanges.skip || sharedControlChanges.rowPos || sharedControlChanges.colPos)) {
+        // 位置／合計／略過等是設定頁可編輯的單值規格；更新嵌套 spec，
+        // 不要讓後面的舊格式欄位覆蓋掉 source 或 mode。
+        const nextSpec = { ...item.spec }
+        // 只覆寫本次 controls 真的產生的新單值規格；例如只改 aggregate
+        // 時 cell 沒有 item.cell，不能把原 spec.cell 洗成 undefined。
+        if (item.cell !== undefined) nextSpec.cell = item.cell
+        if (item.block !== undefined) nextSpec.block = item.block
+        item.spec = nextSpec
+        delete item.cell
+        delete item.block
       }
       return item
     })
@@ -259,6 +323,8 @@ export function getFormData() {
     alerts,
     preActions
   }
+
+  if (fields?.some(field => field.source)) data.multi = true
 
   if (fields) {
     data.fields = fields
@@ -457,13 +523,32 @@ export const BUILTIN_DEFAULTS = {
 export function buildSpec(values) {
   const spec = { strategy: values.strategy }
   if (values.fields) {
-    spec.mode = 'block'
-    spec.fields = values.fields.map(f => {
-      const item = { key: f.key }
-      if (f.cell) item.cell = f.cell
-      if (f.block) item.block = f.block
-      return item
-    })
+    const isMulti = values.multi === true || values.fields.some(f => f && f.source)
+    if (isMulti) {
+      spec.mode = 'multi'
+      spec.fields = values.fields.map(f => {
+        const item = {
+          key: f.key,
+          name: f.name,
+          mode: f.mode || 'number',
+          source: structuredClone(f.source),
+          spec: structuredClone(f.spec || {})
+        }
+        // Direct callers may supply the legacy top-level cell/block shape while
+        // still declaring a source; normalize it into the nested single-value spec.
+        if (!item.spec.cell && f.cell) item.spec.cell = structuredClone(f.cell)
+        if (!item.spec.block && f.block) item.spec.block = structuredClone(f.block)
+        return item
+      })
+    } else {
+      spec.mode = 'block'
+      spec.fields = values.fields.map(f => {
+        const item = { key: f.key }
+        if (f.cell) item.cell = f.cell
+        if (f.block) item.block = f.block
+        return item
+      })
+    }
   } else if (values.block && values.block.cell) {
     spec.mode = 'block'
     spec.block = { cell: values.block.cell }
@@ -644,7 +729,7 @@ export function buildTask(values, locator, existing, frame) {
     id,
     name: values.name.trim(),
     url: values.url,
-    mode: values.fields ? 'block' : values.mode,
+    mode: values.multi === true || values.fields?.some(f => f && f.source) ? 'multi' : (values.fields ? 'block' : values.mode),
     enabled: true,
     locator,
     spec,
@@ -764,6 +849,7 @@ function fillSchedule(schedule) {
 
 export function render(ctx) {
   currentCtx = ctx || {}
+  multiControlBaseline = null
   applyTerms()
   clearGuardState()
   setTestPreActionHint(false)
@@ -877,7 +963,11 @@ export function render(ctx) {
     }
   }
 
-  const isMulti = Boolean((ctx?.picks && Array.isArray(ctx.picks) && ctx.picks.length >= 2) || (ctx?.task && Array.isArray(ctx.task.fields) && ctx.task.fields.length > 0))
+  const isMulti = Boolean(
+    (ctx?.fields && Array.isArray(ctx.fields) && ctx.fields.length > 0) ||
+    (ctx?.picks && Array.isArray(ctx.picks) && ctx.picks.length >= 2) ||
+    (ctx?.task && Array.isArray(ctx.task.fields) && ctx.task.fields.length > 0)
+  )
   if (isMulti) {
     const modeEl = document.getElementById('mode')
     if (modeEl) modeEl.value = 'block'
@@ -918,7 +1008,19 @@ export function render(ctx) {
     }
   }
 
-  if (ctx?.picks && Array.isArray(ctx.picks) && ctx.picks.length >= 2) {
+  if (Array.isArray(ctx?.fields) && ctx.fields.length > 0) {
+    // F1a 完成屏障後由 background 送來的 snapshot fields；保留每值
+    // 的穩定 key、名稱、mode、source 與單值 spec，不重新產生 UUID。
+    const items = ctx.fields.map((field, index) => ({
+      key: field.key,
+      name: field.name || `值 ${index + 1}`,
+      mode: field.mode,
+      source: field.source,
+      spec: field.spec || {}
+    }))
+    renderFieldList(items)
+    applyDefaultCardTypes()
+  } else if (ctx?.picks && Array.isArray(ctx.picks) && ctx.picks.length >= 2) {
     const usedKeys = new Set()
     const nameCounts = new Map()
     const items = ctx.picks.map((pick, index) => {
@@ -1017,6 +1119,10 @@ export function render(ctx) {
   bindBlurValidation()
   updateFrameHint(currentCtx)
   updateBlockSection()
+  if (Array.isArray(ctx?.fields) && ctx.fields.some(field => field?.source)) {
+    multiControlBaseline = multiControlStateOf()
+    updateSetupSummary()
+  }
 }
 
 // 欄位離開焦點就地驗證（錯誤字在欄位正下方、aria-describedby 指向它），不必等按儲存
@@ -1458,7 +1564,7 @@ export function updateSetupSummary() {
       block: values.block?.axis ? values.block : first?.block,
       rowPos: rowPosNow,
       colPos: colPosNow
-    })
+    }) + (values.multi && multiControlsChanged() ? '（共用設定會套用到所有適用的值）' : '')
   }
 
   const schedEl = document.getElementById('summary-schedule')
@@ -1926,12 +2032,14 @@ function setFieldRowHint(row, text) {
   el.textContent = text
 }
 
-function createFieldRow({ key, name, spec }) {
+function createFieldRow({ key, name, spec, source, mode }) {
   const row = document.createElement('div')
   row.className = 'field-row'
   row.setAttribute('data-field-row', '')
   row.dataset.fieldKey = key
   row._spec = spec
+  if (source) row._source = structuredClone(source)
+  if (mode) row._mode = mode
 
   const input = document.createElement('input')
   input.type = 'text'
@@ -3642,7 +3750,17 @@ function bindPickDraftEvents() {
     try {
       const response = await chrome.runtime.sendMessage({ type: MSG.PICK_DRAFT_COMPLETE, ...pickDraftIdentity(draft), expectedRevision: draft.revision })
       if (response?.ok !== true || response.synchronized !== true) throw new Error(response?.message || '草稿尚未同步')
-      setGroupDraftStatus('選取已同步，正在等待設定畫面。')
+      if (response.context) {
+        // background 已把同一份 snapshot 寫成設定頁 ctx；立即切畫面，
+        // 避免只留下「等待設定畫面」而要靠 session 事件才能進表單。
+        await renderFromPanelCtx({
+          kind: 'new',
+          ctx: response.context,
+          draft: { name: activePickGroup()?.name || '', ...(response.snapshot?.form || {}) }
+        })
+      } else {
+        setGroupDraftStatus('選取已同步，正在等待設定畫面。')
+      }
     } catch (error) {
       if (/revision|同步|conflict/i.test(error?.message || '')) await refreshPickDraftAfterConflict()
       setGroupDraftStatus(error?.message || '選取尚未同步，請稍候再完成。', { error: true })

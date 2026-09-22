@@ -629,6 +629,38 @@ async function appendPickedToDraft(msg, sender, payload = msg) {
   return { ok: true, draft: latest, revision: latest.revision }
 }
 
+// F1a：完成屏障取得的 immutable snapshot 是跨面板的唯一選取結果；
+// 這裡把單一群組的值轉成設定頁可直接 render 的欄位形狀。
+// 每個 field 的來源與單值 spec 都保留，不能退回以第一個 locator 假裝整組同源。
+async function pickerContextOfSnapshot(snapshot) {
+  const groups = Array.isArray(snapshot?.groups) ? snapshot.groups : []
+  const group = groups.find(item => Array.isArray(item?.values) && item.values.length > 0) || groups[0]
+  const values = Array.isArray(group?.values) ? group.values : []
+  const fields = values.map((value, index) => ({
+    key: value.key,
+    name: typeof value.name === 'string' && value.name.trim() ? value.name : `值 ${index + 1}`,
+    mode: value.mode === 'text' || value.mode === 'block' ? value.mode : 'number',
+    source: structuredClone(value.source || { locator: value.locator || {} }),
+    spec: structuredClone(value.spec || {})
+  }))
+  let url = typeof snapshot?.routeIdentity?.url === 'string' ? snapshot.routeIdentity.url : ''
+  try {
+    const tabUrl = (await chrome.tabs.get(snapshot?.tabId))?.url
+    if (typeof tabUrl === 'string' && tabUrl) url = tabUrl
+  } catch {}
+  const first = fields[0]
+  return {
+    tabId: snapshot?.tabId,
+    url,
+    nameHint: group?.name || '',
+    locator: first?.source?.locator,
+    ...(first?.source?.frame?.url ? { frameUrl: first.source.frame.url, frame: first.source.frame } : {}),
+    picks: fields.map(field => structuredClone(field.spec)),
+    valueSources: fields.map(field => ({ locator: structuredClone(field.source.locator), ...(field.source.frame ? { frame: structuredClone(field.source.frame) } : {}) })),
+    fields
+  }
+}
+
 // D1a/D1b 取名請求只啟動 content 的取名狀態；不得把頁面文字當成 PICKED 或寫進值草稿。
 async function requestGroupNamePick(msg) {
   const tabId = msg?.tabId
@@ -884,7 +916,26 @@ export async function handleMessage(msg, sender, runOpts = {}) {
     if (msg.type === MSG.PICK_DRAFT_BEGIN) return await beginPickDraft(msg, sender)
     if (msg.type === MSG.PICK_DRAFT_READ) return await readPickDraftMessage(msg, sender)
     if (msg.type === MSG.PICK_DRAFT_OPERATION) return await handlePickDraftOperation(msg, sender)
-    if (msg.type === MSG.PICK_DRAFT_COMPLETE) return await completePickDraft(msg, sender)
+    if (msg.type === MSG.PICK_DRAFT_COMPLETE) {
+      const completed = await completePickDraft(msg, sender)
+      if (completed?.ok && completed.snapshot) {
+        const ctx = await pickerContextOfSnapshot(completed.snapshot)
+        const groupName = Array.isArray(completed.snapshot.groups)
+          ? completed.snapshot.groups.find(group => Array.isArray(group.values) && group.values.length > 0)?.name || ''
+          : ''
+        // 完成後把設定階段寫回同一個分頁 ctx；面板重載時仍會進設定頁，
+        // 而不是再次顯示「等待設定畫面」或重新建立欄位。
+        await setPanelCtx(completed.tabId, {
+          kind: 'new',
+          ctx,
+          draft: { name: groupName, ...(completed.snapshot.form || {}) },
+          pickSessionId: completed.snapshot.sessionId,
+          pickGroupKey: completed.snapshot.groups?.find(group => Array.isArray(group.values) && group.values.length > 0)?.key
+        })
+        return { ...completed, context: ctx }
+      }
+      return completed
+    }
     if (msg.type === MSG.PICK_DRAFT_ABANDON || msg.type === MSG.PICK_DRAFT_FINALIZE) {
       return await abandonPickDraft(msg, sender)
     }
