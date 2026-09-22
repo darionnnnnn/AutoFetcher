@@ -8,7 +8,7 @@ import { applySavedTheme } from '../theme-apply.js'
 import { seriesIdOf } from '../../shared/series-index.js'
 import { computeHealth } from '../../background/health.js'
 import { isGap, gapTextOf } from '../../shared/describe.js'
-import { describeSchedule, describeTarget, targetOfTask, EMPTY_GUIDE } from '../../shared/describe.js'
+import { describeSchedule, describeTarget, describeField, targetOfTask, EMPTY_GUIDE } from '../../shared/describe.js'
 
 let currentCtx = null
 
@@ -230,10 +230,12 @@ function renderTaskRow(task, { lastValues, nextRuns, healthMap, sites }) {
 
   const nameSpan = document.createElement('span')
   nameSpan.className = 'task-name'
-  nameSpan.textContent = task.name || task.id || ''
-  // 抓什麼的白話（含略過／排除）與 Picker 摘要卡、任務頁同一份；與任務頁同一條守門：數值／文字任務的句子沒有新資訊
+  // 抓什麼的白話（含略過／排除）與 Picker 摘要卡、任務頁同一份；multi 顯示群組、值型別與來源
   const target = targetOfTask(task)
-  if (target.mode === 'block') nameSpan.title = describeTarget(target)
+  nameSpan.textContent = target.mode === 'multi'
+    ? `群組：${task.name || task.id || ''}`
+    : (task.name || task.id || '')
+  if (target.mode === 'block' || target.mode === 'multi') nameSpan.title = describeTarget(target)
   mainDiv.appendChild(nameSpan)
 
   const valueSpan = document.createElement('span')
@@ -241,8 +243,13 @@ function renderTaskRow(task, { lastValues, nextRuns, healthMap, sites }) {
   // 多值任務的最後值記在子序列 id 底下，查父任務永遠是空的；最多列三個，其餘用 +N 帶過
   const fields = Array.isArray(task.fields) ? task.fields : []
   if (fields.length > 0) {
+    const detailByKey = new Map((target.fields || []).map(field => [field.key, field]))
     const shown = fields.slice(0, 3)
-      .map(f => `${f.name || f.key}: ${formatValue(lastValues?.[seriesIdOf(task.id, f.key)]?.value)}`)
+      .map(f => {
+        const field = target.mode === 'multi' ? (detailByKey.get(f.key) || f) : f
+        const label = target.mode === 'multi' ? describeField(field) : (f.name || f.key)
+        return `${label}: ${formatValue(lastValues?.[seriesIdOf(task.id, f.key)]?.value)}`
+      })
     valueSpan.textContent = shown.join('  ') + (fields.length > 3 ? `  +${fields.length - 3}` : '')
   } else {
     valueSpan.textContent = formatValue(lastValues?.[task.id]?.value)

@@ -6,7 +6,7 @@ import { buildExport, download } from '../../shared/export.js'
 import { confirmDialog, dismissDialog, isDialogOpen } from '../modal.js'
 import { icon } from '../icons.js'
 import { isGap, gapTextOf } from '../../shared/describe.js'
-import { describeSchedule, describeTarget, targetOfTask, exclusionOfTarget, EMPTY_GUIDE, TERMS } from '../../shared/describe.js'
+import { describeSchedule, describeTarget, describeFields, targetOfTask, exclusionOfTarget, EMPTY_GUIDE, TERMS } from '../../shared/describe.js'
 
 let currentTasks = []
 let currentHealth = {}
@@ -582,15 +582,19 @@ function createTaskRow(t) {
     }
   })
 
+  const target = targetOfTask(t)
   let fieldsEl = null
   if (Array.isArray(t.fields) && t.fields.length > 0) {
     fieldsEl = document.createElement('span')
     fieldsEl.className = 'task-fields'
-    const fieldNames = t.fields.map(f => (f && f.name) ? f.name : (f?.key || '')).filter(Boolean)
     let text = ''
-    if (t.fields.length > 3) {
+    if (target.mode === 'multi') {
+      text = describeFields(target.fields)
+    } else if (t.fields.length > 3) {
+      const fieldNames = t.fields.map(f => (f && f.name) ? f.name : (f?.key || '')).filter(Boolean)
       text = `${fieldNames.slice(0, 3).join('、')} 等 ${t.fields.length} 個值`
     } else {
+      const fieldNames = t.fields.map(f => (f && f.name) ? f.name : (f?.key || '')).filter(Boolean)
       text = fieldNames.join('、')
     }
     fieldsEl.textContent = text
@@ -603,11 +607,12 @@ function createTaskRow(t) {
   const modeEl = document.createElement('span')
   modeEl.className = 'task-mode'
   // 模式欄維持原本的短字；有略過／排除時接上 describe.js 的那一段，完整白話句放 title（與 Picker 摘要卡同一份）
-  const target = targetOfTask(t)
-  modeEl.textContent = describeMode(t) + exclusionOfTarget(target)
+  modeEl.textContent = target.mode === 'multi'
+    ? describeTarget(target)
+    : describeMode(t) + exclusionOfTarget(target)
   // 只給區塊任務：數值／文字任務的完整句（「抓 a.test 頁面上的數字」）沒有新資訊，
   // 而且列上的 title 已經有人用（連續失敗的最後錯誤放在 title）
-  if (target.mode === 'block') modeEl.title = describeTarget(target)
+  if (target.mode === 'block' || target.mode === 'multi') modeEl.title = describeTarget(target)
 
   // 有設告警 / 前置動作的任務要一眼看得出來，否則只能逐一點進去看
   const activeAlerts = Array.isArray(t.alerts) ? t.alerts.filter((a) => a && a.enabled !== false) : []
