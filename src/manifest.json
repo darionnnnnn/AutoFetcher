@@ -45,6 +45,7 @@
         "shared/block-detect.js",
         "shared/describe.js",
         "shared/extract.js",
+        "shared/field-match.js",
         "shared/messages.js",
         "shared/preaction.js",
         "shared/selector.js",
