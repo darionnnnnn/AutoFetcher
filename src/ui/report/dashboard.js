@@ -786,6 +786,14 @@ async function renderPalette() {
  * 將卡片註冊為拖曳投放目標
  */
 function registerCardDropTarget(cardEl, card, ctx) {
+  const dropOptions = (opts = {}) => ({
+    ...opts,
+    seriesIndex: ctx?.index
+  })
+  const numericDropIds = (ids) => {
+    if (!ctx?.index?.byId) return ids
+    return ids.filter(id => ctx.index.byId[id]?.mode !== 'text')
+  }
   cardEl._unregisterDropTarget = registerDropTarget(cardEl, {
     accepts(payload) {
       if (!editing) return false
@@ -796,16 +804,16 @@ function registerCardDropTarget(cardEl, card, ctx) {
       if (card.type === 'line' || card.type === 'bar') {
         const existingIds = new Set((card.source || []).map(s => s.taskId))
         const idsToAdd = Array.isArray(payload.seriesIds)
-          ? payload.seriesIds.filter(id => !existingIds.has(id))
-          : (!existingIds.has(payload.taskId) ? [payload.taskId] : [])
+          ? numericDropIds(payload.seriesIds).filter(id => !existingIds.has(id))
+          : (numericDropIds([payload.taskId]).filter(id => !existingIds.has(id)))
         if (idsToAdd.length > 0 && (card.source || []).length + idsToAdd.length > 8) {
           return true
         }
       }
       if (Array.isArray(payload.seriesIds) && payload.seriesIds.length > 0) {
-        return applyDropMany(card, payload.seriesIds, {}) !== null
+        return applyDropMany(card, payload.seriesIds, dropOptions()) !== null
       }
-      return applyDrop(card, payload.taskId, {}) !== null
+      return applyDrop(card, payload.taskId, dropOptions()) !== null
     },
     async onDrop(payload, pos) {
       if (!payload || !payload.taskId) return
@@ -813,8 +821,8 @@ function registerCardDropTarget(cardEl, card, ctx) {
       if (card.type === 'line' || card.type === 'bar') {
         const existingIds = new Set((card.source || []).map(s => s.taskId))
         const idsToAdd = Array.isArray(payload.seriesIds)
-          ? payload.seriesIds.filter(id => !existingIds.has(id))
-          : (!existingIds.has(payload.taskId) ? [payload.taskId] : [])
+          ? numericDropIds(payload.seriesIds).filter(id => !existingIds.has(id))
+          : (numericDropIds([payload.taskId]).filter(id => !existingIds.has(id)))
         if (idsToAdd.length > 0 && (card.source || []).length + idsToAdd.length > 8) {
           showToast('圖表最多支援 8 個資料數列')
           return
@@ -862,8 +870,8 @@ function registerCardDropTarget(cardEl, card, ctx) {
       }
 
       const patch = (Array.isArray(payload.seriesIds) && payload.seriesIds.length > 0)
-        ? applyDropMany(card, payload.seriesIds, { ...opts, nameOf: (id) => ctx?.tasksById?.[id]?.name || id })
-        : applyDrop(card, payload.taskId, opts)
+        ? applyDropMany(card, payload.seriesIds, dropOptions({ ...opts, nameOf: (id) => ctx?.tasksById?.[id]?.name || id }))
+        : applyDrop(card, payload.taskId, dropOptions(opts))
       if (!patch) return
       if (patch.rejected) {
         showToast(patch.reason)

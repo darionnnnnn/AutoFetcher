@@ -118,7 +118,7 @@ function updateToggleAllState(parentId) {
   if (!container) return
   const parentBox = container.querySelector(`input[data-action="toggle-all"][data-parent-id="${parentId}"]`)
   if (!parentBox) return
-  const childBoxes = [...container.querySelectorAll(`input[data-source-checkbox][data-parent-id="${parentId}"]`)]
+  const childBoxes = [...container.querySelectorAll(`input[data-source-checkbox][data-parent-id="${parentId}"]:not(:disabled)`)]
   if (childBoxes.length === 0) return
   const checkedCount = childBoxes.filter(cb => cb.checked).length
   if (checkedCount === childBoxes.length) {
@@ -147,12 +147,16 @@ function updateSourcesDisabledState(type) {
     if (isMulti) {
       const parentBox = container.querySelector(`input[data-action="toggle-all"][data-parent-id="${t.id}"]`)
       if (parentBox) {
-        parentBox.disabled = isNumeric && t.mode === 'text'
+        const childIds = index.childrenOf[t.id] || []
+        const eligibleIds = isNumeric
+          ? childIds.filter(sid => index.byId[sid]?.mode !== 'text')
+          : childIds
+        parentBox.disabled = isNumeric && eligibleIds.length === 0
         const label = parentBox.closest('label') || parentBox.parentElement
         if (label) {
           label.textContent = ''
           label.appendChild(parentBox)
-          label.appendChild(document.createTextNode(isNumeric && t.mode === 'text' ? ` ${t.name || t.id}（文字模式不可選）` : ` ${t.name || t.id}`))
+          label.appendChild(document.createTextNode(isNumeric && eligibleIds.length === 0 ? ` ${t.name || t.id}（文字模式不可選）` : ` ${t.name || t.id}`))
         }
       }
       for (const sid of (index.childrenOf[t.id] || [])) {
@@ -162,6 +166,7 @@ function updateSourcesDisabledState(type) {
         const label = input.closest('label') || input.parentElement
         const disabled = isNumeric && seriesInfo?.mode === 'text'
         input.disabled = disabled
+        if (disabled) input.checked = false
         if (label) {
           label.textContent = ''
           label.appendChild(input)
@@ -169,6 +174,7 @@ function updateSourcesDisabledState(type) {
           label.appendChild(document.createTextNode(disabled ? ` ${displayName}（文字模式不可選）` : ` ${displayName}`))
         }
       }
+      updateToggleAllState(t.id)
     } else {
       const input = container.querySelector(`input[data-source-checkbox][value="${t.id}"]`)
       if (!input) continue
@@ -176,6 +182,7 @@ function updateSourcesDisabledState(type) {
       const seriesInfo = index.byId[t.id]
       const disabled = isNumeric && seriesInfo?.mode === 'text'
       input.disabled = disabled
+      if (disabled) input.checked = false
       if (label) {
         label.textContent = ''
         label.appendChild(input)
@@ -206,9 +213,14 @@ function renderSources(tasks, currentSources = [], type = 'number') {
   for (const t of tasks) {
     const isMulti = Array.isArray(t.fields) && t.fields.length > 0
     const childSeriesIds = isMulti ? (index.childrenOf[t.id] || []) : [t.id]
-    const selectedChildren = childSeriesIds.filter(id => selectedSet.has(id))
+    const eligibleChildren = isNumeric
+      ? childSeriesIds.filter(id => index.byId[id]?.mode !== 'text')
+      : childSeriesIds
+    const selectedChildren = eligibleChildren.filter(id => selectedSet.has(id))
     selectedChildren.sort((a, b) => selectedIds.indexOf(a) - selectedIds.indexOf(b))
-    const unselectedChildren = childSeriesIds.filter(id => !selectedSet.has(id))
+    // 已選的文字值在數字卡片上仍要列出，讓使用者看見它被排除並可改回表格；
+    // 只有可用的數字值才算父列的「已選」狀態。
+    const unselectedChildren = childSeriesIds.filter(id => !selectedChildren.includes(id))
     const orderedChildren = [...selectedChildren, ...unselectedChildren]
     const earliestIndex = selectedChildren.length > 0
       ? Math.min(...selectedChildren.map(id => selectedIds.indexOf(id)))
@@ -218,6 +230,7 @@ function renderSources(tasks, currentSources = [], type = 'number') {
       task: t,
       isMulti,
       childSeriesIds,
+      eligibleChildren,
       selectedChildren,
       orderedChildren,
       earliestIndex
@@ -247,10 +260,10 @@ function renderSources(tasks, currentSources = [], type = 'number') {
       parentInput.setAttribute('data-parent-id', t.id)
       parentInput.value = t.id
 
-      const isTextMode = isNumeric && t.mode === 'text'
+      const isTextMode = isNumeric && entry.eligibleChildren.length === 0
       parentInput.disabled = isTextMode
 
-      if (entry.selectedChildren.length === entry.childSeriesIds.length && entry.childSeriesIds.length > 0) {
+      if (entry.selectedChildren.length === entry.eligibleChildren.length && entry.eligibleChildren.length > 0) {
         parentInput.checked = true
         parentInput.indeterminate = false
       } else if (entry.selectedChildren.length === 0) {
@@ -269,7 +282,7 @@ function renderSources(tasks, currentSources = [], type = 'number') {
       // 子列：每個值一列
       for (const sid of entry.orderedChildren) {
         const seriesInfo = index.byId[sid]
-        const isChecked = selectedSet.has(sid)
+        const isChecked = selectedSet.has(sid) && !(isNumeric && seriesInfo?.mode === 'text')
         const childRow = document.createElement('div')
         childRow.setAttribute('data-source-row', '')
         childRow.setAttribute('data-task-id', sid)
