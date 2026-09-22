@@ -49,7 +49,7 @@ import {
   clearPickDraftForTab,
   protocolErrorResponse
 } from '../shared/pick-protocol.js'
-import { getPickDraft } from '../shared/pick-draft.js'
+import { getPickDraft, updatePickDraft } from '../shared/pick-draft.js'
 
 // 面板 ctx 可能尚未寫入就收到 pagehide；用短命記號避免無 ctx 時重複清場，
 // 同時讓新一輪開啟能再次廣播 EXIT_PICK。
@@ -661,6 +661,54 @@ async function pickerContextOfSnapshot(snapshot) {
   }
 }
 
+function pickerBatchItemsOfSnapshot(snapshot, baseCtx = {}) {
+  const groups = Array.isArray(snapshot?.groups) ? snapshot.groups : []
+  return groups.map((group, groupIndex) => {
+    const values = Array.isArray(group?.values) ? group.values : []
+    const fields = values.map((value, index) => ({
+      key: value.key,
+      name: typeof value.name === 'string' && value.name.trim() ? value.name : `值 ${index + 1}`,
+      mode: value.mode === 'text' || value.mode === 'block' ? value.mode : 'number',
+      source: structuredClone(value.source || { locator: value.locator || {} }),
+      spec: structuredClone(value.spec || {})
+    }))
+    const first = fields[0]
+    return {
+      key: group.key || `g${groupIndex + 1}`,
+      nameHint: typeof group.name === 'string' ? group.name : '',
+      tabId: snapshot?.tabId,
+      url: baseCtx.url || snapshot?.routeIdentity?.url || '',
+      locator: first?.source?.locator || {},
+      ...(first?.source?.frame?.url ? { frameUrl: first.source.frame.url, frame: first.source.frame } : {}),
+      picks: fields.map(field => structuredClone(field.spec)),
+      valueSources: fields.map(field => ({
+        locator: structuredClone(field.source?.locator || {}),
+        ...(field.source?.frame ? { frame: structuredClone(field.source.frame) } : {})
+      })),
+      fields,
+      taskSaveState: group.taskSaveState || group.saveState || 'pending',
+      firstRunState: group.firstRunState || 'pending',
+      saveState: group.taskSaveState || group.saveState || 'pending',
+      ...(group.taskId ? { taskId: group.taskId } : {})
+    }
+  })
+}
+
+async function markPickSnapshotSettings(snapshot) {
+  return updatePickDraft(snapshot.tabId, current => ({
+    ...current,
+    stage: 'settings',
+    paused: false
+  }), {
+    sessionId: snapshot.sessionId,
+    revision: snapshot.revision,
+    documentGeneration: snapshot.documentGeneration,
+    documentIdentity: snapshot.documentIdentity,
+    routeIdentity: snapshot.routeIdentity,
+    frame: snapshot.frame
+  })
+}
+
 // D1a/D1b 取名請求只啟動 content 的取名狀態；不得把頁面文字當成 PICKED 或寫進值草稿。
 async function requestGroupNamePick(msg) {
   const tabId = msg?.tabId
@@ -919,20 +967,44 @@ export async function handleMessage(msg, sender, runOpts = {}) {
     if (msg.type === MSG.PICK_DRAFT_COMPLETE) {
       const completed = await completePickDraft(msg, sender)
       if (completed?.ok && completed.snapshot) {
+        const groups = Array.isArray(completed.snapshot.groups) ? completed.snapshot.groups : []
+        if (groups.length === 0 || groups.some(group => !Array.isArray(group?.values) || group.values.length === 0)) {
+          return {
+            ...completed,
+            ok: false,
+            synchronized: false,
+            error: 'empty_group',
+            message: '每個群組完成前都必須至少有一個值'
+          }
+        }
+        const previousPanel = await getPanelCtx(completed.tabId)
+        const stagedDraft = await markPickSnapshotSettings(completed.snapshot)
         const ctx = await pickerContextOfSnapshot(completed.snapshot)
-        const groupName = Array.isArray(completed.snapshot.groups)
-          ? completed.snapshot.groups.find(group => Array.isArray(group.values) && group.values.length > 0)?.name || ''
-          : ''
+        const batch = previousPanel?.batch === true
+        const items = batch ? pickerBatchItemsOfSnapshot(completed.snapshot, ctx) : null
+        const batchNames = batch
+          ? Object.fromEntries(groups.map((group, index) => [group.key, typeof group.name === 'string' && group.name.trim() ? group.name : `值 ${index + 1}`]))
+          : null
+        const panelContext = batch
+          ? {
+              kind: 'batch',
+              batch: true,
+              items,
+              draft: { ...(completed.snapshot.form || {}), batchNames },
+              pickSessionId: completed.snapshot.sessionId,
+              pickGroupKey: null
+            }
+          : {
+              kind: 'new',
+              ctx,
+              draft: { name: groups[0]?.name || '', ...(completed.snapshot.form || {}) },
+              pickSessionId: completed.snapshot.sessionId,
+              pickGroupKey: groups[0]?.key
+            }
         // 完成後把設定階段寫回同一個分頁 ctx；面板重載時仍會進設定頁，
         // 而不是再次顯示「等待設定畫面」或重新建立欄位。
-        await setPanelCtx(completed.tabId, {
-          kind: 'new',
-          ctx,
-          draft: { name: groupName, ...(completed.snapshot.form || {}) },
-          pickSessionId: completed.snapshot.sessionId,
-          pickGroupKey: completed.snapshot.groups?.find(group => Array.isArray(group.values) && group.values.length > 0)?.key
-        })
-        return { ...completed, context: ctx }
+        await setPanelCtx(completed.tabId, panelContext)
+        return { ...completed, draft: stagedDraft, context: ctx, panelContext }
       }
       return completed
     }

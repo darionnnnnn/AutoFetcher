@@ -12,12 +12,13 @@ import {
   clearPickDraft,
   normalizePickDraft,
   withPickDraftLock,
-  MAX_PICK_DRAFT_GROUPS
+  MAX_PICK_DRAFT_GROUPS,
+  PICK_SAVE_STATES
 } from './pick-draft.js'
 
 export const PICK_PROTOCOL_VERSION = 1
 export const PICK_OPERATION_TYPES = Object.freeze([
-  'create-group', 'add', 'remove', 'move', 'rename', 'set-active', 'patch-form', 'pause', 'abandon'
+  'create-group', 'add', 'remove', 'move', 'rename', 'set-active', 'patch-form', 'save-state', 'pause', 'abandon'
 ])
 export const DRAFT_OPERATION_TYPES = PICK_OPERATION_TYPES
 
@@ -202,6 +203,39 @@ function applyPatchForm(draft, source) {
   draft.form = { ...draft.form, ...clone(patch) }
 }
 
+function applySaveState(draft, source) {
+  const groupKey = nonEmpty(source.groupKey, 'groupKey')
+  const state = nonEmpty(source.state, 'state')
+  const phase = source.phase === undefined ? 'task' : nonEmpty(source.phase, 'phase')
+  if (phase !== 'task' && phase !== 'first-run') fail('invalid_operation', `不支援的保存階段：${phase}`)
+  if (!PICK_SAVE_STATES.includes(state)) fail('invalid_operation', `不支援的保存狀態：${state}`)
+  const group = groupOf(draft, groupKey)
+  const next = { state }
+  if (source.taskId !== undefined) next.taskId = nonEmpty(source.taskId, 'taskId')
+  if (source.error !== undefined) next.error = String(source.error)
+  if (phase === 'task') {
+    group.taskSaveState = state
+    // 舊批次草稿仍讀 saveState；新流程以 taskSaveState/firstRunState 分開。
+    group.saveState = state
+    next.taskState = state
+  } else {
+    group.firstRunState = state
+    next.firstRunState = state
+  }
+  if (next.taskId !== undefined) group.taskId = next.taskId
+  if (next.error !== undefined) group.error = next.error
+  else delete group.error
+  draft.saveStates = { ...(draft.saveStates || {}), [groupKey]: next }
+  if (phase === 'task' && state === 'inflight') draft.stage = 'saving'
+  if (state === 'uncertain') draft.stage = 'partial'
+  if (phase === 'first-run' && (state === 'inflight' || state === 'done')) draft.stage = 'saving'
+  if (phase === 'first-run' && (state === 'done' || state === 'saved') &&
+      draft.groups.length > 0 && draft.groups.every(item => ['done', 'saved'].includes(item.taskSaveState || item.saveState) &&
+        ['done', 'saved'].includes(item.firstRunState))) {
+    draft.stage = 'completed'
+  }
+}
+
 /** 純函式：核對身分、revision、operationId 並產生下一份草稿。 */
 export function applyPickDraftOperation(inputDraft, inputOperation, context = {}) {
   const current = normalizePickDraft(inputDraft)
@@ -237,6 +271,7 @@ export function applyPickDraftOperation(inputDraft, inputOperation, context = {}
     if (active !== null) groupOf(next, active)
     next.activeGroupKey = active ?? null
   } else if (type === 'patch-form') applyPatchForm(next, source)
+  else if (type === 'save-state') applySaveState(next, source)
   else if (type === 'pause') {
     next.stage = 'paused'
     next.paused = true

@@ -24,6 +24,13 @@ export const MAX_GROUPS = MAX_PICK_DRAFT_GROUPS
 export const MAX_VALUES_PER_GROUP = MAX_PICK_DRAFT_VALUES
 export const MAX_DRAFT_BYTES = MAX_PICK_DRAFT_BYTES
 
+// 保存階段的狀態會跨面板重載保留；舊值 saving/saved/failed 仍相容，
+// 新批次流程另外使用能表達結果不明的 inflight/uncertain。
+export const PICK_SAVE_STATES = Object.freeze([
+  'pending', 'inflight', 'done', 'uncertain',
+  'saving', 'saved', 'failed'
+])
+
 const KEY_PREFIX = 'pickDraft:'
 const STAGES = new Set([
   'empty', 'naming', 'selecting', 'paused', 'settings', 'saving', 'partial', 'completed', 'cancelled'
@@ -34,7 +41,7 @@ const DRAFT_KEYS = new Set([
   'groups', 'activeGroupKey', 'stage', 'form', 'preActions', 'saveStates',
   'operationId', 'appliedOperationIds', 'paused', 'createdAt', 'updatedAt'
 ])
-const GROUP_KEYS = new Set(['key', 'name', 'values', 'saveState', 'taskId', 'error'])
+const GROUP_KEYS = new Set(['key', 'name', 'values', 'saveState', 'taskSaveState', 'firstRunState', 'taskId', 'error'])
 const VALUE_KEYS = new Set([
   'key', 'name', 'source', 'spec', 'mode', 'preview', 'previewValue', 'locator', 'frame'
 ])
@@ -158,7 +165,7 @@ function normalizeSaveStates(value) {
   const result = cloneJson(value, '$.saveStates')
   for (const [key, state] of Object.entries(result)) {
     if (!isPlainObject(state)) fail(`saveStates.${key} 必須是物件`)
-    if (state.state !== undefined && !['pending', 'saving', 'saved', 'failed'].includes(state.state)) {
+    if (state.state !== undefined && !PICK_SAVE_STATES.includes(state.state)) {
       fail(`saveStates.${key}.state 不支援`)
     }
   }

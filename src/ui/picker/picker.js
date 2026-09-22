@@ -24,6 +24,10 @@ const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
 // 批次畫面（AF-18 G-3）的模組狀態：放在檔頭，面板啟動流程（檔尾的正式接線）不論先後都讀得到
 let batchItems = null
 let batchViewOn = false
+// 舊版 kind:'batch' 沒有 C1b session，沿用既有批次保存；只有完成 snapshot
+// 產生的 batch ctx 才要求 task/first-run checkpoint。
+let batchDraftManaged = false
+let batchDraftSessionId = null
 // 整批改排程（AF-19 作業 C）的模組狀態
 let bulkTaskIds = null
 let bulkCount = 0
@@ -2593,8 +2597,9 @@ export async function renderDashboardSection(task) {
 }
 
 // 表單值＋目前 ctx → 任務物件（儲存、試抓、批次的全部試抓／全部儲存都走這一份）
-function taskFromForm(values, ctx) {
-  return buildTask(values, ctx?.locator, ctx?.task, ctx?.frameUrl ? { url: ctx.frameUrl } : undefined)
+function taskFromForm(values, ctx, taskId) {
+  const existing = taskId ? { id: taskId } : ctx?.task
+  return buildTask(values, ctx?.locator, existing, ctx?.frameUrl ? { url: ctx.frameUrl } : undefined)
 }
 
 /**
@@ -2604,8 +2609,8 @@ function taskFromForm(values, ctx) {
  * @param {Object} ctx 目前 render 的 ctx
  * @returns {Promise<Object>} 存好的 task
  */
-async function saveTaskFromForm(values, ctx) {
-  const task = taskFromForm(values, ctx)
+async function saveTaskFromForm(values, ctx, { taskId } = {}) {
+  const task = taskFromForm(values, ctx, taskId)
   await saveTask(task)
   return task
 }
@@ -2810,10 +2815,35 @@ function firstResultOf(res, err) {
  * @param {Object[]} tasks 剛存好的任務（批次時多個）
  * @param {{ keepOpen?: boolean, tabId?: number|null }} [opts] keepOpen：回饋區有警告時成功也不自動關
  */
-async function fetchFirstValues(tasks, { keepOpen = false, tabId = panelTabId } = {}) {
+async function fetchFirstValues(tasks, { keepOpen = false, tabId = panelTabId, batchRun = null } = {}) {
   const list = (tasks || []).filter(Boolean)
   if (list.length === 0) return
-  const results = await Promise.all(list.map(async (task) => {
+  const byId = batchDraftManaged
+    ? new Map((Array.isArray(batchRun) ? batchRun : []).map(entry => [entry.task?.id, entry.item]))
+    : new Map()
+  const pending = []
+  const results = []
+  for (const task of list) {
+    const item = byId.get(task.id)
+    const firstState = item?.firstRunState || 'pending'
+    if (item && firstState === 'done') {
+      results.push({ task, ok: false, text: '第一筆狀態已完成；請到任務頁確認結果後再試一次' })
+      continue
+    }
+    if (item && ['inflight', 'uncertain'].includes(firstState)) {
+      results.push({ task, ok: false, text: '第一筆抓取狀態不明，請到任務頁確認後再試一次' })
+      continue
+    }
+    if (item) {
+      const checkpoint = await updateBatchSaveState(item, 'first-run', 'inflight', task.id)
+      if (!checkpoint) {
+        results.push({ task, ok: false, text: '第一筆狀態同步失敗，請到任務頁確認後再試一次' })
+        continue
+      }
+    }
+    pending.push({ task, item })
+  }
+  const responses = await Promise.all(pending.map(async ({ task, item }) => {
     let res = null
     let err = null
     try {
@@ -2821,8 +2851,20 @@ async function fetchFirstValues(tasks, { keepOpen = false, tabId = panelTabId } 
     } catch (e) {
       err = e || true
     }
-    return { task, ...firstResultOf(res, err) }
+    return { task, item, res, err, ...firstResultOf(res, err) }
   }))
+  for (const result of responses) {
+    const state = result.err ? 'uncertain' : 'done'
+    if (result.item) {
+      const checkpoint = await updateBatchSaveState(result.item, 'first-run', state, result.task.id,
+        result.err ? FIRST_INTERRUPTED_TEXT : undefined)
+      if (!checkpoint && !result.err) {
+        result.ok = false
+        result.text = '第一筆結果已回來，但狀態同步失敗；請到任務頁確認後再試一次'
+      }
+    }
+    results.push(result)
+  }
   let first
   if (results.length === 1) {
     first = { state: results[0].ok ? 'ok' : 'error', text: results[0].text }
@@ -3750,10 +3792,11 @@ function bindPickDraftEvents() {
     try {
       const response = await chrome.runtime.sendMessage({ type: MSG.PICK_DRAFT_COMPLETE, ...pickDraftIdentity(draft), expectedRevision: draft.revision })
       if (response?.ok !== true || response.synchronized !== true) throw new Error(response?.message || '草稿尚未同步')
+      if (response.draft) setPickDraftContext(response.draft, { render: false })
       if (response.context) {
         // background 已把同一份 snapshot 寫成設定頁 ctx；立即切畫面，
         // 避免只留下「等待設定畫面」而要靠 session 事件才能進表單。
-        await renderFromPanelCtx({
+        await renderFromPanelCtx(response.panelContext || {
           kind: 'new',
           ctx: response.context,
           draft: { name: activePickGroup()?.name || '', ...(response.snapshot?.form || {}) }
@@ -4310,13 +4353,26 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
       if (tabId === null) return
       const changed = tabId !== panelTabId
       panelTabId = tabId
-      const ctx = await getPanelCtx(tabId)
+      let ctx = await getPanelCtx(tabId)
       let protocolDraft = null
       try {
         const response = await chrome.runtime.sendMessage({ type: MSG.PICK_DRAFT_READ, tabId })
         protocolDraft = response?.draft || null
       } catch {}
-      if (!protocolDraft && ctx?.batch === true) {
+      // 完成屏障已把選取階段推進 settings；批次設定重載時留在既有
+      // batch items，不得因 session 仍保留而自動回到選值畫面。
+      if (protocolDraft && (ctx?.kind === 'batch' || ctx?.kind === 'saved') &&
+          (['settings', 'saving', 'partial', 'completed'].includes(protocolDraft.stage) ||
+           (ctx.kind === 'saved' && protocolDraft.stage === 'paused'))) {
+        // 保存／首抓進度仍需沿用協定身分；只是不把它當 pickDraft 畫面，
+        // 否則 reload 後 updateBatchSaveState 沒有 revision 可繼續寫回。
+        if (ctx.kind === 'batch') {
+          ctx = { ...ctx, items: reconcileBatchItemsWithDraft(ctx.items, protocolDraft) }
+        }
+        setPickDraftContext(protocolDraft, { render: false })
+        protocolDraft = null
+      }
+      if (!protocolDraft && ctx?.batch === true && ctx.kind !== 'batch') {
         protocolDraft = await beginPickDraftFromBatchEntry(ctx, tabId)
       }
       // 舊 ctx 仍保留目標／批次形狀；表單內容以安全協定草稿為準。
@@ -4416,6 +4472,37 @@ function batchTabId() {
   return batchItems?.[0]?.tabId ?? panelTabId
 }
 
+function reconcileBatchItemsWithDraft(items, draft) {
+  if (!Array.isArray(items) || !Array.isArray(draft?.groups)) return items
+  const previous = new Map(items.map(item => [item.key, item]))
+  return draft.groups.map((group, groupIndex) => {
+    const old = previous.get(group.key) || {}
+    const values = Array.isArray(group.values) ? group.values : []
+    const fields = values.map((value, index) => ({
+      key: value.key,
+      name: typeof value.name === 'string' && value.name.trim() ? value.name : `值 ${index + 1}`,
+      mode: value.mode === 'text' || value.mode === 'block' ? value.mode : 'number',
+      source: structuredClone(value.source || { locator: value.locator || {} }),
+      spec: structuredClone(value.spec || {})
+    }))
+    const first = fields[0]
+    return {
+      ...old,
+      key: group.key || old.key || `g${groupIndex + 1}`,
+      nameHint: typeof group.name === 'string' ? group.name : (old.nameHint || ''),
+      locator: first?.source?.locator || old.locator || {},
+      ...(first?.source?.frame?.url ? { frameUrl: first.source.frame.url, frame: first.source.frame } : {}),
+      picks: fields.map(field => structuredClone(field.spec)),
+      fields,
+      taskSaveState: group.taskSaveState || group.saveState || old.taskSaveState || old.saveState || 'pending',
+      firstRunState: group.firstRunState || old.firstRunState || 'pending',
+      saveState: group.taskSaveState || group.saveState || old.taskSaveState || old.saveState || 'pending',
+      ...(group.taskId || old.taskId ? { taskId: group.taskId || old.taskId } : {}),
+      ...(group.error || old.error ? { error: group.error || old.error } : {})
+    }
+  })
+}
+
 function batchRows() {
   return Array.from(document.querySelectorAll('#batch-list [data-batch-item]'))
 }
@@ -4424,6 +4511,8 @@ async function renderBatch(ctx) {
   const preList = document.getElementById('preaction-list')
   if (preList) preList.replaceChildren()
   batchItems = ctx.items.slice()
+  batchDraftManaged = typeof ctx.pickSessionId === 'string' && ctx.pickSessionId.trim() !== ''
+  batchDraftSessionId = batchDraftManaged ? ctx.pickSessionId : null
   setBatchView(true)
   await renderDashboardSection(null)
   await applyPickerDefaults(null)
@@ -4611,6 +4700,48 @@ function batchEntries() {
   })).filter(e => e.item)
 }
 
+// 批次保存進度回寫 C1b 草稿；這條通道不重畫選值畫面，避免設定頁保存時被
+// 背景 session 事件切回選值。taskId 先寫 pending/inflight，再寫 done，讓重載
+// 能辨認已完成項目與結果不明的項目。
+async function updateBatchSaveState(item, phase, state, taskId, error) {
+  if (!batchDraftManaged) return { legacy: true }
+  if (!pickDraftState || !globalThis.chrome?.runtime?.sendMessage) return null
+  if (batchDraftSessionId && pickDraftState.sessionId !== batchDraftSessionId) return null
+  if (Number.isInteger(item?.tabId) && pickDraftState.tabId !== item.tabId) return null
+  try {
+    await pickDraftOperationQueue
+    const draft = pickDraftState
+    const response = await chrome.runtime.sendMessage({
+      type: MSG.PICK_DRAFT_OPERATION,
+      ...pickDraftIdentity(draft),
+      operationId: operationIdOf(`save-state-${item.key}`),
+      expectedRevision: draft.revision,
+      operation: {
+        type: 'save-state', groupKey: item.key, phase, state,
+        ...(taskId ? { taskId } : {}),
+        ...(error ? { error: String(error) } : {})
+      }
+    })
+    if (response?.ok !== true || !response.draft) return null
+    setPickDraftContext(response.draft, { render: false })
+    if (phase === 'task') {
+      item.taskSaveState = state
+      item.saveState = state
+    } else {
+      item.firstRunState = state
+    }
+    if (taskId) item.taskId = taskId
+    if (error) item.error = String(error)
+    else delete item.error
+    if (batchItems) {
+      try { await mergePanelCtx(batchTabId(), { items: batchItems }) } catch {}
+    }
+    return response.draft
+  } catch {
+    return null
+  }
+}
+
 async function handleBatchSave() {
   // 全部試抓進行中：兩條流程共用同一份表單逐項 render，不能並行——就地說原因，零寫入
   if (batchTesting) {
@@ -4655,6 +4786,23 @@ async function runBatchSave() {
   for (let i = 0; i < entries.length; i++) {
     const { item, name } = entries[i]
     try {
+      // 已完成項目在重載／重試時直接沿用原 task；inflight/uncertain 的結果
+      // 不明，先停在可見的結果不明狀態，不能盲目再送一次。
+      if (batchDraftManaged && (item.taskSaveState || item.saveState) === 'done' && item.taskId) {
+        const existing = await getTask(item.taskId)
+        if (existing) {
+          saved.push({ key: item.key, item, task: existing })
+          lastValues = null
+          continue
+        }
+        await updateBatchSaveState(item, 'task', 'uncertain', item.taskId, '找不到已標記完成的任務')
+        failure = { k: i + 1, name, message: '保存結果不明，請確認任務清單後再重試' }
+        break
+      }
+      if (batchDraftManaged && ['inflight', 'uncertain'].includes(item.taskSaveState || item.saveState)) {
+        failure = { k: i + 1, name, message: '保存結果不明，請先確認任務清單後再重試' }
+        break
+      }
       const values = collectBatchValues(item, name, shared)
       // 收集會把畫面套回批次文字，進度要在它之後寫（與「全部試抓」同一套）
       const saveBtn = document.getElementById('save')
@@ -4664,8 +4812,26 @@ async function runBatchSave() {
         failure = { k: i + 1, name, message: Object.values(validation.errors).join('；') }
         break
       }
-      const task = await saveTaskFromForm(values, currentCtx)
-      saved.push({ key: item.key, task })
+      const taskId = item.taskId || crypto.randomUUID()
+      item.taskId = taskId
+      const checkpoint = await updateBatchSaveState(item, 'task', 'inflight', taskId)
+      if (batchDraftManaged && !checkpoint) {
+        failure = { k: i + 1, name, message: '保存進度同步失敗，任務尚未寫入；請重新整理後重試' }
+        break
+      }
+      let task
+      try {
+        task = await saveTaskFromForm(values, currentCtx, { taskId })
+      } catch (error) {
+        await updateBatchSaveState(item, 'task', 'uncertain', taskId, error?.message || error)
+        throw error
+      }
+      const savedCheckpoint = await updateBatchSaveState(item, 'task', 'done', taskId)
+      if (batchDraftManaged && !savedCheckpoint) {
+        failure = { k: i + 1, name, message: '任務已寫入但保存狀態同步失敗，結果不明；請確認任務後再重試' }
+        break
+      }
+      saved.push({ key: item.key, item, task })
       lastValues = values
       try { await addCardsForTask(task, currentCtx) } catch (e) { cardErrors.push(`「${name}」${e?.message || e}`) }
     } catch (e) {
@@ -4700,6 +4866,11 @@ async function runBatchSave() {
   }
 
   if (failure) {
+    // 第 k 組失敗時，前 k-1 組仍要完成首次抓取；不能因批次後段失敗
+    // 直接 return 而漏掉它們。它們的 taskSaveState 已是 done，重試不會重建。
+    if (saved.length > 0) {
+      await fetchFirstValues(saved.map(s => s.task), { keepOpen: true, batchRun: saved })
+    }
     // 已存的從清單移除，再按一次不會重複建立
     if (saved.length > 0) removeBatchItems(saved.map(s => s.key))
     showErrorText(`已儲存 ${failure.k - 1} 個；第 ${failure.k} 個「${failure.name}」失敗：${failure.message}`)
@@ -4721,7 +4892,7 @@ async function runBatchSave() {
     ...(pinCandidate ? { pin: pinCandidate } : {}),
     ...(warnings.length > 0 ? { warning: warnings.join(' ') } : {})
   })
-  await fetchFirstValues(saved.map(s => s.task), { keepOpen: warnings.length > 0 })
+  await fetchFirstValues(saved.map(s => s.task), { keepOpen: warnings.length > 0, batchRun: saved })
 }
 
 /**
