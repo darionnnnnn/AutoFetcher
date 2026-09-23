@@ -225,6 +225,47 @@ test('C2a content 下鑽先等 partial PICKED ACK，再送 DESCEND_FRAME', async
   assert.deepEqual(order, ['PICKED', 'PICKED_ACK', 'DESCEND_FRAME'])
 })
 
+test('D1b immediate draft mode propagates to a descended frame', async () => {
+  resetChromeMock()
+  const chromeMock = installChromeMock()
+  const dom = new JSDOM(`<!doctype html><html><body>
+    <table id="t"><tbody><tr><td id="cell">42</td></tr></tbody></table>
+    <iframe id="fr" src="https://b.test/embed"></iframe>
+  </body></html>`)
+  globalThis.window = dom.window
+  globalThis.document = dom.window.document
+  globalThis.Event = dom.window.Event
+  globalThis.MouseEvent = dom.window.MouseEvent
+  globalThis.KeyboardEvent = dom.window.KeyboardEvent
+  chromeMock.__setRuntimeResponder(async message => ({ ok: true, revision: 2 }))
+  const picker = await import('../src/content/picker-mode.js?t=' + Math.random())
+  picker.enterPickMode({
+    purpose: 'task', sessionId: 'group-session', groupKey: 'group-1',
+    pickStage: 'selecting', initialTarget: document.getElementById('t')
+  })
+
+  const cell = document.getElementById('cell')
+  cell.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+  cell.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const proxy = document.querySelector('[data-af-frame-proxy]')
+  assert.ok(proxy)
+  proxy.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+  proxy.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  const messages = chromeMock.__calls
+    .filter(call => call.api === 'runtime.sendMessage')
+    .map(call => call.args[0])
+  const descend = messages.find(message => message.type === 'DESCEND_FRAME')
+  assert.ok(descend)
+  assert.equal(descend.sessionId, 'group-session')
+  assert.equal(descend.groupKey, 'group-1')
+  assert.equal(descend.batch, true, 'child frame must use immediate draft writes')
+  assert.equal(messages.filter(message => message.type === 'PICKED').length, 1,
+    'the already-selected parent value is acknowledged before descending')
+})
+
 test('C2a PICKED operationId 以值 index 派生；remove 後同值可用新操作重加', async () => {
   const { messages, bg, draft } = await fresh([[0, 'https://a.test/page']])
   await start(bg, messages)

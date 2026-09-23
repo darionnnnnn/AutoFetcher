@@ -2764,7 +2764,9 @@ async function confirmPick() {
       ...(pickRouteIdentity !== undefined ? { routeIdentity: structuredClone(pickRouteIdentity) } : {}),
       ...(pickRevision !== undefined ? { draftRevision: pickRevision } : {})
     }
-    if (batchMode) msg.batch = true
+    // A draft-group child frame must inherit immediate-write semantics even
+    // though it is not in the legacy multi-task batch picker.
+    if (batchMode || isImmediateDraftGroupMode()) msg.batch = true
     if (currentTaskId !== undefined) msg.taskId = currentTaskId
     // 先把這一層已選的值寫進同一份 panel ctx；下鑽成功／失敗都不能丟掉前面草稿。
     let partial = null

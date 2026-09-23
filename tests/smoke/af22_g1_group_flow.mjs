@@ -24,7 +24,7 @@ const mainFixture = framePort => `<!doctype html><meta charset="utf-8"><title>AF
 <table id="nested"><tbody><tr><td>product</td><td><table><tbody><tr><td>First price</td><td id="price-a">101</td></tr></tbody></table></td></tr></tbody></table>
 <table role="table" aria-label="CSS table"><div role="row"><span role="cell">Second price</span><span role="cell" id="price-b">202</span></div></table>
 <div id="scattered">Scattered amount <strong id="price-c">303</strong> <strong id="price-d">404</strong></div>
-<iframe title="cross-origin fixture" src="http://127.0.0.1:${framePort}/frame"></iframe>`
+<iframe title="cross-origin fixture" src="http://127.0.0.1:${framePort}/frame" style="width:500px;height:280px;border:0"></iframe>`
 const frameFixture = '<!doctype html><meta charset="utf-8"><div id="frame-price" style="margin:30px;padding:20px">404</div>'
 const listen = server => new Promise((resolveListen, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => resolveListen(server.address().port)) })
 const clickSelector = async (page, selector) => {
@@ -229,12 +229,11 @@ try {
     crossOriginFrame = target.frames().find(f => f.url().includes(`:${framePort}/frame`))
     if (crossOriginFrame) { await clickFrameTarget(target, crossOriginFrame, '#frame-price'); framePicked = true }
   } catch (error) { console.log(`[gap] cross-origin frame pick unavailable: ${error.message}`) }
-  ck(framePicked ? 'cross-origin frame value clicked' : 'cross-origin frame capability not reached')
+  ck(framePicked ? 'cross-origin frame navigation initiated' : 'cross-origin frame capability not reached')
 
   if (framePicked) {
     await crossOriginFrame.waitForSelector('[data-af-overlay] [data-af-done]', { timeout: 10000 })
-    await clickFrameTarget(target, crossOriginFrame, '[data-af-done]')
-    ck('cross-origin frame selection finished')
+    await clickFrameTarget(target, crossOriginFrame, '#frame-price')
     const end = Date.now() + 8000
     let frameValues = []
     while (Date.now() < end && !frameCommitted) {
@@ -252,8 +251,10 @@ try {
       if (!frameCommitted) await new Promise(resolveWait => setTimeout(resolveWait, 150))
     }
     console.log('[checkpoint detail] canonical cross-origin values', JSON.stringify(frameValues, null, 2))
-    if (frameCommitted) ck('cross-origin frame source is present in canonical draft')
-    else console.log('[gap] frame click and Done completed, but no frame URL was committed to the canonical group')
+    if (!frameCommitted) throw new Error('child-frame click was not acknowledged into the canonical group before Done')
+    ck('cross-origin frame click was acknowledged before Done')
+    await clickFrameTarget(target, crossOriginFrame, '[data-af-done]')
+    ck('cross-origin frame selection finished')
   }
   if (await target.$('[data-af-done]')) await clickSelector(target, '[data-af-done]')
   await picker.waitForFunction(() => document.querySelectorAll('[data-group-row]').length === 1, { timeout: 15000 })
