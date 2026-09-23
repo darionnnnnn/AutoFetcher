@@ -767,7 +767,7 @@ try {
     names: [...document.querySelectorAll('#batch-list [data-batch-name]')].map(input => input.value),
     results: [...document.querySelectorAll('#batch-list [data-batch-result]')].map(node => node.textContent.trim())
   }))
-  if (secondDryRun.names[0] !== 'Second Round Only' || !secondDryRun.results[0]?.includes('505')) {
+  if (secondDryRun.names[0] !== 'Second Round Only' || !secondDryRun.results[0]?.includes('303')) {
     throw new Error(`second-round dry run used stale task/source data: ${JSON.stringify(secondDryRun)}`)
   }
   ck('second round dry run used its own name and value')
@@ -808,7 +808,7 @@ try {
   ck('second round saved only its source/key while preserving first-round tasks/history')
 
   if (!frameCommitted) throw new Error('cross-origin frame click was not committed to the canonical draft')
-  console.log(JSON.stringify({ browser: CHROME, tabId, framePicked, frameCommitted, groups: await picker.evaluate(() => document.querySelectorAll('[data-group-row]').length), partialResults, fullResults, savedTasks: persisted, repairedFieldKey: fieldKey, retainedSeriesRecords: afterRepair.records.length, secondRoundSessionId: freshDraft.sessionId, secondRoundTaskId: secondTask.id, secondRoundDryRun, status: 'G1_SECOND_ROUND_VERIFIED' }, null, 2))
+  console.log(JSON.stringify({ browser: CHROME, tabId, framePicked, frameCommitted, groups: await picker.evaluate(() => document.querySelectorAll('[data-group-row]').length), partialResults, fullResults, savedTasks: persisted, repairedFieldKey: fieldKey, retainedSeriesRecords: afterRepair.records.length, secondRoundSessionId: freshDraft.sessionId, secondRoundTaskId: secondTask.id, secondRoundDryRun: secondDryRun, status: 'G1_SECOND_ROUND_VERIFIED' }, null, 2))
 } catch (error) {
   console.error(`FAIL G1 checkpoint: ${error?.stack || error}`)
   process.exitCode = 1
