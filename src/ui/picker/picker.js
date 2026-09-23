@@ -799,7 +799,13 @@ export function buildTask(values, locator, existing, frame) {
   }
   if (Array.isArray(values.alerts)) {
     const validAlerts = values.alerts
-      .filter(a => a && typeof a === 'object' && (typeof a.value === 'string' || Number.isFinite(a.value)))
+      .filter(a => {
+        if (!a || typeof a !== 'object') return false
+        const textEquality = alertTargetMode(values, a.field) === 'text' && a.type === 'eq'
+        if (textEquality) return typeof a.value === 'string'
+        if (typeof a.value === 'number') return Number.isFinite(a.value)
+        return typeof a.value === 'string' && a.value.trim() !== '' && Number.isFinite(Number(a.value))
+      })
       .map(a => {
         const textValue = alertTargetMode(values, a.field) === 'text' && a.type === 'eq'
         const item = {

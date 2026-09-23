@@ -252,3 +252,22 @@ test('C2b 過期 EXIT 與另一 session 的 drain resume 不影響目前選取',
   delete globalThis.window; delete globalThis.document; delete globalThis.Event; delete globalThis.MouseEvent
   t.after(() => resetChromeMock())
 })
+
+test('legacy PICKED without sessionId remains valid after a C2b participant is registered', async t => {
+  const f = await fixture(t)
+  const registered = await f.pick('g1', '#new-session-value')
+  assert.equal(registered.ok, true)
+  // This is the pre-C2 message shape. An absent msg.sessionId must not match
+  // an absent participant.sessionId and dereference participant.frames.
+  const legacy = await f.bg.handleMessage({
+    type: f.messages.MSG.PICKED,
+    purpose: 'task',
+    locator: { css: '#legacy-value' },
+    previewValue: 42,
+    picks: [{ mode: 'text' }]
+  }, { tab: { id: f.tab.id, url: tabUrl }, frameId: 4, url: frameUrl })
+  assert.equal(legacy.ok, true)
+  const panel = await f.chrome.storage.session.get(`panel:${f.tab.id}`)
+  assert.equal(panel[`panel:${f.tab.id}`]?.kind, 'new')
+  assert.equal(panel[`panel:${f.tab.id}`]?.ctx.locator.css, '#legacy-value')
+})

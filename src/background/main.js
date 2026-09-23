@@ -1285,7 +1285,13 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       const pickedTabId = sender?.tab?.id
       const activeFrame = Number.isInteger(pickedTabId) ? frameStateOf(pickedTabId) : null
       const participant = Number.isInteger(pickedTabId) ? pickParticipantFrames.get(pickedTabId) : null
-      const knownParticipant = participant?.sessionId === msg.sessionId ? participant.frames.get(sender?.frameId ?? 0) : null
+      // Legacy PICKED has no sessionId. Do not match two absent ids and then
+      // dereference a participant frame map; only C2b session messages may use
+      // the per-session participant document guard.
+      const knownParticipant = participant && msg.sessionId !== undefined &&
+        participant.sessionId === msg.sessionId
+        ? participant.frames.get(sender?.frameId ?? 0)
+        : null
       if (knownParticipant?.documentId && sender?.documentId && knownParticipant.documentId !== sender.documentId) {
         return { ok: false, error: 'stale_document', retryable: true, message: '這個框架的文件已重新載入，請重新進入後再選取' }
       }

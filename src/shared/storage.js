@@ -599,9 +599,10 @@ export async function updateTasks(ids, mutator) {
     const next = await mutator(structuredClone(before))
     if (next === null || next === undefined) continue
     if (next.id !== before.id) throw new Error('不得在 mutator 內改任務 id')
-    const normalized = next.url === before.url ? next : { ...next, url: before.url }
-    validateTask(normalized, prepared.length, { keptUrl: before.url })
-    prepared.push({ before, next: normalized })
+    // 舊任務可能留有歷史上的不安全網址；不改網址時照常允許其他欄位更新，
+    // 若明確改網址則 validateTask 只豁免原網址，不豁免新值。
+    validateTask(next, prepared.length, { keptUrl: before.url })
+    prepared.push({ before, next })
   }
   const invalidated = []
   for (const { before, next } of prepared) {

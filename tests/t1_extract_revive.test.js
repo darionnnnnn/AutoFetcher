@@ -334,7 +334,7 @@ test('重試耗盡後給的是中文與具體建議，不是 Chrome 的英文', 
   assert.match(err, /等待/, `要說出使用者能做什麼：${err}`)
 })
 
-test('英文原文留給診斷，不丟掉', async () => {
+test('英文連線例外轉成安全的階段與結果診斷', async () => {
   const { c, st, fe } = await fresh()
   await st.saveTask(task())
   c.__setTabResponder((tabId, msg) => {
@@ -345,7 +345,9 @@ test('英文原文留給診斷，不丟掉', async () => {
   const st2 = await import('../src/shared/storage.js?t=' + Math.random())
   const list = await st2.getDiagList()
   const joined = JSON.stringify(list)
-  assert.match(joined, /Receiving end/, '除錯時找不到原文就等於什麼線索都沒有')
+  assert.ok(list.some(item => item.kind === 'fetch_page_gone' && /stage=fetch result=page_gone/.test(item.detail)),
+    '要保留可以定位階段與結果的診斷')
+  assert.doesNotMatch(joined, /Receiving end/, '不得保存未篩選的瀏覽器錯誤原文')
 })
 
 test('立即測試拿到的是同一句中文（訊息只有一份）', async () => {
