@@ -202,7 +202,7 @@ try {
     lifecycle: { rounds: cycleMs.length, medianMs: +median(cycleMs).toFixed(2), maxMs: +Math.max(...cycleMs).toFixed(2), finalDom: final,
       bodyEventListeners: { before: listenersBefore, after: listenersAfter, delta: listenersBefore === null || listenersAfter === null ? null : listenersAfter - listenersBefore },
       jsHeapUsedSizeBytes: { before: heapBefore, after: heapAfter, delta: heapBefore === null || heapAfter === null ? null : heapAfter - heapBefore } },
-    baseline: { source: 'docs/AF-22-PLAN.md R15 evidence; Node mock only', mockSwitches: 100, mockWrites: 101, mockAverageMs: 167,
+    baseline: { source: 'docs/archive/AF-22-PLAN.md R15 evidence; Node mock only', mockSwitches: 100, mockWrites: 101, mockAverageMs: 167,
       comparison: 'Different runtime/path; descriptive only, not a real-Chrome baseline.' },
     limitations: ['WeakMap/Map source-cache cardinality is not directly observable from the isolated content script.',
       'CDP listener count is for the inspected page-world body object; it does not enumerate isolated-world listeners.',
