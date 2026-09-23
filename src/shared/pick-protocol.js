@@ -234,6 +234,16 @@ function applySaveState(draft, source) {
   } else {
     group.firstRunState = state
     next.firstRunState = state
+    if (source.firstResult !== undefined) {
+      if (!source.firstResult || typeof source.firstResult !== 'object' || Array.isArray(source.firstResult)) {
+        fail('invalid_operation', 'firstResult 必須是物件')
+      }
+      group.firstRunResult = {
+        ok: source.firstResult.ok === true,
+        text: String(source.firstResult.text || '')
+      }
+      next.firstResult = group.firstRunResult
+    }
   }
   if (next.taskId !== undefined) group.taskId = next.taskId
   if (next.error !== undefined) group.error = next.error

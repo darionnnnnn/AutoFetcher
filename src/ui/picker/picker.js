@@ -29,6 +29,12 @@ let batchViewOn = false
 // 產生的 batch ctx 才要求 task/first-run checkpoint。
 let batchDraftManaged = false
 let batchDraftSessionId = null
+const SAVED_FIRST_RUN_GUARD = '__afSavedFirstRunRecoveryKeys'
+
+function savedFirstRunGuard() {
+  if (!(globalThis[SAVED_FIRST_RUN_GUARD] instanceof Set)) globalThis[SAVED_FIRST_RUN_GUARD] = new Set()
+  return globalThis[SAVED_FIRST_RUN_GUARD]
+}
 // 整批改排程（AF-19 作業 C）的模組狀態
 let bulkTaskIds = null
 let bulkCount = 0
@@ -2785,8 +2791,69 @@ export async function handleSave() {
 const FIRST_PENDING_TEXT = '已儲存，正在抓第一筆…'
 const FIRST_INTERRUPTED_TEXT = '抓取被中斷，請再試一次'
 // 存檔後表單已換成回饋區，面板上沒有「試抓」可按：指向回饋區的「開啟報表」與任務頁的「立即抓取」
-const FIRST_NEXT_STEP = '任務已經存好；可以按下方「開啟報表」，到任務頁用「立即抓取」再試一次'
+const FIRST_NEXT_STEP = '任務已經存好；可以按下方「開啟報表」，到任務管理確認後用既有任務的「立即抓取」再試一次'
 const FIRST_OK_CLOSE_MS = 4000
+
+function savedBatchEntryOf(entry) {
+  const item = entry?.item || entry || {}
+  const task = entry?.task || {}
+  return {
+    key: entry?.key || item.key || '',
+    taskId: task.id || item.taskId || '',
+    name: typeof task.name === 'string' ? task.name : (typeof item.name === 'string' ? item.name : ''),
+    taskSaveState: item.taskSaveState || item.saveState || 'done',
+    firstRunState: item.firstRunState || 'pending',
+    ...(item.firstRunResult ? { firstRunResult: item.firstRunResult } : {}),
+    ...(item.taskCheckpoint ? { taskCheckpoint: item.taskCheckpoint } : {})
+  }
+}
+
+function savedBatchEntriesOf(batchRun) {
+  return Array.isArray(batchRun) ? batchRun.map(savedBatchEntryOf).filter(entry => entry.key && entry.taskId) : []
+}
+
+function savedBatchRecoveryKey(ctx) {
+  const ids = Array.isArray(ctx?.batchRun) ? ctx.batchRun.map(entry => `${entry.key}:${entry.taskId}`).sort() : []
+  return `${ctx?.pickSessionId || ''}|${ids.join('|')}`
+}
+
+function reconcileSavedBatchRun(batchRun, draft) {
+  const groups = new Map((draft?.groups || []).map(group => [group.key, group]))
+  return (batchRun || []).map(entry => {
+    const group = groups.get(entry.key)
+    if (!group) return entry
+    return {
+      ...entry,
+      taskSaveState: group.taskSaveState || group.saveState || entry.taskSaveState || 'done',
+      firstRunState: group.firstRunState || entry.firstRunState || 'pending',
+      ...(group.firstRunResult || entry.firstRunResult ? { firstRunResult: group.firstRunResult || entry.firstRunResult } : {}),
+      ...(group.taskId || entry.taskId ? { taskId: group.taskId || entry.taskId } : {}),
+      ...(group.taskCheckpoint || entry.taskCheckpoint ? { taskCheckpoint: group.taskCheckpoint || entry.taskCheckpoint } : {})
+    }
+  })
+}
+
+async function persistSavedBatchRun(batchRun, tabId = panelTabId) {
+  if (!Array.isArray(batchRun) || tabId === null || tabId === undefined) return
+  try { await mergePanelCtx(tabId, { batchRun: savedBatchEntriesOf(batchRun) }) } catch {}
+}
+
+async function resumeSavedFirstRuns(ctx) {
+  if (ctx?.kind !== 'saved' || !Array.isArray(ctx.batchRun) || ctx.batchRun.length === 0) return
+  const key = savedBatchRecoveryKey(ctx)
+  const guard = savedFirstRunGuard()
+  if (!key || guard.has(key)) return
+  guard.add(key)
+  const tasks = []
+  for (const entry of ctx.batchRun) {
+    if (!entry?.taskId) continue
+    const task = await getTask(entry.taskId)
+    if (task) tasks.push(task)
+  }
+  if (tasks.length > 0) {
+    await fetchFirstValues(tasks, { keepOpen: true, tabId: panelTabId, batchRun: ctx.batchRun })
+  }
+}
 
 function formatFirstValue(v) {
   return v === null || v === undefined ? '（空白）' : String(v)
@@ -2820,7 +2887,11 @@ async function fetchFirstValues(tasks, { keepOpen = false, tabId = panelTabId, b
   const list = (tasks || []).filter(Boolean)
   if (list.length === 0) return
   const byId = batchDraftManaged
-    ? new Map((Array.isArray(batchRun) ? batchRun : []).map(entry => [entry.task?.id, entry.item]))
+    ? new Map((Array.isArray(batchRun) ? batchRun : []).map(entry => {
+      const item = entry.item || entry
+      const id = entry.task?.id || entry.taskId || item.taskId
+      return [id, item]
+    }))
     : new Map()
   const pending = []
   const results = []
@@ -2828,23 +2899,32 @@ async function fetchFirstValues(tasks, { keepOpen = false, tabId = panelTabId, b
     const item = byId.get(task.id)
     const firstState = item?.firstRunState || 'pending'
     if (item && firstState === 'done') {
-      results.push({ task, ok: false, text: '第一筆狀態已完成；請到任務頁確認結果後再試一次' })
+      const previous = item.firstRunResult
+      if (previous && typeof previous.text === 'string') {
+        results.push({ task, ok: previous.ok === true, known: true, text: previous.text })
+      } else {
+        results.push({ task, ok: true, known: false, text: '第一筆已執行；請到任務管理確認' })
+      }
       continue
     }
     if (item && ['inflight', 'uncertain'].includes(firstState)) {
-      results.push({ task, ok: false, text: '第一筆抓取狀態不明，請到任務頁確認後再試一次' })
+      results.push({ task, ok: false, text: '第一筆抓取狀態不明，請到任務管理確認後用既有任務的「立即抓取」再試一次' })
       continue
-    }
-    if (item) {
-      const checkpoint = await updateBatchSaveState(item, 'first-run', 'inflight', task.id)
-      if (!checkpoint) {
-        results.push({ task, ok: false, text: '第一筆狀態同步失敗，請到任務頁確認後再試一次' })
-        continue
-      }
     }
     pending.push({ task, item })
   }
-  const responses = await Promise.all(pending.map(async ({ task, item }) => {
+  // 每個任務都在自己的 inflight checkpoint 後才送 RUN_TASK；序列化可避免
+  // 尚未送出的項目被整批誤標成 inflight。undefined/null 回覆代表結果不明。
+  for (const { task, item } of pending) {
+    if (item) {
+      const checkpoint = await updateBatchSaveState(item, 'first-run', 'inflight', task.id)
+      if (!checkpoint) {
+        results.push({ task, item, ok: false, text: '第一筆狀態同步失敗，請到任務管理確認後再試一次' })
+        await persistSavedBatchRun(batchRun, tabId)
+        continue
+      }
+      await persistSavedBatchRun(batchRun, tabId)
+    }
     let res = null
     let err = null
     try {
@@ -2852,28 +2932,36 @@ async function fetchFirstValues(tasks, { keepOpen = false, tabId = panelTabId, b
     } catch (e) {
       err = e || true
     }
-    return { task, item, res, err, ...firstResultOf(res, err) }
-  }))
-  for (const result of responses) {
-    const state = result.err ? 'uncertain' : 'done'
+    const uncertain = Boolean(err) || res === null || res === undefined
+    const result = { task, item, res, err, known: !uncertain, ...firstResultOf(res, err) }
+    if (uncertain) {
+      result.ok = false
+      result.text = FIRST_INTERRUPTED_TEXT
+    }
+    const state = uncertain ? 'uncertain' : 'done'
     if (result.item) {
       const checkpoint = await updateBatchSaveState(result.item, 'first-run', state, result.task.id,
-        result.err ? FIRST_INTERRUPTED_TEXT : undefined)
-      if (!checkpoint && !result.err) {
+        uncertain ? FIRST_INTERRUPTED_TEXT : undefined, null,
+        { ok: result.ok === true, text: result.text })
+      if (!checkpoint && !uncertain) {
         result.ok = false
         result.text = '第一筆結果已回來，但狀態同步失敗；請到任務頁確認後再試一次'
       }
     }
     results.push(result)
+    await persistSavedBatchRun(batchRun, tabId)
   }
   let first
   if (results.length === 1) {
-    first = { state: results[0].ok ? 'ok' : 'error', text: results[0].text }
+    first = { state: results[0].known === false ? 'neutral' : (results[0].ok ? 'ok' : 'error'), text: results[0].text }
   } else {
     const failed = results.filter(r => !r.ok)
-    first = failed.length === 0
+    const unknown = results.filter(r => r.known === false)
+    first = failed.length === 0 && unknown.length === 0
       ? { state: 'ok', text: `第一筆：${results.length} 個任務都抓到了（${results.map(r => `${r.task.name}：${r.text.replace(/^第一筆：/, '')}`).join('；')}）` }
-      : { state: 'error', text: `第一筆有 ${failed.length} 個沒抓到：${failed.map(r => `「${r.task.name}」${r.text}`).join('；')}` }
+      : failed.length > 0
+        ? { state: 'error', text: `第一筆有 ${failed.length} 個沒抓到：${failed.map(r => `「${r.task.name}」${r.text}`).join('；')}` }
+        : { state: 'neutral', text: `第一筆：${unknown.length} 個任務已執行，請到任務管理確認（${unknown.map(r => `「${r.task.name}」`).join('、')}）` }
   }
   // 畫面：回饋區就地換字（面板重畫時由 ctx 畫回同一句）
   setFirstLine(first)
@@ -2907,7 +2995,7 @@ function setFirstLine(first) {
  * 儲存成功之後不要無聲關窗：說出「存好了、下次什麼時候抓」，
  * 並給一條去看結果的路。1.5 秒後自動關，使用者也可以自己點。
  */
-export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs = 1500, tabId = panelTabId, count = null, hint = false, warning = '', note = '', text = null, first = null, pin = null } = {}) {
+export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs = 1500, tabId = panelTabId, count = null, hint = false, warning = '', note = '', text = null, first = null, pin = null, batchRun = null } = {}) {
   const form = document.getElementById('picker-form')
   if (!form || !task) return
   let when = ''
@@ -2927,8 +3015,18 @@ export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs =
   // 提示（新建的單任務才給）與警告都跟著 saved ctx 走：session 一寫面板就會照 ctx 重畫回饋區，
   // 只 append 在 DOM 上的會被洗掉（體檢實測：提示行在側邊面板永遠看不到）
   // pin：新建任務這一次的排程與去處（「下次新任務沿用」按下去要寫的那一組）；按過之後 pinned: true
-  const saved = { kind: 'saved', text: finalText, ...(hint && count === null ? { hint: true } : {}), ...(warning ? { warning } : {}), ...(note ? { note } : {}), ...(first ? { first } : {}), ...(pin ? { pin, pinned: false } : {}) }
+  const saved = {
+    kind: 'saved', text: finalText,
+    ...(hint && count === null ? { hint: true } : {}),
+    ...(warning ? { warning } : {}), ...(note ? { note } : {}),
+    ...(first ? { first } : {}), ...(pin ? { pin, pinned: false } : {}),
+    ...(Array.isArray(batchRun) && batchRun.length > 0
+      ? { batch: true, pickSessionId: batchDraftSessionId || pickDraftState?.sessionId || null, batchRun: savedBatchEntriesOf(batchRun) }
+      : {})
+  }
   buildSavedFeedback(form, saved)
+
+  if (saved.batchRun) savedFirstRunGuard().add(savedBatchRecoveryKey(saved))
 
   // 存好了就不再是「填到一半的表單」：草稿不得再寫回，session 收成 saved，
   // 關窗前使用者右鍵再選時 background 才會當成新的一輪，而不是換目標
@@ -4045,7 +4143,7 @@ export async function renderFromPanelCtx(ctx, { reload = () => globalThis.locati
   // saved 的第一筆結果（first）也算進簽章：它換了要照 ctx 重畫回饋區（沒有它的 ctx 簽章與以前相同）。
   // 批次的 items 與 bulk 的 taskIds 同口徑：漏了它，第二輪批次選取會被當成沒變，
   // 畫面不更新、「全部儲存」存的是舊目標（AF-21 體檢 C P1）
-  const sig = ctx ? JSON.stringify({ kind: ctx.kind, ctx: ctx.ctx, taskId: ctx.taskId, retarget: ctx.retarget, batch: ctx.batch, taskIds: ctx.taskIds, items: ctx.items, first: ctx.first, pickDraft: ctx.pickDraft }) : 'null'
+  const sig = ctx ? JSON.stringify({ kind: ctx.kind, ctx: ctx.ctx, taskId: ctx.taskId, retarget: ctx.retarget, batch: ctx.batch, taskIds: ctx.taskIds, items: ctx.items, batchRun: ctx.batchRun, first: ctx.first, pickDraft: ctx.pickDraft }) : 'null'
   if (sig === lastPanelSig) return { rendered: false }
   // 批次「全部試抓」「全部儲存」進行中：兩條流程都在同一份表單上逐項 render，
   // 這時重畫會把清單整份換掉、結果寫進孤兒節點。只延後、不丟：結束後補畫一次（AF-21 體檢 C P3）
@@ -4369,11 +4467,17 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
         // 否則 reload 後 updateBatchSaveState 沒有 revision 可繼續寫回。
         if (ctx.kind === 'batch') {
           ctx = { ...ctx, items: reconcileBatchItemsWithDraft(ctx.items, protocolDraft) }
+        } else if (ctx.kind === 'saved' && Array.isArray(ctx.batchRun)) {
+          ctx = { ...ctx, batchRun: reconcileSavedBatchRun(ctx.batchRun, protocolDraft) }
         }
         setPickDraftContext(protocolDraft, { render: false })
         protocolDraft = null
       }
-      if (!protocolDraft && ctx?.batch === true && ctx.kind !== 'batch') {
+      if (ctx?.kind === 'saved' && Array.isArray(ctx.batchRun) && ctx.pickSessionId) {
+        batchDraftManaged = true
+        batchDraftSessionId = ctx.pickSessionId
+      }
+      if (!protocolDraft && ctx?.batch === true && ctx.kind !== 'batch' && ctx.kind !== 'saved') {
         protocolDraft = await beginPickDraftFromBatchEntry(ctx, tabId)
       }
       // 舊 ctx 仍保留目標／批次形狀；表單內容以安全協定草稿為準。
@@ -4384,6 +4488,7 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
             : { kind: 'pick-draft', pickDraft: protocolDraft, ctx: { tabId }, draft: protocolDraft.form || {} })
         : ctx
       if (changed || merged) await renderFromPanelCtx(merged)
+      if (merged?.kind === 'saved') await resumeSavedFirstRuns(merged)
     }
     // 載入當下就解析會拿到切換前的舊分頁；轉為可見時再解析才正確，
     // 而且每次轉為可見都重解析一次（自癒）
@@ -4734,7 +4839,7 @@ function checkpointFingerprintOf(item) {
 // 批次保存進度回寫 C1b 草稿；這條通道不重畫選值畫面，避免設定頁保存時被
 // 背景 session 事件切回選值。taskId 先寫 pending/inflight，再寫 done，讓重載
 // 能辨認已完成項目與結果不明的項目。
-async function updateBatchSaveState(item, phase, state, taskId, error, taskPayload = null) {
+async function updateBatchSaveState(item, phase, state, taskId, error, taskPayload = null, firstResult = null) {
   if (!batchDraftManaged) return { legacy: true }
   if (!pickDraftState || !globalThis.chrome?.runtime?.sendMessage) return null
   if (batchDraftSessionId && pickDraftState.sessionId !== batchDraftSessionId) return null
@@ -4763,6 +4868,9 @@ async function updateBatchSaveState(item, phase, state, taskId, error, taskPaylo
           taskFingerprint,
           taskName: typeof safePayload.name === 'string' ? safePayload.name : '',
           taskUrl: typeof safePayload.url === 'string' ? safePayload.url : ''
+        } : {}),
+        ...(firstResult && typeof firstResult === 'object' ? {
+          firstResult: { ok: firstResult.ok === true, text: String(firstResult.text || '') }
         } : {})
       }
     })
@@ -4779,6 +4887,9 @@ async function updateBatchSaveState(item, phase, state, taskId, error, taskPaylo
       }
     } else {
       item.firstRunState = state
+      if (firstResult && typeof firstResult === 'object') {
+        item.firstRunResult = { ok: firstResult.ok === true, text: String(firstResult.text || '') }
+      }
     }
     if (taskId) item.taskId = taskId
     if (error) item.error = String(error)
@@ -4862,7 +4973,7 @@ async function runBatchSave() {
             break
           }
           if (candidate && taskFingerprintOf(candidate) !== checkpointFingerprint) {
-            reconcileWarnings.push(`「${name}」已沿用中斷前的既有任務；之後的名稱或設定修改未覆寫，請移除這組後重新建立以套用。`)
+            reconcileWarnings.push(`「${name}」已沿用中斷前的既有任務；之後的名稱或設定修改未覆寫，請到任務管理編輯既有任務以套用。`)
           }
           saved.push({ key: item.key, item, task: existing })
           lastValues = null
@@ -4966,6 +5077,7 @@ async function runBatchSave() {
   if (cardErrors.length > 0) warnings.push(`任務已經存好，但有卡片沒加進儀表板：${cardErrors.join('；')}。`)
   await showSavedFeedback(saved[0].task, {
     nextRunMs, count: saved.length,
+    batchRun: saved,
     // 批次新建也立刻抓第一筆：等結果出來再決定關不關
     closeDelayMs: null,
     first: { state: 'pending', text: FIRST_PENDING_TEXT },
