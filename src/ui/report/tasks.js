@@ -7,6 +7,14 @@ import { confirmDialog, dismissDialog, isDialogOpen } from '../modal.js'
 import { icon } from '../icons.js'
 import { isGap, gapTextOf, describeSchedule, describeTarget, describeFields, targetOfTask, exclusionOfTarget, EMPTY_GUIDE, TERMS, describeTaskIdentities } from '../../shared/describe.js'
 
+// Resolve this extension page's tab while the report is loading, not inside a
+// button gesture. Looking it up on click would put an await before
+// sidePanel.open() and can silently route Edit to the fallback window.
+let reportTabId = null
+try {
+  chrome.tabs.getCurrent().then(tab => { reportTabId = tab?.id ?? null }).catch(() => {})
+} catch {}
+
 let currentTasks = []
 let currentHealth = {}
 let currentMissed = []
@@ -802,18 +810,14 @@ function createTaskRow(t) {
   editBtn.dataset.action = 'edit'
   editBtn.textContent = '編輯'
   editBtn.addEventListener('click', async () => {
-    // 新增與編輯用同一個載體（面板）：以前編輯是另開一個普通分頁，
-    // 「保持在最上層」對分頁根本不適用。網址參數不能用（面板重載會丟掉），走 session。
-    // 擴充功能頁問自己在哪個分頁用 getCurrent（查作用分頁在切換競態下會拿到別人的）
-    let tabId
-    try { tabId = (await chrome.tabs.getCurrent())?.id } catch {}
-    if (tabId === undefined) {
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
-      tabId = tabs?.[0]?.id
-    }
-    if (tabId === undefined) return
-    await setPanelCtx(tabId, { kind: 'edit', taskId: t.id })
-    await openPanel(tabId, 'picker', `taskId=${encodeURIComponent(t.id)}`)
+    // 新增與編輯用同一個載體（面板）；context 放 session，網址只作舊版退路。
+    // 兩個 API 請求都在同一個 click task 發出：先排入 context 寫入，再立刻
+    // 呼叫 openPanel；picker 也監聽 session 變化，若啟動先讀到舊值會再畫一次。
+    const tabId = reportTabId
+    if (!Number.isInteger(tabId)) return
+    const contextWrite = setPanelCtx(tabId, { kind: 'edit', taskId: t.id })
+    const panelOpen = openPanel(tabId, 'picker', `taskId=${encodeURIComponent(t.id)}`)
+    await Promise.all([contextWrite, panelOpen])
   })
   actionsEl.appendChild(editBtn)
 

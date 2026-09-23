@@ -113,7 +113,9 @@ try {
   console.log('[debug] picker target type', pickerTarget.type(), pickerTarget.url())
   let pickerCdp = await pickerTarget.createCDPSession()
   await pickerCdp.send('Runtime.enable')
+  let pickerTargetPinned = false
   const refreshPickerTarget = async (preferEdit = false) => {
+    if (pickerTargetPinned) return
     const candidates = browser.targets().filter(t => t.url().includes('/ui/picker/picker.html'))
     let current = null
     for (const candidate of candidates) {
@@ -415,20 +417,32 @@ try {
   await report.evaluate(() => document.querySelector('#tab-tasks')?.click())
   await report.waitForSelector(`#task-list [data-task-id="${firstTask.id}"] [data-action="edit"]`, { timeout: 15000 })
   await report.evaluate(taskId => document.querySelector(`#task-list [data-task-id="${CSS.escape(taskId)}"] [data-action="edit"]`)?.click(), firstTask.id)
+  const editTabId = await report.evaluate(async () => (await chrome.tabs.getCurrent())?.id)
+  await new Promise(resolveWait => setTimeout(resolveWait, 500))
+  console.log('[diagnostic] edit route/context', JSON.stringify(await report.evaluate(async () => {
+    const current = await chrome.tabs.getCurrent().catch(() => null)
+    const active = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => [])
+    const session = await chrome.storage.session.get(null)
+    return { reportCurrentTab: current?.id, activeTabs: active.map(tab => ({ id: tab.id, url: tab.url })), panelContexts: Object.fromEntries(Object.entries(session).filter(([key]) => key.startsWith('panel:'))) }
+  }), null, 2))
   const editTarget = await bounded('picker editor target', async () => {
     const end = Date.now() + 12000
+    const probes = []
     while (Date.now() < end) {
       const candidates = browser.targets().filter(t => t.url().includes('/ui/picker/picker.html'))
       for (const candidate of candidates) {
         const session = await candidate.createCDPSession()
         await session.send('Runtime.enable')
-        const result = await session.send('Runtime.evaluate', { expression: `(() => ({ fields: document.querySelectorAll('#field-list [data-field-row]').length, batchVisible: Boolean(document.querySelector('#batch-section') && !document.querySelector('#batch-section').hidden), url: location.href }))()`, returnByValue: true })
+        const result = await session.send('Runtime.evaluate', { expression: `(() => ({ fields: document.querySelectorAll('#field-list [data-field-row]').length, batchVisible: Boolean(document.querySelector('#batch-section') && !document.querySelector('#batch-section').hidden), url: location.href, windowId: null }))()`, returnByValue: true })
+        const win = await session.send('Runtime.evaluate', { expression: `chrome.windows.getCurrent().then(w => chrome.runtime.sendMessage({type:'RESOLVE_PANEL_TAB', windowId:w?.id}).then(active => ({windowId:w?.id, tabId:active?.tabId})))`, awaitPromise: true, returnByValue: true })
         await session.detach()
-        if (result.result?.value?.fields >= 2) return candidate
+        const probe = { ...result.result?.value, ...win.result?.value, type: candidate.type(), targetUrl: candidate.url() }
+        if (!probes.some(item => item.targetUrl === probe.targetUrl && item.tabId === probe.tabId)) probes.push(probe)
+        if (probe.fields >= 2 && probe.tabId === editTabId) return candidate
       }
       await new Promise(resolveWait => setTimeout(resolveWait, 150))
     }
-    throw new Error(`picker edit target missing; targets=${JSON.stringify(browser.targets().filter(t => t.url().includes('/ui/picker/picker.html')).map(t => ({ type: t.type(), url: t.url() })))}`)
+    throw new Error(`picker edit target missing for tab ${editTabId}; candidates=${JSON.stringify(probes)}`)
   }, 13000)
   if (editTarget !== pickerTarget) {
     try { await pickerCdp.detach() } catch {}
@@ -436,7 +450,13 @@ try {
     pickerCdp = await pickerTarget.createCDPSession()
     await pickerCdp.send('Runtime.enable')
   }
-  console.log('[diagnostic] picker after task edit click', await picker.evaluate(() => ({ rows: document.querySelectorAll('#field-list [data-field-row]').length, batchHidden: document.querySelector('#batch-section')?.hidden, groupHidden: document.querySelector('#group-draft-section')?.hidden, title: document.title })))
+  pickerTargetPinned = true
+  console.log('[diagnostic] picker after task edit click', JSON.stringify(await picker.evaluate(async () => {
+    const win = await chrome.windows.getCurrent().catch(() => null)
+    const active = win ? await chrome.runtime.sendMessage({ type: 'RESOLVE_PANEL_TAB', windowId: win.id }).catch(() => null) : null
+    const session = await chrome.storage.session.get(null)
+    return { windowId: win?.id, resolvedActiveTab: active, page: location.href, rows: document.querySelectorAll('#field-list [data-field-row]').length, batchHidden: document.querySelector('#batch-section')?.hidden, groupHidden: document.querySelector('#group-draft-section')?.hidden, title: document.title, panelContexts: Object.fromEntries(Object.entries(session).filter(([key]) => key.startsWith('panel:'))) }
+  }), null, 2))
   await picker.waitForFunction(() => document.querySelectorAll('#field-list [data-field-row]').length >= 2, { timeout: 20000 })
   ck('reopened saved multi task for editing')
   const editRows = await picker.evaluate(() => [...document.querySelectorAll('#field-list [data-field-row]')].map(row => ({
@@ -506,7 +526,10 @@ try {
     throw new Error('different-metric replacement did not open its source tab')
   }, 16000)
   await replacementPage.waitForSelector('[data-af-overlay] [data-af-done]', { timeout: 15000 })
-  await clickTarget(replacementPage, '#price-b')
+  // Replace with an unselected metric from the fixture. #price-b already
+  // belongs to this task, so selecting it would correctly be rejected as a
+  // duplicate instead of exercising the split-history path.
+  await clickTarget(replacementPage, '#price-c')
   await clickSelector(replacementPage, '[data-af-done]')
   await bounded('replacement task key changes', async () => {
     const end = Date.now() + 15000
@@ -532,11 +555,13 @@ try {
     const storage = await import(chrome.runtime.getURL('shared/storage.js'))
     const task = await storage.getTask(taskId)
     const records = (await Promise.all((await storage.listDates()).map(date => storage.getRecordsByDate(date)))).flat()
-    return { task, records: records.filter(record => record.taskId.startsWith(`${taskId}#`)).map(record => record.taskId) }
+    const lastValues = await storage.getLastValues()
+    return { task, records: records.filter(record => record.taskId.startsWith(`${taskId}#`)).map(record => record.taskId), lastValueKeys: Object.keys(lastValues) }
   }, firstTask.id)
   const newField = afterReplace.task.fields.find(field => field.key !== fieldKey)
   if (!newField || !afterReplace.task.archivedFields?.some(field => field.key === fieldKey)) throw new Error('replacement did not archive the prior metric/key')
   if (!afterReplace.records.includes(oldSeriesId)) throw new Error('different-metric replacement deleted the original history series')
+  if (afterReplace.lastValueKeys.includes(oldSeriesId)) throw new Error('different-metric replacement kept the previous series lastValue')
   ck(`different metric created new key ${newField.key} and retained old history`)
 
   const newTab = await report.evaluate(async url => {
@@ -550,6 +575,7 @@ try {
     await chrome.tabs.update(tab.id, { active: true })
     return { id: tab.id, url }
   }, `http://127.0.0.1:${mainPort}/`)
+  pickerTargetPinned = false
   await clickPanel({ evaluate: (...args) => report.evaluate(...args) }, '#open-second-round-panel')
   await picker.waitForFunction(() => document.querySelector('#group-start-first') && !document.querySelector('#group-start-first').hidden, { timeout: 20000 })
   const freshDraft = await picker.evaluate(async id => (await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id }))?.draft, newTab.id)

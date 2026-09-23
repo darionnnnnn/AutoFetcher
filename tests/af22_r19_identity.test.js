@@ -49,6 +49,7 @@ test('R19 identity labels preserve names, normalize source URLs, and lengthen co
 test('R19 任務頁、刪除確認與歷史篩選在排序後仍能辨識同名同來源任務', async () => {
   const { c, storage } = await setupStorage()
   await storage.saveTasks(tasks)
+  c.__setCurrentTab({ id: 42, url: 'chrome-extension://af/ui/report/report.html' })
   const jd = setupDom(reportHtml)
   const taskUi = await import('../src/ui/report/tasks.js?r19=' + Math.random())
   taskUi.renderTasks(tasks, {}, [])
@@ -62,7 +63,6 @@ test('R19 任務頁、刪除確認與歷史篩選在排序後仍能辨識同名�
   document.querySelector('[data-task-id="right-abcdef"] [data-action="repick"]').click()
   await new Promise(resolve => setTimeout(resolve, 10))
   assert.ok(c.__calls.some(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'ENTER_PICK' && call.args[0]?.taskId === 'right-abcdef'))
-  c.__setCurrentTab({ id: 42, url: 'chrome-extension://af/ui/report/report.html' })
   document.querySelector('[data-task-id="left-abcdef"] [data-action="edit"]').click()
   await new Promise(resolve => setTimeout(resolve, 10))
   const session = await chrome.storage.session.get(null)
