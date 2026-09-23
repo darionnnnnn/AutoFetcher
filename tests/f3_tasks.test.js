@@ -12,9 +12,13 @@ const task = (id, over = {}) => ({
   spec: { strategy: 'text' }, schedule: { type: 'daily', times: ['09:00'] }, ...over
 })
 
-async function fresh() {
+async function fresh({ currentTab } = {}) {
   resetChromeMock()
   const c = installChromeMock()
+  // An extension page's own tab is available when its module initializes;
+  // install it before importing tasks.js, which prefetches the id so Edit can
+  // call sidePanel.open() synchronously in the click gesture.
+  if (currentTab) c.__setCurrentTab(currentTab)
   const st = await import('../src/shared/storage.js?t=' + Math.random())
   await st.init()
   const jd = new JSDOM(html, { url: 'chrome-extension://abc/ui/report/report.html' })
@@ -127,8 +131,9 @@ test('立即抓取送出 RUN_TASK 訊息', async () => {
 })
 
 test('編輯在 side panel 開啟，任務 id 走 session（AF-10：與新增同一個載體）', async () => {
-  const { ts, c, doc } = await fresh()
-  c.__setCurrentTab({ id: 42, url: 'chrome-extension://abc/ui/report/report.html' })
+  const { ts, c, doc } = await fresh({
+    currentTab: { id: 42, url: 'chrome-extension://abc/ui/report/report.html' }
+  })
   ts.renderTasks([task('a')], {}, [])
   doc.querySelector('[data-task-id="a"] [data-action="edit"]').click()
   await new Promise(r => setTimeout(r, 20))
