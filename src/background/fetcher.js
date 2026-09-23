@@ -111,10 +111,18 @@ export function runBudgetMsOf(task, opts = {}) {
   const maxMs = opts.maxMs ?? RUN_BUDGET_MAX_MS
   const stepMaxMs = opts.stepMaxMs ?? PRE_ACTION_STEP_MAX_MS
   let declared = 0
-  for (const action of Array.isArray(task?.preActions) ? task.preActions : []) {
+  const includeDeclaredTime = (action, includeClickTimeout = false) => {
     if (action?.type === 'wait') declared += capStepMs(waitMsOf(action), stepMaxMs).ms
     else if (action?.type === 'hover') declared += capStepMs(holdMsOf(action), stepMaxMs).ms
     else if (action?.type === 'waitFor') declared += timeoutMsOf(action)
+    else if (includeClickTimeout && action?.type === 'click') declared += messageTimeoutMs(action)
+  }
+  for (const action of Array.isArray(task?.preActions) ? task.preActions : []) includeDeclaredTime(action)
+  const isMulti = task?.mode === 'multi' || task?.spec?.mode === 'multi'
+  if (isMulti) {
+    for (const field of normalizeTaskSources(task)) {
+      for (const action of Array.isArray(field.stateActions) ? field.stateActions : []) includeDeclaredTime(action, true)
+    }
   }
   return Math.min(baseMs + declared, maxMs)
 }
@@ -992,6 +1000,13 @@ export async function runTask(task, opts = {}) {
       let acquiredTab = false
       let reusedPreActions = false
       const hasPreActions = Array.isArray(task.preActions) && task.preActions.length > 0
+      const hasSourceStateActions = isMulti && multiSources.some(field => Array.isArray(field.stateActions) && field.stateActions.length > 0)
+      const preparationSignature = hasSourceStateActions
+        ? JSON.stringify({
+          preActions: task.preActions || [],
+          sources: multiSources.map(field => ({ key: field.key, stateActions: field.stateActions || [] }))
+        })
+        : (hasPreActions ? JSON.stringify(task.preActions) : null)
       // 佇列中再次確認冪等，防止併發重複執行（dryRun 與手動抓取略過）
       if (!dryRun && !isManual) {
         if (await getRunStatus(task.id, slot)) return null
@@ -1036,6 +1051,78 @@ export async function runTask(task, opts = {}) {
       }
       // 開頁、等載入的上限也跟著剩餘時間走
       const loadMs = () => within(loadTimeoutMs)
+      // 共用準備與逐來源狀態都走這同一份現有 action engine。
+      const runPreActionSequence = async (actions) => {
+        for (let i = 0; i < actions.length; i++) {
+          const action = actions[i]
+          checkDeadline()
+          const startedAt = Date.now()
+          if (action?.type === 'wait') {
+            const step = capStepMs(waitMsOf(action), preActionStepMaxMs)
+            if (step.ms > 0) await pause(step.ms)
+            const entry = { step: i + 1, type: 'wait', ok: true, ms: Date.now() - startedAt }
+            if (step.capped) {
+              entry.error = PRE_ACTION_STEP_CAP_NOTE
+              capNotes.push(`前置動作第 ${i + 1} 步：${PRE_ACTION_STEP_CAP_NOTE}`)
+            }
+            preActionTrace.push(entry)
+            continue
+          }
+          const holdCapped = action?.type === 'hover' && capStepMs(holdMsOf(action), preActionStepMaxMs).capped
+          if (holdCapped) capNotes.push(`前置動作第 ${i + 1} 步：${PRE_ACTION_STEP_CAP_NOTE}`)
+          const actionTimeout = action?.type === 'waitFor'
+            ? timeoutMsOf(action)
+            : (opts.frameTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS)
+          let actionLoc = await locate(action?.frame, action?.locator, actionTimeout)
+          if (!frameFound(actionLoc)) {
+            preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
+            throw new Error(preActionFailure(i, action, 'frame_not_found'))
+          }
+          // Only waitFor is safe to resend: click and hover have side effects.
+          const resendable = action?.type === 'waitFor'
+          const preAttempts = resendable ? 1 + reviveDelaysMs.length : 1
+          let preRes = null
+          let preLiveErr = null
+          for (let pa = 0; pa < preAttempts; pa++) {
+            if (pa > 0) {
+              await pause(reviveDelaysMs[pa - 1])
+              checkDeadline()
+              const again = await locate(action?.frame, action?.locator, actionTimeout)
+              if (!frameFound(again)) break
+              actionLoc = again
+            }
+            try {
+              await injectContent(tabId, { frameId: actionLoc.frameId })
+              preRes = await send({ type: MSG.RUN_PRE_ACTIONS, actions: [action] }, actionLoc.frameId,
+                opts.preActionTimeoutMs ?? messageTimeoutMs(action), 'Pre-action')
+              preLiveErr = null
+              break
+            } catch (err) {
+              if (err?.afDeadline) {
+                preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
+                throw err
+              }
+              if (err?.afTimeout) {
+                preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
+                throw new Error(preActionFailure(i, action, 'no_response'))
+              }
+              preLiveErr = err
+            }
+          }
+          if (preLiveErr !== null) {
+            preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
+            try { await diag.log('fetch_page_gone', `group=${diagnosticLabel(task.name)} stage=pre_action result=page_gone`) } catch {}
+            throw new Error(preActionFailure(i, action, 'page_gone'))
+          }
+          if (preRes?.ok !== true) {
+            preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
+            throw new Error(preActionFailure(i, action, contentErrorText(preRes)))
+          }
+          const doneEntry = { step: i + 1, type: action?.type, ok: true, ms: Date.now() - startedAt }
+          if (holdCapped) doneEntry.error = PRE_ACTION_STEP_CAP_NOTE
+          preActionTrace.push(doneEntry)
+        }
+      }
 
       try {
         // 取得分頁：指定分頁存在則用、否則開前景分頁或走專用抓取分頁
@@ -1068,10 +1155,12 @@ export async function runTask(task, opts = {}) {
           // 同一頁、同一組前置動作、而且那之後頁面沒被換掉 → 前置動作留下的狀態就是這個任務要的:
           // 不重載、不重跑,一個分頁接著抓(使用者定案:同一頁的值一次抓完)。
           // 頁面有沒有被換掉只看入口的載入次數 `loads`(前置動作可能把網址導去別處,不能比網址)。
-          const preSig = hasPreActions ? JSON.stringify(task.preActions) : null
+          const preSig = preparationSignature
           const applied = queueCtx.preApplied
-          let canKeep = preSig !== null && applied?.sig === preSig && sameOriginPath(applied.url, task.url)
-          const freshLoad = !canKeep && (queueCtx.pageDirty === true || hasPreActions)
+          // Stateful source sequences always begin from a fresh page: reusing the
+          // last source's visible state cannot safely infer the site's reset state.
+          let canKeep = !hasSourceStateActions && preSig !== null && applied?.sig === preSig && sameOriginPath(applied.url, task.url)
+          const freshLoad = !canKeep && (queueCtx.pageDirty === true || hasPreActions || hasSourceStateActions)
           tabId = await acquireFetchTab(queueCtx, task.url, { pollMs, loadTimeoutMs: loadMs(), freshLoad, keepPage: canKeep })
           if (canKeep && queueCtx.fetchTab?.loads !== applied.loads) {
             // 做完前置動作之後頁面被換過(中間插進來的站台檢查導去登入頁、或被卸載而重載當下的網址):
@@ -1135,88 +1224,11 @@ export async function runTask(task, opts = {}) {
             queueCtx.pageDirty = true
             queueCtx.preApplied = null
           }
-          for (let i = 0; i < task.preActions.length; i++) {
-            const action = task.preActions[i]
-            checkDeadline()
-            const startedAt = Date.now()
-            if (action?.type === 'wait') {
-              // 執行時上限：使用者存的值不改，超過照上限跑並在軌跡／紀錄註明
-              const step = capStepMs(waitMsOf(action), preActionStepMaxMs)
-              if (step.ms > 0) await pause(step.ms)
-              const entry = { step: i + 1, type: 'wait', ok: true, ms: Date.now() - startedAt }
-              if (step.capped) {
-                entry.error = PRE_ACTION_STEP_CAP_NOTE
-                capNotes.push(`前置動作第 ${i + 1} 步：${PRE_ACTION_STEP_CAP_NOTE}`)
-              }
-              preActionTrace.push(entry)
-              continue
-            }
-            // hover 的停留由 content 照上限跑；這裡只負責註明
-            const holdCapped = action?.type === 'hover' && capStepMs(holdMsOf(action), preActionStepMaxMs).capped
-            if (holdCapped) capNotes.push(`前置動作第 ${i + 1} 步：${PRE_ACTION_STEP_CAP_NOTE}`)
-            const actionTimeout = action?.type === 'waitFor'
-              ? timeoutMsOf(action)
-              : (opts.frameTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS)
-            let actionLoc = await locate(action?.frame, action?.locator, actionTimeout)
-            // `locateFrame` 失敗時回的是帶候選清單的物件（診斷用），判定一律看有沒有 frameId
-            if (!frameFound(actionLoc)) {
-              preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
-              throw new Error(preActionFailure(i, action, 'frame_not_found'))
-            }
-            // 前置動作自己也可能「送不到」：前一步的點擊讓頁面換掉，這一步就打中將死的文件
-            // （SPEC §4 推薦的「點擊切頁籤 → 等元素出現」正是這種）。
-            // **只有 `waitFor` 可以重送**——它只觀察不動頁面；`hover`／`click` 有副作用，
-            // 重放就是再按一次，所以只能停下來用中文說清楚。
-            // 沒有逾時的話，回應一旦跟著換掉的文件消失，整個抓取會吊到 service worker 被回收；
-            // 逾時值必須涵蓋動作自己需要的時間（`messageTimeoutMs`，唯一一份）。
-            const resendable = action?.type === 'waitFor'
-            const preAttempts = resendable ? 1 + reviveDelaysMs.length : 1
-            let preRes = null
-            let preLiveErr = null
-            for (let pa = 0; pa < preAttempts; pa++) {
-              if (pa > 0) {
-                await pause(reviveDelaysMs[pa - 1])
-                checkDeadline()
-                const again = await locate(action?.frame, action?.locator, actionTimeout)
-                if (!frameFound(again)) break
-                actionLoc = again
-              }
-              try {
-                await injectContent(tabId, { frameId: actionLoc.frameId })
-                preRes = await send({
-                  type: MSG.RUN_PRE_ACTIONS,
-                  actions: [action]
-                }, actionLoc.frameId, opts.preActionTimeoutMs ?? messageTimeoutMs(action), 'Pre-action')
-                preLiveErr = null
-                break
-              } catch (err) {
-                if (err?.afDeadline) {
-                  preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
-                  throw err
-                }
-                if (err?.afTimeout) {
-                  preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
-                  throw new Error(preActionFailure(i, action, 'no_response'))
-                }
-                preLiveErr = err
-              }
-            }
-            if (preLiveErr !== null) {
-              preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
-              try { await diag.log('fetch_page_gone', `group=${diagnosticLabel(task.name)} stage=pre_action result=page_gone`) } catch {}
-              throw new Error(preActionFailure(i, action, 'page_gone'))
-            }
-            if (preRes?.ok !== true) {
-              preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
-              // 訊息要說得出「第幾步、哪一種動作、怎麼了」，使用者才知道要調哪一列
-              throw new Error(preActionFailure(i, action, contentErrorText(preRes)))
-            }
-            const doneEntry = { step: i + 1, type: action?.type, ok: true, ms: Date.now() - startedAt }
-            if (holdCapped) doneEntry.error = PRE_ACTION_STEP_CAP_NOTE
-            preActionTrace.push(doneEntry)
-          }
+          await runPreActionSequence(task.preActions)
           if (acquiredTab) {
-            queueCtx.preApplied = { sig: JSON.stringify(task.preActions), url: task.url, loads: queueCtx.fetchTab?.loads }
+            queueCtx.preApplied = hasSourceStateActions
+              ? null
+              : { sig: preparationSignature, url: task.url, loads: queueCtx.fetchTab?.loads }
           }
         }
 
@@ -1259,6 +1271,29 @@ export async function runTask(task, opts = {}) {
                 ok: false, error: 'invalid_source', message: '多來源欄位缺少有效來源'
               }
               continue
+            }
+            const stateActions = Array.isArray(field.stateActions) ? field.stateActions : []
+            if (stateActions.length > 0) {
+              if (acquiredTab) {
+                queueCtx.pageDirty = true
+                queueCtx.preApplied = null
+              }
+              try {
+                await runPreActionSequence(stateActions)
+              } catch (err) {
+                if (err?.afDeadline) {
+                  deadlineFailure = err
+                  fieldRes = { ok: false, error: 'error', message: String(err.message || DEADLINE_MESSAGE) }
+                } else {
+                  fieldRes = {
+                    ok: false,
+                    error: 'error',
+                    message: `來源「${field.name || key}」狀態準備失敗：${String(err?.message || '前置動作失敗')}`
+                  }
+                }
+                fields[key] = fieldRes
+                continue
+              }
             }
             const maxFieldAttempts = 1 + reviveDelaysMs.length
             try {

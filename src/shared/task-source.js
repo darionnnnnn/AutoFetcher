@@ -83,7 +83,8 @@ export function normalizeTaskSources(task) {
         name: typeof meta.name === 'string' ? meta.name : '',
         mode: field?.mode,
         source: clone(field?.source),
-        spec: clone(field?.spec)
+        spec: clone(field?.spec),
+        ...(Array.isArray(field?.stateActions) ? { stateActions: clone(field.stateActions) } : {})
       }
     })
   }
@@ -111,6 +112,8 @@ function stableExecutionJson(value) {
 }
 
 export function multiExecutionSnapshot(task) {
+  const sources = normalizeTaskSources(task)
+  const stateful = sources.some(field => Array.isArray(field.stateActions) && field.stateActions.length > 0)
   return stableExecutionJson({
     url: task?.url,
     enabled: task?.enabled,
@@ -118,14 +121,15 @@ export function multiExecutionSnapshot(task) {
     mode: task?.mode,
     specMode: task?.spec?.mode,
     preActions: task?.preActions,
-    sources: normalizeTaskSources(task)
-      .map(({ key, mode, source, spec }) => ({ key, mode, source, spec }))
-      .sort((a, b) => String(a.key).localeCompare(String(b.key)))
+    sources: sources.map(({ key, mode, source, spec, stateActions }) => ({
+      key, mode, source, spec, ...(stateActions ? { stateActions } : {})
+    })).sort((a, b) => stateful ? 0 : String(a.key).localeCompare(String(b.key)))
   })
 }
 
 export function changedExecutionSeriesOf(before, after) {
   const oldSources = normalizeTaskSources(before)
+  const newSources = normalizeTaskSources(after)
   if (!(after?.mode === 'multi' || after?.spec?.mode === 'multi')) {
     return oldSources.map(field => field.key)
   }
@@ -138,13 +142,17 @@ export function changedExecutionSeriesOf(before, after) {
     preActions: task?.preActions
   })
   const oldByKey = new Map(oldSources.map(field => [field.key, field]))
-  const newByKey = new Map(normalizeTaskSources(after).map(field => [field.key, field]))
+  const newByKey = new Map(newSources.map(field => [field.key, field]))
   if (common(before) !== common(after)) return oldSources.map(field => field.key)
+  const hasStateActions = [...oldSources, ...newSources].some(field => Array.isArray(field.stateActions) && field.stateActions.length > 0)
+  if (hasStateActions && stableExecutionJson(oldSources.map(field => field.key)) !== stableExecutionJson(newSources.map(field => field.key))) {
+    return oldSources.map(field => field.key)
+  }
   return oldSources
     .filter(field => {
       const current = newByKey.get(field.key)
-      return !current || stableExecutionJson({ key: field.key, mode: field.mode, source: field.source, spec: field.spec }) !==
-        stableExecutionJson({ key: current.key, mode: current.mode, source: current.source, spec: current.spec })
+      return !current || stableExecutionJson({ key: field.key, mode: field.mode, source: field.source, spec: field.spec, stateActions: field.stateActions }) !==
+        stableExecutionJson({ key: current.key, mode: current.mode, source: current.source, spec: current.spec, stateActions: current.stateActions })
     })
     .map(field => field.key)
 }
@@ -257,6 +265,17 @@ export function validateMultiTask(task) {
     if (!MODE_SET.has(field?.mode)) invalid(`field mode 不支援：${field?.mode}`)
     validateSource(field?.source)
     validateSingleSpec(field?.spec)
+    if (field?.stateActions !== undefined) {
+      if (!Array.isArray(field.stateActions)) invalid(`field ${field.key} stateActions 必須為陣列`)
+      for (const action of field.stateActions) {
+        if (!isPlainObject(action) || !['click', 'hover', 'wait', 'waitFor'].includes(action.type)) {
+          invalid(`field ${field.key} stateActions 僅支援 click／hover／wait／waitFor`)
+        }
+        if (action.type !== 'wait' && (!isPlainObject(action.locator) || Object.keys(action.locator).length === 0)) {
+          invalid(`field ${field.key} stateActions ${action.type} 必須有 locator`)
+        }
+      }
+    }
   }
 
   if (taskKeys.size !== specKeys.size || [...taskKeys].some((key) => !specKeys.has(key))) {
