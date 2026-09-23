@@ -733,7 +733,7 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
 
 | 風險 | 現象 | 對策 |
 |---|---|---|
-| service worker 被殺 | 閒置 30 秒或執行 5 分鐘就被回收,抓到一半消失;同站台記憶體佇列裡排隊的任務一起蒸發 | **`session.runState`**(AF-21,取代 `inflight`):到點進佇列前登記 `{ '<taskId>@<slot>': { state:'queued'|'running', at, boot, attempt, reason } }`,結束(含例外)才移除;手動與試抓不登記。worker 每次啟動(模組頂層)與看門狗呼叫 `recoverRunState`:只處理 `boot` 不是自己的項目,**先在鎖內拿走再處理**(兩個復原同時跑時同一格只處理一次);`at` 在 10 分鐘內 → 續跑(同格已有重試 alarm 就不續跑,交給它);超過 → 寫 `interrupted` 紀錄(**不寫帳本**,紅燈,同時記一筆 `interrupted` 診斷),daily 另進錯過清單可補抓。啟動時同時清一次孤兒抓取分頁。純等待每 20 秒續命一次(§4) |
+| service worker 被殺 | 閒置 30 秒或執行 5 分鐘就被回收,抓到一半消失;同站台記憶體佇列裡排隊的任務一起蒸發 | **`session.runState`**(AF-21,取代 `inflight`):到點進佇列前登記 `{ '<taskId>@<slot>': { state:'queued'|'running', at, boot, attempt, reason } }`,結束(含例外)才移除;手動與試抓不登記。worker 每次啟動(模組頂層)與看門狗呼叫 `recoverRunState`:只處理 `boot` 不是自己的項目,**先在鎖內拿走再處理**(兩個復原同時跑時同一格只處理一次);`at` 在 10 分鐘內 → 續跑(同格已有重試 alarm 就不續跑,交給它);超過 → 寫 `interrupted` 紀錄(**multi 依每個宣告值寫子序列紀錄**,單值仍寫父序列;不寫帳本,紅燈,同時記一筆 `interrupted` 診斷),daily 另進錯過清單可補抓。啟動時同時清一次孤兒抓取分頁。純等待每 20 秒續命一次(§4) |
 | alarms 在擴充功能更新 / 重新載入後消失 | 更新後所有任務靜默停擺 | `runtime.onInstalled`、`runtime.onStartup` 一律 `rebuildAlarms()`;另有看門狗(下) |
 | alarm 觸發不準或重複 | 可能晚 0~60 秒、極少數重複觸發;補抓與正常觸發撞在同一槽 | **執行帳本**(按日分鍵 `runs:<日期>` = `{ [taskId]: { [slot]: status } }`,§5):同一 `slot` 只執行一次,重複觸發直接略過(冪等) |
 | 電腦睡眠 | alarm 在喚醒時才響,可能已晚數小時 | 槽一律取 `scheduledTime`;晚超過 30 分鐘的成功記 `late`,晚超過 24 小時的 daily 不執行、交錯過清單;看門狗每輪算錯過;interval 放 gap 提示(§4) |

@@ -270,6 +270,7 @@ export async function recoverRunState(runOpts = {}, { detach = false } = {}) {
       }
       continue
     }
+    let markMissed = true
     if (task) {
       // 不寫帳本（寫了補抓就會被冪等擋掉）、不動 lastValues；燈號要紅
       const record = {
@@ -279,11 +280,44 @@ export async function recoverRunState(runOpts = {}, { detach = false } = {}) {
         status: 'interrupted',
         error: '上一次執行被瀏覽器中斷'
       }
-      await appendRecord(slot.slice(0, 10), record)
-      await updateHealth(taskId, healthFromRecords([record]))
+      const isMulti = task.mode === 'multi' || task.spec?.mode === 'multi'
+      if (isMulti) {
+        // 即使 worker 在執行期間被回收，multi 的每個宣告值都要留下可見的
+        // interrupted 子紀錄。共用失敗入口會依 field key 補齊結果並更新父 health；
+        // skipLedger 保留原規則，讓使用者仍可補抓這個 slot。
+        const executionFingerprint = await executionFingerprintOf(task)
+        const executionSnapshot = multiExecutionSnapshot(task)
+        const committed = await recoverCommittedMulti(
+          task, slot, normalizeTaskSources(task), commitIdOf(task, slot), executionFingerprint
+        )
+        if (committed && !committed.invalid) {
+          // 紀錄可能已完整耐久、只差 worker 後續收尾。先完成健康／最後值，
+          // 不造重複 interrupted rows，也不提前寫帳本；下次補抓入口會依同一 commit 對帳。
+          await finalizeMultiRecords(task, slot, committed, {
+            skipLedger: true,
+            preserveExisting: true,
+            executionFingerprint
+          })
+          markMissed = false
+        } else if (committed?.invalid) {
+          // 舊規格的 durable records 不可掛到目前已改過的任務上。
+          // 保留 interrupted 診斷與 daily catch-up，但不發布孤兒序列結果。
+        } else {
+          await writeMultiFailureRecords(task, slot, 'interrupted', record.error, {
+            skipLedger: true,
+            // interrupted 不是已提交的抓取結果；不掛 commitId，下一次 alarm 才能補抓。
+            dedupe: false,
+            executionSnapshot,
+            executionFingerprint
+          })
+        }
+      } else {
+        await appendRecord(slot.slice(0, 10), record)
+        await updateHealth(taskId, healthFromRecords([record]))
+      }
       // 設定頁的「被中斷」次數改從 diag 數，不再掃 7 天紀錄；這是罕見事件，不會洗掉環形緩衝
       try { await diag.log('interrupted', `${taskId}@${slot}`) } catch {}
-      if (task.schedule?.type === 'daily') {
+      if (markMissed && task.schedule?.type === 'daily') {
         await updateMissedList((list) => {
           if (list.some(m => m?.taskId === taskId && m?.slot === slot)) return undefined
           return [...list, { taskId, taskName: task.name || taskId, slot }]
