@@ -710,7 +710,51 @@ try {
     }), newTab.id))
     throw error
   }
+  const beforeSecondFinish = await picker.evaluate(async id => {
+    const key = `panel:${id}`
+    const context = (await chrome.storage.session.get(key))[key]
+    const read = await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id })
+    return {
+      draft: read?.draft && { sessionId: read.draft.sessionId, tabId: read.draft.tabId, stage: read.draft.stage, revision: read.draft.revision, activeGroupKey: read.draft.activeGroupKey, groupCount: read.draft.groups?.length, valueCount: read.draft.groups?.[0]?.values?.length },
+      context: { kind: context?.kind, tabId: context?.tabId, pickSessionId: context?.pickSessionId, draftSessionId: context?.pickDraft?.sessionId },
+      activeTab: (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0]?.id,
+      sectionHidden: document.querySelector('#group-draft-section')?.hidden,
+      finishHidden: document.querySelector('#group-finish')?.hidden,
+      finishDisabled: document.querySelector('#group-finish')?.disabled
+    }
+  }, newTab.id)
+  await picker.evaluate(() => {
+    const original = chrome.runtime.sendMessage.bind(chrome.runtime)
+    window.__g1CompleteTrace = []
+    chrome.runtime.sendMessage = (message, ...args) => {
+      const response = original(message, ...args)
+      if (message?.type === 'PICK_DRAFT_COMPLETE') {
+        response.then(value => window.__g1CompleteTrace.push({ request: message, response: value }))
+          .catch(error => window.__g1CompleteTrace.push({ request: message, error: String(error?.message || error) }))
+      }
+      return response
+    }
+  })
   await clickPanel(picker, '#group-finish')
+  await new Promise(resolveWait => setTimeout(resolveWait, 350))
+  const afterSecondFinish = await picker.evaluate(async id => {
+    const key = `panel:${id}`
+    const context = (await chrome.storage.session.get(key))[key]
+    const read = await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id })
+    return {
+      draft: read?.draft && { sessionId: read.draft.sessionId, tabId: read.draft.tabId, stage: read.draft.stage, revision: read.draft.revision, activeGroupKey: read.draft.activeGroupKey, groupCount: read.draft.groups?.length, valueCount: read.draft.groups?.[0]?.values?.length },
+      context: { kind: context?.kind, tabId: context?.tabId, pickSessionId: context?.pickSessionId, draftSessionId: context?.pickDraft?.sessionId },
+      activeTab: (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0]?.id,
+      sectionHidden: document.querySelector('#group-draft-section')?.hidden,
+      batchHidden: document.querySelector('#batch-section')?.hidden,
+      finishHidden: document.querySelector('#group-finish')?.hidden,
+      finishDisabled: document.querySelector('#group-finish')?.disabled,
+      status: document.querySelector('#group-draft-status')?.textContent,
+      errors: document.querySelector('#errors')?.textContent,
+      completeTrace: window.__g1CompleteTrace
+    }
+  }, newTab.id)
+  console.log('[diagnostic] second-round finish transition', JSON.stringify({ before: beforeSecondFinish, after: afterSecondFinish }, null, 2))
   await picker.waitForSelector('#batch-section:not([hidden])', { timeout: 15000 })
   const secondSuggestedNames = await picker.evaluate(() => [...document.querySelectorAll('#batch-list [data-batch-name]')].map(input => input.value))
   if (JSON.stringify(secondSuggestedNames) !== JSON.stringify(['Second Round Only'])) throw new Error(`second round name did not carry into settings: ${JSON.stringify(secondSuggestedNames)}`)
