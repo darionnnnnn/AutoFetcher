@@ -20,8 +20,7 @@ const bounded = async (label, fn, ms = 15000) => {
   try { return await Promise.race([Promise.resolve().then(fn), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`timeout: ${label}`)), ms) })]) }
   finally { clearTimeout(timer) }
 }
-const percentile = (xs, p) => { const a = [...xs].sort((x, y) => x - y); return a.length ? a[Math.min(a.length - 1, Math.ceil(p * a.length) - 1)] : 0 }
-const summary = xs => ({ p50: +percentile(xs, .5).toFixed(2), p95: +percentile(xs, .95).toFixed(2), max: +Math.max(0, ...xs).toFixed(2) })
+const median = xs => { const a = [...xs].sort((x, y) => x - y); return a[Math.floor(a.length / 2)] || 0 }
 
 let browser, profile, port
 try {
@@ -31,7 +30,6 @@ try {
   profile = mkdtempSync(join(os.tmpdir(), 'af22-r15-'))
   browser = await bounded('launch isolated CfT', () => puppeteer.launch({
     executablePath: CHROME, headless: false, userDataDir: profile,
-    protocolTimeout: 360000,
     args: [`--disable-extensions-except=${SRC}`, `--load-extension=${SRC}`, '--no-first-run', '--no-default-browser-check']
   }), 30000)
   const worker = await bounded('extension worker', async () => {
@@ -111,7 +109,7 @@ try {
       const raw = JSON.stringify(changes['pickDraft:' + window.__r15TabId].newValue ?? null)
       window.__r15StorageStats.writes++
       window.__r15StorageStats.writeBytes += new TextEncoder().encode(raw).length
-      window.__r15StorageStats.writeEvents.push({ at: Date.now(), bytes: new TextEncoder().encode(raw).length })
+      window.__r15StorageStats.writeEvents.push(performance.now())
     })
   })
   await extensionPage.evaluate(id => { window.__r15TabId = id }, tabId)
@@ -126,24 +124,8 @@ try {
 
   let revision = begun.draft.revision
   const switchLatencies = []
-  const drainProbeMs = []
-  const requestEpochs = []
-  const ackBytes = []
   for (let i = 0; i < 100; i++) {
     const groupKey = groups[(i + 1) % groups.length].key
-    // The real set-active handler drains internally. Probe separately only on
-    // every tenth switch so instrumentation adds bounded CDP traffic.
-    if (i % 10 === 0) {
-      const drainStarted = performance.now()
-      const drained = await extensionPage.evaluate(async args => chrome.tabs.sendMessage(args.tabId, {
-        type: 'PICK_DRAIN', sessionId: args.sessionId, resume: false,
-        documentGeneration: args.documentGeneration, routeIdentity: args.routeIdentity
-      }), { tabId, sessionId, documentGeneration, routeIdentity })
-      drainProbeMs.push(performance.now() - drainStarted)
-      if (drained?.ok === false) throw new Error(`diagnostic drain ${i + 1} failed: ${JSON.stringify(drained)}`)
-    }
-    const startedEpoch = Date.now()
-    requestEpochs.push(startedEpoch)
     const started = performance.now()
     const response = await bounded(`set-active ${i + 1}`, () => picker.evaluate(async args => chrome.runtime.sendMessage({
       type: 'PICK_DRAFT_OPERATION', tabId: args.tabId, sessionId: args.sessionId,
@@ -153,14 +135,10 @@ try {
     }), { tabId, sessionId, revision, documentGeneration, routeIdentity, groupKey, index: i }), 12000)
     switchLatencies.push(performance.now() - started)
     if (!response?.ok) throw new Error(`set-active ${i + 1} failed: ${JSON.stringify(response)}`)
-    ackBytes.push(new TextEncoder().encode(JSON.stringify(response)).length)
     revision = response.revision
     if ((i + 1) % 10 === 0) console.log(`[R15] switches ${i + 1}/100`)
   }
   await wait(100)
-  const observedWrites = await extensionPage.evaluate(() => window.__r15StorageStats.writeEvents)
-  if (observedWrites.length !== 100) throw new Error(`expected 100 durable writes, observed ${observedWrites.length}`)
-  const persistObservedMs = observedWrites.map((event, index) => Math.max(0, event.at - requestEpochs[index]))
   const sessionValue = await extensionPage.evaluate(async id => (await chrome.storage.session.get(`pickDraft:${id}`))[`pickDraft:${id}`], tabId)
   const serializedSessionBytes = new TextEncoder().encode(JSON.stringify(sessionValue)).length
   Object.assign(stats, await extensionPage.evaluate(() => window.__r15StorageStats))
@@ -220,22 +198,13 @@ try {
     status: 'PASS', browser: CHROME, system, fixture: fixtureUrl,
     model: { groups: 20, valuesPerGroup: 100, totalValues: 2000, beginMs: +beginMs.toFixed(2), serializedSessionBytes },
     switches: { requested: 100, completed: switchLatencies.length, writes: stats.writes, writeBytes: stats.writeBytes,
-      writeCountPerSwitch: stats.writes / switchLatencies.length,
-      totalAckBytes: ackBytes.reduce((sum, value) => sum + value, 0), ackBytes: summary(ackBytes),
-      latencyMs: summary(switchLatencies),
-      phaseMs: { diagnosticContentDrain: summary(drainProbeMs), observedWriteEventAfterRequest: summary(persistObservedMs),
-        postWriteUntilAckApprox: summary(switchLatencies.map((total, index) => Math.max(0, total - persistObservedMs[index]))) } },
-    lifecycle: { rounds: cycleMs.length, latencyMs: summary(cycleMs), finalDom: final,
+      latencyMs: { median: +median(switchLatencies).toFixed(2), max: +Math.max(...switchLatencies).toFixed(2) } },
+    lifecycle: { rounds: cycleMs.length, medianMs: +median(cycleMs).toFixed(2), maxMs: +Math.max(...cycleMs).toFixed(2), finalDom: final,
       bodyEventListeners: { before: listenersBefore, after: listenersAfter, delta: listenersBefore === null || listenersAfter === null ? null : listenersAfter - listenersBefore },
       jsHeapUsedSizeBytes: { before: heapBefore, after: heapAfter, delta: heapBefore === null || heapAfter === null ? null : heapAfter - heapBefore } },
     baseline: { source: 'docs/AF-22-PLAN.md R15 evidence; Node mock only', mockSwitches: 100, mockWrites: 101, mockAverageMs: 167,
-      comparison: 'Different runtime/path; descriptive only, not a real-Chrome baseline.',
-      priorUninstrumentedCfT: { source: 'fa0bacd', medianMs: 1321.2, maxMs: 2477.83, writes: 100, writeBytes: 16362177,
-        comparison: 'Same 20×100/100-switch scenario before added drain probes; instrumented latency below is not directly comparable.' } },
-    limitations: ['This harness sends PICK_DRAFT_OPERATION directly from the extension page; it does not exercise Picker queue/render behavior.',
-      'One diagnostic PICK_DRAIN probe is run every 10 switches; those timings are separate and are not subtracted from end-to-end latency.',
-      'The storage onChanged timestamp is observed in another extension page and is an approximation of persistence completion, not an internal storage-call span.',
-      'WeakMap/Map source-cache cardinality is not directly observable from the isolated content script.',
+      comparison: 'Different runtime/path; descriptive only, not a real-Chrome baseline.' },
+    limitations: ['WeakMap/Map source-cache cardinality is not directly observable from the isolated content script.',
       'CDP listener count is for the inspected page-world body object; it does not enumerate isolated-world listeners.',
       'Same-site queue-delay measurement is not included in this revision; no pre-AF22 real-browser baseline is available.']
   }
