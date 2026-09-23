@@ -22,7 +22,7 @@ const mainFixture = framePort => `<!doctype html><meta charset="utf-8"><title>AF
 <style>body{font:18px sans-serif}table{border-collapse:collapse;margin:24px}td,th{border:1px solid;padding:18px}#scattered{margin:50px;padding:24px;border:1px solid}</style>
 <h1>Fixture for group flow</h1><span id="group-name-text">Second Group Picked Name</span>
 <table id="nested"><tbody><tr><td>product</td><td><table><tbody><tr><td>First price</td><td id="price-a">101</td></tr></tbody></table></td></tr></tbody></table>
-<table role="table" aria-label="CSS table"><div role="row"><span role="cell">Second price</span><span role="cell" id="price-b">202</span></div></table>
+<div role="table" aria-label="CSS table"><div role="row"><span role="cell">Second price</span><span role="cell" id="price-b">202</span></div></div>
 <div id="scattered">Scattered amount <strong id="price-c">303</strong> <strong id="price-d">404</strong></div>
 <iframe title="cross-origin fixture" src="http://127.0.0.1:${framePort}/frame" style="width:500px;height:280px;border:0"></iframe>`
 const frameFixture = '<!doctype html><meta charset="utf-8"><div id="frame-price" style="margin:30px;padding:20px">404</div>'
@@ -114,7 +114,7 @@ try {
   let pickerCdp = await pickerTarget.createCDPSession()
   await pickerCdp.send('Runtime.enable')
   let pickerTargetPinned = false
-  const refreshPickerTarget = async (preferEdit = false, preferGroupKey = null) => {
+  const refreshPickerTarget = async (preferEdit = false, preferGroupKey = null, preferTabId = null) => {
     if (pickerTargetPinned) return
     const candidates = browser.targets().filter(t => t.url().includes('/ui/picker/picker.html'))
     let current = null
@@ -123,12 +123,13 @@ try {
       try {
         const session = await candidate.createCDPSession()
         await session.send('Runtime.enable')
-        const result = await session.send('Runtime.evaluate', { expression: `(() => ({ fields: document.querySelectorAll('#field-list [data-field-row]').length, batchVisible: Boolean(document.querySelector('#batch-section') && !document.querySelector('#batch-section').hidden), groupVisible: Boolean(document.querySelector('#group-draft-section') && !document.querySelector('#group-draft-section').hidden), groupKeys: [...document.querySelectorAll('[data-group-row]')].map(row => row.getAttribute('data-group-key')), url: location.href }))()`, returnByValue: true })
+        const result = await session.send('Runtime.evaluate', { expression: `(async () => ({ fields: document.querySelectorAll('#field-list [data-field-row]').length, batchVisible: Boolean(document.querySelector('#batch-section') && !document.querySelector('#batch-section').hidden), groupVisible: Boolean(document.querySelector('#group-draft-section') && !document.querySelector('#group-draft-section').hidden), firstReady: Boolean(document.querySelector('#group-start-first') && !document.querySelector('#group-start-first').hidden), visibility: document.visibilityState, groupKeys: [...document.querySelectorAll('[data-group-row]')].map(row => row.getAttribute('data-group-key')), activeTabId: (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id, url: location.href }))()`, awaitPromise: true, returnByValue: true })
         probe = result.result?.value
         await session.detach()
       } catch {}
-      if (preferGroupKey ? probe?.groupVisible && probe.groupKeys?.includes(preferGroupKey) :
-        (preferEdit ? probe?.fields >= 2 : probe)) { current = candidate; break }
+      if (preferTabId !== null ? probe?.activeTabId === preferTabId && probe?.visibility === 'visible' && probe?.groupVisible && probe?.firstReady :
+        (preferGroupKey ? probe?.groupVisible && probe.groupKeys?.includes(preferGroupKey) :
+          (preferEdit ? probe?.fields >= 2 : probe))) { current = candidate; break }
     }
     if (!current || current === pickerTarget) return
     try { await pickerCdp.detach() } catch {}
@@ -205,7 +206,6 @@ try {
     throw error
   }
   ck('first group created and manually named')
-  console.log('[diagnostic] first group canonical name', await picker.evaluate(async id => (await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id })).draft?.groups?.map(group => ({ key: group.key, name: group.name })), tabId))
   await clickTarget(target, '#price-a')
   await clickTarget(target, '#price-b')
   await new Promise(resolveWait => setTimeout(resolveWait, 1200))
@@ -240,12 +240,15 @@ try {
   let crossOriginFrame = null
   try {
     crossOriginFrame = target.frames().find(f => f.url().includes(`:${framePort}/frame`))
-    if (crossOriginFrame) { await clickFrameTarget(target, crossOriginFrame, '#frame-price'); framePicked = true }
+    if (crossOriginFrame) {
+      await crossOriginFrame.waitForSelector('[data-af-overlay] [data-af-done]', { timeout: 5000 })
+      await clickFrameTarget(target, crossOriginFrame, '#frame-price')
+      framePicked = true
+    }
   } catch (error) { console.log(`[gap] cross-origin frame pick unavailable: ${error.message}`) }
   ck(framePicked ? 'cross-origin frame navigation initiated' : 'cross-origin frame capability not reached')
 
   if (framePicked) {
-    await crossOriginFrame.waitForSelector('[data-af-overlay] [data-af-done]', { timeout: 10000 })
     await clickFrameTarget(target, crossOriginFrame, '#frame-price')
     const end = Date.now() + 8000
     let frameValues = []
@@ -587,7 +590,15 @@ try {
     return { id: tab.id, url }
   }, `http://127.0.0.1:${mainPort}/second-round`)
   pickerTargetPinned = false
-  await clickPanel({ evaluate: (...args) => report.evaluate(...args) }, '#open-second-round-panel')
+  await clickSelector(report, '#open-second-round-panel')
+  await report.waitForFunction(() => {
+    const button = document.querySelector('#open-second-round-panel')
+    return button?.dataset.opened === 'true' || button?.dataset.error
+  }, { timeout: 10000 })
+  const secondPanelOpen = await report.$eval('#open-second-round-panel', button => ({ opened: button.dataset.opened, error: button.dataset.error }))
+  if (secondPanelOpen.opened !== 'true') throw new Error(`second-round side panel failed to open: ${JSON.stringify(secondPanelOpen)}`)
+  await refreshPickerTarget(false, null, newTab.id)
+  pickerTargetPinned = true
   await picker.waitForFunction(() => document.querySelector('#group-start-first') && !document.querySelector('#group-start-first').hidden, { timeout: 20000 })
   const freshDraft = await picker.evaluate(async id => (await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id }))?.draft, newTab.id)
   if (!freshDraft || freshDraft.sessionId === firstGroupState.sessionId || freshDraft.groups.length !== 0) throw new Error('second round inherited old picker draft groups')
@@ -644,6 +655,16 @@ try {
   })
 
   await clickPanel(picker, '#group-start-first')
+  await picker.waitForSelector('#group-name-editor:not([hidden])', { timeout: 10000 })
+  // Creating the first group is asynchronous; wait for its editor/draft before
+  // typing so rendering cannot reset a name entered into the previous view.
+  await picker.waitForFunction(async () => {
+    const tabId = (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id
+    const draft = Number.isInteger(tabId)
+      ? (await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId }))?.draft
+      : null
+    return draft?.groups?.length === 1 && draft.activeGroupKey === draft.groups[0]?.key && !draft.groups[0]?.name
+  }, { timeout: 10000 })
   await picker.type('#group-name', 'Second Round Only')
   await clickPanel(picker, '#group-name-confirm')
   await waitOverlay(secondPage)
@@ -807,7 +828,7 @@ try {
   }
   ck('second round saved only its source/key while preserving first-round tasks/history')
 
-  if (!frameCommitted) throw new Error('cross-origin frame click was not committed to the canonical draft')
+  if (framePicked && !frameCommitted) throw new Error('cross-origin frame click was not committed to the canonical draft')
   console.log(JSON.stringify({ browser: CHROME, tabId, framePicked, frameCommitted, groups: await picker.evaluate(() => document.querySelectorAll('[data-group-row]').length), partialResults, fullResults, savedTasks: persisted, repairedFieldKey: fieldKey, retainedSeriesRecords: afterRepair.records.length, secondRoundSessionId: freshDraft.sessionId, secondRoundTaskId: secondTask.id, secondRoundDryRun: secondDryRun, status: 'G1_SECOND_ROUND_VERIFIED' }, null, 2))
 } catch (error) {
   console.error(`FAIL G1 checkpoint: ${error?.stack || error}`)

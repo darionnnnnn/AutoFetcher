@@ -12,10 +12,91 @@ import { enterPickMode, exitPickMode, drainPickQueue } from './picker-mode.js'
 let lastTarget = null
 let groupNamePickState = null
 
+function groupNamePickText(target, { preview = false } = {}) {
+  if (!target) return { text: '', scope: '' }
+  const tag = String(target.tagName || '').toLowerCase()
+  const type = String(target.type || '').toLowerCase()
+  if (type === 'password') return { text: '', scope: '密碼欄位不會讀取' }
+  if (tag === 'textarea' || tag === 'input') {
+    if (preview && tag === 'input' && !['text', 'search', 'tel', 'url', 'email'].includes(type || 'text')) {
+      return { text: '', scope: '此欄位不在預覽範圍' }
+    }
+    if (preview && !isVisibleGroupNameInput(target)) return { text: '', scope: '此欄位目前不可見' }
+    return { text: String(target.value || '').trim(), scope: '此欄位的文字' }
+  }
+  return { text: String(target.textContent || '').trim(), scope: '此元素及其子元素的文字' }
+}
+
+function isVisibleGroupNameInput(element) {
+  if (element.hidden || element.closest?.('[hidden]')) return false
+  let current = element
+  while (current && current.nodeType === 1) {
+    const style = typeof window.getComputedStyle === 'function' ? window.getComputedStyle(current) : null
+    if (style && (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || style.opacity === '0')) return false
+    current = current.parentElement
+  }
+  return typeof element.getClientRects !== 'function' || element.getClientRects().length > 0
+}
+
+function createGroupNamePreview() {
+  const host = document.createElement('div')
+  host.setAttribute('data-af-overlay', 'group-name-preview')
+  host.style.setProperty('all', 'initial', 'important')
+  host.style.setProperty('display', 'block', 'important')
+  host.style.setProperty('position', 'fixed', 'important')
+  host.style.setProperty('left', '0', 'important')
+  host.style.setProperty('top', '0', 'important')
+  host.style.setProperty('z-index', '2147483647', 'important')
+  host.style.setProperty('pointer-events', 'none', 'important')
+  const shadow = host.attachShadow({ mode: 'open' })
+  const style = document.createElement('style')
+  style.textContent = `:host{all:initial!important} .box{box-sizing:border-box;max-width:min(420px,calc(100vw - 24px));padding:8px 10px;border:1px solid CanvasText;border-radius:6px;background:Canvas;color:CanvasText;box-shadow:0 4px 16px color-mix(in srgb,CanvasText 20%,transparent);font:13px/1.45 system-ui,sans-serif;overflow-wrap:anywhere;white-space:pre-wrap} .label{display:block;margin-bottom:3px;color:CanvasText;font-size:11px;font-weight:600} .value{display:block;max-height:8em;overflow:hidden} .note{display:block;margin-top:4px;color:CanvasText;font-size:11px}`
+  const box = document.createElement('div')
+  box.className = 'box'
+  const label = document.createElement('span')
+  label.className = 'label'
+  const value = document.createElement('span')
+  value.className = 'value'
+  const note = document.createElement('span')
+  note.className = 'note'
+  note.textContent = '點擊只回填群組名稱；不會執行頁面動作或加入值'
+  box.append(label, value, note)
+  shadow.append(style, box)
+  ;(document.body || document.documentElement).appendChild(host)
+  return { host, label, value }
+}
+
+function updateGroupNamePreview(event) {
+  const state = groupNamePickState
+  if (!state) return
+  const target = event.target?.nodeType === 1 ? event.target : event.target?.parentElement
+  if (!target || target.closest?.('[data-af-overlay]')) return
+  const { text, scope } = groupNamePickText(target, { preview: true })
+  if (String(target.type || '').toLowerCase() === 'password') {
+    state.preview.host.style.setProperty('display', 'none', 'important')
+    return
+  }
+  state.preview.host.style.setProperty('display', 'block', 'important')
+  state.preview.label.textContent = scope ? `可取用範圍：${scope}` : '可取用範圍：此元素的文字'
+  const maxPreview = 500
+  state.preview.value.textContent = text ? `${text.slice(0, maxPreview)}${text.length > maxPreview ? '…（預覽已截短；點擊仍取完整文字）' : ''}` : '（空白）'
+  const x = Math.max(8, Math.min((event.clientX || 0) + 14, (window.innerWidth || 1024) - 440))
+  const y = Math.max(8, Math.min((event.clientY || 0) + 14, (window.innerHeight || 768) - 150))
+  state.preview.host.style.setProperty('transform', `translate(${x}px, ${y}px)`, 'important')
+}
+
+function clearGroupNamePreview() {
+  groupNamePickState?.preview?.host.style.setProperty('display', 'none', 'important')
+}
+
 function endGroupNamePick() {
   if (!groupNamePickState) return
   document.removeEventListener('click', groupNamePickState.onClick, true)
   document.removeEventListener('keydown', groupNamePickState.onKeyDown, true)
+  document.removeEventListener('mouseover', groupNamePickState.onMouseOver, true)
+  document.removeEventListener('mousemove', groupNamePickState.onMouseMove, true)
+  document.removeEventListener('mouseout', groupNamePickState.onMouseOut, true)
+  groupNamePickState.preview?.host.remove()
   if (typeof window !== 'undefined') {
     window.removeEventListener('popstate', groupNamePickState.onRouteChange, true)
     window.removeEventListener('hashchange', groupNamePickState.onRouteChange, true)
@@ -34,6 +115,12 @@ function beginGroupNamePick(msg) {
     if (routeAtEntry && typeof location !== 'undefined' && location.href !== routeAtEntry) endGroupNamePick()
   }
   const onPageHide = () => endGroupNamePick()
+  const preview = createGroupNamePreview()
+  const onMouseOver = (event) => updateGroupNamePreview(event)
+  const onMouseMove = (event) => updateGroupNamePreview(event)
+  const onMouseOut = (event) => {
+    if (!event.relatedTarget) clearGroupNamePreview()
+  }
   const onClick = (event) => {
     onRouteChange()
     if (!groupNamePickState) return
@@ -41,11 +128,8 @@ function beginGroupNamePick(msg) {
     if (!target || target.closest?.('[data-af-overlay]')) return
     event.preventDefault()
     event.stopPropagation()
-    const tag = String(target.tagName || '').toLowerCase()
-    const type = String(target.type || '').toLowerCase()
     // password／敏感可編輯欄位永遠只回空文字，不能把秘密送回面板。
-    const text = type === 'password' ? ''
-      : (tag === 'input' || tag === 'textarea' ? String(target.value || '').trim() : String(target.textContent || '').trim())
+    const { text } = groupNamePickText(target)
     endGroupNamePick()
     const pending = chrome.runtime.sendMessage({
       type: MSG.PICK_GROUP_NAME_RESULT,
@@ -66,9 +150,12 @@ function beginGroupNamePick(msg) {
     event.stopPropagation()
     endGroupNamePick()
   }
-  groupNamePickState = { onClick, onKeyDown, onRouteChange, onPageHide }
+  groupNamePickState = { onClick, onKeyDown, onMouseOver, onMouseMove, onMouseOut, onRouteChange, onPageHide, preview }
   document.addEventListener('click', onClick, true)
   document.addEventListener('keydown', onKeyDown, true)
+  document.addEventListener('mouseover', onMouseOver, true)
+  document.addEventListener('mousemove', onMouseMove, true)
+  document.addEventListener('mouseout', onMouseOut, true)
   if (typeof window !== 'undefined') {
     window.addEventListener('popstate', onRouteChange, true)
     window.addEventListener('hashchange', onRouteChange, true)

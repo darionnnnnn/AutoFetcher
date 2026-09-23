@@ -48,6 +48,7 @@
         "shared/field-match.js",
         "shared/messages.js",
         "shared/preaction.js",
+        "shared/route.js",
         "shared/selector.js",
         "shared/table.js"
       ],

@@ -11,7 +11,7 @@ test('F1b 兩組多來源完成 snapshot 進 batch，實際保存兩個 multi ta
   resetChromeMock()
   const chromeMock = installChromeMock()
   chromeMock.__setScriptResponder(() => [{ frameId: 0, result: 'https://a.test/prices' }, { frameId: 1, result: 'https://b.test/embed' }, { frameId: 2, result: 'https://c.test/embed' }])
-  chromeMock.__setTabResponder((_tabId, message) => message.type === 'PICK_DRAIN' ? { ok: true, drained: true } : undefined)
+  chromeMock.__setTabResponder((_tabId, message) => message.type === 'PICK_DRAIN' ? { ok: true, drained: true, ...(message.validateSources ? { validatedSources: message.expectedSources?.length || 0 } : {}) } : undefined)
   chromeMock.runtime.id = 'autofetcher-test'
   const storage = await import('../src/shared/storage.js?f1b-storage=' + Math.random())
   const tab = await chrome.tabs.create({ url: 'https://a.test/prices' })
@@ -202,7 +202,7 @@ test('F1b taskId checkpoint 訊息失敗時 handleBatchSave 可見中止且不�
   resetChromeMock()
   const chromeMock = installChromeMock()
   chromeMock.__setScriptResponder(() => [{ frameId: 0, result: 'https://a.test/prices' }, { frameId: 1, result: 'https://b.test/embed' }, { frameId: 2, result: 'https://c.test/embed' }])
-  chromeMock.__setTabResponder((_tabId, message) => message.type === 'PICK_DRAIN' ? { ok: true, drained: true } : undefined)
+  chromeMock.__setTabResponder((_tabId, message) => message.type === 'PICK_DRAIN' ? { ok: true, drained: true, ...(message.validateSources ? { validatedSources: message.expectedSources?.length || 0 } : {}) } : undefined)
   const storage = await import('../src/shared/storage.js?f1b-checkpoint-storage=' + Math.random())
   const tab = await chrome.tabs.create({ url: 'https://a.test/prices' })
   await storage.setPanelCtx(tab.id, { kind: 'waiting', purpose: 'task', batch: true })
@@ -250,7 +250,7 @@ test('F1b 第2組保存 checkpoint 中斷時第1組仍首抓一次，重試不�
   resetChromeMock()
   const chromeMock = installChromeMock()
   chromeMock.__setScriptResponder(() => [{ frameId: 0, result: 'https://a.test/prices' }, { frameId: 1, result: 'https://b.test/embed' }, { frameId: 2, result: 'https://c.test/embed' }])
-  chromeMock.__setTabResponder((_tabId, message) => message.type === 'PICK_DRAIN' ? { ok: true, drained: true } : undefined)
+  chromeMock.__setTabResponder((_tabId, message) => message.type === 'PICK_DRAIN' ? { ok: true, drained: true, ...(message.validateSources ? { validatedSources: message.expectedSources?.length || 0 } : {}) } : undefined)
   chromeMock.runtime.id = 'autofetcher-test'
   const storage = await import('../src/shared/storage.js?f1b-partial-storage=' + Math.random())
   const tab = await chrome.tabs.create({ url: 'https://a.test/prices' })

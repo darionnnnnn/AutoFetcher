@@ -86,6 +86,7 @@ test('D-2 按「加入點擊步驟」會新增一列 click 並開始在頁面上
   const { c, pk, doc, win } = await fresh()
   pk.render(baseCtx({ frameUrl: 'https://widget.example/chart.html', tabId: 9 }))
   click(win, $(doc, 'frame-hint-add'))
+  await new Promise(resolve => setTimeout(resolve, 0))
 
   const rows = doc.querySelectorAll('#preaction-list [data-preaction-row]')
   assert.equal(rows.length, 1, '要新增一列前置動作')

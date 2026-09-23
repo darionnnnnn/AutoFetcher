@@ -7,6 +7,7 @@ import { detectKind } from '../shared/block-detect.js'
 import { parseNumber, resolveByPosition, locateByHeader } from '../shared/extract.js'
 import { withInnerLabel, TERMS } from '../shared/describe.js'
 import { pickSourceOf, pickSpecOf, stripPos } from '../shared/field-match.js'
+import { sameRouteIgnoringTracking } from '../shared/route.js'
 import {
   columnHeaders, rowHeader, innermostTable,
   // 「哪些列／格屬於這張表」的判準只有 shared/table.js 一份（AF-10 作業 D）：
@@ -145,6 +146,80 @@ let draftPickDrainPaused = false
 let draftRangeAnchor = null
 const draftPickPending = new Map()
 const draftPickFailures = new Map()
+// DOM provenance survives picker exit/group switches inside this content document.
+// New sessions and route invalidation release it; document teardown releases the rest.
+const draftSourceSessions = new Map()
+
+function sourceTableOf(target) {
+  if (!target || target.nodeType !== 1) return null
+  return target.matches?.('table') ? target : target.closest?.('table') || null
+}
+
+function sourceElementOf(target, pick) {
+  const cell = pick?.cell
+  if (!cell || !isTableMode(target)) return target
+  const rowIndex = cell.row?.index
+  const colIndex = cell.col?.index
+  if (!Number.isInteger(rowIndex) || !Number.isInteger(colIndex)) return target
+  const row = resolveDataRows(target)[rowIndex]
+  return row ? targetAtGrid(row, colIndex, cell.inner) || target : target
+}
+
+function recordDraftSource(identity, key, target, pick, remove) {
+  if (!identity?.sessionId || !identity?.groupKey) return
+  let records = draftSourceSessions.get(identity.sessionId)
+  if (!records) { records = new Map(); draftSourceSessions.set(identity.sessionId, records) }
+  let groups = records.get(key)
+  if (remove) {
+    groups?.delete(identity.groupKey)
+    if (groups && !groups.size) records.delete(key)
+    if (!records.size) draftSourceSessions.delete(identity.sessionId)
+    return
+  }
+  if (!groups) { groups = new Map(); records.set(key, groups) }
+  const sourceElement = sourceElementOf(target, pick)
+  groups.set(identity.groupKey, {
+    groupKey: identity.groupKey,
+    valueLabel: (target?.textContent || getPickName(pick) || '已選值').trim().slice(0, 80),
+    target: sourceElement,
+    table: sourceTableOf(target)
+  })
+}
+
+function validateDraftSources(sessionId, expectedSources = []) {
+  const records = draftSourceSessions.get(sessionId)
+  for (const expected of expectedSources) {
+    const groupLabel = expected?.groupName
+      ? `群組「${expected.groupName}」`
+      : `第 ${expected?.groupIndex || expected?.groupKey || '未知'} 組`
+    const value = expected?.value
+    const locator = value?.source?.locator || value?.locator
+    const spec = value?.spec
+    if (!locator || !spec) {
+      return { ok: false, error: 'stale_source', message: `${groupLabel}有來源無法核對，請重新選取` }
+    }
+    const pick = spec.cell || spec.block ? spec : { spec }
+    const key = draftPickKeyFor(locator, pick, value?.source?.frame)
+    const groupRecords = records?.get(key)
+    const record = groupRecords?.get(expected.groupKey) || groupRecords?.values().next().value
+    if (!record) {
+      const label = (value.preview || value.previewValue || value.name || '已選值').toString().trim().slice(0, 80)
+      return { ok: false, error: 'stale_source', message: `${groupLabel}的「${label}」來源未經目前文件核對，請重新選取` }
+    }
+    if (!record.target?.isConnected || (record.table && (!record.table.isConnected || sourceTableOf(record.target) !== record.table))) {
+      return {
+        ok: false,
+        error: 'stale_source',
+        message: `${groupLabel}的「${record.valueLabel}」來源已被頁面替換或移除，請重新選取`
+      }
+    }
+  }
+  return { ok: true }
+}
+
+export function releaseDraftSources(sessionId) {
+  if (sessionId) draftSourceSessions.delete(sessionId)
+}
 
 function isDraftGroupMode() {
   return currentPurpose === 'task' && typeof pickSessionId === 'string' && pickSessionId !== '' &&
@@ -295,6 +370,7 @@ function queueDraftPick(target, pick, remove = false) {
       if (panelEl) updatePanel(panelEl, currentTargetEl)
       return false
     }
+    recordDraftSource(identity, key, target, pick, remove)
     draftPickFailures.delete(operationKey)
     draftPickPending.delete(operationKey)
     if (generation !== draftPickGeneration || identity.sessionId !== pickSessionId || identity.groupKey !== pickGroupKey) return true
@@ -4734,6 +4810,10 @@ function onContextMenu(event) {
 }
 
 export async function drainPickQueue(identity = {}) {
+  if (identity.releaseSources === true) {
+    releaseDraftSources(identity.sessionId)
+    return { ok: true, released: true }
+  }
   const exited = !active && identity.sessionId && exitedDraftIdentity?.sessionId === identity.sessionId
   const identityMatches = (field, current) => identity[field] === undefined ||
     JSON.stringify(stableDraftIdentity(identity[field])) === JSON.stringify(stableDraftIdentity(current))
@@ -4742,12 +4822,14 @@ export async function drainPickQueue(identity = {}) {
   const routeIdentity = exited ? exitedDraftIdentity.routeIdentity : pickRouteIdentity
   if (!identityMatches('documentGeneration', documentIdentity)) return { ok: false, error: 'stale_document', message: '目前頁面文件已變更，請重新進入選取' }
   if (!identityMatches('routeIdentity', routeIdentity)) return { ok: false, error: 'stale_route', message: '目前頁面路徑已變更，請重新進入選取' }
-  if (exited && typeof location !== 'undefined' && exitedDraftIdentity.locationAtExit && location.href !== exitedDraftIdentity.locationAtExit) return { ok: false, error: 'stale_route', message: '頁面路徑已變更，請重新進入選取' }
+  if (exited && typeof location !== 'undefined' && exitedDraftIdentity.locationAtExit &&
+      !sameRouteIgnoringTracking(exitedDraftIdentity.locationAtExit, location.href)) return { ok: false, error: 'stale_route', message: '頁面路徑已變更，請重新進入選取' }
   // An exited participant must never resume capture; it may only finish ACKing
   // this same session's immutable pending operations.
   if (identity.resume === true && exited) return { ok: true, resumed: false }
   if (identity.resume === true) { draftPickDrainPaused = false; return { ok: true, resumed: true } }
-  if (isDraftGroupMode() && pickLocationAtEntry && typeof location !== 'undefined' && location.href !== pickLocationAtEntry) {
+  if (isDraftGroupMode() && pickLocationAtEntry && typeof location !== 'undefined' &&
+      !sameRouteIgnoringTracking(pickLocationAtEntry, location.href)) {
     invalidatePickForRouteChange()
     return { ok: false, error: 'stale_route', message: '頁面路徑已變更，請重新進入選取' }
   }
@@ -4772,7 +4854,18 @@ export async function drainPickQueue(identity = {}) {
     draftPickDrainPaused = false
     return { ok: false, error: 'pick_ack_failed', message: '有選取尚未同步，請重試' }
   }
-  return { ok: true, drained: true }
+  if (identity.validateSources === true) {
+    const sourceValidity = validateDraftSources(sessionId, identity.expectedSources || [])
+    if (!sourceValidity.ok) {
+      draftPickDrainPaused = false
+      return sourceValidity
+    }
+  }
+  return {
+    ok: true,
+    drained: true,
+    ...(identity.validateSources === true ? { validatedSources: (identity.expectedSources || []).length } : {})
+  }
 }
 
 function invalidatePickForRouteChange() {
@@ -4783,16 +4876,23 @@ function invalidatePickForRouteChange() {
   draftPickDrainPaused = true
   draftPickPending.clear()
   draftPickFailures.clear()
-  exitPickMode()
+  releaseDraftSources(pickSessionId)
+  exitPickMode({ routeInvalidated: true })
 }
 
 function routeChanged() {
-  if (pickLocationAtEntry && typeof location !== 'undefined' && location.href !== pickLocationAtEntry) {
+  if (pickLocationAtEntry && typeof location !== 'undefined' &&
+      !sameRouteIgnoringTracking(pickLocationAtEntry, location.href)) {
     invalidatePickForRouteChange()
   }
 }
 
 export function enterPickMode(opts) {
+  // A newer session supersedes the old page-side references. Group changes in
+  // one session keep their records; a new round releases the prior session.
+  for (const sessionId of draftSourceSessions.keys()) {
+    if (sessionId !== opts?.sessionId) draftSourceSessions.delete(sessionId)
+  }
   // 進來前先清乾淨，但**只清同一個用途**的保留標示：
   // 前置動作要選一個元素時，任務目標的藍框要留在畫面上（面板還開著、使用者還在看）
   exitPickMode({ clearOnly: opts?.purpose || null })
@@ -4978,7 +5078,9 @@ export function exitPickMode(opts = {}) {
       sessionId: pickSessionId,
       documentGeneration: pickDocumentGeneration === undefined ? undefined : structuredClone(pickDocumentGeneration),
       routeIdentity: pickRouteIdentity === undefined ? undefined : structuredClone(pickRouteIdentity),
-      locationAtExit: typeof location !== 'undefined' ? location.href : ''
+      locationAtExit: opts?.routeInvalidated
+        ? pickLocationAtEntry
+        : (typeof location !== 'undefined' ? location.href : '')
     }
   }
   currentHint = null

@@ -50,6 +50,7 @@ import {
   protocolErrorResponse
 } from '../shared/pick-protocol.js'
 import { getPickDraft, updatePickDraft } from '../shared/pick-draft.js'
+import { routeIdentityMatchesUrl, sameRouteIgnoringTracking } from '../shared/route.js'
 
 // 面板 ctx 可能尚未寫入就收到 pagehide；用短命記號避免無 ctx 時重複清場，
 // 同時讓新一輪開啟能再次廣播 EXIT_PICK。
@@ -299,7 +300,7 @@ function rememberPickParticipant(tabId, sessionId, sender) {
   pickParticipantFrames.set(tabId, state)
 }
 
-async function drainPickDraft(tabId, draft, timeoutMs, resume = false) {
+async function drainPickDraft(tabId, draft, timeoutMs, resume = false, validateSources = false) {
   if (!draft || !Number.isInteger(tabId)) return { ok: false, message: '選取草稿不存在，無法同步' }
   const registered = pickParticipantFrames.get(tabId)
   const activeBeforeDrain = frameStateOf(tabId)
@@ -314,7 +315,7 @@ async function drainPickDraft(tabId, draft, timeoutMs, resume = false) {
   if (registered?.sessionId === draft.sessionId) {
     for (const [frameId, identity] of registered.frames) {
       const frame = listed.find(item => item.frameId === frameId)
-      if (!frame || (identity.url && frame.url !== identity.url) ||
+      if (!frame || (identity.url && !sameRouteIgnoringTracking(identity.url, frame.url)) ||
           (identity.documentId && frame.documentId && frame.documentId !== identity.documentId)) {
         return { ok: false, message: '有參與選取的框架已失聯或文件已變更，請重新進入該框架後重試' }
       }
@@ -330,7 +331,7 @@ async function drainPickDraft(tabId, draft, timeoutMs, resume = false) {
   try { tabUrl = (await chrome.tabs.get(tabId))?.url || '' } catch {}
   if (tabUrl) urls.add(tabUrl)
   for (const url of urls) {
-    const matches = listed.filter(frame => frame.url === url)
+    const matches = listed.filter(frame => sameRouteIgnoringTracking(url, frame.url))
     if (matches.length !== 1) return { ok: false, message: matches.length ? '找到多個相同網址的框架，無法確認所有選取都已同步' : '有參與選取的框架已失聯，請返回頁面重試' }
     targets.add(matches[0].frameId)
   }
@@ -338,12 +339,46 @@ async function drainPickDraft(tabId, draft, timeoutMs, resume = false) {
   const active = frameStateOf(tabId)
   if (active?.sessionId === draft.sessionId) targets.add(active.frameId)
   let failure = null
+  let validatedSourceCount = 0
+  const declaredSourceCount = (draft.groups || []).reduce((sum, group) => sum + (group.values || []).length, 0)
+  const expectedSourcesByFrame = new Map()
+  if (validateSources) {
+    for (const [groupIndex, group] of (draft.groups || []).entries()) for (const value of group.values || []) {
+      const sourceFrameUrl = value?.source?.frame?.url
+      const matches = sourceFrameUrl
+        ? listed.filter(item => sameRouteIgnoringTracking(sourceFrameUrl, item.url))
+        : listed.filter(item => item.frameId === 0)
+      if (matches.length !== 1) return {
+        ok: false,
+        message: matches.length > 1
+          ? '找到多個相同路由的框架，無法確認所有選取都已同步'
+          : '有選取來源未對應到可核對的框架，請重新選取該組的值'
+      }
+      const frame = matches[0]
+      let sources = expectedSourcesByFrame.get(frame.frameId)
+      if (!sources) { sources = []; expectedSourcesByFrame.set(frame.frameId, sources) }
+      sources.push({ groupKey: group.key, groupName: group.name, groupIndex: groupIndex + 1, value })
+    }
+  }
   for (const frameId of targets) {
     try {
-      const response = await sendToFrame(tabId, {
+      const frameUrl = listed.find(frame => frame.frameId === frameId)?.url || ''
+      const message = {
         type: MSG.PICK_DRAIN, sessionId: draft.sessionId, resume,
         documentGeneration: draft.documentGeneration, routeIdentity: draft.routeIdentity
-      }, frameId, timeoutMs, 'Drain picker queue')
+      }
+      if (validateSources) {
+        message.validateSources = true
+        message.expectedSources = expectedSourcesByFrame.get(frameId) || []
+      }
+      const response = await sendToFrame(tabId, message, frameId, timeoutMs, 'Drain picker queue')
+      if (validateSources && response?.ok === true) {
+        if (response.validatedSources !== message.expectedSources.length) {
+          failure = '有選取來源未經目前文件核對，請重新選取該組的值'
+          break
+        }
+        validatedSourceCount += response.validatedSources
+      }
       if (response?.ok !== true) { failure = response?.message || '有選取尚未同步，請重試'; break }
     } catch {
       failure = '有參與選取的框架沒有回覆同步確認，請返回該框架重試'
@@ -358,7 +393,29 @@ async function drainPickDraft(tabId, draft, timeoutMs, resume = false) {
     return { ok: false, message: failure }
   }
   if (failure) return { ok: false, message: failure }
+  if (validateSources && validatedSourceCount !== declaredSourceCount) {
+    return { ok: false, message: '有選取來源未對應到可核對的框架，請重新選取該組的值' }
+  }
   return { ok: true }
+}
+
+async function releasePickDraftSources(tabId, sessionId, draft = null) {
+  if (!Number.isInteger(tabId) || typeof sessionId !== 'string') return
+  const frames = await listFrames(tabId).catch(() => [])
+  const targets = new Set()
+  const registered = pickParticipantFrames.get(tabId)
+  if (registered?.sessionId === sessionId) for (const frameId of registered.frames.keys()) targets.add(frameId)
+  for (const group of draft?.groups || []) for (const value of group.values || []) {
+    const url = value?.source?.frame?.url
+    const matches = url ? frames.filter(frame => frame.url === url) : frames.filter(frame => frame.frameId === 0)
+    if (matches.length === 1) targets.add(matches[0].frameId)
+  }
+  // A worker restart can lose the transient participant map. Release best effort
+  // from every live frame; a later session/page teardown is the final cleanup.
+  if (!targets.size) for (const frame of frames) targets.add(frame.frameId)
+  await Promise.all([...targets].map(frameId => sendToFrame(tabId, {
+    type: MSG.PICK_DRAIN, sessionId, releaseSources: true
+  }, frameId, Math.min(CONTENT_MESSAGE_TIMEOUT_MS, 500), 'Release picker source references').catch(() => null)))
 }
 
 function pickIdentityOf(msg = {}) {
@@ -1085,10 +1142,7 @@ function draftIdentityMatches(message, draft) {
 }
 
 function draftRouteMatchesTab(routeIdentity, tabUrl) {
-  const expectedUrl = routeIdentity && typeof routeIdentity === 'object' && typeof routeIdentity.url === 'string'
-    ? routeIdentity.url
-    : ''
-  return !expectedUrl || expectedUrl === tabUrl
+  return routeIdentityMatchesUrl(routeIdentity, tabUrl)
 }
 
 function stableValue(value) {
@@ -1350,6 +1404,8 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         await drainPickDraft(tabId, latest, contentMs, true)
         return { ok: false, synchronized: false, error: 'empty_group', message: '每個群組完成前都必須至少有一個值' }
       }
+      const sourcesChecked = await drainPickDraft(tabId, latest, contentMs, false, true)
+      if (!sourcesChecked.ok) return { ok: false, error: 'drain_failed', retryable: true, message: sourcesChecked.message }
       let completed
       try {
         completed = await completePickDraft({ ...msg, expectedRevision: latest.revision }, sender)
@@ -1396,6 +1452,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         // 完成後把設定階段寫回同一個分頁 ctx；面板重載時仍會進設定頁，
         // 而不是再次顯示「等待設定畫面」或重新建立欄位。
         await setPanelCtx(completed.tabId, panelContext)
+        await releasePickDraftSources(completed.tabId, completed.snapshot.sessionId, completed.snapshot)
         return { ...completed, draft: stagedDraft, context: ctx, panelContext }
       }
       return completed
@@ -1404,6 +1461,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       const result = await abandonPickDraft(msg, sender)
       if (result?.ok) {
         const tabId = msg.tabId ?? sender?.tab?.id
+        await releasePickDraftSources(tabId, msg.sessionId)
         pickParticipantFrames.delete(tabId)
         forgetPickFrame(tabId)
       }

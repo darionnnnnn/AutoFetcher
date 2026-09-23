@@ -246,6 +246,26 @@ test('A-7 選好元素回填時，那一列已經不在畫面上就不寫（否�
     '寫進已經被丟掉的節點等於什麼都沒發生，使用者會以為選取失敗')
 })
 
+test('picker preaction message observer does not claim task PICKED response channel', async () => {
+  resetChromeMock()
+  const c = installChromeMock()
+  const st = await import('../src/shared/storage.js?t=' + Math.random())
+  await st.init()
+  const html = readFileSync(new URL('../src/ui/picker/picker.html', import.meta.url), 'utf8')
+  const jd = new JSDOM(html, { url: 'chrome-extension://abc/ui/picker/picker.html' })
+  globalThis.window = jd.window
+  globalThis.document = jd.window.document
+  const pk = await import('../src/ui/picker/picker.js?t=' + Math.random())
+  pk.render({ locator: { css: '#v' }, url: 'https://a.test/p', tabId: 3 })
+
+  const results = [...c.runtime.onMessage._listeners].map(listener =>
+    listener({ type: 'PICKED', purpose: 'task' }, {}, () => {}))
+  assert.ok(results.length > 0, 'render binds the picker message observer')
+  assert.ok(results.every(result => result === false || result === undefined),
+    'ordinary task PICKED listeners must not return a Promise or claim the ACK response channel')
+  globalThis.window.close = () => {}
+})
+
 // ---------- 體檢輪 ----------
 
 test('體檢 立即測試失敗時也要帶逐步軌跡（要看得出卡在第幾步）', async () => {
