@@ -276,11 +276,19 @@ try {
     throw new Error(`named groups did not prefill their own task names: ${JSON.stringify(suggestedNames)}`)
   }
   await target.evaluate(() => document.querySelector('#price-d')?.remove())
+  await picker.evaluate(() => {
+    for (const result of document.querySelectorAll('#batch-list [data-batch-result]')) result.textContent = '—'
+  })
   await clickPanel(picker, '#test-now')
   try {
     await picker.waitForFunction(() => {
       const results = [...document.querySelectorAll('#batch-list [data-batch-result]')].map(el => el.textContent.trim())
-      return results.length >= 2 && results.every(text => text && text !== '—')
+      const test = document.querySelector('#test-now')
+      const save = document.querySelector('#save')
+      return results.length >= 2 && results.every(text => text && text !== '—') &&
+        results.some(text => /失敗|找不到|錯誤|missing|error/i.test(text)) &&
+        results.some(text => !/失敗|找不到|錯誤|missing|error/i.test(text)) &&
+        test && !test.disabled && save && !save.hasAttribute('aria-disabled')
     }, { timeout: 45000 })
   } catch (error) {
     console.log('[diagnostic] partial dry run state', await picker.evaluate(() => ({
@@ -300,12 +308,20 @@ try {
   ck('partial dry run reports independent success and failure')
 
   await target.evaluate(() => {
+    const second = document.querySelector('#price-c')
+    if (second) second.textContent = '505'
     const el = document.createElement('strong'); el.id = 'price-d'; el.textContent = '404'; document.querySelector('#scattered').append(el)
+  })
+  await picker.evaluate(() => {
+    for (const result of document.querySelectorAll('#batch-list [data-batch-result]')) result.textContent = '—'
   })
   await clickPanel(picker, '#test-now')
   await picker.waitForFunction(() => {
     const results = [...document.querySelectorAll('#batch-list [data-batch-result]')].map(el => el.textContent.trim())
-    return results.length >= 2 && results.every(text => text && text !== '—')
+    const test = document.querySelector('#test-now')
+    const save = document.querySelector('#save')
+    return results.length >= 2 && results[0]?.includes('404') && results[1]?.includes('505') &&
+      test && !test.disabled && save && !save.hasAttribute('aria-disabled')
   }, { timeout: 45000 })
   const fullResults = await picker.evaluate(() => [...document.querySelectorAll('#batch-list [data-batch-result]')].map(el => el.textContent.trim()))
   ck(`full dry run completed (${fullResults.length} results)`)
@@ -313,9 +329,10 @@ try {
   await clickPanel(picker, '#save')
   try {
     await picker.waitForFunction(() => {
-      const text = document.querySelector('#saved-feedback')?.textContent || ''
-      return text && !/正在|儲存中|處理中/.test(text)
-    }, { timeout: 30000 })
+      const feedback = document.querySelector('#saved-feedback')
+      const first = feedback?.querySelector('[data-saved-first]')
+      return feedback && first && first.dataset.state !== 'pending' && !/正在|儲存中|處理中/.test(first.textContent)
+    }, { timeout: 45000 })
   } catch (error) {
     console.log('[diagnostic] save remained in editor', await picker.evaluate(() => ({
       errors: document.querySelector('#errors')?.textContent,
