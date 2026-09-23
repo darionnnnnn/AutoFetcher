@@ -24,6 +24,14 @@ function frameFound(loc) {
   return Boolean(loc) && typeof loc.frameId === 'number'
 }
 
+function stableActionJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableActionJson).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableActionJson(value[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
 // 「立即測試」失敗時給使用者匯出的診斷包（SPEC §3）。
 // **只在 dryRun 走這裡**：正式抓取不組（不寫紀錄、不進 diag 環形緩衝）。
 async function buildDebug(task, tabId, loc, preActionTrace, err, page) {
@@ -1287,6 +1295,7 @@ export async function runTask(task, opts = {}) {
           const sourceFields = multiSources
           let retryWholeTask = false
           let deadlineFailure = null
+          let preparedSourceState = null
           for (const field of sourceFields) {
             const key = field?.key
             let fieldRes = null
@@ -1301,33 +1310,40 @@ export async function runTask(task, opts = {}) {
               continue
             }
             if (typeof key !== 'string' || key.length === 0 || !field?.source?.locator) {
+              preparedSourceState = null
               fields[key || `field-${Object.keys(fields).length}`] = {
                 ok: false, error: 'invalid_source', message: '多來源欄位缺少有效來源'
               }
               continue
             }
             const stateActions = Array.isArray(field.stateActions) ? field.stateActions : []
-            if (stateActions.length > 0) {
-              if (acquiredTab) {
-                queueCtx.pageDirty = true
-                queueCtx.preApplied = null
-              }
-              try {
-                await runPreActionSequence(stateActions)
-              } catch (err) {
-                if (err?.afDeadline) {
-                  deadlineFailure = err
-                  fieldRes = { ok: false, error: 'error', message: String(err.message || DEADLINE_MESSAGE) }
-                } else {
-                  fieldRes = {
-                    ok: false,
-                    error: 'error',
-                    message: `來源「${field.name || key}」狀態準備失敗：${String(err?.message || '前置動作失敗')}`
+            const stateSignature = stableActionJson(stateActions)
+            if (preparedSourceState?.signature !== stateSignature) {
+              preparedSourceState = { signature: stateSignature, ok: true }
+              if (stateActions.length > 0) {
+                if (acquiredTab) {
+                  queueCtx.pageDirty = true
+                  queueCtx.preApplied = null
+                }
+                try {
+                  await runPreActionSequence(stateActions)
+                } catch (err) {
+                  if (err?.afDeadline) {
+                    deadlineFailure = err
+                    preparedSourceState = { signature: stateSignature, ok: false, deadline: true, message: String(err.message || DEADLINE_MESSAGE) }
+                  } else {
+                    preparedSourceState = { signature: stateSignature, ok: false, message: String(err?.message || '前置動作失敗') }
                   }
                 }
-                fields[key] = fieldRes
-                continue
               }
+            }
+            if (!preparedSourceState.ok) {
+              const message = preparedSourceState.deadline
+                ? preparedSourceState.message
+                : `來源「${field.name || key}」狀態準備失敗：${preparedSourceState.message}`
+              fields[key] = { ok: false, error: 'error', message }
+              if (preparedSourceState.deadline) deadlineFailure = deadlineFailure || timeoutError(message)
+              continue
             }
             const maxFieldAttempts = 1 + reviveDelaysMs.length
             try {
