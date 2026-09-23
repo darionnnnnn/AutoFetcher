@@ -78,39 +78,63 @@ async function beginFieldRepair(msg) {
     return { ok: false, error: 'field_not_found', message: '找不到這個多值任務欄位，請重新載入設定' }
   }
   const sessionId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
-  const tab = await chrome.tabs.create({ url: task.url, active: true })
-  if (!Number.isInteger(tab?.id)) return { ok: false, error: 'tab_failed', message: '無法開啟來源頁面' }
-  const loc = await locateFrame(tab.id, source.frame, locator)
-  if (!loc || !Number.isInteger(loc.frameId)) {
-    try { await chrome.tabs.remove(tab.id) } catch {}
-    return { ok: false, error: 'frame_not_found', message: '找不到此值原本所在的框架' }
+  let tabId = null
+  let keepTab = false
+  let failureCode = 'tab_failed'
+  try {
+    const tab = await chrome.tabs.create({ url: task.url, active: true })
+    tabId = Number.isInteger(tab?.id) ? tab.id : null
+    if (tabId === null) return { ok: false, error: 'tab_failed', message: '無法開啟來源頁面' }
+
+    failureCode = 'frame_not_found'
+    const loc = await locateFrame(tabId, source.frame, locator)
+    if (!loc || !Number.isInteger(loc.frameId)) {
+      return { ok: false, error: 'frame_not_found', message: '找不到此值原本所在的框架' }
+    }
+    let frames = []
+    try { frames = await listFrames(tabId) } catch {}
+    const frameUrl = frames.find(item => item.frameId === loc.frameId)?.url || task.url
+    const routeIdentity = { url: frameUrl }
+    const documentGeneration = `repair:${sessionId}`
+
+    failureCode = 'enter_failed'
+    await injectContent(tabId, { frameId: loc.frameId })
+    // Injection may reject. Do not create the worker-memory one-shot grant until
+    // the source script is ready; a failed handoff then has nothing replayable.
+    fieldRepairSessions.set(sessionId, {
+      sessionId, taskId: task.id, fieldKey: field.key, repairMode: msg.repairMode,
+      tabId, frameId: loc.frameId, frameUrl,
+      documentGeneration, routeIdentity
+    })
+    const entered = await sendToFrame(tabId, {
+      type: MSG.ENTER_PICK, purpose: 'repick', taskId: task.id, locator,
+      repairSessionId: sessionId, repairFieldKey: field.key, repairMode: msg.repairMode,
+      documentGeneration, routeIdentity,
+      preselect: fieldSpec.spec?.cell ? [{ cell: fieldSpec.spec.cell }]
+        : fieldSpec.spec?.block ? [{ block: fieldSpec.spec.block }]
+          : fieldSpec.cell ? [{ cell: fieldSpec.cell }]
+            : fieldSpec.block ? [{ block: fieldSpec.block }] : undefined
+    }, loc.frameId, CONTENT_MESSAGE_TIMEOUT_MS, 'Enter field repair pick')
+    if (entered?.ok === false) {
+      return { ok: false, error: 'enter_failed', message: '無法進入此值的重選模式' }
+    }
+    keepTab = true
+    return { ok: true, sessionId, tabId }
+  } catch (error) {
+    return {
+      ok: false,
+      error: failureCode,
+      message: failureCode === 'frame_not_found' ? '找不到此值原本所在的框架' : '無法進入此值的重選模式',
+      ...(error?.afTimeout ? { retryable: true } : {})
+    }
+  } finally {
+    if (!keepTab) {
+      fieldRepairSessions.delete(sessionId)
+      if (Number.isInteger(tabId)) {
+        try { await chrome.tabs.remove(tabId) } catch {}
+      }
+    }
   }
-  let frames = []
-  try { frames = await listFrames(tab.id) } catch {}
-  const frameUrl = frames.find(item => item.frameId === loc.frameId)?.url || task.url
-  const routeIdentity = { url: frameUrl }
-  const documentGeneration = `repair:${sessionId}`
-  fieldRepairSessions.set(sessionId, {
-    sessionId, taskId: task.id, fieldKey: field.key, repairMode: msg.repairMode,
-    tabId: tab.id, frameId: loc.frameId, frameUrl,
-    documentGeneration, routeIdentity
-  })
-  await injectContent(tab.id, { frameId: loc.frameId })
-  const entered = await sendToFrame(tab.id, {
-    type: MSG.ENTER_PICK, purpose: 'repick', taskId: task.id, locator,
-    repairSessionId: sessionId, repairFieldKey: field.key, repairMode: msg.repairMode,
-    documentGeneration, routeIdentity,
-    preselect: fieldSpec.spec?.cell ? [{ cell: fieldSpec.spec.cell }]
-      : fieldSpec.spec?.block ? [{ block: fieldSpec.spec.block }]
-        : fieldSpec.cell ? [{ cell: fieldSpec.cell }]
-          : fieldSpec.block ? [{ block: fieldSpec.block }] : undefined
-  }, loc.frameId, CONTENT_MESSAGE_TIMEOUT_MS, 'Enter field repair pick')
-  if (entered?.ok === false) {
-    fieldRepairSessions.delete(sessionId)
-    try { await chrome.tabs.remove(tab.id) } catch {}
-    return { ok: false, error: 'enter_failed', message: '無法進入此值的重選模式' }
-  }
-  return { ok: true, sessionId, tabId: tab.id }
 }
 
 async function applyFieldRepair(msg, sender) {

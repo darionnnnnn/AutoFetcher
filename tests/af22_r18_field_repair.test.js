@@ -117,6 +117,68 @@ test('R18 cancelled, wrong-tab, wrong-field, and post-worker-restart grants do n
   assert.deepEqual(await f.storage.getTask('repair-task'), original)
 })
 
+test('R18 failed injection/send releases owned source tab and grant; retry starts with a fresh grant', async t => {
+  for (const failurePoint of ['inject', 'send']) {
+    await t.test(failurePoint, async subtest => {
+      const f = await setup(subtest)
+      let injectionCalls = 0
+      let failInjection = failurePoint === 'inject'
+      f.chrome.__setScriptResponder(async () => {
+        injectionCalls += 1
+        // locateFrame consumes the first executeScript; injectContent is next.
+        if (failInjection && injectionCalls > 1) throw new Error('injection rejected')
+        return [{ frameId: 0, result: 'https://a.test/prices' }]
+      })
+      let failSend = failurePoint === 'send'
+      let failedTabId = null
+      let failedSessionId = null
+      f.chrome.__setTabResponder(async (tabId, message) => {
+        if (message?.type !== 'ENTER_PICK') return undefined
+        if (failSend) {
+          failSend = false
+          failedTabId = tabId
+          failedSessionId = message.repairSessionId
+          throw new Error('send rejected')
+        }
+        return { ok: true }
+      })
+
+      const failed = await f.bg.handleMessage({
+        type: f.messages.MSG.BEGIN_FIELD_REPAIR, taskId: 'repair-task', fieldKey: 'f1', repairMode: 'repair'
+      }, extensionSender)
+      assert.equal(failed.ok, false)
+      assert.equal(failed.error, 'enter_failed')
+      assert.deepEqual(await f.chrome.tabs.query({ url: 'https://a.test/prices' }), [], 'failed attempt closes its owned source tab')
+      if (failurePoint === 'send') {
+        const replay = await f.bg.handleMessage({
+          type: f.messages.MSG.PICKED, purpose: 'repick', taskId: 'repair-task',
+          repairSessionId: failedSessionId, repairFieldKey: 'f1', repairMode: 'repair',
+          documentGeneration: `repair:${failedSessionId}`, locator: { css: '#attack' }, picks: [{ cell: {} }]
+        }, { tab: { id: failedTabId, url: 'https://a.test/prices' }, frameId: 0, url: 'https://a.test/prices' })
+        assert.equal(replay.error, 'stale_field_repair', 'failed handoff grant cannot be replayed')
+      }
+
+      failInjection = false
+      const retry = await f.bg.handleMessage({
+        type: f.messages.MSG.BEGIN_FIELD_REPAIR, taskId: 'repair-task', fieldKey: 'f1', repairMode: 'repair'
+      }, extensionSender)
+      assert.equal(retry.ok, true, 'retry establishes a new usable grant')
+      const retryEnter = f.chrome.__calls.filter(call => call.api === 'tabs.sendMessage')
+        .map(call => call.args[1]).reverse().find(message => message?.type === 'ENTER_PICK')
+      if (failedSessionId) assert.notEqual(retryEnter.repairSessionId, failedSessionId)
+      assert.equal((await f.chrome.tabs.query({ url: 'https://a.test/prices' })).length, 1)
+      assert.equal((await f.chrome.tabs.get(retry.tabId)).id, retry.tabId)
+      const cancelled = await f.bg.handleMessage({
+        type: f.messages.MSG.PICKED, purpose: 'repick', taskId: 'repair-task',
+        repairSessionId: retryEnter.repairSessionId, repairFieldKey: 'f1', repairMode: 'repair',
+        documentGeneration: retryEnter.documentGeneration, cancelled: true, picks: []
+      }, { tab: { id: retry.tabId, url: 'https://a.test/prices' }, frameId: 0, url: 'https://a.test/prices' })
+      assert.equal(cancelled.cancelled, true)
+      assert.deepEqual(await f.chrome.tabs.query({ url: 'https://a.test/prices' }), [])
+    })
+  }
+})
+
 test('R18 different metric gets a new series, retires old active references, and keeps old history addressable', async t => {
   const f = await setup(t)
   const before = await f.storage.getTask('repair-task')
