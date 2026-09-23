@@ -304,6 +304,33 @@ test('C2b 過期 EXIT 與另一 session 的 drain resume 不影響目前選取',
   t.after(() => resetChromeMock())
 })
 
+test('C2b 已退出的參與 frame 可完成同一 session drain，但不能恢復舊選取', async t => {
+  resetChromeMock()
+  const chrome = installChromeMock()
+  const dom = new JSDOM('<!doctype html><html><body><table><tbody><tr><td>值</td></tr></tbody></table></body></html>', { url: tabUrl })
+  globalThis.window = dom.window
+  globalThis.document = dom.window.document
+  globalThis.location = dom.window.location
+  globalThis.Event = dom.window.Event
+  globalThis.MouseEvent = dom.window.MouseEvent
+  chrome.__setRuntimeResponder(() => ({ ok: true }))
+  const picker = await import('../src/content/picker-mode.js?t=' + Math.random())
+  picker.enterPickMode({ purpose: 'task', sessionId: 'finished-session', groupKey: 'g1', pickStage: 'selecting', documentGeneration: 'doc-finished', routeIdentity: { url: tabUrl }, initialTarget: document.querySelector('table') })
+  picker.exitPickMode()
+  const drained = await picker.drainPickQueue({ sessionId: 'finished-session', documentGeneration: 'doc-finished', routeIdentity: { url: tabUrl } })
+  assert.equal(drained.ok, true)
+  assert.equal(drained.drained, true)
+  const resumed = await picker.drainPickQueue({ sessionId: 'finished-session', documentGeneration: 'doc-finished', routeIdentity: { url: tabUrl }, resume: true })
+  assert.deepEqual(resumed, { ok: true, resumed: false })
+  const unrelated = await picker.drainPickQueue({ sessionId: 'other-session', resume: true })
+  assert.equal(unrelated.error, 'stale_session')
+  document.querySelector('td').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  assert.equal(chrome.__calls.filter(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICKED').length, 0)
+  dom.window.close()
+  delete globalThis.window; delete globalThis.document; delete globalThis.location; delete globalThis.Event; delete globalThis.MouseEvent
+  t.after(() => resetChromeMock())
+})
+
 test('legacy PICKED without sessionId remains valid after a C2b participant is registered', async t => {
   const f = await fixture(t)
   const registered = await f.pick('g1', '#new-session-value')

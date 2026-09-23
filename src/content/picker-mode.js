@@ -38,6 +38,9 @@ const COLORS = {
 let active = false, currentPurpose = null, currentTaskId = undefined, currentTargetEl = null, backStack = []
 // AF-22 C2a：短命選取工作階段的協調欄位；永久草稿仍由 background 保存。
 let pickSessionId = undefined, pickGroupKey = undefined, pickFrame = undefined, pickRevision = undefined, parentFrameId = undefined
+// A participant may be drained after the user leaves selection mode. Keep only
+// the last exact draft identity so that its already queued ACKs can settle.
+let exitedDraftIdentity = null
 let repairSessionId = undefined, repairFieldKey = undefined, repairMode = undefined
 let pickDocumentGeneration = undefined, pickRouteIdentity = undefined
 let pickLocationAtEntry = ''
@@ -4714,9 +4717,18 @@ function onContextMenu(event) {
 }
 
 export async function drainPickQueue(identity = {}) {
-  if (identity.sessionId && identity.sessionId !== pickSessionId) return { ok: false, error: 'stale_session', message: '選取階段已變更' }
-  if (identity.documentGeneration !== undefined && JSON.stringify(stableDraftIdentity(identity.documentGeneration)) !== JSON.stringify(stableDraftIdentity(pickDocumentGeneration))) return { ok: false, error: 'stale_document', message: '目前頁面文件已變更，請重新進入選取' }
-  if (identity.routeIdentity !== undefined && JSON.stringify(stableDraftIdentity(identity.routeIdentity)) !== JSON.stringify(stableDraftIdentity(pickRouteIdentity))) return { ok: false, error: 'stale_route', message: '目前頁面路徑已變更，請重新進入選取' }
+  const exited = !active && identity.sessionId && exitedDraftIdentity?.sessionId === identity.sessionId
+  const identityMatches = (field, current) => identity[field] === undefined ||
+    JSON.stringify(stableDraftIdentity(identity[field])) === JSON.stringify(stableDraftIdentity(current))
+  if (identity.sessionId && identity.sessionId !== pickSessionId && !exited) return { ok: false, error: 'stale_session', message: '選取階段已變更' }
+  const documentIdentity = exited ? exitedDraftIdentity.documentGeneration : pickDocumentGeneration
+  const routeIdentity = exited ? exitedDraftIdentity.routeIdentity : pickRouteIdentity
+  if (!identityMatches('documentGeneration', documentIdentity)) return { ok: false, error: 'stale_document', message: '目前頁面文件已變更，請重新進入選取' }
+  if (!identityMatches('routeIdentity', routeIdentity)) return { ok: false, error: 'stale_route', message: '目前頁面路徑已變更，請重新進入選取' }
+  if (exited && typeof location !== 'undefined' && exitedDraftIdentity.locationAtExit && location.href !== exitedDraftIdentity.locationAtExit) return { ok: false, error: 'stale_route', message: '頁面路徑已變更，請重新進入選取' }
+  // An exited participant must never resume capture; it may only finish ACKing
+  // this same session's immutable pending operations.
+  if (identity.resume === true && exited) return { ok: true, resumed: false }
   if (identity.resume === true) { draftPickDrainPaused = false; return { ok: true, resumed: true } }
   if (isDraftGroupMode() && pickLocationAtEntry && typeof location !== 'undefined' && location.href !== pickLocationAtEntry) {
     invalidatePickForRouteChange()
@@ -4944,6 +4956,14 @@ export function exitPickMode(opts = {}) {
   if (expected?.sessionId !== undefined && expected.sessionId !== pickSessionId) return false
   if (expected?.documentGeneration !== undefined && JSON.stringify(stableDraftIdentity(expected.documentGeneration)) !== JSON.stringify(stableDraftIdentity(pickDocumentGeneration))) return false
   if (expected?.routeIdentity !== undefined && JSON.stringify(stableDraftIdentity(expected.routeIdentity)) !== JSON.stringify(stableDraftIdentity(pickRouteIdentity))) return false
+  if (currentPurpose === 'task' && typeof pickSessionId === 'string' && pickSessionId) {
+    exitedDraftIdentity = {
+      sessionId: pickSessionId,
+      documentGeneration: pickDocumentGeneration === undefined ? undefined : structuredClone(pickDocumentGeneration),
+      routeIdentity: pickRouteIdentity === undefined ? undefined : structuredClone(pickRouteIdentity),
+      locationAtExit: typeof location !== 'undefined' ? location.href : ''
+    }
+  }
   currentHint = null
   // 取消／`Esc` 只清自己這一輪的保留標示：前置動作選到一半反悔，
   // 不該把任務目標的藍框一起抹掉（那是另一個用途的成果）
