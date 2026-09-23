@@ -58,7 +58,7 @@ test('D01 representative tab fixture replays with existing click/waitFor action 
   assert.equal(document.getElementById('panel-b').hidden, false)
 })
 
-test('D01 virtual-list fixture cannot replay a row outside the rendered window with existing actions', async () => {
+test('D01 virtual-list fixture scrolls its container before waiting for an unrendered row', async () => {
   resetChromeMock()
   const c = installChromeMock()
   const dom = new JSDOM(fixture, { runScripts: 'dangerously', url: 'https://a.test/page' })
@@ -74,11 +74,20 @@ test('D01 virtual-list fixture cannot replay a row outside the rendered window w
   await import('../src/content/main.js?d01=' + Math.random())
   const listener = [...c.runtime.onMessage._listeners][0]
   const result = await new Promise(resolve => listener({ type: 'RUN_PRE_ACTIONS', actions: [
-    { type: 'waitFor', locator: locator('#virtual-row-4'), timeoutMs: 5 }
+    { type: 'scroll', locator: locator('#virtual-list'), top: 400 },
+    { type: 'waitFor', locator: locator('#virtual-row-4'), timeoutMs: 20 }
   ] }, {}, resolve))
-  assert.equal(result.ok, false)
-  assert.equal(result.error, 'preaction_timeout')
-  assert.equal(document.getElementById('virtual-row-4'), null)
+  assert.equal(result.ok, true)
+  assert.equal(document.getElementById('virtual-row-4')?.textContent, '第 4 列')
+})
+
+test('D01 scroll state action is valid only with a located container and bounded nonnegative position', async () => {
+  const { validateMultiTask } = await import('../src/shared/task-source.js?d01=' + Math.random())
+  const input = task()
+  input.spec.fields[1].stateActions = [{ type: 'scroll', locator: locator('#virtual-list'), top: 400 }]
+  assert.equal(validateMultiTask(input), undefined)
+  input.spec.fields[1].stateActions[0].top = -1
+  assert.throws(() => validateMultiTask(input), /scroll 必須有非負 top/)
 })
 
 test('D01 executes each source state action in selected order, then extracts that source', async () => {
@@ -158,4 +167,7 @@ test('D01 state action duration and selected source order belong to execution id
   const changedAction = structuredClone(one)
   changedAction.spec.fields[1].stateActions[1].locator.css = '#tab-a'
   assert.deepEqual(changedExecutionSeriesOf(one, changedAction), ['b'])
+  const scrollBudget = structuredClone(one)
+  scrollBudget.spec.fields[1].stateActions = [{ type: 'scroll', locator: locator('#virtual-list'), top: 400 }]
+  assert.equal(fetcher.runBudgetMsOf(scrollBudget, { baseMs: 100, maxMs: 100000 }), 20100)
 })

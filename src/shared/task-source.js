@@ -268,12 +268,13 @@ export function validateMultiTask(task) {
     if (field?.stateActions !== undefined) {
       if (!Array.isArray(field.stateActions)) invalid(`field ${field.key} stateActions 必須為陣列`)
       for (const action of field.stateActions) {
-        if (!isPlainObject(action) || !['click', 'hover', 'wait', 'waitFor'].includes(action.type)) {
-          invalid(`field ${field.key} stateActions 僅支援 click／hover／wait／waitFor`)
+        if (!isPlainObject(action) || !['click', 'hover', 'wait', 'waitFor', 'scroll'].includes(action.type)) {
+          invalid(`field ${field.key} stateActions 僅支援 click／hover／wait／waitFor／scroll`)
         }
         if (action.type !== 'wait' && (!isPlainObject(action.locator) || Object.keys(action.locator).length === 0)) {
           invalid(`field ${field.key} stateActions ${action.type} 必須有 locator`)
         }
+        if (action.type === 'scroll' && (!Number.isFinite(action.top) || action.top < 0)) invalid(`field ${field.key} stateActions scroll 必須有非負 top`)
       }
     }
   }

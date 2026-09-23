@@ -229,6 +229,10 @@ function preActionsFromForm() {
         sec: valStr === '' ? '' : num
       }
     }
+    if (type === 'scroll') {
+      const top = valStr === '' ? NaN : Number(valStr)
+      return { type, locator, top, ...(frame ? { frame } : {}) }
+    }
     return { type, locator }
   })
 }
@@ -333,6 +337,9 @@ export function getFormData() {
         item.mode = row._mode || 'number'
         item.source = structuredClone(row._source)
         item.spec = structuredClone(spec)
+        if (Array.isArray(row._stateActions) && row._stateActions.length) {
+          item.stateActions = structuredClone(row._stateActions)
+        }
       }
       if (spec.cell && (!row._source || sharedControlChanges.rowPos || sharedControlChanges.colPos)) {
         const effectiveRowPos = !row._source || sharedControlChanges.rowPos ? rowPos : (spec.cell.row?.pos || '')
@@ -589,6 +596,7 @@ export function buildSpec(values) {
           source: structuredClone(f.source),
           spec: structuredClone(f.spec || {})
         }
+        if (Array.isArray(f.stateActions) && f.stateActions.length) item.stateActions = validPreActionsOf(f.stateActions)
         // Direct callers may supply the legacy top-level cell/block shape while
         // still declaring a source; normalize it into the nested single-value spec.
         if (!item.spec.cell && f.cell) item.spec.cell = structuredClone(f.cell)
@@ -705,6 +713,12 @@ function validPreActionsOf(list) {
         const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
         if (!hasLoc) return null
         return withFrame({ type: 'click', locator: a.locator }, a.frame)
+      }
+      if (a.type === 'scroll') {
+        const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
+        const top = Number(a.top)
+        if (!hasLoc || !Number.isFinite(top) || top < 0) return null
+        return withFrame({ type: 'scroll', locator: a.locator, top }, a.frame)
       }
       if (a.type === 'hover') {
         const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
@@ -1081,7 +1095,8 @@ export function render(ctx) {
       name: field.name || `值 ${index + 1}`,
       mode: field.mode,
       source: field.source,
-      spec: field.spec || {}
+      spec: field.spec || {},
+      stateActions: field.stateActions || []
     }))
     renderFieldList(items)
     applyDefaultCardTypes()
@@ -1122,6 +1137,7 @@ export function render(ctx) {
         name: field.name,
         spec,
         source: matchingSpec?.source,
+        stateActions: matchingSpec?.stateActions || [],
         mode: matchingSpec?.mode || matchingSpec?.spec?.mode || (ctx.task.mode === 'text' ? 'text' : undefined)
       }
     })
@@ -2150,13 +2166,14 @@ function setFieldRowHint(row, text) {
   el.textContent = text
 }
 
-function createFieldRow({ key, name, spec, source, mode }) {
+function createFieldRow({ key, name, spec, source, mode, stateActions }) {
   const row = document.createElement('div')
   row.className = 'field-row'
   row.setAttribute('data-field-row', '')
   row.dataset.fieldKey = key
   row._spec = spec
   if (source) row._source = structuredClone(source)
+  row._stateActions = Array.isArray(stateActions) ? structuredClone(stateActions) : []
   if (mode) row._mode = mode
 
   const input = document.createElement('input')
@@ -2283,6 +2300,20 @@ function createFieldRow({ key, name, spec, source, mode }) {
   })
   row.appendChild(replaceBtn)
   row.appendChild(removeBtn)
+
+  if (source) {
+    const stateButton = document.createElement('button')
+    stateButton.type = 'button'
+    stateButton.setAttribute('data-source-state-copy', '')
+    const updateStateLabel = () => { stateButton.textContent = `來源狀態動作（${row._stateActions.length}）` }
+    updateStateLabel()
+    stateButton.addEventListener('click', () => {
+      row._stateActions = validPreActionsOf(preActionsFromForm())
+      updateStateLabel()
+      scheduleDraftSave?.()
+    })
+    row.appendChild(stateButton)
+  }
 
   return row
 }
@@ -2506,6 +2537,9 @@ function updatePreActionRowVisibility(row) {
       if (!input.value) {
         input.value = String(DEFAULT_WAIT_TIMEOUT_MS / 1000)
       }
+    } else if (type === 'scroll') {
+      input.placeholder = '捲動位置（px）'
+      input.step = '1'
     }
   }
 }
@@ -2529,6 +2563,7 @@ function addPreActionRow(data = {}) {
     { value: 'waitFor', text: '等元素出現' },
     { value: 'hover', text: '移到元素上' },
     { value: 'click', text: '點擊元素' },
+    { value: 'scroll', text: '捲動容器到位置' },
     { value: 'wait', text: '等待秒數' }
   ]
   for (const opt of options) {
@@ -2583,6 +2618,8 @@ function addPreActionRow(data = {}) {
     }
   } else if (data.type === 'click') {
     input.value = ''
+  } else if (data.type === 'scroll') {
+    input.value = Number.isFinite(Number(data.top)) ? String(data.top) : '0'
   } else if (data.type === 'hover') {
     input.value = data.holdMs !== undefined && data.holdMs !== null && String(data.holdMs).trim() !== ''
       ? String(data.holdMs)
@@ -4489,6 +4526,7 @@ function applyRetarget(payload) {
     auto: r.querySelector('input[data-field-name]')?._afAutoName ?? null,
     spec: r._spec || fieldSpecs.get(r.dataset.fieldKey || '') || {},
     source: r._source ? structuredClone(r._source) : undefined,
+    stateActions: structuredClone(r._stateActions || []),
     mode: r._mode
   }))
   const prevForm = getFormData()
@@ -4833,7 +4871,8 @@ function reconcileBatchItemsWithDraft(items, draft) {
       name: typeof value.name === 'string' && value.name.trim() ? value.name : `值 ${index + 1}`,
       mode: value.mode === 'text' || value.mode === 'block' ? value.mode : 'number',
       source: structuredClone(value.source || { locator: value.locator || {} }),
-      spec: structuredClone(value.spec || {})
+      spec: structuredClone(value.spec || {}),
+      stateActions: structuredClone(value.stateActions || [])
     }))
     const first = fields[0]
     return {
@@ -4937,6 +4976,35 @@ function createBatchRow(item, name, auto) {
   const where = document.createElement('div')
   where.setAttribute('data-batch-where', '')
   where.textContent = batchWhereText(item)
+
+  for (const field of Array.isArray(item.fields) ? item.fields : []) {
+    const stateButton = document.createElement('button')
+    stateButton.type = 'button'
+    stateButton.setAttribute('data-batch-source-state', field.key)
+    const updateStateText = () => { stateButton.textContent = `「${field.name || field.key}」狀態動作（${(field.stateActions || []).length}）` }
+    updateStateText()
+    stateButton.addEventListener('click', async () => {
+      const actions = validPreActionsOf(preActionsFromForm())
+      if (batchDraftManaged && pickDraftState) {
+        const group = pickDraftState.groups?.find(candidate => candidate.key === item.key)
+        const value = group?.values?.find(candidate => candidate.key === field.key)
+        if (value) {
+          const response = await sendPickDraftOperation({
+            type: 'replace-value', groupKey: item.key, valueKey: field.key,
+            value: { ...value, stateActions: actions }
+          })
+          if (!response?.draft) return
+          batchItems = reconcileBatchItemsWithDraft(batchItems, response.draft)
+          field.stateActions = structuredClone(actions)
+          updateStateText()
+          return
+        }
+      }
+      field.stateActions = structuredClone(actions)
+      updateStateText()
+    })
+    row.appendChild(stateButton)
+  }
 
   const result = document.createElement('div')
   result.setAttribute('data-batch-result', '')

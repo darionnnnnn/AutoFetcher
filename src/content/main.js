@@ -478,6 +478,15 @@ async function handlePreActions(msg, sendResponse) {
         if (typeof res.el.click === 'function') {
           res.el.click()
         }
+      } else if (action.type === 'scroll') {
+        const res = resolve(document, action.locator)
+        if (res?.error || !res?.el) throw new Error('preaction_not_found')
+        const top = Number(action.top)
+        if (!Number.isFinite(top) || top < 0) throw new Error('preaction_invalid_scroll')
+        // Set the container position directly; dispatch scroll so virtualized
+        // widgets which listen for it can render the requested window.
+        res.el.scrollTop = top
+        res.el.dispatchEvent(new (res.el.ownerDocument?.defaultView?.Event || Event)('scroll', { bubbles: true }))
       } else if (action.type === 'waitFor') {
         // 「出現」預設是**看得見**：元素早就在 DOM 裡、只是隱藏著的話，
         // 等到了也只是點到看不見的東西（visible: false 可關掉這個要求）

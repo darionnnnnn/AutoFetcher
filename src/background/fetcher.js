@@ -111,11 +111,11 @@ export function runBudgetMsOf(task, opts = {}) {
   const maxMs = opts.maxMs ?? RUN_BUDGET_MAX_MS
   const stepMaxMs = opts.stepMaxMs ?? PRE_ACTION_STEP_MAX_MS
   let declared = 0
-  const includeDeclaredTime = (action, includeClickTimeout = false) => {
+  const includeDeclaredTime = (action, includeMessageTimeout = false) => {
     if (action?.type === 'wait') declared += capStepMs(waitMsOf(action), stepMaxMs).ms
     else if (action?.type === 'hover') declared += capStepMs(holdMsOf(action), stepMaxMs).ms
     else if (action?.type === 'waitFor') declared += timeoutMsOf(action)
-    else if (includeClickTimeout && action?.type === 'click') declared += messageTimeoutMs(action)
+    else if (includeMessageTimeout && ['click', 'scroll'].includes(action?.type)) declared += messageTimeoutMs(action)
   }
   for (const action of Array.isArray(task?.preActions) ? task.preActions : []) includeDeclaredTime(action)
   const isMulti = task?.mode === 'multi' || task?.spec?.mode === 'multi'
