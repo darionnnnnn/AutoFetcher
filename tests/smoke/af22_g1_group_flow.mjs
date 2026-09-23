@@ -114,7 +114,7 @@ try {
   let pickerCdp = await pickerTarget.createCDPSession()
   await pickerCdp.send('Runtime.enable')
   let pickerTargetPinned = false
-  const refreshPickerTarget = async (preferEdit = false) => {
+  const refreshPickerTarget = async (preferEdit = false, preferGroupKey = null) => {
     if (pickerTargetPinned) return
     const candidates = browser.targets().filter(t => t.url().includes('/ui/picker/picker.html'))
     let current = null
@@ -123,11 +123,12 @@ try {
       try {
         const session = await candidate.createCDPSession()
         await session.send('Runtime.enable')
-        const result = await session.send('Runtime.evaluate', { expression: `(() => ({ fields: document.querySelectorAll('#field-list [data-field-row]').length, batchVisible: Boolean(document.querySelector('#batch-section') && !document.querySelector('#batch-section').hidden), groupVisible: Boolean(document.querySelector('#group-draft-section') && !document.querySelector('#group-draft-section').hidden), url: location.href }))()`, returnByValue: true })
+        const result = await session.send('Runtime.evaluate', { expression: `(() => ({ fields: document.querySelectorAll('#field-list [data-field-row]').length, batchVisible: Boolean(document.querySelector('#batch-section') && !document.querySelector('#batch-section').hidden), groupVisible: Boolean(document.querySelector('#group-draft-section') && !document.querySelector('#group-draft-section').hidden), groupKeys: [...document.querySelectorAll('[data-group-row]')].map(row => row.getAttribute('data-group-key')), url: location.href }))()`, returnByValue: true })
         probe = result.result?.value
         await session.detach()
       } catch {}
-      if (preferEdit ? probe?.fields >= 2 : probe) { current = candidate; break }
+      if (preferGroupKey ? probe?.groupVisible && probe.groupKeys?.includes(preferGroupKey) :
+        (preferEdit ? probe?.fields >= 2 : probe)) { current = candidate; break }
     }
     if (!current || current === pickerTarget) return
     try { await pickerCdp.detach() } catch {}
@@ -618,10 +619,152 @@ try {
   }, { id: newTab.id, oldSession: firstGroupState.sessionId })
   console.log('[diagnostic] wrong-session cross-tab restore', crossTab)
   if (crossTab.response?.ok === true || crossTab.groups?.length !== 0) throw new Error('wrong-session cross-tab message mutated the fresh draft')
-  ck('second round is empty, with no prior sources/frame/tasks, and rejects a wrong-session cross-tab write')
+  ck('second round starts empty, with no prior sources/frame/tasks, and rejects wrong-session writes')
+
+  const secondPage = await bounded('second-round page target', async () => {
+    const end = Date.now() + 8000
+    while (Date.now() < end) {
+      const page = (await browser.pages()).find(candidate => candidate !== target && candidate !== report && candidate.url() === newTab.url)
+      if (page) return page
+      await new Promise(resolveWait => setTimeout(resolveWait, 100))
+    }
+    throw new Error(`second-round page missing: ${JSON.stringify((await browser.pages()).map(page => page.url()))}`)
+  }, 9000)
+  const beforeSecondRound = await report.evaluate(async () => {
+    const storage = await import(chrome.runtime.getURL('shared/storage.js'))
+    const tasks = await storage.getTasks()
+    const records = (await Promise.all((await storage.listDates()).map(date => storage.getRecordsByDate(date)))).flat()
+    const lastValues = await storage.getLastValues()
+    const ids = new Set(tasks.map(task => task.id))
+    return {
+      tasks: tasks.map(task => [task.id, JSON.stringify(task)]),
+      records: records.filter(record => [...ids].some(id => record.taskId === id || record.taskId.startsWith(`${id}#`))).map(record => JSON.stringify(record)).sort(),
+      lastValues: Object.fromEntries(Object.entries(lastValues).filter(([key]) => [...ids].some(id => key === id || key.startsWith(`${id}#`))))
+    }
+  })
+
+  await clickPanel(picker, '#group-start-first')
+  await picker.type('#group-name', 'Second Round Only')
+  await clickPanel(picker, '#group-name-confirm')
+  await waitOverlay(secondPage)
+  await clickTarget(secondPage, '#price-c')
+  await new Promise(resolveWait => setTimeout(resolveWait, 400))
+  const secondRoundPicked = await picker.evaluate(async id => {
+    const draft = (await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id }))?.draft
+    const group = draft?.groups?.find(item => item.key === draft.activeGroupKey)
+    return { draft, values: group?.values || [] }
+  }, newTab.id)
+  if (secondRoundPicked.draft?.groups?.length !== 1 || secondRoundPicked.draft.groups[0].name !== 'Second Round Only' ||
+      secondRoundPicked.values.length !== 1 || secondRoundPicked.values[0].source?.locator?.css !== '#price-c') {
+    throw new Error(`second round did not retain only its new named source: ${JSON.stringify({ name: secondRoundPicked.draft?.groups?.[0]?.name, values: secondRoundPicked.values })}`)
+  }
+  ck('second round selected and canonically persisted its own source')
+
+  // Switching away and back must preserve the per-tab session draft. A second
+  // tab cannot complete this draft by substituting the first round's tab id.
+  await report.evaluate(async id => chrome.tabs.update(id, { active: true }), tabId)
+  await report.evaluate(async id => chrome.tabs.update(id, { active: true }), newTab.id)
+  await clickPanel({ evaluate: (...args) => report.evaluate(...args) }, '#open-second-round-panel')
+  await new Promise(resolveWait => setTimeout(resolveWait, 400))
+  await refreshPickerTarget(false, secondRoundPicked.draft.groups[0].key)
+  pickerTargetPinned = true
+  const restoredPanel = await picker.evaluate(async id => {
+    const key = `panel:${id}`
+    const context = (await chrome.storage.session.get(key))[key]
+    return {
+      groupSectionHidden: document.querySelector('#group-draft-section')?.hidden,
+      groups: [...document.querySelectorAll('[data-group-row]')].map(row => row.getAttribute('data-group-key')),
+      context: { kind: context?.kind, tabId: context?.tabId, pickSessionId: context?.pickSessionId, draftSessionId: context?.pickDraft?.sessionId }
+    }
+  }, newTab.id)
+  if (restoredPanel.groupSectionHidden || !restoredPanel.groups.includes(secondRoundPicked.draft.groups[0].key)) {
+    throw new Error(`second-round tab returned with a hidden or wrong picker draft: ${JSON.stringify(restoredPanel)}`)
+  }
+  const afterTabSwitch = await picker.evaluate(async id => (await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id }))?.draft, newTab.id)
+  if (afterTabSwitch?.sessionId !== freshDraft.sessionId || afterTabSwitch.groups?.[0]?.values?.length !== 1) {
+    throw new Error(`second-round draft did not restore after tab switching: ${JSON.stringify(afterTabSwitch)}`)
+  }
+  const wrongTabComplete = await picker.evaluate(async ({ originalTabId, identity }) => {
+    return chrome.runtime.sendMessage({ type: 'PICK_DRAFT_COMPLETE', ...identity, tabId: originalTabId, expectedRevision: identity.revision })
+  }, { originalTabId: tabId, identity: {
+    sessionId: freshDraft.sessionId, tabId: newTab.id, revision: afterTabSwitch.revision,
+    documentGeneration: afterTabSwitch.documentGeneration, routeIdentity: afterTabSwitch.routeIdentity
+  } })
+  const afterWrongTabComplete = await picker.evaluate(async id => (await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id }))?.draft, newTab.id)
+  if (wrongTabComplete?.ok === true || afterWrongTabComplete?.groups?.[0]?.values?.length !== 1) {
+    throw new Error(`wrong-tab completion was accepted or changed the second draft: ${JSON.stringify({ wrongTabComplete, afterWrongTabComplete })}`)
+  }
+  ck('tab switch restored the right draft; wrong-tab completion was rejected')
+
+  await clickSelector(secondPage, '[data-af-done]')
+  try {
+    await picker.waitForSelector('#group-finish:not([hidden])', { timeout: 10000 })
+  } catch (error) {
+    console.log('[diagnostic] second-round completion control', await picker.evaluate(async id => ({
+      tab: (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0]?.id,
+      groupRows: [...document.querySelectorAll('[data-group-row]')].map(row => ({ key: row.getAttribute('data-group-key'), values: row.querySelectorAll('[data-group-value]').length })),
+      finishHidden: document.querySelector('#group-finish')?.hidden,
+      hiddenAncestors: (() => { const chain = []; for (let node = document.querySelector('#group-finish'); node; node = node.parentElement) if (node.hidden) chain.push(node.id || node.tagName); return chain })(),
+      status: document.querySelector('#group-draft-status')?.textContent,
+      draft: (await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id }))?.draft
+    }), newTab.id))
+    throw error
+  }
+  await clickPanel(picker, '#group-finish')
+  await picker.waitForSelector('#batch-section:not([hidden])', { timeout: 15000 })
+  const secondSuggestedNames = await picker.evaluate(() => [...document.querySelectorAll('#batch-list [data-batch-name]')].map(input => input.value))
+  if (JSON.stringify(secondSuggestedNames) !== JSON.stringify(['Second Round Only'])) throw new Error(`second round name did not carry into settings: ${JSON.stringify(secondSuggestedNames)}`)
+  await clickPanel(picker, '#test-now')
+  await picker.waitForFunction(() => {
+    const rows = [...document.querySelectorAll('#batch-list [data-batch-result]')]
+    return rows.length === 1 && rows[0].textContent.trim() !== '—' && !document.querySelector('#test-now')?.disabled
+  }, { timeout: 45000 })
+  const secondDryRun = await picker.evaluate(() => ({
+    names: [...document.querySelectorAll('#batch-list [data-batch-name]')].map(input => input.value),
+    results: [...document.querySelectorAll('#batch-list [data-batch-result]')].map(node => node.textContent.trim())
+  }))
+  if (secondDryRun.names[0] !== 'Second Round Only' || !secondDryRun.results[0]?.includes('505')) {
+    throw new Error(`second-round dry run used stale task/source data: ${JSON.stringify(secondDryRun)}`)
+  }
+  ck('second round dry run used its own name and value')
+  await clickPanel(picker, '#save')
+  await picker.waitForFunction(() => {
+    const first = document.querySelector('#saved-feedback [data-saved-first]')
+    return first && first.dataset.state !== 'pending' && !/正在|儲存中|處理中/.test(first.textContent)
+  }, { timeout: 45000 })
+  const afterSecondRound = await report.evaluate(async () => {
+    const storage = await import(chrome.runtime.getURL('shared/storage.js'))
+    const tasks = await storage.getTasks()
+    const records = (await Promise.all((await storage.listDates()).map(date => storage.getRecordsByDate(date)))).flat()
+    const lastValues = await storage.getLastValues()
+    return { tasks, records, lastValues }
+  })
+  const secondTasks = afterSecondRound.tasks.filter(task => !beforeSecondRound.tasks.some(([id]) => id === task.id))
+  if (secondTasks.length !== 1 || secondTasks[0].name !== 'Second Round Only' || secondTasks[0].fields?.length !== 1) {
+    throw new Error(`second round did not save exactly one new one-value task: ${JSON.stringify(secondTasks.map(task => ({ id: task.id, name: task.name, fields: task.fields })))}`)
+  }
+  const secondTask = secondTasks[0]
+  const secondSpec = secondTask.spec?.fields?.find(field => field.key === secondTask.fields[0].key)
+  if (!secondSpec || secondSpec.source?.locator?.css !== '#price-c' || secondSpec.source?.frame) {
+    throw new Error(`second task inherited or lost source identity: ${JSON.stringify(secondSpec)}`)
+  }
+  const afterTaskMap = new Map(afterSecondRound.tasks.map(task => [task.id, JSON.stringify(task)]))
+  for (const [id, json] of beforeSecondRound.tasks) {
+    if (afterTaskMap.get(id) !== json) throw new Error(`second-round save mutated prior task ${id}`)
+  }
+  const priorIds = new Set(beforeSecondRound.tasks.map(([id]) => id))
+  const priorRecordJson = afterSecondRound.records.filter(record => [...priorIds].some(id => record.taskId === id || record.taskId.startsWith(`${id}#`))).map(record => JSON.stringify(record)).sort()
+  if (JSON.stringify(priorRecordJson) !== JSON.stringify(beforeSecondRound.records)) throw new Error('second-round save changed first-round history records')
+  for (const [key, value] of Object.entries(beforeSecondRound.lastValues)) {
+    if (JSON.stringify(afterSecondRound.lastValues[key]) !== JSON.stringify(value)) throw new Error(`second-round save changed prior lastValue ${key}`)
+  }
+  if (!afterSecondRound.records.some(record => record.taskId === `${secondTask.id}#${secondTask.fields[0].key}`)) {
+    throw new Error('second-round first run did not write its own field history')
+  }
+  ck('second round saved only its source/key while preserving first-round tasks/history')
 
   if (!frameCommitted) throw new Error('cross-origin frame click was not committed to the canonical draft')
-  console.log(JSON.stringify({ browser: CHROME, tabId, framePicked, frameCommitted, groups: await picker.evaluate(() => document.querySelectorAll('[data-group-row]').length), partialResults, fullResults, savedTasks: persisted, repairedFieldKey: fieldKey, retainedSeriesRecords: afterRepair.records.length, secondRoundSessionId: freshDraft.sessionId, status: 'PARTIAL_G1' }, null, 2))
+  console.log(JSON.stringify({ browser: CHROME, tabId, framePicked, frameCommitted, groups: await picker.evaluate(() => document.querySelectorAll('[data-group-row]').length), partialResults, fullResults, savedTasks: persisted, repairedFieldKey: fieldKey, retainedSeriesRecords: afterRepair.records.length, secondRoundSessionId: freshDraft.sessionId, secondRoundTaskId: secondTask.id, secondRoundDryRun, status: 'G1_SECOND_ROUND_VERIFIED' }, null, 2))
 } catch (error) {
   console.error(`FAIL G1 checkpoint: ${error?.stack || error}`)
   process.exitCode = 1
