@@ -5,6 +5,63 @@
 
 import { isAnchorText, skipOf, excludeOf } from './table.js'
 
+// 同名任務在同一個清單出現時，補上安全的來源摘要；同名同來源再附穩定 id 短碼。
+// URL 摘要刻意省略 query 與 fragment，避免把 token 顯示在標籤或提示文字中。
+export function describeTaskIdentities(tasks) {
+  const list = Array.isArray(tasks) ? tasks.filter(task => task && typeof task.id === 'string') : []
+  const baseOf = task => {
+    let source = typeof task.url === 'string' ? task.url : ''
+    try {
+      const url = new URL(source)
+      source = `${url.host}${url.pathname === '/' ? '' : url.pathname}`
+    } catch {
+      source = source.split(/[?#]/, 1)[0]
+    }
+    const name = typeof task.name === 'string' && task.name.trim() ? task.name : task.id
+    return { name, nameKey: name.trim(), source: source || '來源不明' }
+  }
+  const bases = new Map(list.map(task => [task.id, baseOf(task)]))
+  const groups = new Map()
+  const nameCounts = new Map()
+  for (const task of list) {
+    const base = bases.get(task.id)
+    const key = `${base.nameKey}\u0000${base.source}`
+    const group = groups.get(key) || []
+    group.push(task)
+    groups.set(key, group)
+    nameCounts.set(base.nameKey, (nameCounts.get(base.nameKey) || 0) + 1)
+  }
+
+  const out = new Map()
+  for (const group of groups.values()) {
+    const duplicate = group.length > 1
+    for (const task of group) {
+      const base = bases.get(task.id)
+      let shortId = ''
+      if (duplicate) {
+        const ids = group.map(other => other.id)
+        const maximum = Math.max(...ids.map(id => id.length))
+        let uniqueLength = 0
+        for (let length = Math.min(6, Math.min(...ids.map(id => id.length))); length <= maximum; length++) {
+          const suffixes = ids.map(id => id.slice(-length).toLowerCase())
+          if (new Set(suffixes).size === suffixes.length) {
+            uniqueLength = length
+            break
+          }
+        }
+        shortId = uniqueLength ? task.id.slice(-uniqueLength) : task.id
+      }
+      out.set(task.id, {
+        name: base.name,
+        source: base.source,
+        shortId,
+        label: `${base.name}${shortId ? ` · #${shortId}` : ''}${nameCounts.get(base.nameKey) > 1 ? ` · ${base.source}` : ''}`
+      })
+    }
+  }
+  return out
+}
+
 const WEEKDAY_NAMES = ['日', '一', '二', '三', '四', '五', '六']
 // 以週一為起點排序：使用者看的是「週一～五」，不是「週日、週一…」
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0]
@@ -109,6 +166,69 @@ export const TERMS = Object.freeze({
   pinnedDone: '已設定'
 })
 
+// multi 任務的欄位資料：完整來源／型別在 spec.fields，task.fields 只保留可編輯的 key/name。
+// 顯示端一律走這些函式，避免把 multi 代碼或不同畫面的各自推測露給使用者。
+function fieldModeOf(field) {
+  if (field?.mode === 'text' || field?.spec?.mode === 'text') return 'text'
+  if (field?.mode === 'block' || field?.spec?.mode === 'block' || field?.block || field?.spec?.block) return 'block'
+  return 'number'
+}
+
+function fieldSourceOf(field) {
+  const source = field?.source || field?.spec?.source
+  return source && typeof source === 'object' && !Array.isArray(source) ? source : {}
+}
+
+/**
+ * 值的型別白話。未知型別沿用數字的安全舊預設，不把內部代碼顯示出來。
+ * @param {unknown} mode
+ * @returns {string}
+ */
+export function describeFieldMode(mode) {
+  return TERMS.modes[mode === 'text' ? 'text' : mode === 'block' ? 'block' : 'number']
+}
+
+/**
+ * 值的來源摘要：主頁或可辨識的內嵌框架；只取穩定網址主機名，不顯示完整 query。
+ * @param {Object} source
+ * @returns {string}
+ */
+export function describeFieldSource(source) {
+  const frame = source?.frame
+  const frameUrl = (frame && typeof frame === 'object' && frame.url) || source?.frameUrl
+  if (typeof frameUrl === 'string' && frameUrl.trim() !== '') {
+    const host = hostOf(frameUrl)
+    return host ? `內嵌框架（${host}）` : '內嵌框架'
+  }
+  return '頁面'
+}
+
+/**
+ * 一個 multi 值的白話摘要，例如「現價（數字，頁面）」。
+ * @param {Object} field
+ * @returns {string}
+ */
+export function describeField(field) {
+  const name = typeof field?.name === 'string' && field.name.trim() !== ''
+    ? field.name.trim()
+    : (typeof field?.key === 'string' && field.key.trim() !== '' ? field.key : '未命名值')
+  return `${name}（${describeFieldMode(fieldModeOf(field))}，${describeFieldSource(fieldSourceOf(field))}）`
+}
+
+/**
+ * multi 任務值的顯示清單，限制長度以免任務列被大量值撐開。
+ * @param {Object[]} fields
+ * @param {number} [limit]
+ * @returns {string}
+ */
+export function describeFields(fields, limit = 4) {
+  const list = Array.isArray(fields) ? fields.filter(Boolean) : []
+  if (list.length === 0) return '尚未選值'
+  const shown = list.slice(0, Math.max(1, limit)).map(describeField)
+  if (list.length > shown.length) shown.push(`另 ${list.length - shown.length} 個值`)
+  return shown.join('、')
+}
+
 // 位置定位的白話（Picker 的值清單也用這一份，不要再抄一張）
 export const POS_TEXT = {
   first: '第一筆',
@@ -206,6 +326,24 @@ export function targetOfTask(task) {
   const t = task || {}
   const spec = t.spec || {}
   const fields = Array.isArray(spec.fields) ? spec.fields : []
+  const taskFields = Array.isArray(t.fields) ? t.fields : []
+  const names = new Map(taskFields.map((field) => [field?.key, field?.name]))
+  const multi = t.mode === 'multi' || spec.mode === 'multi'
+  if (multi) {
+    const values = fields.length > 0 ? fields : taskFields
+    return {
+      url: t.url || '',
+      mode: 'multi',
+      groupName: typeof t.name === 'string' ? t.name : '',
+      fields: values.map((field) => ({
+        ...field,
+        // 編輯表單只回寫 task.fields；spec.fields 可能仍是建立時的快照，名稱以目前任務欄位為準。
+        name: (typeof names.get(field?.key) === 'string' && names.get(field?.key).trim() !== '')
+          ? names.get(field?.key)
+          : (field?.name || field?.key || '')
+      }))
+    }
+  }
   // 多值取第一個值；略過是任務層級、只掛在整欄整列的值上，第一個值是儲存格時要往後找第一個 block（否則略過說明整段消失）
   const first = fields.length > 0 ? (fields.find((f) => f && f.block) || fields[0]) : spec.block
   const out = { url: t.url || '', mode: fields.length > 0 ? 'block' : (t.mode || spec.mode || 'number') }
@@ -242,6 +380,14 @@ export function describeTarget(target) {
   const t = target || {}
   const host = hostOf(t.url)
   const where = host ? `抓 ${host} ` : '抓 '
+  if (t.mode === 'multi') {
+    const group = t.groupName ? `群組「${t.groupName}」` : '群組'
+    const fields = Array.isArray(t.fields) ? t.fields : []
+    const count = fields.length > 0 ? fields.length : (Number.isFinite(t.fieldCount) ? t.fieldCount : 0)
+    const valueText = count > 0 ? `${count} 個值` : '尚未選值'
+    const details = fields.length > 0 ? `：${describeFields(fields)}` : ''
+    return `${where}${group}，${valueText}${details}`
+  }
   const note = t.mode === 'block' ? anchorNote(t.cell, t.block, t.rowPos, t.colPos) : ''
 
   if (t.mode !== 'block') {

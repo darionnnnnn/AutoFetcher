@@ -1,0 +1,40 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>AF-22 D01 deterministic state fixture</title>
+<nav>
+  <button id="tab-a" aria-selected="true" data-panel="panel-a">狀態 A</button>
+  <button id="tab-b" aria-selected="false" data-panel="panel-b">狀態 B</button>
+</nav>
+<button id="open-panel" aria-expanded="false">開啟資訊</button>
+<section id="toggle-panel" hidden>
+  <output id="toggle-value-a">A=101</output>
+  <output id="toggle-value-b">B=202</output>
+</section>
+<section id="panel-a"><output id="value-a">A=11</output></section>
+<section id="panel-b" hidden><output id="value-b">B=22</output></section>
+<div id="virtual-list" style="height:120px;overflow:auto">
+  <div id="virtual-row-0">第 0 列</div>
+</div>
+<script>
+  for (const button of document.querySelectorAll('[data-panel]')) {
+    button.addEventListener('click', () => {
+      for (const candidate of document.querySelectorAll('[data-panel]')) {
+        const active = candidate === button
+        candidate.setAttribute('aria-selected', String(active))
+        document.getElementById(candidate.dataset.panel).hidden = !active
+      }
+    })
+  }
+  document.getElementById('open-panel').addEventListener('click', event => {
+    const panel = document.getElementById('toggle-panel')
+    panel.hidden = !panel.hidden
+    event.currentTarget.setAttribute('aria-expanded', String(!panel.hidden))
+  })
+  document.getElementById('virtual-list').addEventListener('scroll', event => {
+    const list = event.currentTarget
+    const index = Math.floor(list.scrollTop / 100)
+    list.replaceChildren(Object.assign(document.createElement('div'), {
+      id: `virtual-row-${index}`, textContent: `第 ${index} 列`
+    }))
+  })
+</script>

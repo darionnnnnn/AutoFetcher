@@ -121,16 +121,26 @@ export async function runPrecheck(task, opts = {}) {
     let reason = ''
     let detail = ''
 
-    if (res?.ok === true && res.fields && typeof res.fields === 'object') {
+    if (res?.fields && typeof res.fields === 'object') {
       const fieldEntries = Object.entries(res.fields)
-      const hasOk = fieldEntries.some(([_, r]) => r?.ok === true)
-      if (hasOk) {
+      const declared = Array.isArray(task?.fields) ? task.fields : []
+      const declaredKeys = new Set(declared.map(field => field?.key).filter(Boolean))
+      const hasAllDeclared = declared.length > 0 && declared.every(field =>
+        field?.key && Object.prototype.hasOwnProperty.call(res.fields, field.key))
+      const successful = fieldEntries.filter(([_, r]) => r?.ok === true)
+      const failedEntries = fieldEntries.filter(([key, r]) => r?.ok !== true || (declared.length > 0 && !declaredKeys.has(key)))
+      if (res.ok === true && hasAllDeclared && fieldEntries.length === declared.length && failedEntries.length === 0) {
         status = 'ok'
       } else {
-        const failedEntries = fieldEntries.filter(([_, r]) => !r?.ok)
-        const firstFail = failedEntries[0]?.[1]
+        const missing = declared.filter(field => !Object.prototype.hasOwnProperty.call(res.fields, field?.key))
+        const failures = [...failedEntries, ...missing.map(field => [field.key, { ok: false, error: 'error' }])]
+        if (successful.length > 0 && failures.length === 0) failures.push(['結果', { ok: false, error: 'error' }])
+        const firstFail = failures[0]?.[1]
         const firstError = firstFail?.error
-        if (firstError === 'not_found') {
+        if (successful.length > 0) {
+          status = 'partial'
+          reason = '部分失敗'
+        } else if (firstError === 'not_found') {
           status = 'selector_lost'
           reason = '找不到元素'
         } else if (firstError === 'parse_error') {
@@ -142,7 +152,7 @@ export async function runPrecheck(task, opts = {}) {
         }
         // 使用者看得懂的是值的名稱，不是內部代號
         const nameOfKey = (k) => (task?.fields || []).find(f => f?.key === k)?.name || k
-        detail = failedEntries.map(([k]) => nameOfKey(k)).join('、')
+        detail = failures.map(([k]) => nameOfKey(k)).join('、')
       }
     } else {
       if (res?.ok === true) {
@@ -183,7 +193,8 @@ export async function runPrecheck(task, opts = {}) {
       // 同一任務同一狀態 24 小時內只通知一次（燈號照寫，不受冷卻影響）
       await notifyFailure(`${task.id}:precheck`, status, {
         title,
-        message
+        message,
+        task
       })
     }
 

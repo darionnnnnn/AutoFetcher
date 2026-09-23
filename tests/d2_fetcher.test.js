@@ -240,7 +240,9 @@ test('例外不會讓 runTask 炸掉,會寫成 error 紀錄', async () => {
   assert.equal(rec.status, 'error')
   assert.ok(String(rec.error).length > 0, '要留下看得懂的原因，不能是空字串')
   const list = await st.getDiagList()
-  assert.match(JSON.stringify(list), /boom/, '原文丟掉的話，除錯時什麼線索都沒有')
+  const pageGone = list.find(item => item.kind === 'fetch_page_gone')
+  assert.match(pageGone?.detail || '', /group=總量 stage=fetch result=page_gone/, '診斷要保留任務、階段與安全結果類別')
+  assert.doesNotMatch(JSON.stringify(list), /boom/, '診斷不保存未篩選的錯誤原文')
 })
 
 // AF-12：擷取逾時的計時器要清掉。

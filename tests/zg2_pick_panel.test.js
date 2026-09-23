@@ -1,6 +1,6 @@
 // AF-21 段 7-B：選取模式——面板與工具列不擋不溢出、頁面重繪後不送出失效的選取、隱藏操作的提示
 // 1. 面板直向彈性版面：動作列不在可捲動內容區裡，組數多時三顆鈕仍在內容區之後
-// 2. 工具列比照面板閃避（同一份判定、同樣的遲滯）
+// 2. 工具列與面板位置固定，提供可聚焦的手動移位
 // 3. 已選的表整個被換掉（SPA 重繪）→ 完成／雙擊／Enter 都不送、提示、清空；之後在新表上照常送出
 // 4. describe 對脫離文件的節點不產生 path／xpath
 // 5. 範圍／全選提示、網頁元件說明、中鍵攔截、完成鈕雙擊只送一次
@@ -78,9 +78,9 @@ test('7B-1 批次 5 組各 10 個值：動作列不是內容區的子孫、位�
   pm.exitPickMode()
 })
 
-// ================= 2. 工具列閃避 =================
+// ================= 2. 工具列位置 =================
 
-test('7B-2 游標移到工具列所在角落 → 換到左側；原地再動不彈回；移開後也不亂跳', async () => {
+test('7B-2 游標靠近工具列不自動換邊；手動移位後原地再動也不反跳', async () => {
   const { doc, pm, win } = await boot(PAGE)
   const toolbar = doc.querySelector('[data-af-toolbar]')
   toolbar.getBoundingClientRect = () => rect(900, 16, 280, 30)
@@ -88,27 +88,24 @@ test('7B-2 游標移到工具列所在角落 → 換到左側；原地再動不�
   assert.equal(toolbar.style.right, '16px')
 
   fire(win, cell, 'mousemove', { clientX: 1000, clientY: 30 })
-  assert.equal(toolbar.style.left, '16px', '游標壓在工具列的位置上要讓開')
+  assert.equal(toolbar.style.right, '16px', '游標壓在工具列的位置上也不自動讓開')
+  assert.equal(toolbar.style.left, '')
+
+  fire(win, toolbar.querySelector('[data-af-toolbar-move]'), 'click')
+  assert.equal(toolbar.style.left, '16px', '按移位鈕才切到左側')
   assert.equal(toolbar.style.right, '')
 
   fire(win, cell, 'mousemove', { clientX: 1002, clientY: 31 })
-  assert.equal(toolbar.style.left, '16px', '只再動一次：換角後游標還在原處不得翻回去')
-
   fire(win, cell, 'mousemove', { clientX: 300, clientY: 400 })
-  assert.equal(toolbar.style.left, '16px', '移開之後不亂跳')
-  assert.equal(toolbar.style.right, '')
+  assert.equal(toolbar.style.left, '16px', '移位後滑鼠移動不得反跳')
   pm.exitPickMode()
 })
 
-test('7B-2b 滑鼠停著的那一格被工具列蓋住 → 工具列讓開；exitPickMode 後角落狀態重設', async () => {
+test('7B-2b 手動移位後 exitPickMode 再進入會回到右側', async () => {
   const { doc, pm, win } = await boot(PAGE)
   let toolbar = doc.querySelector('[data-af-toolbar]')
-  toolbar.getBoundingClientRect = () => rect(900, 16, 280, 30)
-  const cell = doc.getElementById('t-0-1')
-  cell.getBoundingClientRect = () => rect(950, 20, 60, 20)
-  fire(win, cell, 'mousemove', { clientX: 960, clientY: 60 })   // 游標不在工具列上，但格子被蓋住
-  fire(win, cell, 'mousemove', { clientX: 961, clientY: 60 })
-  assert.equal(toolbar.style.left, '16px', '要抓的那一格在工具列底下，工具列要讓開')
+  fire(win, toolbar.querySelector('[data-af-toolbar-move]'), 'click')
+  assert.equal(toolbar.style.left, '16px')
 
   pm.exitPickMode()
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.body })
@@ -116,7 +113,7 @@ test('7B-2b 滑鼠停著的那一格被工具列蓋住 → 工具列讓開；exi
   toolbar.getBoundingClientRect = () => rect(900, 16, 280, 30)
   assert.equal(toolbar.style.right, '16px')
   fire(win, doc.getElementById('para'), 'mousemove', { clientX: 1000, clientY: 30 })
-  assert.equal(toolbar.style.left, '16px', '重進之後第一次靠近要往左閃（角落與鎖定狀態已重設）')
+  assert.equal(toolbar.style.right, '16px', '重進之後靠近仍維持預設右側')
   pm.exitPickMode()
 })
 

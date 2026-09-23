@@ -11,6 +11,9 @@ export const MSG = {
   ENTER_PICK: 'ENTER_PICK',
   EXIT_PICK: 'EXIT_PICK',
   PICKED: 'PICKED',
+  // AF-22 D1a/D1b：群組名稱取名只回傳文字，不加入選值草稿
+  PICK_GROUP_NAME: 'PICK_GROUP_NAME',
+  PICK_GROUP_NAME_RESULT: 'PICK_GROUP_NAME_RESULT',
   GET_NEXT_RUNS: 'GET_NEXT_RUNS',
   SELF_CHECK: 'SELF_CHECK',
   FILL_LOGIN: 'FILL_LOGIN',
@@ -25,12 +28,22 @@ export const MSG = {
   // AF-21 批次 4：站台面板用尚未儲存的設定測一次登入（只給擴充功能頁送，不進 CONTENT_ALLOWED）
   TEST_LOGIN: 'TEST_LOGIN',
   // AF-21 批次 5：popup／任務頁的「知道了」把 health 項目標已讀（只給擴充功能頁送，不進 CONTENT_ALLOWED）
-  MARK_READ: 'MARK_READ'
+  MARK_READ: 'MARK_READ',
+  // AF-22 C1b：選取草稿安全訊息協定（只給 extension page；content 仍走舊 PICKED）
+  PICK_DRAFT_BEGIN: 'PICK_DRAFT_BEGIN',
+  PICK_DRAFT_READ: 'PICK_DRAFT_READ',
+  PICK_DRAFT_OPERATION: 'PICK_DRAFT_OPERATION',
+  PICK_DRAFT_COMPLETE: 'PICK_DRAFT_COMPLETE',
+  PICK_DRAFT_ABANDON: 'PICK_DRAFT_ABANDON',
+  PICK_DRAFT_PAUSE: 'PICK_DRAFT_PAUSE',
+  PICK_DRAFT_FINALIZE: 'PICK_DRAFT_FINALIZE',
+  PICK_DRAIN: 'PICK_DRAIN',
+  BEGIN_FIELD_REPAIR: 'BEGIN_FIELD_REPAIR'
 }
 
 // content script（跑在任意網頁上）可以送給 background 的型別（AF-21 批次 3 定案 3）。
 // 預設拒絕：新增的訊息型別不在這裡，網頁端就送不進來
-export const CONTENT_ALLOWED = new Set([MSG.PICKED, MSG.DESCEND_FRAME])
+export const CONTENT_ALLOWED = new Set([MSG.PICKED, MSG.PICK_GROUP_NAME_RESULT, MSG.DESCEND_FRAME])
 
 // 一批最多建立幾個任務：頁面上的多任務組數上限與面板「拆成每個值一個任務」共用這一個數字
 export const MAX_BATCH_TASKS = 20

@@ -21,6 +21,7 @@ import { closeDrawer, isDrawerOpen } from './drawer.js'
 import { isSuccess, statusTextOf } from '../../shared/record-status.js'
 import { MSG } from '../../shared/messages.js'
 import { buildSeriesIndex, nameOf } from '../../shared/series-index.js'
+import { describeTaskIdentities } from '../../shared/describe.js'
 import { computeHealth } from '../../background/health.js'
 import { icon, setIcon, levelChipOf } from '../icons.js'
 
@@ -270,6 +271,7 @@ export async function renderFilters() {
   const tasksContainer = document.createElement('div')
   tasksContainer.id = 'filter-tasks'
   const seriesIndex = buildSeriesIndex(tasks)
+  const identities = describeTaskIdentities(tasks)
 
   for (const t of tasks) {
     if (!t || !t.id) continue
@@ -282,7 +284,8 @@ export async function renderFilters() {
     parentCb.value = t.id
 
     parentLabel.appendChild(parentCb)
-    parentLabel.appendChild(document.createTextNode(` ${t.name || t.id}`))
+    const identity = identities.get(t.id)
+    parentLabel.appendChild(document.createTextNode(` ${identity?.label || t.name || t.id}`))
     taskGroup.appendChild(parentLabel)
 
     const isMulti = Array.isArray(t.fields) && t.fields.length > 0
@@ -293,6 +296,8 @@ export async function renderFilters() {
 
       const childCbs = []
       const children = seriesIndex.childrenOf[t.id] || []
+      const historyChildren = (seriesIndex.historySeriesIds || seriesIndex.seriesIds)
+        .filter(sid => seriesIndex.byId[sid]?.parentId === t.id)
 
       function updateParentState() {
         const checkedCount = childCbs.filter(c => c.checked).length
@@ -315,7 +320,7 @@ export async function renderFilters() {
         }
       })
 
-      for (const sid of children) {
+      for (const sid of historyChildren) {
         const item = seriesIndex.byId[sid]
         const childLabel = document.createElement('label')
         const childCb = document.createElement('input')
@@ -325,7 +330,7 @@ export async function renderFilters() {
         childCbs.push(childCb)
 
         childLabel.appendChild(childCb)
-        childLabel.appendChild(document.createTextNode(` ${item?.shortName || item?.name || sid}`))
+        childLabel.appendChild(document.createTextNode(` ${identity?.label || t.name || t.id} · ${item?.shortName || item?.name || sid}${item?.archived ? '（舊歷史）' : ''}`))
         childrenContainer.appendChild(childLabel)
 
         childCb.addEventListener('change', () => {
@@ -1173,7 +1178,7 @@ export function renderPivot(records = [], tasks = []) {
 
   const sortedTasks = [...tasks].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
   const seriesIndex = buildSeriesIndex(sortedTasks)
-  const seriesIds = seriesIndex.seriesIds
+  const seriesIds = seriesIndex.historySeriesIds || seriesIndex.seriesIds
 
   const { columns, rows } = pivot(records, seriesIds, { taskOrder: seriesIds })
 
@@ -1208,7 +1213,7 @@ export async function renderCompare(compareDate) {
   try { tasks = await getTasks() } catch {}
   const sortedTasks = [...tasks].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
   const seriesIndex = buildSeriesIndex(sortedTasks)
-  const seriesIds = seriesIndex.seriesIds
+  const seriesIds = seriesIndex.historySeriesIds || seriesIndex.seriesIds
 
   const recordsA = await getRecordsInRange(state.from, state.to)
   const recordsB = await getRecordsByDate(compareDate)

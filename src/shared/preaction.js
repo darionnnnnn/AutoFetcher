@@ -7,6 +7,7 @@ export const PRE_ACTION_LABELS = {
   hover: '移到元素上',
   waitFor: '等元素出現',
   click: '點擊元素',
+  scroll: '捲動容器',
   wait: '等待'
 }
 

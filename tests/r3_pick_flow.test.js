@@ -261,29 +261,34 @@ test('C12c 「完成」停用時游標要是 not-allowed（樣式套用順序）
   assert.equal(done.style.cursor, 'not-allowed')
 })
 
-test('C13-1 面板閃避：游標靠近時換到另一角', async () => {
+test('C13-1 面板位置固定，按手動移位鈕才切到另一角', async () => {
   const { doc, win } = await enter()
   const panel = doc.querySelector('[data-af-panel]')
   panel.getBoundingClientRect = () => ({ left: 800, right: 980, top: 600, bottom: 700, width: 180, height: 100 })
   assert.equal(panel.style.right, '16px')
 
   move(win, doc.getElementById('a1'), { clientX: 810, clientY: 620 })
-  assert.equal(panel.style.left, '16px', '游標壓在面板上要閃到左邊')
+  assert.equal(panel.style.right, '16px', '游標靠近面板不應自動換邊')
+  assert.equal(panel.style.left, '')
+
+  click(win, panel.querySelector('[data-af-panel-move]'))
+  assert.equal(panel.style.left, '16px', '按移位鈕才切到左邊')
   assert.equal(panel.style.right, '')
 })
 
-test('C13-1b 連續在同一處移動不會來回彈跳（換角後要離開才再換）', async () => {
+test('C13-1b 手動移位後連續移動不會反跳', async () => {
   const { doc, win } = await enter()
   const panel = doc.querySelector('[data-af-panel]')
-  // 面板換角之後，游標仍在原處：舊實作會用「移動前的位置」再判一次而翻回去
   panel.getBoundingClientRect = () => ({ left: 800, right: 980, top: 600, bottom: 700, width: 180, height: 100 })
+  click(win, panel.querySelector('[data-af-panel-move]'))
+  assert.equal(panel.style.left, '16px')
+
   move(win, doc.getElementById('a1'), { clientX: 810, clientY: 620 })
   assert.equal(panel.style.left, '16px')
 
-  // 只再移動「一次」：移動兩次的話彈回去又彈回來，最終位置剛好一樣，測不出抖動
   move(win, doc.getElementById('a1'), { clientX: 812, clientY: 622 })
-  assert.equal(panel.style.left, '16px', '游標沿邊緣移動時面板不該左右抖動')
-  assert.equal(panel.style.right, '', '仍應停在左邊')
+  assert.equal(panel.style.left, '16px', '移位後游標移動不得讓面板反跳')
+  assert.equal(panel.style.right, '')
 })
 
 test('C13-2 滑鼠在面板自己身上時不閃避（否則按鈕會從指尖跑掉）', async () => {
@@ -323,11 +328,11 @@ test('C15 exitPickMode 清掉本輪新增的狀態（連續兩次選取不互相
   click(win, doc.getElementById('a1'))
   move(win, doc.getElementById('a2'))
   click(win, doc.getElementById('a2')) // 產生復原快照
-  // 先讓面板真的翻到左邊，這樣「角落狀態有沒有被重設」才有訊號
+  // 先手動移到左邊，這樣「角落狀態有沒有被重設」才有訊號
   const oldPanel = doc.querySelector('[data-af-panel]')
   oldPanel.getBoundingClientRect = () => ({ left: 800, right: 980, top: 600, bottom: 700, width: 180, height: 100 })
-  move(win, doc.getElementById('a1'), { clientX: 810, clientY: 620 })
-  assert.equal(oldPanel.style.left, '16px', '前提：這一次已經翻到左邊')
+  click(win, oldPanel.querySelector('[data-af-panel-move]'))
+  assert.equal(oldPanel.style.left, '16px', '前提：這一次已經手動移到左邊')
   pm.exitPickMode()
 
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('t') })
@@ -338,5 +343,5 @@ test('C15 exitPickMode 清掉本輪新增的狀態（連續兩次選取不互相
   const panel = doc.querySelector('[data-af-panel]')
   panel.getBoundingClientRect = () => ({ left: 800, right: 980, top: 600, bottom: 700, width: 180, height: 100 })
   move(win, doc.getElementById('a1'), { clientX: 810, clientY: 620 })
-  assert.equal(panel.style.left, '16px', '重進之後第一次靠近應該往左閃（角落狀態已重設）')
+  assert.equal(panel.style.right, '16px', '重進之後靠近仍維持預設右側（角落狀態已重設）')
 })

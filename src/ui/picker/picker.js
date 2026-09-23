@@ -13,14 +13,49 @@ import { reconcileFields } from '../../shared/field-match.js'
 import { download } from '../../shared/export.js'
 import { statusTextOf } from '../../shared/record-status.js'
 import { createSaveGuard, setFieldError } from '../save-guard.js'
+import { MAX_PICK_DRAFT_BYTES } from '../../shared/pick-draft.js'
 
 let currentCtx = null
 let currentBlock = null
 const fieldSpecs = new Map()
+// multi 每個值可以有自己的 block 設定；只有使用者真的改動共用 controls
+// 時才把它們套用到所有適用值。render 時記下畫面基準，避免單純重畫／儲存洗掉來源規格。
+let multiControlBaseline = null
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
 // 批次畫面（AF-18 G-3）的模組狀態：放在檔頭，面板啟動流程（檔尾的正式接線）不論先後都讀得到
 let batchItems = null
 let batchViewOn = false
+// 舊版 kind:'batch' 沒有 C1b session，沿用既有批次保存；只有完成 snapshot
+// 產生的 batch ctx 才要求 task/first-run checkpoint。
+let batchDraftManaged = false
+let batchDraftSessionId = null
+// Side-panel boot resolves the active tab, session context, and protocol draft
+// asynchronously. Do not let an early Save use the previous tab's UI model.
+let panelBootRequired = false
+let panelBootReady = false
+const SAVED_FIRST_RUN_GUARD = '__afSavedFirstRunRecoveryKeys'
+
+function setPanelBootReady(ready) {
+  panelBootReady = ready === true
+  if (typeof document !== 'undefined' && document.body) {
+    document.body.dataset.afPickerReady = panelBootReady ? 'true' : 'false'
+  }
+}
+
+function blockActionUntilPanelReady() {
+  if (!panelBootRequired || panelBootReady) return false
+  const notice = document.getElementById('panel-notice')
+  if (notice) {
+    notice.hidden = false
+    notice.textContent = '正在確認目前分頁與草稿，請稍候再儲存或試抓。'
+  }
+  return true
+}
+
+function savedFirstRunGuard() {
+  if (!(globalThis[SAVED_FIRST_RUN_GUARD] instanceof Set)) globalThis[SAVED_FIRST_RUN_GUARD] = new Set()
+  return globalThis[SAVED_FIRST_RUN_GUARD]
+}
 // 整批改排程（AF-19 作業 C）的模組狀態
 let bulkTaskIds = null
 let bulkCount = 0
@@ -107,7 +142,7 @@ function clearGuardState() {
 }
 
 // 驗證錯誤鍵 → 要跳過去的欄位（星期沒有單一欄位，交給動作處理）
-const ERROR_FIELDS = { name: 'name', times: 'time-input', everyMinutes: 'every-minutes', window: 'window-from', regex: 'regex' }
+const ERROR_FIELDS = { name: 'name', times: 'time-input', everyMinutes: 'every-minutes', window: 'window-from', regex: 'regex', alerts: 'alert-list' }
 
 function skipFromForm() {
   const row = document.querySelector('[data-skip-row]')
@@ -116,6 +151,38 @@ function skipFromForm() {
   const tail = Number(document.getElementById('skip-tail')?.value)
   const blank = document.getElementById('skip-blank')?.checked ?? false
   return skipOf({ head, tail, blank })
+}
+
+function multiControlStateOf() {
+  return {
+    aggregate: document.getElementById('block-aggregate')?.value || 'sum',
+    rowPos: posValueOf('row-pos'),
+    colPos: posValueOf('col-pos'),
+    skip: skipFromForm()
+  }
+}
+
+function sameMultiControlState(a, b) {
+  return Boolean(a && b) && a.aggregate === b.aggregate && a.rowPos === b.rowPos &&
+    a.colPos === b.colPos && a.skip?.head === b.skip?.head &&
+    a.skip?.tail === b.skip?.tail && a.skip?.blank === b.skip?.blank
+}
+
+function multiControlsChanged() {
+  return multiControlBaseline !== null && !sameMultiControlState(multiControlBaseline, multiControlStateOf())
+}
+
+function multiControlChanges() {
+  const current = multiControlStateOf()
+  if (multiControlBaseline === null) {
+    return { aggregate: true, rowPos: true, colPos: true, skip: true }
+  }
+  return {
+    aggregate: current.aggregate !== multiControlBaseline.aggregate,
+    rowPos: current.rowPos !== multiControlBaseline.rowPos,
+    colPos: current.colPos !== multiControlBaseline.colPos,
+    skip: !sameMultiControlState({ ...multiControlBaseline, aggregate: current.aggregate, rowPos: current.rowPos, colPos: current.colPos }, current)
+  }
 }
 
 // 整欄用「列」、整列用「格」、混著用「筆」：略過欄位的標籤與儲存摘要共用這一份
@@ -183,8 +250,52 @@ function preActionsFromForm() {
         sec: valStr === '' ? '' : num
       }
     }
+    if (type === 'scroll') {
+      const top = valStr === '' ? NaN : Number(valStr)
+      return { type, locator, top, ...(frame ? { frame } : {}) }
+    }
     return { type, locator }
   })
+}
+
+function alertTargetMode(values, fieldKey = '') {
+  if (fieldKey) {
+    const field = (Array.isArray(values?.fields) ? values.fields : []).find(item => item?.key === fieldKey)
+    return field?.mode === 'text' ? 'text' : 'number'
+  }
+  if (values?.mode === 'text') return 'text'
+  return 'number'
+}
+
+function refreshAlertRow(row) {
+  const typeSelect = row?.querySelector('select.alert-type')
+  const valueInput = row?.querySelector('input.alert-value')
+  if (!typeSelect || !valueInput) return
+  const mode = alertTargetMode({
+    mode: document.getElementById('mode')?.value || 'number',
+    fields: Array.from(document.querySelectorAll('#field-list [data-field-row]')).map(fieldRow => ({
+      key: fieldRow.dataset.fieldKey,
+      mode: fieldRow._mode || fieldRow.dataset.mode
+    }))
+  }, row.querySelector('select[data-alert-field]')?.value || '')
+  const incompatible = mode === 'text' && ['gt', 'lt', 'deltaPct'].includes(typeSelect.value)
+  valueInput.type = mode === 'text' && typeSelect.value === 'eq' ? 'text' : 'number'
+  valueInput.inputMode = valueInput.type === 'number' ? 'decimal' : 'text'
+  valueInput.placeholder = mode === 'text' && typeSelect.value === 'eq' ? '文字（完全相等）' : '數值'
+  let message = row.querySelector('[data-alert-error]')
+  if (!message) {
+    message = document.createElement('span')
+    message.setAttribute('data-alert-error', '')
+    message.setAttribute('role', 'alert')
+    row.appendChild(message)
+  }
+  message.hidden = !incompatible
+  message.textContent = incompatible ? '文字值不支援大小門檻或變動百分比，請改用「值等於」。' : ''
+  row.dataset.invalid = String(incompatible)
+}
+
+function refreshAllAlertRows() {
+  document.querySelectorAll('[data-alert-row]').forEach(refreshAlertRow)
 }
 
 export function getFormData() {
@@ -214,16 +325,14 @@ export function getFormData() {
     const id = row.dataset.id || crypto.randomUUID()
     const type = row.querySelector('select.alert-type')?.value || row.querySelector('select')?.value || 'gt'
     const valInput = row.querySelector('input:not([type="checkbox"])') || row.querySelector('input')
-    const valStr = valInput?.value?.trim() ?? ''
-    const value = valStr === '' ? NaN : Number(valStr)
+    const valStr = valInput?.value ?? ''
+    const field = row.querySelector('select[data-alert-field]')?.value?.trim() || ''
+    const isText = alertTargetMode({ mode, fields: Array.from(document.querySelectorAll('#field-list [data-field-row]')).map(fieldRow => ({ key: fieldRow.dataset.fieldKey, mode: fieldRow._mode || fieldRow.dataset.mode })) }, field) === 'text'
+    const value = valStr.trim() === '' ? NaN : (isText && type === 'eq' ? valStr : Number(valStr))
     const cb = row.querySelector('input[type="checkbox"]')
     const enabled = cb ? cb.checked : true
     const alertItem = { id, type, value, enabled }
-    const fieldSel = row.querySelector('select[data-alert-field]')
-    const fieldVal = fieldSel?.value?.trim()
-    if (fieldVal) {
-      alertItem.field = fieldVal
-    }
+    if (field) alertItem.field = field
     return alertItem
   })
 
@@ -232,6 +341,7 @@ export function getFormData() {
   const aggregateValue = document.getElementById('block-aggregate')?.value || 'sum'
   const rowPos = posValueOf('row-pos')
   const colPos = posValueOf('col-pos')
+  const sharedControlChanges = multiControlChanges()
   const fieldRows = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
   let fields = undefined
   if (fieldRows.length > 0) {
@@ -241,14 +351,46 @@ export function getFormData() {
       const name = rawName || `值 ${index + 1}`
       const spec = row._spec || fieldSpecs.get(key) || {}
       const item = { key, name }
-      if (spec.cell) item.cell = applyPosToCell(spec.cell, rowPos, colPos)
+      if (row._mode) item.mode = row._mode
+      // AF-22 F1a：完成選取後的每個值可以來自不同元素／frame；
+      // 這些欄位不屬於舊同表 block 格式，必須沿著表單原樣帶到 buildTask。
+      if (row._source) {
+        item.mode = row._mode || 'number'
+        item.source = structuredClone(row._source)
+        item.spec = structuredClone(spec)
+        if (Array.isArray(row._stateActions) && row._stateActions.length) {
+          item.stateActions = structuredClone(row._stateActions)
+        }
+      }
+      if (spec.cell && (!row._source || sharedControlChanges.rowPos || sharedControlChanges.colPos)) {
+        const effectiveRowPos = !row._source || sharedControlChanges.rowPos ? rowPos : (spec.cell.row?.pos || '')
+        const effectiveColPos = !row._source || sharedControlChanges.colPos ? colPos : (spec.cell.col?.pos || '')
+        item.cell = applyPosToCell(spec.cell, effectiveRowPos, effectiveColPos)
+      }
       // 整欄／整列的值要合計，合計方式來自表單（全任務一份）；
       // 少了這一行，抓取端會拿不到設定而預設成加總，下拉等於裝飾品
-      if (spec.block) {
-        const block = { ...spec.block, aggregate: aggregateValue }
-        delete block.skip
-        putSkip(block, skipFromForm())
-        item.block = applyPosToBlock(block, rowPos, colPos)
+      if (spec.block && (!row._source || sharedControlChanges.aggregate || sharedControlChanges.skip || sharedControlChanges.rowPos || sharedControlChanges.colPos)) {
+        const block = { ...spec.block }
+        if (!row._source || sharedControlChanges.aggregate) block.aggregate = aggregateValue
+        if (!row._source || sharedControlChanges.skip) {
+          delete block.skip
+          putSkip(block, skipFromForm())
+        }
+        const crossPosChanged = block.axis === 'row' ? sharedControlChanges.colPos : sharedControlChanges.rowPos
+        if (!row._source || crossPosChanged) item.block = applyPosToBlock(block, rowPos, colPos)
+        else item.block = block
+      }
+      if (item.source && (sharedControlChanges.aggregate || sharedControlChanges.skip || sharedControlChanges.rowPos || sharedControlChanges.colPos)) {
+        // 位置／合計／略過等是設定頁可編輯的單值規格；更新嵌套 spec，
+        // 不要讓後面的舊格式欄位覆蓋掉 source 或 mode。
+        const nextSpec = { ...item.spec }
+        // 只覆寫本次 controls 真的產生的新單值規格；例如只改 aggregate
+        // 時 cell 沒有 item.cell，不能把原 spec.cell 洗成 undefined。
+        if (item.cell !== undefined) nextSpec.cell = item.cell
+        if (item.block !== undefined) nextSpec.block = item.block
+        item.spec = nextSpec
+        delete item.cell
+        delete item.block
       }
       return item
     })
@@ -259,6 +401,8 @@ export function getFormData() {
     alerts,
     preActions
   }
+
+  if (fields?.some(field => field.source)) data.multi = true
 
   if (fields) {
     data.fields = fields
@@ -394,6 +538,11 @@ export function validateForm(values) {
     }
   }
 
+  if ((values.alerts || []).some(alert => alert && alert.enabled !== false &&
+    alertTargetMode(values, alert.field) === 'text' && ['gt', 'lt', 'deltaPct'].includes(alert.type))) {
+    errors.alerts = '文字值只能使用「值等於」或「連續失敗次數達到」；請修正告警條件。'
+  }
+
   return Object.keys(errors).length > 0 ? { ok: false, errors } : { ok: true }
 }
 
@@ -457,13 +606,33 @@ export const BUILTIN_DEFAULTS = {
 export function buildSpec(values) {
   const spec = { strategy: values.strategy }
   if (values.fields) {
-    spec.mode = 'block'
-    spec.fields = values.fields.map(f => {
-      const item = { key: f.key }
-      if (f.cell) item.cell = f.cell
-      if (f.block) item.block = f.block
-      return item
-    })
+    const isMulti = values.multi === true || values.fields.some(f => f && f.source)
+    if (isMulti) {
+      spec.mode = 'multi'
+      spec.fields = values.fields.map(f => {
+        const item = {
+          key: f.key,
+          name: f.name,
+          mode: f.mode || 'number',
+          source: structuredClone(f.source),
+          spec: structuredClone(f.spec || {})
+        }
+        if (Array.isArray(f.stateActions) && f.stateActions.length) item.stateActions = validPreActionsOf(f.stateActions)
+        // Direct callers may supply the legacy top-level cell/block shape while
+        // still declaring a source; normalize it into the nested single-value spec.
+        if (!item.spec.cell && f.cell) item.spec.cell = structuredClone(f.cell)
+        if (!item.spec.block && f.block) item.spec.block = structuredClone(f.block)
+        return item
+      })
+    } else {
+      spec.mode = 'block'
+      spec.fields = values.fields.map(f => {
+        const item = { key: f.key }
+        if (f.cell) item.cell = f.cell
+        if (f.block) item.block = f.block
+        return item
+      })
+    }
   } else if (values.block && values.block.cell) {
     spec.mode = 'block'
     spec.block = { cell: values.block.cell }
@@ -566,6 +735,12 @@ function validPreActionsOf(list) {
         if (!hasLoc) return null
         return withFrame({ type: 'click', locator: a.locator }, a.frame)
       }
+      if (a.type === 'scroll') {
+        const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
+        const top = Number(a.top)
+        if (!hasLoc || !Number.isFinite(top) || top < 0) return null
+        return withFrame({ type: 'scroll', locator: a.locator, top }, a.frame)
+      }
       if (a.type === 'hover') {
         const hasLoc = a.locator && typeof a.locator === 'object' && (a.locator.css || a.locator.path || a.locator.xpath || a.locator.anchor)
         if (!hasLoc) return null
@@ -644,7 +819,7 @@ export function buildTask(values, locator, existing, frame) {
     id,
     name: values.name.trim(),
     url: values.url,
-    mode: values.fields ? 'block' : values.mode,
+    mode: values.multi === true || values.fields?.some(f => f && f.source) ? 'multi' : (values.fields ? 'block' : values.mode),
     enabled: true,
     locator,
     spec,
@@ -659,12 +834,19 @@ export function buildTask(values, locator, existing, frame) {
   }
   if (Array.isArray(values.alerts)) {
     const validAlerts = values.alerts
-      .filter(a => a && typeof a === 'object' && Number.isFinite(a.value))
+      .filter(a => {
+        if (!a || typeof a !== 'object') return false
+        const textEquality = alertTargetMode(values, a.field) === 'text' && a.type === 'eq'
+        if (textEquality) return typeof a.value === 'string'
+        if (typeof a.value === 'number') return Number.isFinite(a.value)
+        return typeof a.value === 'string' && a.value.trim() !== '' && Number.isFinite(Number(a.value))
+      })
       .map(a => {
+        const textValue = alertTargetMode(values, a.field) === 'text' && a.type === 'eq'
         const item = {
           id: a.id || crypto.randomUUID(),
           type: a.type,
-          value: Number(a.value),
+          value: textValue ? String(a.value) : Number(a.value),
           enabled: a.enabled !== false
         }
         if (a.field) {
@@ -683,6 +865,9 @@ export function buildTask(values, locator, existing, frame) {
     }
   }
   if (existing?.order !== undefined) task.order = existing.order
+  if (Array.isArray(existing?.archivedFields) && existing.archivedFields.length > 0) {
+    task.archivedFields = structuredClone(existing.archivedFields)
+  }
   // 既有任務有哪個鍵才帶哪個：沒有的不得憑空長出來（`enabled` 缺省照舊視為啟用）
   if (existing) {
     for (const k of RUNTIME_FIELDS) {
@@ -764,6 +949,7 @@ function fillSchedule(schedule) {
 
 export function render(ctx) {
   currentCtx = ctx || {}
+  multiControlBaseline = null
   applyTerms()
   clearGuardState()
   setTestPreActionHint(false)
@@ -877,7 +1063,11 @@ export function render(ctx) {
     }
   }
 
-  const isMulti = Boolean((ctx?.picks && Array.isArray(ctx.picks) && ctx.picks.length >= 2) || (ctx?.task && Array.isArray(ctx.task.fields) && ctx.task.fields.length > 0))
+  const isMulti = Boolean(
+    (ctx?.fields && Array.isArray(ctx.fields) && ctx.fields.length > 0) ||
+    (ctx?.picks && Array.isArray(ctx.picks) && ctx.picks.length >= 2) ||
+    (ctx?.task && Array.isArray(ctx.task.fields) && ctx.task.fields.length > 0)
+  )
   if (isMulti) {
     const modeEl = document.getElementById('mode')
     if (modeEl) modeEl.value = 'block'
@@ -918,7 +1108,20 @@ export function render(ctx) {
     }
   }
 
-  if (ctx?.picks && Array.isArray(ctx.picks) && ctx.picks.length >= 2) {
+  if (Array.isArray(ctx?.fields) && ctx.fields.length > 0) {
+    // F1a 完成屏障後由 background 送來的 snapshot fields；保留每值
+    // 的穩定 key、名稱、mode、source 與單值 spec，不重新產生 UUID。
+    const items = ctx.fields.map((field, index) => ({
+      key: field.key,
+      name: field.name || `值 ${index + 1}`,
+      mode: field.mode,
+      source: field.source,
+      spec: field.spec || {},
+      stateActions: field.stateActions || []
+    }))
+    renderFieldList(items)
+    applyDefaultCardTypes()
+  } else if (ctx?.picks && Array.isArray(ctx.picks) && ctx.picks.length >= 2) {
     const usedKeys = new Set()
     const nameCounts = new Map()
     const items = ctx.picks.map((pick, index) => {
@@ -947,13 +1150,16 @@ export function render(ctx) {
   } else if (ctx?.task && Array.isArray(ctx.task.fields) && ctx.task.fields.length > 0) {
     const items = ctx.task.fields.map(field => {
       const matchingSpec = ctx.task.spec?.fields?.find(f => f.key === field.key)
-      const spec = {}
+      const spec = structuredClone(matchingSpec?.spec || {})
       if (matchingSpec?.cell) spec.cell = matchingSpec.cell
       if (matchingSpec?.block) spec.block = matchingSpec.block
       return {
         key: field.key,
         name: field.name,
-        spec
+        spec,
+        source: matchingSpec?.source,
+        stateActions: matchingSpec?.stateActions || [],
+        mode: matchingSpec?.mode || matchingSpec?.spec?.mode || (ctx.task.mode === 'text' ? 'text' : undefined)
       }
     })
     renderFieldList(items)
@@ -1013,10 +1219,59 @@ export function render(ctx) {
   bindAlertEvents()
   bindPreActionEvents()
   bindPreActionMessageListener()
+  chrome.runtime.onMessage?.addListener(message => {
+    if (message?.type !== 'FIELD_REPAIR_DONE' || message.taskId !== currentCtx?.task?.id) return undefined
+    const replacing = message.repairMode === 'replace' && typeof message.oldFieldKey === 'string'
+    const row = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
+      .find(item => item.dataset.fieldKey === (replacing ? message.oldFieldKey : message.fieldKey))
+    if (!row) return undefined
+    const oldFieldKey = row.dataset.fieldKey
+    if (replacing) {
+      row.dataset.fieldKey = message.fieldKey
+      const nameInput = row.querySelector('input[data-field-name]')
+      if (nameInput && message.fieldName) nameInput.value = message.fieldName
+      for (const alertRow of document.querySelectorAll('[data-alert-row]')) {
+        if (alertRow.querySelector('select[data-alert-field]')?.value === oldFieldKey) alertRow.remove()
+      }
+      fieldSpecs.delete(oldFieldKey)
+      currentCtx.task.fields = (currentCtx.task.fields || []).map(field => field.key === oldFieldKey
+        ? { ...field, key: message.fieldKey, name: message.fieldName || field.name } : field)
+      currentCtx.task.alerts = (currentCtx.task.alerts || []).filter(alert => alert.field !== oldFieldKey)
+      if (Array.isArray(message.archivedField)) currentCtx.task.archivedFields = message.archivedField
+      else if (message.archivedField) {
+        currentCtx.task.archivedFields = [...(currentCtx.task.archivedFields || []), message.archivedField]
+      }
+    }
+    row._source = structuredClone(message.source)
+    row._spec = structuredClone(message.spec)
+    fieldSpecs.set(message.fieldKey, row._spec)
+    const where = row.querySelector('[data-field-where]')
+    if (where) {
+      where.textContent = fieldWhereText(row._spec)
+      where.title = where.textContent
+    }
+    const savedSpec = currentCtx.task.spec?.fields?.find(item => item.key === (replacing ? oldFieldKey : message.fieldKey))
+    if (savedSpec) {
+      savedSpec.key = message.fieldKey
+      savedSpec.name = message.fieldName || savedSpec.name
+      savedSpec.source = structuredClone(message.source)
+      savedSpec.spec = structuredClone(message.spec)
+    }
+    setFieldRowHint(row, replacing
+      ? '已建立不同指標的新歷史序列；舊紀錄保留，舊告警不會套用到新值'
+      : '這個值的來源已更新；名稱、告警與歷史序列保留')
+    if (replacing) updateFieldListState()
+    return undefined
+  })
   bindPosEvents()
   bindBlurValidation()
   updateFrameHint(currentCtx)
   updateBlockSection()
+  if (Array.isArray(ctx?.fields) && ctx.fields.some(field => field?.source)) {
+    multiControlBaseline = multiControlStateOf()
+    updateSetupSummary()
+  }
+  updateSourceStateWarning()
 }
 
 // 欄位離開焦點就地驗證（錯誤字在欄位正下方、aria-describedby 指向它），不必等按儲存
@@ -1458,7 +1713,7 @@ export function updateSetupSummary() {
       block: values.block?.axis ? values.block : first?.block,
       rowPos: rowPosNow,
       colPos: colPosNow
-    })
+    }) + (values.multi && multiControlsChanged() ? '（共用設定會套用到所有適用的值）' : '')
   }
 
   const schedEl = document.getElementById('summary-schedule')
@@ -1623,6 +1878,7 @@ function bindModeEvents() {
     modeEl.addEventListener('change', () => {
       applyDefaultCardTypes()
       updateBlockSection()
+      refreshAllAlertRows()
     })
     modeEl._modeEventsBound = true
   }
@@ -1744,7 +2000,12 @@ function populateAlertFieldOptions(select, selectedKey) {
 function updateAlertRowsFields() {
   const fieldRows = document.querySelectorAll('#field-list [data-field-row]')
   const alertRows = document.querySelectorAll('[data-alert-row]')
-  const hasMulti = fieldRows.length >= 2
+  // Keep an explicit field target visible when a multi-value edit shrinks to
+  // one remaining field; otherwise the alert silently becomes task-wide.
+  const hasMulti = fieldRows.length >= 2 || Array.from(alertRows).some(row => {
+    const select = row.querySelector('select[data-alert-field]')
+    return Boolean(select?.value)
+  })
 
   for (const row of alertRows) {
     let fieldSelect = row.querySelector('select[data-alert-field]')
@@ -1766,6 +2027,7 @@ function updateAlertRowsFields() {
         fieldSelect.remove()
       }
     }
+    refreshAlertRow(row)
   }
 }
 
@@ -1813,6 +2075,7 @@ function updateFieldListState() {
 
   updateAlertRowsFields()
   updateBlockSection()
+  updateSourceStateWarning()
 }
 
 // 「用「列 · 欄」命名」用的文字：與 fieldWhereText 同形，但純數值標題不進名稱
@@ -1926,12 +2189,15 @@ function setFieldRowHint(row, text) {
   el.textContent = text
 }
 
-function createFieldRow({ key, name, spec }) {
+function createFieldRow({ key, name, spec, source, mode, stateActions }) {
   const row = document.createElement('div')
   row.className = 'field-row'
   row.setAttribute('data-field-row', '')
   row.dataset.fieldKey = key
   row._spec = spec
+  if (source) row._source = structuredClone(source)
+  row._stateActions = Array.isArray(stateActions) ? structuredClone(stateActions) : []
+  if (mode) row._mode = mode
 
   const input = document.createElement('input')
   input.type = 'text'
@@ -2000,12 +2266,78 @@ function createFieldRow({ key, name, spec }) {
     updateFieldListState()
   })
 
+  const repairBtn = document.createElement('button')
+  repairBtn.type = 'button'
+  repairBtn.setAttribute('data-field-repair', '')
+  repairBtn.textContent = '修復同一個值'
+  repairBtn.title = '只修復這個值的來源，保留原名稱、告警與歷史序列；不同指標請建立新值'
+  repairBtn.hidden = !(currentCtx?.task?.mode === 'multi' &&
+    Array.isArray(currentCtx.task.fields) && currentCtx.task.fields.length > 1)
+  repairBtn.addEventListener('click', async () => {
+    repairBtn.setAttribute('aria-disabled', 'true')
+    setFieldRowHint(row, '')
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: MSG.BEGIN_FIELD_REPAIR,
+        taskId: currentCtx?.task?.id,
+        fieldKey: row.dataset.fieldKey,
+        repairMode: 'repair'
+      })
+      if (!response?.ok) setFieldRowHint(row, response?.message || '無法開始單值重選，請重試')
+    } catch (error) {
+      setFieldRowHint(row, String(error?.message || '無法開始單值重選，請重試'))
+    } finally {
+      repairBtn.removeAttribute('aria-disabled')
+    }
+  })
+
   row.appendChild(input)
   row.appendChild(whereEl)
   row.appendChild(resultEl)
   row.appendChild(upBtn)
   row.appendChild(downBtn)
+  row.appendChild(repairBtn)
+  const replaceBtn = document.createElement('button')
+  replaceBtn.type = 'button'
+  replaceBtn.setAttribute('data-field-replace', '')
+  replaceBtn.textContent = '改成不同指標'
+  replaceBtn.title = '建立新的值與歷史序列；舊歷史保留，原告警不會沿用'
+  replaceBtn.hidden = repairBtn.hidden
+  replaceBtn.addEventListener('click', async () => {
+    if (!globalThis.confirm?.('這會把目前欄位改成不同指標，建立新的歷史序列並移除原告警設定。舊歷史會保留。要繼續嗎？')) return
+    replaceBtn.setAttribute('aria-disabled', 'true')
+    setFieldRowHint(row, '')
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: MSG.BEGIN_FIELD_REPAIR,
+        taskId: currentCtx?.task?.id,
+        fieldKey: row.dataset.fieldKey,
+        repairMode: 'replace'
+      })
+      if (!response?.ok) setFieldRowHint(row, response?.message || '無法開始更換指標，請重試')
+    } catch (error) {
+      setFieldRowHint(row, String(error?.message || '無法開始更換指標，請重試'))
+    } finally {
+      replaceBtn.removeAttribute('aria-disabled')
+    }
+  })
+  row.appendChild(replaceBtn)
   row.appendChild(removeBtn)
+
+  if (source) {
+    const stateButton = document.createElement('button')
+    stateButton.type = 'button'
+    stateButton.setAttribute('data-source-state-copy', '')
+    const updateStateLabel = () => { stateButton.textContent = `來源狀態動作（${row._stateActions.length}）` }
+    updateStateLabel()
+    stateButton.addEventListener('click', () => {
+      row._stateActions = validPreActionsOf(preActionsFromForm())
+      updateStateLabel()
+      updateSourceStateWarning()
+      scheduleDraftSave?.()
+    })
+    row.appendChild(stateButton)
+  }
 
   return row
 }
@@ -2047,8 +2379,17 @@ async function splitIntoTasks() {
   const items = rows.map((r, i) => {
     const key = `b${i + 1}`
     const name = r.querySelector('input[data-field-name]')?.value?.trim()
+    const fieldKey = r.dataset.fieldKey || `field-${i + 1}`
+    const spec = structuredClone(r._spec || fieldSpecs.get(fieldKey) || {})
+    const field = {
+      key: fieldKey,
+      name: name || `值 ${i + 1}`,
+      ...(r._mode ? { mode: r._mode } : {}),
+      ...(r._source ? { source: structuredClone(r._source) } : {}),
+      spec
+    }
     draft.batchNames[key] = name || `值 ${i + 1}`
-    return { key, ...common, picks: [r._spec || fieldSpecs.get(r.dataset.fieldKey || '')] }
+    return { key, ...common, fields: [field], picks: [spec] }
   })
   if (draftTimer) { clearTimeout(draftTimer); draftTimer = null }
   await setPanelCtx(tabId, { kind: 'batch', items, draft })
@@ -2083,10 +2424,12 @@ function addAlertRow(data = {}) {
   row.dataset.id = data.id || crypto.randomUUID()
 
   const fieldRows = document.querySelectorAll('#field-list [data-field-row]')
-  if (fieldRows.length >= 2) {
-    const fieldSelect = document.createElement('select')
+  let fieldSelect = null
+  if (fieldRows.length >= 2 || data.field) {
+    fieldSelect = document.createElement('select')
     fieldSelect.setAttribute('data-alert-field', '')
     populateAlertFieldOptions(fieldSelect, data.field || '')
+    if (data.field) fieldSelect.value = data.field
     row.appendChild(fieldSelect)
   }
 
@@ -2111,13 +2454,22 @@ function addAlertRow(data = {}) {
   select.value = data.type || 'gt'
 
   const input = document.createElement('input')
-  input.type = 'number'
+  const initialMode = alertTargetMode({
+    mode: document.getElementById('mode')?.value || 'number',
+    fields: Array.from(document.querySelectorAll('#field-list [data-field-row]')).map(fieldRow => ({
+      key: fieldRow.dataset.fieldKey,
+      mode: fieldRow._mode || fieldRow.dataset.mode
+    }))
+  }, data.field || '')
+  input.type = initialMode === 'text' && (data.type || 'gt') === 'eq' ? 'text' : 'number'
   input.className = 'alert-value'
   input.placeholder = '數值'
   input.step = 'any'
   if (data.value !== undefined && data.value !== null && !Number.isNaN(data.value) && String(data.value).trim() !== '') {
     input.value = String(data.value)
   }
+  select.addEventListener('change', () => refreshAlertRow(row))
+  fieldSelect?.addEventListener('change', () => refreshAlertRow(row))
 
   const label = document.createElement('label')
   label.className = 'alert-enable'
@@ -2142,6 +2494,7 @@ function addAlertRow(data = {}) {
   row.appendChild(removeBtn)
 
   list.appendChild(row)
+  refreshAlertRow(row)
   return row
 }
 
@@ -2208,6 +2561,9 @@ function updatePreActionRowVisibility(row) {
       if (!input.value) {
         input.value = String(DEFAULT_WAIT_TIMEOUT_MS / 1000)
       }
+    } else if (type === 'scroll') {
+      input.placeholder = '捲動位置（px）'
+      input.step = '1'
     }
   }
 }
@@ -2231,6 +2587,7 @@ function addPreActionRow(data = {}) {
     { value: 'waitFor', text: '等元素出現' },
     { value: 'hover', text: '移到元素上' },
     { value: 'click', text: '點擊元素' },
+    { value: 'scroll', text: '捲動容器到位置' },
     { value: 'wait', text: '等待秒數' }
   ]
   for (const opt of options) {
@@ -2285,6 +2642,8 @@ function addPreActionRow(data = {}) {
     }
   } else if (data.type === 'click') {
     input.value = ''
+  } else if (data.type === 'scroll') {
+    input.value = Number.isFinite(Number(data.top)) ? String(data.top) : '0'
   } else if (data.type === 'hover') {
     input.value = data.holdMs !== undefined && data.holdMs !== null && String(data.holdMs).trim() !== ''
       ? String(data.holdMs)
@@ -2485,8 +2844,9 @@ export async function renderDashboardSection(task) {
 }
 
 // 表單值＋目前 ctx → 任務物件（儲存、試抓、批次的全部試抓／全部儲存都走這一份）
-function taskFromForm(values, ctx) {
-  return buildTask(values, ctx?.locator, ctx?.task, ctx?.frameUrl ? { url: ctx.frameUrl } : undefined)
+function taskFromForm(values, ctx, taskId) {
+  const existing = taskId ? { id: taskId } : ctx?.task
+  return buildTask(values, ctx?.locator, existing, ctx?.frameUrl ? { url: ctx.frameUrl } : undefined)
 }
 
 /**
@@ -2496,8 +2856,8 @@ function taskFromForm(values, ctx) {
  * @param {Object} ctx 目前 render 的 ctx
  * @returns {Promise<Object>} 存好的 task
  */
-async function saveTaskFromForm(values, ctx) {
-  const task = taskFromForm(values, ctx)
+async function saveTaskFromForm(values, ctx, { taskId, preparedTask } = {}) {
+  const task = preparedTask || taskFromForm(values, ctx, taskId)
   await saveTask(task)
   return task
 }
@@ -2582,6 +2942,7 @@ async function writePickerDefaults(patch) {
 }
 
 export async function handleSave() {
+  if (blockActionUntilPanelReady()) return
   if (batchItems) return handleBatchSave()
   if (bulkTaskIds) return handleBulkSave()
 
@@ -2671,8 +3032,69 @@ export async function handleSave() {
 const FIRST_PENDING_TEXT = '已儲存，正在抓第一筆…'
 const FIRST_INTERRUPTED_TEXT = '抓取被中斷，請再試一次'
 // 存檔後表單已換成回饋區，面板上沒有「試抓」可按：指向回饋區的「開啟報表」與任務頁的「立即抓取」
-const FIRST_NEXT_STEP = '任務已經存好；可以按下方「開啟報表」，到任務頁用「立即抓取」再試一次'
+const FIRST_NEXT_STEP = '任務已經存好；可以按下方「開啟報表」，到任務管理確認後用既有任務的「立即抓取」再試一次'
 const FIRST_OK_CLOSE_MS = 4000
+
+function savedBatchEntryOf(entry) {
+  const item = entry?.item || entry || {}
+  const task = entry?.task || {}
+  return {
+    key: entry?.key || item.key || '',
+    taskId: task.id || item.taskId || '',
+    name: typeof task.name === 'string' ? task.name : (typeof item.name === 'string' ? item.name : ''),
+    taskSaveState: item.taskSaveState || item.saveState || 'done',
+    firstRunState: item.firstRunState || 'pending',
+    ...(item.firstRunResult ? { firstRunResult: item.firstRunResult } : {}),
+    ...(item.taskCheckpoint ? { taskCheckpoint: item.taskCheckpoint } : {})
+  }
+}
+
+function savedBatchEntriesOf(batchRun) {
+  return Array.isArray(batchRun) ? batchRun.map(savedBatchEntryOf).filter(entry => entry.key && entry.taskId) : []
+}
+
+function savedBatchRecoveryKey(ctx) {
+  const ids = Array.isArray(ctx?.batchRun) ? ctx.batchRun.map(entry => `${entry.key}:${entry.taskId}`).sort() : []
+  return `${ctx?.pickSessionId || ''}|${ids.join('|')}`
+}
+
+function reconcileSavedBatchRun(batchRun, draft) {
+  const groups = new Map((draft?.groups || []).map(group => [group.key, group]))
+  return (batchRun || []).map(entry => {
+    const group = groups.get(entry.key)
+    if (!group) return entry
+    return {
+      ...entry,
+      taskSaveState: group.taskSaveState || group.saveState || entry.taskSaveState || 'done',
+      firstRunState: group.firstRunState || entry.firstRunState || 'pending',
+      ...(group.firstRunResult || entry.firstRunResult ? { firstRunResult: group.firstRunResult || entry.firstRunResult } : {}),
+      ...(group.taskId || entry.taskId ? { taskId: group.taskId || entry.taskId } : {}),
+      ...(group.taskCheckpoint || entry.taskCheckpoint ? { taskCheckpoint: group.taskCheckpoint || entry.taskCheckpoint } : {})
+    }
+  })
+}
+
+async function persistSavedBatchRun(batchRun, tabId = panelTabId) {
+  if (!Array.isArray(batchRun) || tabId === null || tabId === undefined) return
+  try { await mergePanelCtx(tabId, { batchRun: savedBatchEntriesOf(batchRun) }) } catch {}
+}
+
+async function resumeSavedFirstRuns(ctx) {
+  if (ctx?.kind !== 'saved' || !Array.isArray(ctx.batchRun) || ctx.batchRun.length === 0) return
+  const key = savedBatchRecoveryKey(ctx)
+  const guard = savedFirstRunGuard()
+  if (!key || guard.has(key)) return
+  guard.add(key)
+  const tasks = []
+  for (const entry of ctx.batchRun) {
+    if (!entry?.taskId) continue
+    const task = await getTask(entry.taskId)
+    if (task) tasks.push(task)
+  }
+  if (tasks.length > 0) {
+    await fetchFirstValues(tasks, { keepOpen: true, tabId: panelTabId, batchRun: ctx.batchRun })
+  }
+}
 
 function formatFirstValue(v) {
   return v === null || v === undefined ? '（空白）' : String(v)
@@ -2689,7 +3111,7 @@ function firstResultOf(res, err) {
     const parts = res.values.map(v => `${v.name}: ${v.ok ? formatFirstValue(v.value) : (v.error || '失敗')}`)
     return allOk
       ? { ok: true, text: `第一筆：${parts.join('、')}` }
-      : { ok: false, text: `第一筆有值沒抓到：${parts.join('、')}。${FIRST_NEXT_STEP}` }
+      : { ok: false, text: `第一筆部分失敗：${parts.join('、')}。${FIRST_NEXT_STEP}` }
   }
   if (res.outcome === 'done') return { ok: true, text: `第一筆：${formatFirstValue(res.value)}` }
   const reason = res.error || (res.status ? statusTextOf(res.status) : '') || '抓取失敗'
@@ -2702,10 +3124,48 @@ function firstResultOf(res, err) {
  * @param {Object[]} tasks 剛存好的任務（批次時多個）
  * @param {{ keepOpen?: boolean, tabId?: number|null }} [opts] keepOpen：回饋區有警告時成功也不自動關
  */
-async function fetchFirstValues(tasks, { keepOpen = false, tabId = panelTabId } = {}) {
+async function fetchFirstValues(tasks, { keepOpen = false, tabId = panelTabId, batchRun = null } = {}) {
   const list = (tasks || []).filter(Boolean)
   if (list.length === 0) return
-  const results = await Promise.all(list.map(async (task) => {
+  const byId = batchDraftManaged
+    ? new Map((Array.isArray(batchRun) ? batchRun : []).map(entry => {
+      const item = entry.item || entry
+      const id = entry.task?.id || entry.taskId || item.taskId
+      return [id, item]
+    }))
+    : new Map()
+  const pending = []
+  const results = []
+  for (const task of list) {
+    const item = byId.get(task.id)
+    const firstState = item?.firstRunState || 'pending'
+    if (item && firstState === 'done') {
+      const previous = item.firstRunResult
+      if (previous && typeof previous.text === 'string') {
+        results.push({ task, ok: previous.ok === true, known: true, text: previous.text })
+      } else {
+        results.push({ task, ok: true, known: false, text: '第一筆已執行；請到任務管理確認' })
+      }
+      continue
+    }
+    if (item && ['inflight', 'uncertain'].includes(firstState)) {
+      results.push({ task, ok: false, text: '第一筆抓取狀態不明，請到任務管理確認後用既有任務的「立即抓取」再試一次' })
+      continue
+    }
+    pending.push({ task, item })
+  }
+  // 每個任務都在自己的 inflight checkpoint 後才送 RUN_TASK；序列化可避免
+  // 尚未送出的項目被整批誤標成 inflight。undefined/null 回覆代表結果不明。
+  for (const { task, item } of pending) {
+    if (item) {
+      const checkpoint = await updateBatchSaveState(item, 'first-run', 'inflight', task.id)
+      if (!checkpoint) {
+        results.push({ task, item, ok: false, text: '第一筆狀態同步失敗，請到任務管理確認後再試一次' })
+        await persistSavedBatchRun(batchRun, tabId)
+        continue
+      }
+      await persistSavedBatchRun(batchRun, tabId)
+    }
     let res = null
     let err = null
     try {
@@ -2713,16 +3173,36 @@ async function fetchFirstValues(tasks, { keepOpen = false, tabId = panelTabId } 
     } catch (e) {
       err = e || true
     }
-    return { task, ...firstResultOf(res, err) }
-  }))
+    const uncertain = Boolean(err) || res === null || res === undefined
+    const result = { task, item, res, err, known: !uncertain, ...firstResultOf(res, err) }
+    if (uncertain) {
+      result.ok = false
+      result.text = FIRST_INTERRUPTED_TEXT
+    }
+    const state = uncertain ? 'uncertain' : 'done'
+    if (result.item) {
+      const checkpoint = await updateBatchSaveState(result.item, 'first-run', state, result.task.id,
+        uncertain ? FIRST_INTERRUPTED_TEXT : undefined, null,
+        { ok: result.ok === true, text: result.text })
+      if (!checkpoint && !uncertain) {
+        result.ok = false
+        result.text = '第一筆結果已回來，但狀態同步失敗；請到任務頁確認後再試一次'
+      }
+    }
+    results.push(result)
+    await persistSavedBatchRun(batchRun, tabId)
+  }
   let first
   if (results.length === 1) {
-    first = { state: results[0].ok ? 'ok' : 'error', text: results[0].text }
+    first = { state: results[0].known === false ? 'neutral' : (results[0].ok ? 'ok' : 'error'), text: results[0].text }
   } else {
     const failed = results.filter(r => !r.ok)
-    first = failed.length === 0
+    const unknown = results.filter(r => r.known === false)
+    first = failed.length === 0 && unknown.length === 0
       ? { state: 'ok', text: `第一筆：${results.length} 個任務都抓到了（${results.map(r => `${r.task.name}：${r.text.replace(/^第一筆：/, '')}`).join('；')}）` }
-      : { state: 'error', text: `第一筆有 ${failed.length} 個沒抓到：${failed.map(r => `「${r.task.name}」${r.text}`).join('；')}` }
+      : failed.length > 0
+        ? { state: 'error', text: `第一筆有 ${failed.length} 個沒抓到：${failed.map(r => `「${r.task.name}」${r.text}`).join('；')}` }
+        : { state: 'neutral', text: `第一筆：${unknown.length} 個任務已執行，請到任務管理確認（${unknown.map(r => `「${r.task.name}」`).join('、')}）` }
   }
   // 畫面：回饋區就地換字（面板重畫時由 ctx 畫回同一句）
   setFirstLine(first)
@@ -2756,7 +3236,7 @@ function setFirstLine(first) {
  * 儲存成功之後不要無聲關窗：說出「存好了、下次什麼時候抓」，
  * 並給一條去看結果的路。1.5 秒後自動關，使用者也可以自己點。
  */
-export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs = 1500, tabId = panelTabId, count = null, hint = false, warning = '', note = '', text = null, first = null, pin = null } = {}) {
+export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs = 1500, tabId = panelTabId, count = null, hint = false, warning = '', note = '', text = null, first = null, pin = null, batchRun = null } = {}) {
   const form = document.getElementById('picker-form')
   if (!form || !task) return
   let when = ''
@@ -2776,8 +3256,18 @@ export async function showSavedFeedback(task, { nextRunMs = null, closeDelayMs =
   // 提示（新建的單任務才給）與警告都跟著 saved ctx 走：session 一寫面板就會照 ctx 重畫回饋區，
   // 只 append 在 DOM 上的會被洗掉（體檢實測：提示行在側邊面板永遠看不到）
   // pin：新建任務這一次的排程與去處（「下次新任務沿用」按下去要寫的那一組）；按過之後 pinned: true
-  const saved = { kind: 'saved', text: finalText, ...(hint && count === null ? { hint: true } : {}), ...(warning ? { warning } : {}), ...(note ? { note } : {}), ...(first ? { first } : {}), ...(pin ? { pin, pinned: false } : {}) }
+  const saved = {
+    kind: 'saved', text: finalText,
+    ...(hint && count === null ? { hint: true } : {}),
+    ...(warning ? { warning } : {}), ...(note ? { note } : {}),
+    ...(first ? { first } : {}), ...(pin ? { pin, pinned: false } : {}),
+    ...(Array.isArray(batchRun) && batchRun.length > 0
+      ? { batch: true, pickSessionId: batchDraftSessionId || pickDraftState?.sessionId || null, batchRun: savedBatchEntriesOf(batchRun) }
+      : {})
+  }
   buildSavedFeedback(form, saved)
+
+  if (saved.batchRun) savedFirstRunGuard().add(savedBatchRecoveryKey(saved))
 
   // 存好了就不再是「填到一半的表單」：草稿不得再寫回，session 收成 saved，
   // 關窗前使用者右鍵再選時 background 才會當成新的一輪，而不是換目標
@@ -3130,6 +3620,7 @@ function scrollPreviewIntoView() {
 }
 
 export async function handleTestNow() {
+  if (blockActionUntilPanelReady()) return
   if (batchItems) return handleBatchTest()
   const previewEl = document.getElementById('preview')
   // 引導句只給「還沒試抓」：按下去之後不論結果都換成這一次的內容
@@ -3272,10 +3763,696 @@ function setBusy(id, label) {
 // 唯一穩的是 windowId（#14），而且要在**轉為可見時**才解析（#13）。
 let panelTabId = null
 let panelWindowId = null
+let panelBootSequence = 0
 let draftTimer = null
 // 上一次真的畫過的 ctx 簽章：草稿寫回 session 會觸發 onChanged，
 // 面板會再收到同一份 ctx（只多了 draft）——這時不能重畫，使用者正在打字
 let lastPanelSig = null
+
+// AF-22 D1a：側欄先建群組／命名入口。草稿本身仍以 C1b session 為唯一事實來源；
+// 這裡只保留目前畫面與尚未送出的輸入，不能在記憶體另維護一份可提交清單。
+const PICK_GROUP_NAME_REQUEST = MSG.PICK_GROUP_NAME
+const PICK_GROUP_NAME_RESULT = MSG.PICK_GROUP_NAME_RESULT
+const MAX_PICK_GROUPS = 20
+let pickDraftState = null
+let pickDraftOperationQueue = Promise.resolve()
+let pickDraftNameTimers = new Map()
+let pickDraftPendingNames = new Map()
+let pickDraftNameRequestPending = false
+let pickDraftNameRequest = null
+let pickDraftNameRequestSeq = 0
+let pickDraftUndo = null
+let pickDraftUndoRevision = null
+let pickDraftUndoToken = 0
+let pickDraftKeyHandlerBound = false
+
+function clonePickDraft(value) {
+  if (value === undefined || value === null) return value
+  try { return structuredClone(value) } catch { return value }
+}
+
+function groupKeyOf(group) { return typeof group?.key === 'string' ? group.key : '' }
+
+function activePickGroup() {
+  const key = pickDraftState?.activeGroupKey
+  return pickDraftState?.groups?.find(group => group.key === key) || null
+}
+
+function newPickGroupKey() {
+  try {
+    if (typeof globalThis.crypto?.randomUUID === 'function') return `group-${globalThis.crypto.randomUUID()}`
+  } catch {}
+  return `group-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+function pickDraftIdentity(draft = pickDraftState) {
+  const out = {
+    sessionId: draft?.sessionId,
+    tabId: draft?.tabId,
+    documentGeneration: draft?.documentGeneration,
+    documentIdentity: draft?.documentIdentity,
+    routeIdentity: draft?.routeIdentity,
+    frame: draft?.frame
+  }
+  return Object.fromEntries(Object.entries(out).filter(([, value]) => value !== undefined))
+}
+
+function groupSourceSummary(group) {
+  const values = Array.isArray(group?.values) ? group.values : []
+  const sources = []
+  for (const value of values) {
+    const source = value?.source || {}
+    const locator = source.locator || source
+    const text = source.frameUrl || source.url || locator?.css || locator?.xpath || locator?.path
+    if (typeof text === 'string' && text.trim() && !sources.includes(text.trim())) sources.push(text.trim())
+  }
+  if (sources.length === 0) return '尚未選值，來源待選取'
+  if (sources.length === 1) return `來源：${sources[0]}`
+  return `來源 ${sources.length} 處：${sources.slice(0, 2).join('、')}${sources.length > 2 ? '…' : ''}`
+}
+
+export function groupSourceText(group) { return groupSourceSummary(group) }
+
+function setGroupDraftStatus(text, { error = false } = {}) {
+  const el = document.getElementById('group-draft-status')
+  if (!el) return
+  el.hidden = !text
+  el.textContent = text || ''
+  el.dataset.state = error ? 'error' : 'info'
+}
+
+function hidePickDraftView() {
+  const section = document.getElementById('group-draft-section')
+  if (section) section.hidden = true
+}
+
+function showPickDraftView() {
+  const section = document.getElementById('group-draft-section')
+  if (section) section.hidden = false
+  const waiting = document.getElementById('panel-waiting')
+  if (waiting) waiting.hidden = true
+  const form = document.getElementById('picker-form') || document.querySelector('.settings-body')
+  if (form) form.hidden = true
+  const footer = document.querySelector('.settings-footer') || document.querySelector('.action-bar')
+  if (footer) footer.hidden = true
+}
+
+function operationIdOf(type) { return `picker-${type}-${Date.now()}-${Math.random().toString(36).slice(2)}` }
+
+function sendPickDraftOperationWithUndo(operation, inverse) {
+  const token = ++pickDraftUndoToken
+  pickDraftUndo = null
+  renderPickDraft(pickDraftState)
+  return sendPickDraftOperation(operation, { preserveUndo: true }).then(response => {
+    if (response && token === pickDraftUndoToken) {
+      pickDraftUndo = inverse && typeof inverse === 'object' ? inverse : null
+      pickDraftUndoRevision = pickDraftState?.revision ?? null
+      renderPickDraft(pickDraftState)
+    }
+    return response
+  })
+}
+
+function queuePickDraftOperation(operation) {
+  const run = pickDraftOperationQueue.then(async () => {
+    const draft = pickDraftState
+    if (!draft) throw new Error('找不到選取草稿')
+    const message = {
+      type: MSG.PICK_DRAFT_OPERATION,
+      ...pickDraftIdentity(draft),
+      operationId: operationIdOf(operation.type),
+      expectedRevision: Number.isInteger(draft.revision) ? draft.revision : 0,
+      operation
+    }
+    const response = await chrome.runtime.sendMessage(message)
+    if (!response || response.ok === false || !response.draft) {
+      const error = new Error(response?.message || response?.error || '草稿同步失敗，請重新整理')
+      error.response = response
+      throw error
+    }
+    pickDraftState = clonePickDraft(response.draft)
+    setPickDraftContext(pickDraftState, { render: false })
+    renderPickDraft(pickDraftState)
+    return response
+  })
+  pickDraftOperationQueue = run.catch(() => {})
+  return run
+}
+
+async function refreshPickDraftAfterConflict() {
+  const draft = pickDraftState
+  if (!draft) return null
+  try {
+    const response = await chrome.runtime.sendMessage({ type: MSG.PICK_DRAFT_READ, ...pickDraftIdentity(draft) })
+    if (response?.draft) {
+      pickDraftState = clonePickDraft(response.draft)
+      setPickDraftContext(pickDraftState, { render: false })
+      renderPickDraft(pickDraftState)
+      setGroupDraftStatus('草稿已更新，請確認目前名稱與作用組。', { error: true })
+    }
+    return response?.draft || null
+  } catch { return null }
+}
+
+async function sendPickDraftOperation(operation, { preserveUndo = false } = {}) {
+  if (!preserveUndo && pickDraftUndo) {
+    pickDraftUndo = null
+    pickDraftUndoRevision = null
+    ++pickDraftUndoToken
+  }
+  try {
+    return await queuePickDraftOperation(operation)
+  } catch (error) {
+    if (/revision|同步|conflict/i.test(`${error?.message || ''} ${error?.response?.error || ''}`)) await refreshPickDraftAfterConflict()
+    setGroupDraftStatus(error?.message || '草稿同步失敗，請再試一次。', { error: true })
+    return null
+  }
+}
+
+async function beginPickDraftFromBatchEntry(ctx, tabId) {
+  if (!ctx || ctx.batch !== true || !Number.isInteger(tabId)) return null
+  const now = Date.now()
+  const sessionId = `picker-${tabId}-${now}-${Math.random().toString(36).slice(2)}`
+  const documentGeneration = ctx.documentGeneration ?? { pickerLoad: now }
+  const routeIdentity = ctx.routeIdentity ?? ctx.documentIdentity ?? { url: ctx.url || '' }
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: MSG.PICK_DRAFT_BEGIN,
+      sessionId,
+      tabId,
+      documentGeneration,
+      ...(ctx.documentIdentity !== undefined ? { documentIdentity: ctx.documentIdentity } : {}),
+      routeIdentity,
+      groups: [],
+      activeGroupKey: null,
+      stage: 'empty',
+      form: {}
+    })
+    if (response?.ok !== true || !response.draft) return null
+    // session ctx 仍是面板的重開入口；真正的群組與 revision 以 pick-draft session 為準。
+    try { await mergePanelCtx(tabId, { pickDraft: response.draft, pickSessionId: response.draft.sessionId }) } catch {}
+    return response.draft
+  } catch (error) {
+    // 不假裝已進入命名；renderFromPanelCtx 會保留既有等待畫面，並在 notice 顯示失敗。
+    try { await mergePanelCtx(tabId, { notice: `無法建立選取草稿：${error?.message || error}` }) } catch {}
+    return null
+  }
+}
+
+function pendingNameOf(group) {
+  const key = groupKeyOf(group)
+  if (pickDraftPendingNames.has(key)) return pickDraftPendingNames.get(key)
+  return typeof group?.name === 'string' ? group.name : ''
+}
+
+function schedulePickGroupRename(value) {
+  const group = activePickGroup()
+  if (!group) return
+  const key = group.key
+  pickDraftPendingNames.set(key, value)
+  const timer = pickDraftNameTimers.get(key)
+  if (timer) clearTimeout(timer)
+  pickDraftNameTimers.set(key, setTimeout(() => {
+    pickDraftNameTimers.delete(key)
+    const latest = pickDraftPendingNames.get(key)
+    if (latest === undefined || latest.trim() === (group.name || '').trim()) return
+    void sendPickDraftOperation({ type: 'rename', groupKey: key, name: latest.trim() })
+  }, 250))
+}
+
+async function flushPickGroupRename() {
+  const group = activePickGroup()
+  if (!group) return true
+  const key = group.key
+  const timer = pickDraftNameTimers.get(key)
+  if (timer) clearTimeout(timer)
+  pickDraftNameTimers.delete(key)
+  const input = document.getElementById('group-name')
+  // The single editor is reused across groups. A synthetic/programmatic group
+  // switch may leave focus on it, so never apply its value to a different key.
+  const value = input?.dataset.groupKey === key ? input.value : pendingNameOf(group)
+  pickDraftPendingNames.set(key, value)
+  if (value.trim() === (group.name || '').trim()) return true
+  return Boolean(await sendPickDraftOperation({ type: 'rename', groupKey: key, name: value.trim() }))
+}
+
+async function enterPickForDraftGroup(draft, group) {
+  if (!draft || !group) return false
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: MSG.ENTER_PICK,
+      purpose: 'task',
+      batch: true,
+      tabId: draft.tabId,
+      frameId: 0,
+      sessionId: draft.sessionId,
+      groupKey: group.key,
+      pickStage: 'selecting',
+      documentGeneration: draft.documentGeneration,
+      routeIdentity: draft.routeIdentity,
+      draftValues: clonePickDraft(group.values || [])
+    })
+    if (response?.ok === false) throw new Error(response.error || '背景拒絕選取')
+    setGroupDraftStatus(`目前選入「${pendingNameOf(group)}」；點頁面值加入這一組。`)
+    return true
+  } catch (error) {
+    setGroupDraftStatus(`沒有進入選值模式：${error?.message || error}`, { error: true })
+    return false
+  }
+}
+
+function groupValueLabel(value) {
+  const name = typeof value?.name === 'string' && value.name.trim() ? value.name.trim() : '未命名值'
+  const key = typeof value?.key === 'string' ? value.key : '未知 key'
+  return `${name}（識別：${key}）`
+}
+
+async function finishPickDraft() {
+  if (!pickDraftState) return
+  if (panelBootSequence > 0 && Number.isInteger(panelTabId)) {
+    const activeTabId = await resolvePanelTab()
+    if (!Number.isInteger(activeTabId)) {
+      if (panelWindowId !== null) {
+        setGroupDraftStatus('無法確認目前分頁；請重新開啟選取面板後再完成。', { error: true })
+        return
+      }
+    } else {
+      let currentDraft = null
+      try {
+        const response = await chrome.runtime.sendMessage({ type: MSG.PICK_DRAFT_READ, tabId: activeTabId })
+        currentDraft = response?.draft || null
+      } catch {}
+      if (!currentDraft || currentDraft.tabId !== activeTabId) {
+        setGroupDraftStatus('目前分頁沒有可完成的選取草稿；請重新選取。', { error: true })
+        return
+      }
+      const rows = Array.from(document.querySelectorAll('[data-group-row]'))
+      const currentGroups = Array.isArray(currentDraft.groups) ? currentDraft.groups : []
+      const renderedMatches = rows.length === currentGroups.length && currentGroups.every((group, index) => {
+        const row = rows[index]
+        const valueKeys = Array.from(row?.querySelectorAll('[data-group-value]') || [], value => value.dataset.valueKey)
+        const currentValueKeys = Array.isArray(group.values) ? group.values.map(value => value.key) : []
+        return row?.dataset.groupKey === group.key &&
+          row?.dataset.active === String(group.key === currentDraft.activeGroupKey) &&
+          JSON.stringify(valueKeys) === JSON.stringify(currentValueKeys)
+      })
+      if (!renderedMatches) {
+        setPickDraftContext(currentDraft)
+        setGroupDraftStatus('目前分頁的選取內容已更新；請確認後再次完成。', { error: true })
+        return
+      }
+      panelTabId = activeTabId
+      setPickDraftContext(currentDraft, { render: false })
+    }
+  }
+  // 最後一字可能仍在 debounce 或前一個 ACK queue；完成屏障一定要站在最新 revision 上。
+  if (!(await flushPickGroupRename())) return
+  try { await pickDraftOperationQueue } catch { return }
+  const draft = pickDraftState
+  if (!draft) return
+  const emptyGroup = draft.groups.find(group => !Array.isArray(group.values) || group.values.length === 0)
+  if (emptyGroup) {
+    if (pickDraftState.activeGroupKey !== emptyGroup.key) {
+      if (!(await sendPickDraftOperation({ type: 'set-active', groupKey: emptyGroup.key }))) return
+    }
+    if (!pendingNameOf(emptyGroup).trim()) document.getElementById('group-name')?.focus()
+    else await enterPickForDraftGroup(pickDraftState, activePickGroup())
+    setGroupDraftStatus(`「${pendingNameOf(emptyGroup).trim() || '尚未命名'}」目前沒有值；已定位到此組，請繼續選值或刪除此空組。`, { error: true })
+    return
+  }
+  try {
+    const response = await chrome.runtime.sendMessage({ type: MSG.PICK_DRAFT_COMPLETE, ...pickDraftIdentity(draft), expectedRevision: draft.revision })
+    if (response?.ok !== true || response.synchronized !== true) throw new Error(response?.message || '草稿尚未同步')
+    if (response.draft) setPickDraftContext(response.draft, { render: false })
+    if (response.context) {
+      // background 已把同一份 snapshot 寫成設定頁 ctx；立即切畫面，
+      // 避免只留下「等待設定畫面」而要靠 session 事件才能進表單。
+      await renderFromPanelCtx(response.panelContext || {
+        kind: 'new',
+        ctx: response.context,
+        draft: { name: activePickGroup()?.name || '', ...(response.snapshot?.form || {}) }
+      })
+    } else {
+      setGroupDraftStatus('選取已同步，正在等待設定畫面。')
+    }
+  } catch (error) {
+    if (/revision|同步|conflict/i.test(error?.message || '')) await refreshPickDraftAfterConflict()
+    setGroupDraftStatus(error?.message || '選取尚未同步，請稍候再完成。', { error: true })
+  }
+}
+
+function bindPickDraftEvents() {
+  const start = document.getElementById('group-start-first')
+  if (!start || start.dataset.bound === 'true') return
+  start.dataset.bound = 'true'
+  const add = document.getElementById('group-add')
+  const input = document.getElementById('group-name')
+  const fromPage = document.getElementById('group-name-from-page')
+  const confirm = document.getElementById('group-name-confirm')
+  const startSelection = document.getElementById('group-start-selection')
+  const finish = document.getElementById('group-finish')
+  const undo = document.getElementById('group-undo')
+  const abandon = document.getElementById('group-abandon')
+  const returnSelection = document.getElementById('batch-return-selection')
+
+  if (!pickDraftKeyHandlerBound) {
+    pickDraftKeyHandlerBound = true
+    document.addEventListener('keydown', (event) => {
+      if (!pickDraftState || event.isComposing || !(event.ctrlKey || event.metaKey) || event.key !== 'Enter') return
+      const target = event.target
+      if (target?.matches?.('input, textarea, select') || target?.isContentEditable ||
+          target?.closest?.('[contenteditable="true"]')) return
+      const finishButton = document.getElementById('group-finish')
+      if (!finishButton || finishButton.hidden || finishButton.disabled) return
+      event.preventDefault()
+      void finishButton.click()
+    })
+  }
+
+  const createGroup = async () => {
+    const current = pickDraftState
+    if (!current || current.groups.length >= MAX_PICK_GROUPS) {
+      setGroupDraftStatus(`最多 ${MAX_PICK_GROUPS} 組，請先移除一組。`, { error: true })
+      return
+    }
+    const group = { key: newPickGroupKey(), name: '', values: [] }
+    const response = await sendPickDraftOperation({ type: 'create-group', group })
+    if (response?.ok !== true) return
+    if (pickDraftState.activeGroupKey !== group.key) {
+      const activated = await sendPickDraftOperation({ type: 'set-active', groupKey: group.key })
+      if (activated?.ok !== true) return
+    }
+    document.getElementById('group-name')?.focus()
+    setGroupDraftStatus('請輸入名稱，或從頁面取名稱；確認後才會開始選值。')
+  }
+  start.addEventListener('click', () => { void createGroup() })
+  add?.addEventListener('click', () => { void createGroup() })
+  returnSelection?.addEventListener('click', async () => {
+    const draft = pickDraftState
+    if (!draft || draft.stage !== 'settings') return
+    const response = await sendPickDraftOperation({ type: 'return-selection' })
+    const resumed = response?.draft
+    const group = resumed?.groups?.find(item => item.key === resumed.activeGroupKey)
+    if (!resumed || !group) {
+      setGroupDraftStatus('無法返回選取：找不到目前作用組。', { error: true })
+      return
+    }
+    setPickDraftContext(resumed, { render: false })
+    setBatchView(false)
+    showPickDraftView()
+    renderPickDraft(resumed)
+    await enterPickForDraftGroup(resumed, group)
+  })
+  input?.addEventListener('input', () => {
+    schedulePickGroupRename(input.value)
+    const startButton = document.getElementById('group-start-selection')
+    if (startButton) startButton.hidden = !input.value.trim()
+  })
+  input?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.isComposing && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault()
+      void confirm?.click()
+    }
+  })
+  fromPage?.addEventListener('click', async () => {
+    const draft = pickDraftState
+    const group = activePickGroup()
+    if (!draft || !group || pickDraftNameRequestPending) return
+    const requestId = `group-name-${++pickDraftNameRequestSeq}-${Date.now()}`
+    pickDraftNameRequest = {
+      requestId,
+      sessionId: draft.sessionId,
+      groupKey: group.key,
+      documentGeneration: clonePickDraft(draft.documentGeneration),
+      routeIdentity: clonePickDraft(draft.routeIdentity)
+    }
+    pickDraftNameRequestPending = true
+    setGroupDraftStatus('請在頁面上點要用作名稱的文字或欄位；這次只會命名，不會選入值。')
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: PICK_GROUP_NAME_REQUEST,
+        ...pickDraftIdentity(draft),
+        groupKey: group.key,
+        purpose: 'group-name',
+        requestId
+      })
+      if (response?.ok === false) {
+        if (pickDraftNameRequest?.requestId === requestId) pickDraftNameRequest = null
+        setGroupDraftStatus(response.message || '無法開始取名，請再試一次。', { error: true })
+      }
+    } catch (error) {
+      if (pickDraftNameRequest?.requestId === requestId) pickDraftNameRequest = null
+      setGroupDraftStatus(`無法開始取名：${error?.message || error}`, { error: true })
+    } finally {
+      if (pickDraftNameRequest?.requestId === requestId) pickDraftNameRequestPending = false
+    }
+  })
+  const beginSelection = async () => {
+    const group = activePickGroup()
+    const draft = pickDraftState
+    if (!group || !draft) return
+    const inputValue = document.getElementById('group-name')?.value || ''
+    if (!inputValue.trim()) {
+      setGroupDraftStatus('請先輸入群組名稱，再開始選值。', { error: true })
+      document.getElementById('group-name')?.focus()
+      return
+    }
+    if (!(await flushPickGroupRename())) return
+    if (pickDraftState.activeGroupKey !== group.key && !(await sendPickDraftOperation({ type: 'set-active', groupKey: group.key }))) return
+    await enterPickForDraftGroup(pickDraftState, activePickGroup())
+  }
+  confirm?.addEventListener('click', () => { void beginSelection() })
+  startSelection?.addEventListener('click', () => { void beginSelection() })
+  finish?.addEventListener('click', () => { void document.__af22PickDraftFinish?.() })
+  abandon?.addEventListener('click', async () => {
+    const draft = pickDraftState
+    if (!draft) return
+    try {
+      const response = await chrome.runtime.sendMessage({ type: MSG.PICK_DRAFT_ABANDON, ...pickDraftIdentity(draft) })
+      if (response?.ok !== true) throw new Error(response?.message || '放棄失敗')
+      pickDraftState = null
+      hidePickDraftView()
+      setGroupDraftStatus('')
+    } catch (error) { setGroupDraftStatus(`放棄失敗：${error?.message || error}`, { error: true }) }
+  })
+  undo?.addEventListener('click', async () => {
+    const inverse = pickDraftUndo
+    if (!inverse || (pickDraftUndoRevision !== null && pickDraftState?.revision !== pickDraftUndoRevision)) {
+      pickDraftUndo = null
+      pickDraftUndoRevision = null
+      renderPickDraft(pickDraftState)
+      setGroupDraftStatus('復原已失效，草稿已有後續變更。', { error: true })
+      return
+    }
+    pickDraftUndo = null
+    pickDraftUndoRevision = null
+    ++pickDraftUndoToken
+    renderPickDraft(pickDraftState)
+    const response = await sendPickDraftOperation(inverse.operation)
+    if (response) {
+      setGroupDraftStatus('已復原上一個移除／移動操作。')
+    }
+  })
+}
+
+export function setPickDraftContext(draft, { render = true } = {}) {
+  const previousSessionId = pickDraftState?.sessionId
+  pickDraftState = clonePickDraft(draft)
+  if (previousSessionId !== pickDraftState?.sessionId) {
+    pickDraftUndo = null
+    pickDraftUndoRevision = null
+    pickDraftNameRequest = null
+    pickDraftNameRequestPending = false
+  }
+  if (Number.isInteger(pickDraftState?.tabId)) panelTabId = pickDraftState.tabId
+  if (render && pickDraftState) renderPickDraft(pickDraftState)
+  return pickDraftState
+}
+
+export async function consumeGroupNameResult(message) {
+  if (!message || message.type !== PICK_GROUP_NAME_RESULT) return false
+  const draft = pickDraftState
+  const group = activePickGroup()
+  const request = pickDraftNameRequest
+  if (!draft || !group || !request || message.requestId !== request.requestId ||
+      message.sessionId !== draft.sessionId || message.groupKey !== group.key ||
+      request.sessionId !== draft.sessionId || request.groupKey !== group.key ||
+      JSON.stringify(message.documentGeneration) !== JSON.stringify(draft.documentGeneration) ||
+      JSON.stringify(message.routeIdentity) !== JSON.stringify(draft.routeIdentity)) return false
+  if (message.tabId !== undefined && message.tabId !== draft.tabId) return false
+  const text = typeof message.text === 'string' ? message.text : (typeof message.name === 'string' ? message.name : message.preview)
+  if (typeof text !== 'string' || text.trim() === '') {
+    pickDraftNameRequest = null
+    pickDraftNameRequestPending = false
+    setGroupDraftStatus('這次沒有讀到可用文字，原名稱保留；請重新選取。', { error: true })
+    return false
+  }
+  const input = document.getElementById('group-name')
+  if (!input) return false
+  input.value = text.trim()
+  pickDraftNameRequest = null
+  pickDraftNameRequestPending = false
+  pickDraftPendingNames.set(group.key, input.value)
+  setGroupDraftStatus('已帶回頁面文字，可編輯後確認；這次沒有加入值。')
+  input.focus()
+  input.setSelectionRange(input.value.length, input.value.length)
+  return true
+}
+
+function renderGroupRow(group, activeKey) {
+  const row = document.createElement('div')
+  row.setAttribute('data-group-row', '')
+  row.dataset.groupKey = group.key
+  row.dataset.active = String(group.key === activeKey)
+  const head = document.createElement('div')
+  head.setAttribute('data-group-row-head', '')
+  const name = document.createElement('span')
+  name.setAttribute('data-group-name', '')
+  name.textContent = pendingNameOf(group) || '尚未命名'
+  const active = document.createElement('span')
+  active.className = 'chip'
+  active.textContent = group.key === activeKey ? '目前選入此組' : '可切換'
+  const select = document.createElement('button')
+  select.type = 'button'
+  select.textContent = group.key === activeKey ? '目前' : '切換'
+  select.disabled = group.key === activeKey
+  select.addEventListener('click', async () => {
+    if (!(await flushPickGroupRename())) return
+    const response = await sendPickDraftOperation({ type: 'set-active', groupKey: group.key })
+    if (response?.draft) await enterPickForDraftGroup(response.draft, response.draft.groups.find(item => item.key === group.key))
+  })
+  const remove = document.createElement('button')
+  remove.type = 'button'
+  remove.textContent = '移除組'
+  remove.addEventListener('click', () => {
+    void sendPickDraftOperationWithUndo(
+      { type: 'remove', groupKey: group.key },
+      { operation: { type: 'create-group', group: clonePickDraft(group) } }
+    )
+  })
+  head.append(name, active, select, remove)
+  row.appendChild(head)
+  const source = document.createElement('div')
+  source.setAttribute('data-group-source', '')
+  source.textContent = `${groupSourceSummary(group)}；群組識別：${group.key}`
+  row.appendChild(source)
+  const values = document.createElement('div')
+  values.setAttribute('data-group-values', '')
+  for (const value of Array.isArray(group.values) ? group.values : []) {
+    const item = document.createElement('div')
+    item.setAttribute('data-group-value', '')
+    item.dataset.valueKey = value.key || ''
+    item.textContent = groupValueLabel(value)
+    const removeValue = document.createElement('button')
+    removeValue.type = 'button'
+    removeValue.textContent = '移除值'
+    removeValue.setAttribute('aria-label', `移除${value.name || value.key || '這個值'}`)
+    removeValue.addEventListener('click', () => {
+      void sendPickDraftOperationWithUndo(
+        { type: 'remove', groupKey: group.key, valueKey: value.key },
+        { operation: { type: 'add', groupKey: group.key, value: clonePickDraft(value) } }
+      )
+    })
+    item.appendChild(removeValue)
+    const targets = (Array.isArray(pickDraftState?.groups) ? pickDraftState.groups : [])
+      .filter(target => target.key !== group.key)
+    if (targets.length > 0) {
+      const moveTo = document.createElement('select')
+      moveTo.setAttribute('aria-label', `將${value.name || value.key || '這個值'}移到群組`)
+      const placeholder = document.createElement('option')
+      placeholder.value = ''
+      placeholder.textContent = '移到群組…'
+      moveTo.appendChild(placeholder)
+      for (const target of targets) {
+        const option = document.createElement('option')
+        option.value = target.key
+        option.textContent = pendingNameOf(target) || target.key
+        moveTo.appendChild(option)
+      }
+      moveTo.addEventListener('change', () => {
+        const toGroupKey = moveTo.value
+        moveTo.value = ''
+        if (!toGroupKey) return
+        void sendPickDraftOperationWithUndo(
+          { type: 'move', fromGroupKey: group.key, toGroupKey, valueKey: value.key },
+          { operation: { type: 'move', fromGroupKey: toGroupKey, toGroupKey: group.key, valueKey: value.key } }
+        )
+      })
+      item.appendChild(moveTo)
+    }
+    values.appendChild(item)
+  }
+  if (values.childElementCount === 0) {
+    const actions = document.createElement('div')
+    actions.setAttribute('data-group-empty-actions', '')
+    const continueButton = document.createElement('button')
+    continueButton.type = 'button'
+    continueButton.textContent = '繼續選值'
+    continueButton.addEventListener('click', async () => {
+      const response = await sendPickDraftOperation({ type: 'set-active', groupKey: group.key })
+      if (!response?.draft) return
+      if (!pendingNameOf(group).trim()) document.getElementById('group-name')?.focus()
+      else await enterPickForDraftGroup(response.draft, response.draft.groups.find(item => item.key === group.key))
+    })
+    const deleteButton = document.createElement('button')
+    deleteButton.type = 'button'
+    deleteButton.textContent = '刪除此空組'
+    deleteButton.addEventListener('click', () => void sendPickDraftOperationWithUndo(
+      { type: 'remove', groupKey: group.key },
+      { operation: { type: 'create-group', group: clonePickDraft(group) } }
+    ))
+    actions.append(continueButton, deleteButton)
+    values.appendChild(actions)
+    const empty = document.createElement('div')
+    empty.setAttribute('data-group-value-source', '')
+    empty.textContent = '空組仍保留；完成前需繼續選值或移除。'
+    values.appendChild(empty)
+  }
+  row.appendChild(values)
+  return row
+}
+
+export function renderPickDraft(draft = pickDraftState) {
+  if (!draft) { hidePickDraftView(); return }
+  setPickDraftContext(draft, { render: false })
+  // A panel can keep its document while a tab-bound module/context is replaced.
+  // Event listeners are installed once per DOM, so point the button at the latest
+  // draft controller every time that DOM is rehydrated.
+  document.__af22PickDraftFinish = finishPickDraft
+  showPickDraftView()
+  bindPickDraftEvents()
+  const groups = Array.isArray(draft.groups) ? draft.groups : []
+  const list = document.getElementById('group-list')
+  if (list) list.replaceChildren(...groups.map(group => renderGroupRow(group, draft.activeGroupKey)))
+  const start = document.getElementById('group-start-first')
+  const add = document.getElementById('group-add')
+  const finish = document.getElementById('group-finish')
+  const undo = document.getElementById('group-undo')
+  const editor = document.getElementById('group-name-editor')
+  const startSelection = document.getElementById('group-start-selection')
+  if (start) start.hidden = groups.length !== 0
+  if (add) { add.hidden = groups.length === 0; add.disabled = groups.length >= MAX_PICK_GROUPS }
+  const active = activePickGroup()
+  const input = document.getElementById('group-name')
+  const groupChanged = Boolean(input && active && input.dataset.groupKey !== active.key)
+  const focused = input && document.activeElement === input && !groupChanged
+  const selection = focused ? { start: input.selectionStart, end: input.selectionEnd } : null
+  if (editor) editor.hidden = !active
+  if (input && active && !focused) input.value = pendingNameOf(active)
+  if (input && active) input.dataset.groupKey = active.key
+  if (startSelection) startSelection.hidden = !active || !pendingNameOf(active).trim()
+  if (finish) finish.hidden = groups.length === 0
+  if (finish) finish.disabled = groups.length === 0
+  if (undo) undo.hidden = !pickDraftUndo || (pickDraftUndoRevision !== null && draft.revision !== pickDraftUndoRevision)
+  const title = document.getElementById('group-draft-title')
+  if (title) title.textContent = groups.length === 0 ? '先建立群組' : `群組與選值（${groups.length}/${MAX_PICK_GROUPS}）`
+  const help = document.getElementById('group-draft-help')
+  if (help) help.textContent = groups.length === 0 ? '先建立群組並命名；目前還沒有任何值會被偷選。' : '目前組會接收頁面上的選值；同名群組也保留各自識別與來源。'
+  if (focused && input && selection) {
+    input.focus()
+    try { input.setSelectionRange(selection.start, selection.end) } catch {}
+  }
+}
 
 // 批次進行中被擋下來的那一份 ctx（只留最後一份：它已經是最新狀態），結束後補畫
 let pendingPanelCtx = null
@@ -3317,8 +4494,34 @@ export async function renderFromPanelCtx(ctx, { reload = () => globalThis.locati
   // saved 的第一筆結果（first）也算進簽章：它換了要照 ctx 重畫回饋區（沒有它的 ctx 簽章與以前相同）。
   // 批次的 items 與 bulk 的 taskIds 同口徑：漏了它，第二輪批次選取會被當成沒變，
   // 畫面不更新、「全部儲存」存的是舊目標（AF-21 體檢 C P1）
-  const sig = ctx ? JSON.stringify({ kind: ctx.kind, ctx: ctx.ctx, taskId: ctx.taskId, retarget: ctx.retarget, batch: ctx.batch, taskIds: ctx.taskIds, items: ctx.items, first: ctx.first }) : 'null'
-  if (sig === lastPanelSig) return { rendered: false }
+  const sig = ctx ? JSON.stringify({ kind: ctx.kind, ctx: ctx.ctx, taskId: ctx.taskId, retarget: ctx.retarget, batch: ctx.batch, taskIds: ctx.taskIds, items: ctx.items, batchRun: ctx.batchRun, first: ctx.first, pickDraft: ctx.pickDraft }) : 'null'
+  if (ctx?.pickDraft) {
+    const draftTabId = ctx.pickDraft.tabId
+    const contextTabId = ctx.tabId ?? ctx.ctx?.tabId
+    if ((Number.isInteger(contextTabId) && Number.isInteger(draftTabId) && contextTabId !== draftTabId) ||
+        (Number.isInteger(panelTabId) && Number.isInteger(draftTabId) && panelTabId !== draftTabId)) {
+      return { rendered: false, stale: true }
+    }
+  }
+  if (sig === lastPanelSig) {
+    if (!ctx?.pickDraft) return { rendered: false }
+    const section = document.getElementById('group-draft-section')
+    const rows = Array.from(document.querySelectorAll('[data-group-row]'))
+    const groups = Array.isArray(ctx.pickDraft.groups) ? ctx.pickDraft.groups : []
+    const matches = !section?.hidden && rows.length === groups.length && groups.every((group, index) => {
+      const row = rows[index]
+      return row?.dataset.groupKey === group.key &&
+        row?.dataset.active === String(group.key === ctx.pickDraft.activeGroupKey) &&
+        row.querySelectorAll('[data-group-value]').length === (Array.isArray(group.values) ? group.values.length : 0)
+    })
+    if (matches) return { rendered: false }
+    if (batchBusy()) {
+      pendingPanelCtx = { ctx, opts: { reload } }
+      return { rendered: false, deferred: true }
+    }
+    renderPickDraft(ctx.pickDraft)
+    return { rendered: true, rehydrated: true }
+  }
   // 批次「全部試抓」「全部儲存」進行中：兩條流程都在同一份表單上逐項 render，
   // 這時重畫會把清單整份換掉、結果寫進孤兒節點。只延後、不丟：結束後補畫一次（AF-21 體檢 C P3）
   if (batchBusy()) {
@@ -3343,6 +4546,11 @@ export async function renderFromPanelCtx(ctx, { reload = () => globalThis.locati
   if (form) form.hidden = kind === 'waiting'
   const footer = document.querySelector('.settings-footer') || document.getElementById('picker-actions')
   if (footer) footer.hidden = kind === 'waiting'
+  if (ctx?.pickDraft) {
+    renderPickDraft(ctx.pickDraft)
+    return { rendered: true }
+  }
+  hidePickDraftView()
   if (kind !== 'saved') {
     const header = document.querySelector('[data-picker-header]')
     if (header) header.hidden = false
@@ -3359,6 +4567,8 @@ export async function renderFromPanelCtx(ctx, { reload = () => globalThis.locati
 
   if (kind === 'batch' && Array.isArray(ctx.items)) {
     await renderBatch(ctx)
+    const returnSelection = document.getElementById('batch-return-selection')
+    if (returnSelection) returnSelection.hidden = !(batchDraftManaged && pickDraftState?.stage === 'settings')
     return { rendered: true }
   }
 
@@ -3414,7 +4624,10 @@ function applyRetarget(payload) {
     key: r.dataset.fieldKey || '',
     name: r.querySelector('input[data-field-name]')?.value ?? '',
     auto: r.querySelector('input[data-field-name]')?._afAutoName ?? null,
-    spec: r._spec || fieldSpecs.get(r.dataset.fieldKey || '') || {}
+    spec: r._spec || fieldSpecs.get(r.dataset.fieldKey || '') || {},
+    source: r._source ? structuredClone(r._source) : undefined,
+    stateActions: structuredClone(r._stateActions || []),
+    mode: r._mode
   }))
   const prevForm = getFormData()
   const prevAlerts = Array.isArray(prevForm.alerts) ? prevForm.alerts : []
@@ -3610,18 +4823,69 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
 
   const search = typeof window !== 'undefined' ? window.location?.search : ''
   const params = new URLSearchParams(search || '')
-  // side panel：沒有網址參數可用，改由 session 的 ctx 決定畫面
-  if (!params.has('taskId') && !params.has('ctx') && globalThis.chrome?.sidePanel) {
+  // side panel：沒有網址參數可用，改由 session 的 ctx 決定畫面。
+  // fallback popup 會帶 tabId；它同樣向 background 取 protocol draft，不能另開一份本地草稿。
+  if (!params.has('taskId') && !params.has('ctx') && (globalThis.chrome?.sidePanel || params.has('tabId'))) {
     // 退路的彈出視窗不是面板：它的作用分頁是它自己，解析不到目標分頁。
     // 開它的人會在網址上寫明「你服務的是哪個分頁」
     const forcedTab = params.has('tabId') ? Number(params.get('tabId')) : null
     const boot = async () => {
+      panelBootRequired = true
+      setPanelBootReady(false)
+      const sequence = ++panelBootSequence
       const tabId = Number.isFinite(forcedTab) && forcedTab !== null ? forcedTab : await resolvePanelTab()
-      if (tabId === null) return
+      if (tabId === null || sequence !== panelBootSequence) return
       const changed = tabId !== panelTabId
       panelTabId = tabId
-      const ctx = await getPanelCtx(tabId)
-      if (changed || ctx) await renderFromPanelCtx(ctx)
+      let ctx = await getPanelCtx(tabId)
+      if (sequence !== panelBootSequence) return
+      let protocolDraft = null
+      try {
+        const response = await chrome.runtime.sendMessage({ type: MSG.PICK_DRAFT_READ, tabId })
+        protocolDraft = response?.draft || null
+      } catch {}
+      if (sequence !== panelBootSequence) return
+      // 完成屏障已把選取階段推進 settings；批次設定重載時留在既有
+      // batch items，不得因 session 仍保留而自動回到選值畫面。
+      if (protocolDraft && (ctx?.kind === 'batch' || ctx?.kind === 'saved') &&
+          (['settings', 'saving', 'partial', 'completed'].includes(protocolDraft.stage) ||
+           (ctx.kind === 'saved' && protocolDraft.stage === 'paused'))) {
+        // 保存／首抓進度仍需沿用協定身分；只是不把它當 pickDraft 畫面，
+        // 否則 reload 後 updateBatchSaveState 沒有 revision 可繼續寫回。
+        if (ctx.kind === 'batch') {
+          ctx = { ...ctx, items: reconcileBatchItemsWithDraft(ctx.items, protocolDraft) }
+        } else if (ctx.kind === 'saved' && Array.isArray(ctx.batchRun)) {
+          ctx = { ...ctx, batchRun: reconcileSavedBatchRun(ctx.batchRun, protocolDraft) }
+        }
+        setPickDraftContext(protocolDraft, { render: false })
+        protocolDraft = null
+      }
+      if (ctx?.kind === 'saved' && Array.isArray(ctx.batchRun) && ctx.pickSessionId) {
+        batchDraftManaged = true
+        batchDraftSessionId = ctx.pickSessionId
+      }
+      if (!protocolDraft && ctx?.batch === true && ctx.kind !== 'batch' && ctx.kind !== 'saved') {
+        protocolDraft = await beginPickDraftFromBatchEntry(ctx, tabId)
+      }
+      if (sequence !== panelBootSequence) return
+      if (forcedTab === null) {
+        const activeTabId = await resolvePanelTab()
+        if (sequence !== panelBootSequence || activeTabId !== tabId) return
+      }
+      // 舊 ctx 仍保留目標／批次形狀；表單內容以安全協定草稿為準。
+      // 沒有 ctx 時也先建立可恢復的空目標畫面，使用者仍可回頁面重新選目標。
+      const merged = protocolDraft
+        ? (ctx
+            ? { ...ctx, pickDraft: protocolDraft, draft: { ...(ctx.draft || {}), ...(protocolDraft.form || {}) } }
+            : { kind: 'pick-draft', pickDraft: protocolDraft, ctx: { tabId }, draft: protocolDraft.form || {} })
+        : ctx
+      const draftTabId = merged?.pickDraft?.tabId
+      if (Number.isInteger(draftTabId) && draftTabId !== tabId) return
+      const rendered = (changed || merged) ? await renderFromPanelCtx(merged) : { rendered: false }
+      if (merged?.kind === 'saved') await resumeSavedFirstRuns(merged)
+      if (sequence === panelBootSequence && !rendered?.reloading && !rendered?.deferred && !rendered?.stale) {
+        setPanelBootReady(true)
+      }
     }
     // 載入當下就解析會拿到切換前的舊分頁；轉為可見時再解析才正確，
     // 而且每次轉為可見都重解析一次（自癒）
@@ -3630,7 +4894,16 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
     })
     if (document.visibilityState === 'visible') boot()
     // ctx 變了（例如使用者在頁面上選好了目標）就重畫
-    subscribe(() => { boot() }, { area: 'session' })
+    subscribe(() => {
+      // A hidden side panel can receive session updates while its target tab is
+      // being prepared. Keep it from racing a visible panel's tab binding.
+      if (document.visibilityState === 'visible') boot()
+    }, { area: 'session' })
+    document.addEventListener('af:pick-group-name-result', event => { consumeGroupNameResult(event.detail) })
+    chrome.runtime.onMessage?.addListener((message) => {
+      if (message?.type === PICK_GROUP_NAME_RESULT) return consumeGroupNameResult(message)
+      return undefined
+    })
     document.addEventListener('input', scheduleDraftSave, true)
     document.addEventListener('change', scheduleDraftSave, true)
     document.getElementById('panel-cancel-pick')?.addEventListener('click', () => {
@@ -3706,6 +4979,70 @@ function batchTabId() {
   return batchItems?.[0]?.tabId ?? panelTabId
 }
 
+function reconcileBatchItemsWithDraft(items, draft) {
+  if (!Array.isArray(items) || !Array.isArray(draft?.groups)) return items
+  const previous = new Map(items.map(item => [item.key, item]))
+  return draft.groups.map((group, groupIndex) => {
+    const old = previous.get(group.key) || {}
+    const values = Array.isArray(group.values) ? group.values : []
+    const fields = values.map((value, index) => ({
+      key: value.key,
+      name: typeof value.name === 'string' && value.name.trim() ? value.name : `值 ${index + 1}`,
+      mode: value.mode === 'text' || value.mode === 'block' ? value.mode : 'number',
+      source: structuredClone(value.source || { locator: value.locator || {} }),
+      spec: structuredClone(value.spec || {}),
+      stateActions: structuredClone(value.stateActions || [])
+    }))
+    const first = fields[0]
+    return {
+      ...old,
+      key: group.key || old.key || `g${groupIndex + 1}`,
+      nameHint: typeof group.name === 'string' ? group.name : (old.nameHint || ''),
+      locator: first?.source?.locator || old.locator || {},
+      ...(first?.source?.frame?.url ? { frameUrl: first.source.frame.url, frame: first.source.frame } : {}),
+      picks: fields.map(field => structuredClone(field.spec)),
+      fields,
+      taskSaveState: group.taskSaveState || group.saveState || old.taskSaveState || old.saveState || 'pending',
+      firstRunState: group.firstRunState || old.firstRunState || 'pending',
+      saveState: group.taskSaveState || group.saveState || old.taskSaveState || old.saveState || 'pending',
+      ...(group.taskId || old.taskId ? { taskId: group.taskId || old.taskId } : {}),
+      ...(group.taskCheckpoint || old.taskCheckpoint ? { taskCheckpoint: group.taskCheckpoint || old.taskCheckpoint } : {}),
+      ...(group.error || old.error ? { error: group.error || old.error } : {})
+    }
+  })
+}
+
+export function sourceStateTransitionWarningOf(items) {
+  let previousHasActions = false
+  for (const item of Array.isArray(items) ? items : []) {
+    if (Array.isArray(item?.fields)) {
+      // Batch rows are separate tasks; their page state never carries across rows.
+      let groupHasActions = false
+      for (const field of item.fields) {
+        const hasActions = Array.isArray(field?.stateActions) && field.stateActions.length > 0
+        if (groupHasActions && !hasActions) return true
+        groupHasActions = hasActions
+      }
+      continue
+    }
+    const fields = [item]
+    for (const field of fields) {
+      const hasActions = Array.isArray(field?.stateActions) && field.stateActions.length > 0
+      if (previousHasActions && !hasActions) return true
+      previousHasActions = hasActions
+    }
+  }
+  return false
+}
+
+function updateSourceStateWarning() {
+  const warning = document.getElementById('source-state-warning')
+  const fields = batchItems || Array.from(document.querySelectorAll('#field-list [data-field-row]'), row => ({
+    stateActions: row._stateActions || []
+  }))
+  if (warning) warning.hidden = !sourceStateTransitionWarningOf(fields)
+}
+
 function batchRows() {
   return Array.from(document.querySelectorAll('#batch-list [data-batch-item]'))
 }
@@ -3714,6 +5051,8 @@ async function renderBatch(ctx) {
   const preList = document.getElementById('preaction-list')
   if (preList) preList.replaceChildren()
   batchItems = ctx.items.slice()
+  batchDraftManaged = typeof ctx.pickSessionId === 'string' && ctx.pickSessionId.trim() !== ''
+  batchDraftSessionId = batchDraftManaged ? ctx.pickSessionId : null
   setBatchView(true)
   await renderDashboardSection(null)
   await applyPickerDefaults(null)
@@ -3744,7 +5083,9 @@ function renderBatchList(savedNames) {
     if (name === null) {
       // 與單任務同一份命名規則；位置下拉先照這一項重設，才算得出同樣的名稱
       applyPositionDefaults(item)
-      const base = defaultTaskName(item)
+      const base = typeof item.nameHint === 'string' && item.nameHint.trim()
+        ? item.nameHint.trim()
+        : defaultTaskName(item)
       name = base
       for (let n = 2; base && used.has(name); n++) name = `${base} (${n})`
       if (name) used.add(name)
@@ -3756,6 +5097,7 @@ function renderBatchList(savedNames) {
   if (aggLabel) {
     aggLabel.hidden = !batchItems.some(it => Array.isArray(it.picks) && it.picks.some(p => p?.block))
   }
+  updateSourceStateWarning()
 }
 
 function batchWhereText(item) {
@@ -3788,6 +5130,37 @@ function createBatchRow(item, name, auto) {
   where.setAttribute('data-batch-where', '')
   where.textContent = batchWhereText(item)
 
+  for (const field of Array.isArray(item.fields) ? item.fields : []) {
+    const stateButton = document.createElement('button')
+    stateButton.type = 'button'
+    stateButton.setAttribute('data-batch-source-state', field.key)
+    const updateStateText = () => { stateButton.textContent = `「${field.name || field.key}」狀態動作（${(field.stateActions || []).length}）` }
+    updateStateText()
+    stateButton.addEventListener('click', async () => {
+      const actions = validPreActionsOf(preActionsFromForm())
+      if (batchDraftManaged && pickDraftState) {
+        const group = pickDraftState.groups?.find(candidate => candidate.key === item.key)
+        const value = group?.values?.find(candidate => candidate.key === field.key)
+        if (value) {
+          const response = await sendPickDraftOperation({
+            type: 'replace-value', groupKey: item.key, valueKey: field.key,
+            value: { ...value, stateActions: actions }
+          })
+          if (!response?.draft) return
+          batchItems = reconcileBatchItemsWithDraft(batchItems, response.draft)
+          field.stateActions = structuredClone(actions)
+          updateStateText()
+          updateSourceStateWarning()
+          return
+        }
+      }
+      field.stateActions = structuredClone(actions)
+      updateStateText()
+      updateSourceStateWarning()
+    })
+    row.appendChild(stateButton)
+  }
+
   const result = document.createElement('div')
   result.setAttribute('data-batch-result', '')
   result.textContent = '—'
@@ -3814,6 +5187,43 @@ function batchNamesFromDom() {
   return out
 }
 
+function snapshotBatchRowUi() {
+  const focused = document.activeElement?.closest?.('[data-batch-item]')
+  const focusedKey = focused?.getAttribute('data-batch-key') || null
+  const input = focused?.querySelector('input[data-batch-name]')
+  return {
+    rows: batchRows().map(row => ({
+      key: row.getAttribute('data-batch-key'),
+      name: row.querySelector('input[data-batch-name]')?.value || '',
+      result: row.querySelector('[data-batch-result]')?.textContent || '—'
+    })),
+    focusedKey,
+    selectionStart: input?.selectionStart ?? null,
+    selectionEnd: input?.selectionEnd ?? null
+  }
+}
+
+function restoreBatchRowUi(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.rows)) return
+  const byKey = new Map(snapshot.rows.map(row => [row.key, row]))
+  for (const row of batchRows()) {
+    const saved = byKey.get(row.getAttribute('data-batch-key'))
+    if (!saved) continue
+    const input = row.querySelector('input[data-batch-name]')
+    if (input) input.value = saved.name
+    const result = row.querySelector('[data-batch-result]')
+    if (result) result.textContent = saved.result
+  }
+  if (!snapshot.focusedKey) return
+  const focusedRow = batchRows().find(row => row.getAttribute('data-batch-key') === snapshot.focusedKey)
+  const input = focusedRow?.querySelector('input[data-batch-name]')
+  if (!input) return
+  input.focus()
+  if (snapshot.selectionStart !== null && snapshot.selectionEnd !== null) {
+    try { input.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd) } catch {}
+  }
+}
+
 function removeBatchItems(keys) {
   if (!batchItems) return
   const drop = new Set(keys)
@@ -3822,6 +5232,7 @@ function removeBatchItems(keys) {
     if (drop.has(row.getAttribute('data-batch-key'))) row.remove()
   }
   batchItems = batchItems.filter(it => !drop.has(it.key))
+  updateSourceStateWarning()
   if (batchItems.length === 0) {
     // 清單清空＝取消，與取消鈕同一條收尾
     finishPanelSession(tabId)
@@ -3901,6 +5312,102 @@ function batchEntries() {
   })).filter(e => e.item)
 }
 
+function stableTaskValue(value) {
+  if (Array.isArray(value)) return value.map(stableTaskValue)
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableTaskValue(value[key])]))
+  }
+  return value
+}
+
+// 儲存庫會在 task 上補 createdAt/order/notFoundStreak 等執行欄位；對帳只比對
+// 保存時由表單產生的使用者設定，避免這些欄位讓同一筆固定 task 被誤判不相容。
+function taskComparablePayload(task) {
+  const keys = ['name', 'url', 'mode', 'locator', 'spec', 'schedule', 'frame', 'fields', 'alerts', 'preActions']
+  return Object.fromEntries(keys
+    .filter(key => task && task[key] !== undefined)
+    .map(key => [key, task[key]]))
+}
+
+function taskFingerprintOf(task) {
+  return JSON.stringify(stableTaskValue(taskComparablePayload(task)))
+}
+
+function jsonTaskPayloadOf(task) {
+  try { return JSON.parse(JSON.stringify(task)) } catch { return null }
+}
+
+function checkpointFingerprintOf(item) {
+  return item?.taskCheckpoint?.taskFingerprint || ''
+}
+
+// 批次保存進度回寫 C1b 草稿；這條通道不重畫選值畫面，避免設定頁保存時被
+// 背景 session 事件切回選值。taskId 先寫 pending/inflight，再寫 done，讓重載
+// 能辨認已完成項目與結果不明的項目。
+async function updateBatchSaveState(item, phase, state, taskId, error, taskPayload = null, firstResult = null) {
+  if (!batchDraftManaged) return { legacy: true }
+  if (!pickDraftState || !globalThis.chrome?.runtime?.sendMessage) return null
+  if (batchDraftSessionId && pickDraftState.sessionId !== batchDraftSessionId) return null
+  if (Number.isInteger(item?.tabId) && pickDraftState.tabId !== item.tabId) return null
+  const safePayload = taskPayload ? jsonTaskPayloadOf(taskPayload) : null
+  if (taskPayload && !safePayload) return null
+  if (safePayload) {
+    const encoded = JSON.stringify(safePayload)
+    const bytes = typeof TextEncoder === 'function' ? new TextEncoder().encode(encoded).byteLength : encoded.length
+    if (bytes > MAX_PICK_DRAFT_BYTES) return null
+  }
+  const taskFingerprint = safePayload ? taskFingerprintOf(safePayload) : ''
+  try {
+    await pickDraftOperationQueue
+    const draft = pickDraftState
+    const response = await chrome.runtime.sendMessage({
+      type: MSG.PICK_DRAFT_OPERATION,
+      ...pickDraftIdentity(draft),
+      operationId: operationIdOf(`save-state-${item.key}`),
+      expectedRevision: draft.revision,
+      operation: {
+        type: 'save-state', groupKey: item.key, phase, state,
+        ...(taskId ? { taskId } : {}),
+        ...(error ? { error: String(error) } : {}),
+        ...(safePayload ? {
+          taskFingerprint,
+          taskName: typeof safePayload.name === 'string' ? safePayload.name : '',
+          taskUrl: typeof safePayload.url === 'string' ? safePayload.url : ''
+        } : {}),
+        ...(firstResult && typeof firstResult === 'object' ? {
+          firstResult: { ok: firstResult.ok === true, text: String(firstResult.text || '') }
+        } : {})
+      }
+    })
+    if (response?.ok !== true || !response.draft) return null
+    setPickDraftContext(response.draft, { render: false })
+    if (phase === 'task') {
+      item.taskSaveState = state
+      item.saveState = state
+      if (safePayload) item.taskCheckpoint = {
+        taskId,
+        taskFingerprint,
+        taskName: typeof safePayload.name === 'string' ? safePayload.name : '',
+        taskUrl: typeof safePayload.url === 'string' ? safePayload.url : ''
+      }
+    } else {
+      item.firstRunState = state
+      if (firstResult && typeof firstResult === 'object') {
+        item.firstRunResult = { ok: firstResult.ok === true, text: String(firstResult.text || '') }
+      }
+    }
+    if (taskId) item.taskId = taskId
+    if (error) item.error = String(error)
+    else delete item.error
+    if (batchItems) {
+      try { await mergePanelCtx(batchTabId(), { items: batchItems }) } catch {}
+    }
+    return response.draft
+  } catch {
+    return null
+  }
+}
+
 async function handleBatchSave() {
   // 全部試抓進行中：兩條流程共用同一份表單逐項 render，不能並行——就地說原因，零寫入
   if (batchTesting) {
@@ -3942,9 +5449,55 @@ async function runBatchSave() {
   let failure = null
   let postError = null
   const cardErrors = []
+  const reconcileWarnings = []
   for (let i = 0; i < entries.length; i++) {
     const { item, name } = entries[i]
     try {
+      // 已完成項目在重載／重試時直接沿用原 task；inflight/uncertain 的結果
+      // 不明，先停在可見的結果不明狀態，不能盲目再送一次。
+      if (batchDraftManaged && (item.taskSaveState || item.saveState) === 'done' && item.taskId) {
+        const existing = await getTask(item.taskId)
+        if (existing) {
+          saved.push({ key: item.key, item, task: existing })
+          lastValues = null
+          continue
+        }
+        await updateBatchSaveState(item, 'task', 'uncertain', item.taskId, '找不到已標記完成的任務')
+        failure = { k: i + 1, name, message: '保存結果不明，請確認任務清單後再重試' }
+        break
+      }
+      if (batchDraftManaged && ['inflight', 'uncertain'].includes(item.taskSaveState || item.saveState)) {
+        const values = collectBatchValues(item, name, shared)
+        const checkpointFingerprint = checkpointFingerprintOf(item)
+        const candidate = checkpointFingerprint ? taskFromForm(values, currentCtx, item.taskId) : null
+        const existing = item.taskId ? await getTask(item.taskId) : null
+        if (existing && checkpointFingerprint && taskFingerprintOf(existing) === checkpointFingerprint) {
+          const reconciled = await updateBatchSaveState(item, 'task', 'done', item.taskId)
+          if (!reconciled) {
+            failure = { k: i + 1, name, message: '已找到固定任務，但保存狀態無法回寫；請稍後重試' }
+            break
+          }
+          if (candidate && taskFingerprintOf(candidate) !== checkpointFingerprint) {
+            reconcileWarnings.push(`「${name}」已沿用中斷前的既有任務；之後的名稱或設定修改未覆寫，請到任務管理編輯既有任務以套用。`)
+          }
+          saved.push({ key: item.key, item, task: existing })
+          lastValues = null
+          continue
+        }
+        const reason = existing && checkpointFingerprint
+          ? (taskFingerprintOf(existing) === checkpointFingerprint
+              ? '已找到既有任務，但保存狀態無法回寫'
+              : '已寫入任務與保存前快照不相容')
+          : (existing ? '缺少可核對的保存前快照' : '固定任務不存在，無法確認是否曾寫入')
+        failure = {
+          k: i + 1,
+          name,
+          message: existing && checkpointFingerprint && taskFingerprintOf(existing) === checkpointFingerprint
+            ? `保存結果不明（${reason}）；請稍後重試保存狀態`
+            : `保存結果不明（${reason}）；請移除這組後按「在頁面上選取」重新建立`
+        }
+        break
+      }
       const values = collectBatchValues(item, name, shared)
       // 收集會把畫面套回批次文字，進度要在它之後寫（與「全部試抓」同一套）
       const saveBtn = document.getElementById('save')
@@ -3954,8 +5507,26 @@ async function runBatchSave() {
         failure = { k: i + 1, name, message: Object.values(validation.errors).join('；') }
         break
       }
-      const task = await saveTaskFromForm(values, currentCtx)
-      saved.push({ key: item.key, task })
+      const taskId = item.taskId || crypto.randomUUID()
+      item.taskId = taskId
+      let task = taskFromForm(values, currentCtx, taskId)
+      const checkpoint = await updateBatchSaveState(item, 'task', 'inflight', taskId, undefined, task)
+      if (batchDraftManaged && !checkpoint) {
+        failure = { k: i + 1, name, message: '保存進度同步失敗，任務尚未寫入；請重新整理後重試' }
+        break
+      }
+      try {
+        task = await saveTaskFromForm(values, currentCtx, { taskId, preparedTask: task })
+      } catch (error) {
+        await updateBatchSaveState(item, 'task', 'uncertain', taskId, error?.message || error)
+        throw error
+      }
+      const savedCheckpoint = await updateBatchSaveState(item, 'task', 'done', taskId)
+      if (batchDraftManaged && !savedCheckpoint) {
+        failure = { k: i + 1, name, message: '任務已寫入但保存狀態同步失敗，結果不明；請確認任務後再重試' }
+        break
+      }
+      saved.push({ key: item.key, item, task })
       lastValues = values
       try { await addCardsForTask(task, currentCtx) } catch (e) { cardErrors.push(`「${name}」${e?.message || e}`) }
     } catch (e) {
@@ -3990,6 +5561,11 @@ async function runBatchSave() {
   }
 
   if (failure) {
+    // 第 k 組失敗時，前 k-1 組仍要完成首次抓取；不能因批次後段失敗
+    // 直接 return 而漏掉它們。它們的 taskSaveState 已是 done，重試不會重建。
+    if (saved.length > 0) {
+      await fetchFirstValues(saved.map(s => s.task), { keepOpen: true, batchRun: saved })
+    }
     // 已存的從清單移除，再按一次不會重複建立
     if (saved.length > 0) removeBatchItems(saved.map(s => s.key))
     showErrorText(`已儲存 ${failure.k - 1} 個；第 ${failure.k} 個「${failure.name}」失敗：${failure.message}`)
@@ -4001,17 +5577,19 @@ async function runBatchSave() {
   batchItems = null
   // 有後段錯誤時不自動關面板：這一句使用者一定要看得到
   const warnings = []
+  warnings.push(...reconcileWarnings)
   if (postError) warnings.push(`任務已經存好，但排程重建沒有完成：${postError}。請到報表的「任務管理」確認下次抓取時間。`)
   if (cardErrors.length > 0) warnings.push(`任務已經存好，但有卡片沒加進儀表板：${cardErrors.join('；')}。`)
   await showSavedFeedback(saved[0].task, {
     nextRunMs, count: saved.length,
+    batchRun: saved,
     // 批次新建也立刻抓第一筆：等結果出來再決定關不關
     closeDelayMs: null,
     first: { state: 'pending', text: FIRST_PENDING_TEXT },
     ...(pinCandidate ? { pin: pinCandidate } : {}),
     ...(warnings.length > 0 ? { warning: warnings.join(' ') } : {})
   })
-  await fetchFirstValues(saved.map(s => s.task), { keepOpen: warnings.length > 0 })
+  await fetchFirstValues(saved.map(s => s.task), { keepOpen: warnings.length > 0, batchRun: saved })
 }
 
 /**
@@ -4049,11 +5627,18 @@ async function handleBatchTest() {
   batchTesting = true
   if (saveBtn) saveBtn.setAttribute('aria-disabled', 'true')
   const shared = snapshotShared()
+  const rowUi = snapshotBatchRowUi()
+  const setResult = (key, text) => {
+    const saved = rowUi.rows.find(item => item.key === key)
+    if (saved) saved.result = text
+    const current = batchRows().find(row => row.getAttribute('data-batch-key') === key)
+    const result = current?.querySelector('[data-batch-result]')
+    if (result) result.textContent = text
+  }
   const entries = batchEntries()
   try {
     for (let i = 0; i < entries.length; i++) {
       const { row, item, name } = entries[i]
-      const resultEl = row.querySelector('[data-batch-result]')
       try {
         const values = collectBatchValues(item, name, shared)
         // 收集會把畫面套回批次文字，進度要在它之後寫
@@ -4064,7 +5649,7 @@ async function handleBatchTest() {
         try {
           res = await chrome.runtime.sendMessage({ type: MSG.TEST_TASK, task, tabId: item.tabId })
         } catch {
-          if (resultEl) resultEl.textContent = '抓取被中斷，請再試一次'
+          setResult(item.key, '抓取被中斷，請再試一次')
           continue
         }
         if (res && res.ok) {
@@ -4079,12 +5664,12 @@ async function handleBatchTest() {
             const val = res.value !== undefined ? String(res.value) : (res.raw ?? '')
             text = `${val}${blockCountsText(res)}`
           }
-          if (resultEl) resultEl.textContent = text
-        } else if (resultEl) {
-          resultEl.textContent = `失敗：${res?.message || statusTextOf(res?.error) || '抓取失敗'}`
+          setResult(item.key, text)
+        } else {
+          setResult(item.key, `失敗：${res?.message || statusTextOf(res?.error) || '抓取失敗'}`)
         }
       } catch (e) {
-        if (resultEl) resultEl.textContent = `失敗：${e?.message || e}`
+        setResult(item.key, `失敗：${e?.message || e}`)
       }
     }
   } finally {
@@ -4100,6 +5685,7 @@ async function handleBatchTest() {
     if (document.getElementById('errors')?.textContent === BATCH_TESTING_TEXT) showErrorText('')
     // 試抓途中被擋下來的重畫：補畫一次（只延後、不丟）
     await flushPendingPanelCtx()
+    restoreBatchRowUi(rowUi)
   }
 }
 
@@ -4299,4 +5885,3 @@ async function handleBulkSave() {
     busySave()
   }
 }
-

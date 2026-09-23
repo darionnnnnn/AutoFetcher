@@ -206,6 +206,9 @@ test('E-5 「同一個目標頁」的判定只有 frames.js 那一份', async ()
   assert.equal(sameOriginPath('https://a.test/p', 'https://b.test/p'), false)
   assert.equal(sameOriginPath('not a url', 'https://a.test/p'), false, '不合法一律不相同')
   const fetcherSrc = readFileSync(new URL('../src/background/fetcher.js', import.meta.url), 'utf8')
-  assert.ok(!/\.pathname/.test(fetcherSrc), 'fetcher.js 不得自己再比一次 pathname，要用 frames.js 的那一份')
+  // URL.pathname is also used for privacy-safe diagnostic redaction; only
+  // equality comparisons would duplicate frames.js's same-page policy.
+  assert.ok(!/\.pathname\s*={2,3}|={2,3}\s*[\w$.]+\.pathname/.test(fetcherSrc),
+    'fetcher.js 不得自己再比一次 pathname，要用 frames.js 的那一份')
   assert.ok(/sameOriginPath\(tab\.url, task\.url\)/.test(fetcherSrc), '立即測試核對分頁網址要走它')
 })

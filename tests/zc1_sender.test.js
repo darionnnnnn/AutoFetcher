@@ -25,8 +25,8 @@ const task = {
   schedule: { type: 'daily', times: ['09:00'], weekdays: [1, 2, 3, 4, 5] }
 }
 
-test('content script 可送的型別只有 PICKED 與 DESCEND_FRAME', () => {
-  assert.deepEqual([...CONTENT_ALLOWED].sort(), [MSG.DESCEND_FRAME, MSG.PICKED].sort())
+test('content script 可送的型別限於選值、下鑽與群組取名結果', () => {
+  assert.deepEqual([...CONTENT_ALLOWED].sort(), [MSG.DESCEND_FRAME, MSG.PICKED, MSG.PICK_GROUP_NAME_RESULT].sort())
 })
 
 test('來自網頁（content script）的 TEST_TASK 被拒：不開分頁、不回頁面內容、留診斷', async () => {

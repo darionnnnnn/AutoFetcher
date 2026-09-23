@@ -1,10 +1,31 @@
 // AutoFetcher 報表卡片投放規則純函式模組
 // 負責計算將任務拖放至儀表板卡片後的變更 patch（無 DOM、無相依）
 
-import { parentIdOf } from '../../shared/series-index.js';
+import { buildSeriesIndex, parentIdOf } from '../../shared/series-index.js';
 
 // 折線圖與長條圖的調色盤上限
 export const MAX_CHART_SERIES = 8;
+
+const TEXT_CHART_REASON = '文字值不能加入數字圖表';
+
+// 拖曳端傳入同一份 buildSeriesIndex 結果即可依子序列判斷型別。
+// 沒有型別資料時維持既有 legacy 行為，讓舊的單值拖曳契約不被改變。
+function modeOf(id, opts = {}) {
+  return opts.seriesIndex?.byId?.[id]?.mode;
+}
+
+function hasModeInfo(opts = {}) {
+  return Boolean(opts.seriesIndex?.byId);
+}
+
+function numericIds(ids, opts = {}) {
+  if (!hasModeInfo(opts)) return ids;
+  return ids.filter(id => modeOf(id, opts) !== 'text');
+}
+
+function textSkippedNotice(count) {
+  return count > 0 ? `已略過 ${count} 個文字值（${TEXT_CHART_REASON}）` : '';
+}
 
 // 處理表格卡片的任務投放
 function applyTableDrop(card, taskId, opts = {}) {
@@ -37,7 +58,10 @@ function applyTableDrop(card, taskId, opts = {}) {
 }
 
 // 處理折線圖與長條圖的任務投放
-function applyChartDrop(card, taskId) {
+function applyChartDrop(card, taskId, opts = {}) {
+  if (hasModeInfo(opts) && modeOf(taskId, opts) === 'text') {
+    return { rejected: true, reason: TEXT_CHART_REASON };
+  }
   const source = card.source || [];
   if (source.some(s => s.taskId === taskId)) {
     return null;
@@ -56,6 +80,9 @@ function applyChartDrop(card, taskId) {
 
 // 處理單一來源卡片（數值、儀表盤）的任務投放
 function applySingleSourceDrop(card, taskId, opts = {}) {
+  if (hasModeInfo(opts) && modeOf(taskId, opts) === 'text') {
+    return { rejected: true, reason: TEXT_CHART_REASON };
+  }
   const currentSource = card.source || [];
   if (currentSource.length === 1 && currentSource[0].taskId === taskId) {
     return null;
@@ -95,7 +122,7 @@ export function applyDrop(card, taskId, opts = {}) {
       return applyTableDrop(card, taskId, opts);
     case 'line':
     case 'bar':
-      return applyChartDrop(card, taskId);
+      return applyChartDrop(card, taskId, opts);
     case 'number':
     case 'gauge':
       return applySingleSourceDrop(card, taskId, opts);
@@ -160,33 +187,49 @@ export function applyDropMany(card, ids, opts = {}) {
 
     case 'line':
     case 'bar': {
+      const chartIds = numericIds(validIds, opts);
+      const skippedText = validIds.length - chartIds.length;
+      if (chartIds.length === 0) {
+        return { rejected: true, reason: TEXT_CHART_REASON };
+      }
       const source = card.source || [];
       const existingIds = new Set(source.map(s => s.taskId));
       const newIds = [];
-      for (const id of validIds) {
+      for (const id of chartIds) {
         if (!existingIds.has(id) && !newIds.includes(id)) {
           newIds.push(id);
         }
       }
       if (newIds.length === 0) {
-        return null;
+        return skippedText > 0
+          ? { rejected: true, reason: textSkippedNotice(skippedText) }
+          : null;
       }
       if (source.length + newIds.length > MAX_CHART_SERIES) {
         return null;
       }
       const aggregation = card.options?.aggregation || 'raw';
-      return {
+      const patch = {
         source: [...source, ...newIds.map(taskId => ({ taskId, aggregation }))]
       };
+      if (skippedText > 0) patch.notice = textSkippedNotice(skippedText);
+      return patch;
     }
 
     case 'number':
     case 'gauge': {
-      const patch = applyDrop(card, validIds[0], opts);
+      const sourceIds = numericIds(validIds, opts);
+      if (sourceIds.length === 0) {
+        return { rejected: true, reason: TEXT_CHART_REASON };
+      }
+      const patch = applyDrop(card, sourceIds[0], opts);
       // 這兩種卡片只有一個值的位置；多丟了幾個要說一聲，否則使用者以為其他值掉了
-      if (patch && validIds.length > 1) {
-        const label = opts?.nameOf ? opts.nameOf(validIds[0]) : validIds[0];
-        patch.notice = `只用得到一個值，已使用「${label}」`;
+      if (patch && (validIds.length > 1 || sourceIds.length !== validIds.length)) {
+        const label = opts?.nameOf ? opts.nameOf(sourceIds[0]) : sourceIds[0];
+        const notices = [];
+        if (validIds.length > 1) notices.push(`只用得到一個值，已使用「${label}」`);
+        if (sourceIds.length !== validIds.length) notices.push(textSkippedNotice(validIds.length - sourceIds.length));
+        patch.notice = notices.join('；');
       }
       return patch;
     }
@@ -222,6 +265,14 @@ export function cardTypeForTask(task) {
   if (!task) {
     return 'number';
   }
+  if (task.mode === 'multi' || task.spec?.mode === 'multi') {
+    const index = buildSeriesIndex([task]);
+    const children = index.childrenOf[task.id] || [];
+    if (children.some(id => index.byId[id]?.mode === 'number' || index.byId[id]?.mode === 'block')) {
+      return 'number';
+    }
+    return 'table';
+  }
   if (Array.isArray(task.fields) && task.fields.length > 0) {
     return 'table';
   }
@@ -230,4 +281,3 @@ export function cardTypeForTask(task) {
   }
   return 'number';
 }
-

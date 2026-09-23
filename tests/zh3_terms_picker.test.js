@@ -93,7 +93,7 @@ const task = (over = {}) => ({
 // 保留的只剩白名單外或「只換通知／錯誤文字」檔案裡的程式註解（歷史說明，不是使用者看得到的字）。
 const OLD_TERMS = /聚合方式|合成方式|立即測試|先試抓看看/g
 const KEPT = {
-  'background/fetcher.js': 5, // 註解：立即測試的診斷包、軌跡、raw 截斷層（background 只准換通知／錯誤文字）
+  'background/fetcher.js': 6, // 註解：失敗時保留立即測試軌跡的說明，其餘為既有診斷包與 raw 截斷層
   'background/frames.js': 1, // 註解：立即測試核對分頁網址走 sameOriginPath
   'background/main.js': 1, // 註解：重選時聚合方式沿用
   'shared/aggregate.js': 2, // 註解：純函式的參數說明（檔案不在本段白名單）

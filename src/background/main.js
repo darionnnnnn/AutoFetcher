@@ -29,15 +29,360 @@ import {
 } from './precheck.js'
 import { injectContent } from './inject.js'
 import { sendToFrame } from './messaging.js'
-import { locateFrame, listFrames, matchFrameByUrl } from './frames.js'
+import { locateFrame, listFrames, matchFrameByUrl, sameOriginPath } from './frames.js'
 import { isAnchorText, putSkip } from '../shared/table.js'
-import { pickSpecOf, reconcileFields } from '../shared/field-match.js'
+import { pickSpecOf, pickSourceOf, reconcileFields, sameSpec, stripPos } from '../shared/field-match.js'
+import { parseNumber } from '../shared/extract.js'
 import { withInnerLabel } from '../shared/describe.js'
 import { scheduleSiteCheck, runSiteCheck } from './sitecheck.js'
 import { testLogin } from './login.js'
 import { decryptSecret } from '../shared/crypto.js'
 import { isSuccess, statusTextOf } from '../shared/record-status.js'
 import { parentIdOf, buildSeriesIndex, nameOf, seriesIdOf } from '../shared/series-index.js'
+import {
+  beginPickDraft,
+  readPickDraftMessage,
+  handlePickDraftOperation,
+  completePickDraft,
+  abandonPickDraft,
+  pausePickDraft,
+  clearPickDraftForTab,
+  protocolErrorResponse
+} from '../shared/pick-protocol.js'
+import { getPickDraft, updatePickDraft } from '../shared/pick-draft.js'
+
+// 面板 ctx 可能尚未寫入就收到 pagehide；用短命記號避免無 ctx 時重複清場，
+// 同時讓新一輪開啟能再次廣播 EXIT_PICK。
+const exitedPickTabs = new Set()
+
+// AF-22 C2a：選取中的 frame 是短命執行期狀態，不能寫進草稿（frameId 每次載入都會變）。
+// 這份索引只用來讓進出 frame 有一個可核對的來源，避免舊 frame 的延遲回報改到新階段。
+const activePickFrames = new Map()
+const pickParticipantFrames = new Map()
+const groupNamePickRequests = new Map()
+// Per-field repair grants are deliberately worker-memory only: a worker restart
+// invalidates every outstanding grant, so a stale page cannot replay a repair.
+const fieldRepairSessions = new Map()
+
+async function beginFieldRepair(msg) {
+  if (typeof msg.taskId !== 'string' || typeof msg.fieldKey !== 'string' ||
+      !['repair', 'replace'].includes(msg.repairMode)) return { ok: false, error: 'invalid_repair' }
+  const task = await getTask(msg.taskId)
+  const fields = Array.isArray(task?.fields) ? task.fields : []
+  const field = fields.find(item => item?.key === msg.fieldKey)
+  const specs = Array.isArray(task?.spec?.fields) ? task.spec.fields : []
+  const fieldSpec = specs.find(item => item?.key === msg.fieldKey)
+  const source = field?.source || fieldSpec?.source || task?.source
+  const locator = source?.locator || task?.locator
+  if (!task || !field || !fieldSpec || !locator || task.mode !== 'multi') {
+    return { ok: false, error: 'field_not_found', message: '找不到這個多值任務欄位，請重新載入設定' }
+  }
+  const sessionId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  let tabId = null
+  let keepTab = false
+  let failureCode = 'tab_failed'
+  try {
+    const tab = await chrome.tabs.create({ url: task.url, active: true })
+    tabId = Number.isInteger(tab?.id) ? tab.id : null
+    if (tabId === null) return { ok: false, error: 'tab_failed', message: '無法開啟來源頁面' }
+
+    failureCode = 'frame_not_found'
+    const loc = await locateFrame(tabId, source.frame, locator)
+    if (!loc || !Number.isInteger(loc.frameId)) {
+      return { ok: false, error: 'frame_not_found', message: '找不到此值原本所在的框架' }
+    }
+    let frames = []
+    try { frames = await listFrames(tabId) } catch {}
+    const frameUrl = frames.find(item => item.frameId === loc.frameId)?.url || task.url
+    const routeIdentity = { url: frameUrl }
+    const documentGeneration = `repair:${sessionId}`
+
+    failureCode = 'enter_failed'
+    await injectContent(tabId, { frameId: loc.frameId })
+    // Injection may reject. Do not create the worker-memory one-shot grant until
+    // the source script is ready; a failed handoff then has nothing replayable.
+    fieldRepairSessions.set(sessionId, {
+      sessionId, taskId: task.id, fieldKey: field.key, repairMode: msg.repairMode,
+      tabId, frameId: loc.frameId, frameUrl,
+      documentGeneration, routeIdentity
+    })
+    const entered = await sendToFrame(tabId, {
+      type: MSG.ENTER_PICK, purpose: 'repick', taskId: task.id, locator,
+      repairSessionId: sessionId, repairFieldKey: field.key, repairMode: msg.repairMode,
+      documentGeneration, routeIdentity,
+      preselect: fieldSpec.spec?.cell ? [{ cell: fieldSpec.spec.cell }]
+        : fieldSpec.spec?.block ? [{ block: fieldSpec.spec.block }]
+          : fieldSpec.cell ? [{ cell: fieldSpec.cell }]
+            : fieldSpec.block ? [{ block: fieldSpec.block }] : undefined
+    }, loc.frameId, CONTENT_MESSAGE_TIMEOUT_MS, 'Enter field repair pick')
+    if (entered?.ok === false) {
+      return { ok: false, error: 'enter_failed', message: '無法進入此值的重選模式' }
+    }
+    keepTab = true
+    return { ok: true, sessionId, tabId }
+  } catch (error) {
+    return {
+      ok: false,
+      error: failureCode,
+      message: failureCode === 'frame_not_found' ? '找不到此值原本所在的框架' : '無法進入此值的重選模式',
+      ...(error?.afTimeout ? { retryable: true } : {})
+    }
+  } finally {
+    if (!keepTab) {
+      fieldRepairSessions.delete(sessionId)
+      if (Number.isInteger(tabId)) {
+        try { await chrome.tabs.remove(tabId) } catch {}
+      }
+    }
+  }
+}
+
+async function applyFieldRepair(msg, sender) {
+  const grant = typeof msg.repairSessionId === 'string' ? fieldRepairSessions.get(msg.repairSessionId) : null
+  const tabId = sender?.tab?.id
+  const frameId = sender?.frameId ?? 0
+  if (!grant || grant.taskId !== msg.taskId || grant.fieldKey !== msg.repairFieldKey ||
+      grant.repairMode !== msg.repairMode || tabId !== grant.tabId || frameId !== grant.frameId ||
+      msg.documentGeneration !== grant.documentGeneration || !sameOriginPath(sender?.url, grant.frameUrl)) {
+    return { ok: false, error: 'stale_field_repair', message: '這次單值重選已失效，請重新開始' }
+  }
+  if (msg.cancelled === true) {
+    fieldRepairSessions.delete(grant.sessionId)
+    try { await chrome.tabs.remove(grant.tabId) } catch {}
+    return { ok: true, cancelled: true }
+  }
+  if (!Array.isArray(msg.picks) || msg.picks.length !== 1) {
+    return { ok: false, error: 'invalid_repair_pick', message: '一次只能重選一個值' }
+  }
+  const pick = msg.picks[0]
+  let spec = pickSpecOf(pick)
+  const selectedMode = msg.pickModes?.[0]
+  const hasLocator = value => value && typeof value === 'object' &&
+    ['css', 'path', 'xpath'].some(key => typeof value[key] === 'string' && value[key].trim() !== '')
+  const locatorSignature = value => hasLocator(value)
+    ? JSON.stringify(['css', 'path', 'xpath'].map(key => value[key] || ''))
+    : ''
+  if (!spec && ['number', 'text'].includes(selectedMode) && hasLocator(pick?.locator) &&
+      locatorSignature(pick.locator) === locatorSignature(msg.locator)) {
+    // A non-table metric is identified by its URL-only locator and has no
+    // cell/block selector. Accept only the one target emitted by this pick and
+    // retain the content-side scalar type hint.
+    spec = { mode: selectedMode }
+  }
+  if (!spec) return { ok: false, error: 'invalid_repair_pick', message: '這個選取沒有可用的定位規格' }
+  const locator = msg.locator && typeof msg.locator === 'object' ? structuredClone(msg.locator) : {}
+  if (!hasLocator(locator)) return { ok: false, error: 'invalid_repair_pick', message: '這個選取沒有可用的定位規格' }
+  const frame = frameDescriptorOf(sender, msg)
+  const source = { locator, ...(frame?.url ? { frame: { url: frame.url } } : {}) }
+  // One-shot grant: duplicate delivery cannot repair twice, and a worker restart
+  // naturally loses the grant so old page messages fail closed.
+  fieldRepairSessions.delete(grant.sessionId)
+  let found = false
+  let replacement = null
+  let archivedField = null
+  const oldSeriesId = seriesIdOf(grant.taskId, grant.fieldKey)
+  const [updated] = await updateTasks([grant.taskId], task => {
+    const fields = Array.isArray(task.fields) ? task.fields : []
+    const field = fields.find(item => item?.key === grant.fieldKey)
+    const specs = Array.isArray(task.spec?.fields) ? task.spec.fields : []
+    const entry = specs.find(item => item?.key === grant.fieldKey)
+    if (!field || !entry || task.mode !== 'multi') return null
+    const previous = entry.spec || (entry.cell ? { cell: entry.cell } : entry.block ? { block: entry.block } : {})
+    if (grant.repairMode === 'repair' &&
+        (Boolean(previous.cell) !== Boolean(spec.cell) || Boolean(previous.block) !== Boolean(spec.block))) {
+      return null
+    }
+    const next = structuredClone(spec)
+    if (next.cell && previous.cell) {
+      for (const axis of ['row', 'col']) {
+        if (previous.cell[axis]?.pos && next.cell[axis]) next.cell[axis].pos = previous.cell[axis].pos
+      }
+      if (!next.cell.inner && previous.cell.inner) next.cell.inner = structuredClone(previous.cell.inner)
+    } else if (next.block && previous.block) {
+      for (const key of ['aggregate', 'skip', 'exclude', 'pos', 'inner']) {
+        if (next.block[key] === undefined && previous.block[key] !== undefined) next.block[key] = structuredClone(previous.block[key])
+      }
+    }
+    if (grant.repairMode === 'replace') {
+      const newKey = `field-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
+      const fieldIndex = fields.findIndex(item => item?.key === grant.fieldKey)
+      const name = defaultFieldName(pick, fields.length + 1)
+      const mode = ['number', 'text'].includes(selectedMode) ? selectedMode : (field.mode || pick.mode || 'number')
+      const oldAlerts = (Array.isArray(task.alerts) ? task.alerts : []).filter(alert => alert?.field === grant.fieldKey)
+      task.archivedFields = Array.isArray(task.archivedFields) ? task.archivedFields : []
+      archivedField = {
+        key: grant.fieldKey, name: field.name || grant.fieldKey, mode: field.mode,
+        source: structuredClone(entry.source || field.source || {}), spec: structuredClone(previous),
+        alerts: structuredClone(oldAlerts), archivedAt: new Date().toISOString()
+      }
+      task.archivedFields.push(archivedField)
+      task.fields[fieldIndex] = { ...field, key: newKey, name, mode }
+      entry.key = newKey
+      entry.name = name
+      entry.mode = mode
+      entry.source = source
+      entry.spec = next
+      task.alerts = (Array.isArray(task.alerts) ? task.alerts : []).filter(alert => alert?.field !== grant.fieldKey)
+      if (task.alerts.length === 0) delete task.alerts
+      replacement = { oldFieldKey: grant.fieldKey, newFieldKey: newKey, name, oldSeriesId }
+    } else {
+      entry.source = source
+      entry.spec = next
+      // Legacy normalized copies are removed so future reads use this single spec.
+      delete entry.cell
+      delete entry.block
+    }
+    found = true
+    return task
+  })
+  if (!updated || !found) return { ok: false, error: 'field_not_found', message: '這個值已移除或選取類型不同，沒有套用重選結果' }
+  if (replacement) {
+    await pruneSeries([replacement.oldSeriesId])
+    await deleteLastValues([replacement.oldSeriesId])
+    await rebuildAlarms()
+  }
+  const resultFieldKey = replacement?.newFieldKey || grant.fieldKey
+  const repaired = updated.spec.fields.find(item => item.key === resultFieldKey)
+  const result = { ok: true, taskId: updated.id, fieldKey: resultFieldKey,
+    source: structuredClone(repaired.source), spec: structuredClone(repaired.spec) }
+  if (replacement) Object.assign(result, replacement, {
+    repairMode: 'replace', fieldName: replacement.name,
+    archivedField: structuredClone(archivedField)
+  })
+  try { await chrome.runtime.sendMessage({ type: 'FIELD_REPAIR_DONE', ...result }) } catch {}
+  try { await chrome.tabs.remove(grant.tabId) } catch {}
+  return result
+}
+
+function frameDescriptorOf(sender, extra = {}) {
+  const frameId = sender?.frameId
+  if (frameId === undefined || frameId === 0) return undefined
+  const url = typeof sender?.url === 'string' && sender.url.trim() !== ''
+    ? sender.url
+    : (typeof extra.frameUrl === 'string' ? extra.frameUrl : '')
+  if (!url) return undefined
+  const anchor = extra.frameAnchor ?? extra.frame?.anchor
+  return {
+    url,
+    ...(anchor && typeof anchor === 'object' ? { anchor: structuredClone(anchor) } : {})
+  }
+}
+
+// task/source 與 draft value 的持久格式只允許穩定網址；iframe 的 anchor
+// 只供本輪進出 frame 時核對，不能混進日後 buildTask 會保存的 source。
+function stableFrameOf(sender, extra = {}) {
+  const frame = frameDescriptorOf(sender, extra)
+  return frame ? { url: frame.url } : undefined
+}
+
+function frameStateOf(tabId) {
+  return activePickFrames.get(tabId) || null
+}
+
+function rememberPickFrame(tabId, state) {
+  if (!Number.isInteger(tabId) || !state || !Number.isInteger(state.frameId)) return
+  activePickFrames.set(tabId, { ...state })
+}
+
+function forgetPickFrame(tabId) {
+  activePickFrames.delete(tabId)
+}
+
+function rememberPickParticipant(tabId, sessionId, sender) {
+  if (!Number.isInteger(tabId) || typeof sessionId !== 'string' || !Number.isInteger(sender?.frameId)) return
+  let state = pickParticipantFrames.get(tabId)
+  if (!state || state.sessionId !== sessionId) state = { sessionId, frames: new Map() }
+  state.frames.set(sender.frameId, {
+    url: sender.frameId === 0 ? '' : (sender.url || ''),
+    ...(typeof sender.documentId === 'string' && sender.documentId ? { documentId: sender.documentId } : {})
+  })
+  pickParticipantFrames.set(tabId, state)
+}
+
+async function drainPickDraft(tabId, draft, timeoutMs, resume = false) {
+  if (!draft || !Number.isInteger(tabId)) return { ok: false, message: '選取草稿不存在，無法同步' }
+  const registered = pickParticipantFrames.get(tabId)
+  const activeBeforeDrain = frameStateOf(tabId)
+  const hasQueuedValues = (draft.groups || []).some(group => (group.values || []).length > 0)
+  // Before the first value is selected, the panel may safely create/switch its
+  // initial group without any page content frame participating in the session.
+  if (!hasQueuedValues && registered?.sessionId !== draft.sessionId && activeBeforeDrain?.sessionId !== draft.sessionId) {
+    return { ok: true }
+  }
+  const listed = await listFrames(tabId)
+  const targets = new Set()
+  if (registered?.sessionId === draft.sessionId) {
+    for (const [frameId, identity] of registered.frames) {
+      const frame = listed.find(item => item.frameId === frameId)
+      if (!frame || (identity.url && frame.url !== identity.url) ||
+          (identity.documentId && frame.documentId && frame.documentId !== identity.documentId)) {
+        return { ok: false, message: '有參與選取的框架已失聯或文件已變更，請重新進入該框架後重試' }
+      }
+      targets.add(frameId)
+    }
+  }
+  const urls = new Set()
+  for (const group of draft.groups || []) for (const value of group.values || []) {
+    const url = value?.source?.frame?.url
+    if (typeof url === 'string' && url) urls.add(url)
+  }
+  let tabUrl = ''
+  try { tabUrl = (await chrome.tabs.get(tabId))?.url || '' } catch {}
+  if (tabUrl) urls.add(tabUrl)
+  for (const url of urls) {
+    const matches = listed.filter(frame => frame.url === url)
+    if (matches.length !== 1) return { ok: false, message: matches.length ? '找到多個相同網址的框架，無法確認所有選取都已同步' : '有參與選取的框架已失聯，請返回頁面重試' }
+    targets.add(matches[0].frameId)
+  }
+  if (!targets.size) return { ok: false, message: '找不到可同步的選取框架，請返回頁面重試' }
+  const active = frameStateOf(tabId)
+  if (active?.sessionId === draft.sessionId) targets.add(active.frameId)
+  let failure = null
+  for (const frameId of targets) {
+    try {
+      const response = await sendToFrame(tabId, {
+        type: MSG.PICK_DRAIN, sessionId: draft.sessionId, resume,
+        documentGeneration: draft.documentGeneration, routeIdentity: draft.routeIdentity
+      }, frameId, timeoutMs, 'Drain picker queue')
+      if (response?.ok !== true) { failure = response?.message || '有選取尚未同步，請重試'; break }
+    } catch {
+      failure = '有參與選取的框架沒有回覆同步確認，請返回該框架重試'
+      break
+    }
+  }
+  if (failure && !resume) {
+    await Promise.all([...targets].map(frameId => sendToFrame(tabId, {
+      type: MSG.PICK_DRAIN, sessionId: draft.sessionId, resume: true,
+      documentGeneration: draft.documentGeneration, routeIdentity: draft.routeIdentity
+    }, frameId, timeoutMs, 'Resume picker after failed drain').catch(() => null)))
+    return { ok: false, message: failure }
+  }
+  if (failure) return { ok: false, message: failure }
+  return { ok: true }
+}
+
+function pickIdentityOf(msg = {}) {
+  const activeGroupKey = msg.activeGroupKey ?? msg.groupKey
+  return {
+    ...(msg.sessionId !== undefined ? { sessionId: msg.sessionId } : {}),
+    ...(msg.groupKey !== undefined ? { groupKey: msg.groupKey } : {}),
+    ...(activeGroupKey !== undefined ? { activeGroupKey } : {}),
+    ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
+    ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {})
+  }
+}
+
+function pickTransitionError(hint, candidates = []) {
+  const ambiguous = hint === 'frame_ambiguous'
+  return {
+    ok: false,
+    error: ambiguous ? 'frame_ambiguous' : 'frame_unavailable',
+    retryable: true,
+    hint,
+    candidates: Array.isArray(candidates) ? candidates : [],
+    message: ambiguous ? '找到了多個相同網址的框架，請重新選取要進入的框架' : '目前無法進入這個框架，請重試'
+  }
+}
 
 
 // 重選時把選好的值寫回任務：沒動的值保留原本的 key 與名稱（紀錄靠 key），新值配新 key。
@@ -376,13 +721,19 @@ export async function handleAlarm(alarm, testOpts = {}) {
 
 // 處理內部訊息分派
 // 送訊息那個 frame 的身分；最上層不留欄位（舊任務零遷移的前提）
-function frameIdentityOf(sender) {
+function frameIdentityOf(sender, extra = {}) {
   if (sender?.frameId === undefined || sender.frameId === 0) return {}
-  return { frameId: sender.frameId, frameUrl: sender.url }
+  const frame = stableFrameOf(sender, extra)
+  return {
+    frameId: sender.frameId,
+    frameUrl: sender.url,
+    ...(frame ? { frame } : {})
+  }
 }
 
 // 選取結果 → 面板要的 payload（逐欄挑，補上分頁與框架身分）；單任務與批次每一組共用這一份
-function taskPayloadOf(src, sender) {
+function taskPayloadOf(src, sender, msg = {}) {
+  const frame = stableFrameOf(sender, msg)
   const payload = {
     locator: src?.locator,
     preview: src?.preview,
@@ -393,10 +744,385 @@ function taskPayloadOf(src, sender) {
     url: sender?.tab?.url,
     nameHint: src?.nameHint,
     // 使用者一次挑的那幾個值；漏掉這一個欄位，多值任務就會退化成單值
-    picks: src?.picks
+    picks: src?.picks,
+    ...(frame ? { source: { frame } } : {}),
+    ...pickIdentityOf(msg)
   }
-  Object.assign(payload, frameIdentityOf(sender))
+  Object.assign(payload, frameIdentityOf(sender, msg))
+  // C2a 的跨 frame 草稿尚未進入正式 task schema；先把每個值的來源以可序列化
+  // 形狀留在 panel ctx，後續設定頁接線時不必猜「這批值原本在哪一層」。
+  if (Array.isArray(payload.picks)) {
+    payload.valueSources = payload.picks.map((spec) => ({
+      locator: payload.locator,
+      ...(frame ? { frame } : {}),
+      spec: structuredClone(spec)
+    }))
+  }
   return payload
+}
+
+function hashStable(value) {
+  const text = stableValue(value)
+  let hash = 2166136261
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
+function valueModeOf(pick, payload, index = 0) {
+  if (typeof pick?.mode === 'string' && pick.mode.trim() !== '') return pick.mode
+  const hinted = payload?.pickModes?.[index] ?? payload?.valueModes?.[index]
+  if (hinted === 'number' || hinted === 'text' || hinted === 'block') return hinted
+  if (pick?.block) return 'block'
+  // A single value can use its actual preview as a fallback. For multiple
+  // values content supplies one explicit mode per value; otherwise remain
+  // undecided instead of guessing text from a missing preview.
+  if (Array.isArray(payload?.picks) && payload.picks.length === 1 && typeof payload.preview === 'string') {
+    return parseNumber(payload.preview) !== null ? 'number' : 'text'
+  }
+  return 'pending'
+}
+
+function draftValueOf(payload, pick, sender, msg, index = 0) {
+  const frame = stableFrameOf(sender, msg)
+  const locator = payload?.locator ? structuredClone(payload.locator) : {}
+  const rawSpec = pickSpecOf(pick) || {}
+  // pickSpecOf keeps optional fields explicit for comparison; the draft
+  // serializer accepts JSON data only, so drop undefined optional members.
+  const spec = JSON.parse(JSON.stringify(rawSpec))
+  const source = pickSourceOf({
+    locator,
+    ...(frame ? { frame } : {})
+  }) || { locator }
+  // B2 identity ignores position-only and block skip/exclude settings.
+  const identitySpec = stripPos(spec)
+  const identity = {
+    source,
+    spec: identitySpec
+  }
+  const value = {
+    key: `pick-${hashStable(identity)}`,
+    mode: valueModeOf(pick, payload, index),
+    source,
+    spec,
+    locator,
+    ...(payload?.preview !== undefined ? { preview: payload.preview } : {}),
+    ...(payload?.previewValue !== undefined ? { previewValue: payload.previewValue } : {})
+  }
+  return value
+}
+
+async function extensionDraftSender(tabId) {
+  let url = 'chrome-extension://autofetcher/ui/picker/picker.html'
+  try {
+    if (typeof chrome?.runtime?.getURL === 'function') url = await chrome.runtime.getURL('ui/picker/picker.html')
+  } catch {}
+  return { url, tab: { id: tabId }, frameId: 0 }
+}
+
+// Content 端仍只能送 PICKED；background 在收到它後，以 C1b add operation
+// 逐值寫入同一份 draft。operation id 由 content 的一次 PICKED 操作加值索引
+// 派生；同一 source/spec 則即使換了 operation id 也保持冪等。
+async function appendPickedToDraft(msg, sender, payload = msg) {
+  const tabId = sender?.tab?.id
+  const groupKey = msg?.groupKey ?? msg?.activeGroupKey
+  if (msg?.purpose !== 'task' || !Number.isInteger(tabId) || typeof msg?.sessionId !== 'string' ||
+      typeof groupKey !== 'string' || !Array.isArray(payload?.picks)) return null
+
+  const draft = await getPickDraft(tabId, { sessionId: msg.sessionId })
+  if (!draft) {
+    return { ok: false, error: 'missing_draft', retryable: true, message: '選取草稿已不存在，請重新開始這一輪選取' }
+  }
+  if (!draft.groups.some(group => group.key === groupKey)) {
+    return { ok: false, error: 'group_not_found', retryable: true, message: '目前作用中的選取組已不存在，請重新選取' }
+  }
+  if (!draftRouteMatchesTab(draft.routeIdentity, sender?.tab?.url)) {
+    return { ok: false, error: 'stale_route', retryable: true, message: '目前頁面路徑已變更，請重新確認來源後再選取' }
+  }
+  if (!draftIdentityMatches(msg, draft)) {
+    return { ok: false, error: 'stale_document', retryable: true, message: '頁面已變更，請重新整理後再選取' }
+  }
+
+  const operationSender = await extensionDraftSender(tabId)
+  let latest = draft
+  try {
+    const operationBase = typeof msg.operationId === 'string' && msg.operationId.trim() !== ''
+      ? msg.operationId
+      : `background-pick:${draft.sessionId}:${groupKey}:${Date.now()}-${Math.random().toString(36).slice(2)}`
+    for (const [index, pick] of payload.picks.entries()) {
+      const value = draftValueOf(payload, pick, sender, msg, index)
+      const group = latest.groups.find(item => item.key === groupKey)
+      if (group?.values.some(existing => sameSpec(existing, value))) continue
+      const operationId = `${operationBase}:${index}`
+      const result = await handlePickDraftOperation({
+        type: MSG.PICK_DRAFT_OPERATION,
+        operationId,
+        expectedRevision: latest.revision,
+        sessionId: draft.sessionId,
+        tabId,
+        operation: { type: 'add', groupKey, value }
+      }, operationSender)
+      if (!result?.ok || !result.draft) return result || { ok: false, error: 'draft_write_failed', retryable: true }
+      latest = result.draft
+    }
+    // 新群組模式點已選值＝移除；仍沿用 PICKED content 白名單，background
+    // 以同一份 source/spec 找回穩定 value key，再走正式 remove operation。
+    if (Array.isArray(payload?.removePicks)) {
+      for (const [index, pick] of payload.removePicks.entries()) {
+        const value = draftValueOf(payload, pick, sender, msg, index)
+        const group = latest.groups.find(item => item.key === groupKey)
+        const existing = group?.values.find(item => sameSpec(item, value))
+        if (!existing) continue
+        const operationId = `${operationBase}:remove:${index}`
+        const result = await handlePickDraftOperation({
+          type: MSG.PICK_DRAFT_OPERATION,
+          operationId,
+          expectedRevision: latest.revision,
+          sessionId: draft.sessionId,
+          tabId,
+          operation: { type: 'remove', groupKey, valueKey: existing.key }
+        }, operationSender)
+        if (!result?.ok || !result.draft) return result || { ok: false, error: 'draft_write_failed', retryable: true }
+        latest = result.draft
+      }
+    }
+    // Context-menu exclude/include edits replace the selector atomically. Keep
+    // the original value key/source so ACK retries and source identity remain stable.
+    if (Array.isArray(payload?.replacePicks)) {
+      for (const [index, item] of payload.replacePicks.entries()) {
+        const pick = item?.pick
+        const value = draftValueOf(payload, pick, sender, msg, index)
+        const group = latest.groups.find(entry => entry.key === groupKey)
+        const existing = group?.values.find(entry => sameSpec(entry, value))
+        if (!existing) continue
+        const replacement = {
+          ...value,
+          key: existing.key,
+          source: structuredClone(existing.source),
+          locator: structuredClone(existing.locator || value.locator)
+        }
+        const operationId = `${operationBase}:replace:${index}`
+        const result = await handlePickDraftOperation({
+          type: MSG.PICK_DRAFT_OPERATION,
+          operationId,
+          expectedRevision: latest.revision,
+          sessionId: draft.sessionId,
+          tabId,
+          operation: { type: 'replace-value', groupKey, valueKey: existing.key, value: replacement }
+        }, operationSender)
+        if (!result?.ok || !result.draft) return result || { ok: false, error: 'draft_write_failed', retryable: true }
+        latest = result.draft
+      }
+    }
+  } catch (error) {
+    const response = protocolErrorResponse(error)
+    return response || { ok: false, error: 'draft_write_failed', retryable: true, message: String(error?.message || error) }
+  }
+
+  await mergePanelCtx(tabId, {
+    pickDraft: latest,
+    pickSessionId: latest.sessionId,
+    pickGroupKey: groupKey
+  })
+  return { ok: true, draft: latest, revision: latest.revision }
+}
+
+// F1a：完成屏障取得的 immutable snapshot 是跨面板的唯一選取結果；
+// 這裡把單一群組的值轉成設定頁可直接 render 的欄位形狀。
+// 每個 field 的來源與單值 spec 都保留，不能退回以第一個 locator 假裝整組同源。
+async function pickerContextOfSnapshot(snapshot) {
+  const groups = Array.isArray(snapshot?.groups) ? snapshot.groups : []
+  const group = groups.find(item => Array.isArray(item?.values) && item.values.length > 0) || groups[0]
+  const values = Array.isArray(group?.values) ? group.values : []
+  const fields = values.map((value, index) => ({
+    key: value.key,
+    name: typeof value.name === 'string' && value.name.trim() ? value.name : `值 ${index + 1}`,
+    mode: value.mode === 'text' || value.mode === 'block' ? value.mode : 'number',
+    source: structuredClone(value.source || { locator: value.locator || {} }),
+    spec: structuredClone(value.spec || {})
+  }))
+  let url = typeof snapshot?.routeIdentity?.url === 'string' ? snapshot.routeIdentity.url : ''
+  try {
+    const tabUrl = (await chrome.tabs.get(snapshot?.tabId))?.url
+    if (typeof tabUrl === 'string' && tabUrl) url = tabUrl
+  } catch {}
+  const first = fields[0]
+  return {
+    tabId: snapshot?.tabId,
+    url,
+    nameHint: group?.name || '',
+    locator: first?.source?.locator,
+    ...(first?.source?.frame?.url ? { frameUrl: first.source.frame.url, frame: first.source.frame } : {}),
+    picks: fields.map(field => structuredClone(field.spec)),
+    valueSources: fields.map(field => ({ locator: structuredClone(field.source.locator), ...(field.source.frame ? { frame: structuredClone(field.source.frame) } : {}) })),
+    fields
+  }
+}
+
+function pickerBatchItemsOfSnapshot(snapshot, baseCtx = {}) {
+  const groups = Array.isArray(snapshot?.groups) ? snapshot.groups : []
+  return groups.map((group, groupIndex) => {
+    const values = Array.isArray(group?.values) ? group.values : []
+    const fields = values.map((value, index) => ({
+      key: value.key,
+      name: typeof value.name === 'string' && value.name.trim() ? value.name : `值 ${index + 1}`,
+      mode: value.mode === 'text' || value.mode === 'block' ? value.mode : 'number',
+      source: structuredClone(value.source || { locator: value.locator || {} }),
+      spec: structuredClone(value.spec || {})
+    }))
+    const first = fields[0]
+    return {
+      key: group.key || `g${groupIndex + 1}`,
+      nameHint: typeof group.name === 'string' ? group.name : '',
+      tabId: snapshot?.tabId,
+      url: baseCtx.url || snapshot?.routeIdentity?.url || '',
+      locator: first?.source?.locator || {},
+      ...(first?.source?.frame?.url ? { frameUrl: first.source.frame.url, frame: first.source.frame } : {}),
+      picks: fields.map(field => structuredClone(field.spec)),
+      valueSources: fields.map(field => ({
+        locator: structuredClone(field.source?.locator || {}),
+        ...(field.source?.frame ? { frame: structuredClone(field.source.frame) } : {})
+      })),
+      fields,
+      taskSaveState: group.taskSaveState || group.saveState || 'pending',
+      firstRunState: group.firstRunState || 'pending',
+      saveState: group.taskSaveState || group.saveState || 'pending',
+      ...(group.taskId ? { taskId: group.taskId } : {})
+    }
+  })
+}
+
+async function markPickSnapshotSettings(snapshot) {
+  return updatePickDraft(snapshot.tabId, current => ({
+    ...current,
+    stage: 'settings',
+    paused: false
+  }), {
+    sessionId: snapshot.sessionId,
+    revision: snapshot.revision,
+    documentGeneration: snapshot.documentGeneration,
+    documentIdentity: snapshot.documentIdentity,
+    routeIdentity: snapshot.routeIdentity,
+    frame: snapshot.frame
+  })
+}
+
+// D1a/D1b 取名請求只啟動 content 的取名狀態；不得把頁面文字當成 PICKED 或寫進值草稿。
+async function requestGroupNamePick(msg) {
+  const tabId = msg?.tabId
+  if (!Number.isInteger(tabId) || typeof msg?.sessionId !== 'string' || typeof msg?.groupKey !== 'string' ||
+      typeof msg?.requestId !== 'string' || msg.requestId.trim() === '') {
+    return { ok: false, error: 'invalid_group_name_request', message: '取名請求缺少工作階段身分' }
+  }
+  const draft = await getPickDraft(tabId, { sessionId: msg.sessionId })
+  if (!draft || !draft.groups.some(group => group.key === msg.groupKey)) {
+    return { ok: false, error: 'group_not_found', message: '目前群組已不存在，請重新整理面板' }
+  }
+  if (!draftIdentityMatches(msg, draft)) {
+    return { ok: false, error: 'stale_document', message: '頁面已變更，請重新整理後再取名' }
+  }
+  if (draft.activeGroupKey !== msg.groupKey) {
+    return { ok: false, error: 'inactive_group', message: '請先切換到要命名的群組，再從頁面取名' }
+  }
+  let active = frameStateOf(tabId)
+  let frameId = active?.frameId ?? 0
+  if (active && (active.sessionId !== msg.sessionId || !draftIdentityMatches(msg, active))) {
+    return { ok: false, error: 'group_conflict', message: '目前頁面選取階段已切換，請重新取名' }
+  }
+  // set-active drains every participant but deliberately leaves the last frame
+  // identity tagged with the previous group. A page-name gesture belongs to the
+  // currently active group; after a drain barrier it can safely move to the top
+  // document, where text outside the previously selected iframe is reachable.
+  if (active && active.groupKey && active.groupKey !== msg.groupKey) {
+    const drained = await drainPickDraft(tabId, draft, CONTENT_MESSAGE_TIMEOUT_MS)
+    if (!drained.ok) return { ok: false, error: 'drain_failed', retryable: true, message: drained.message }
+    const latest = await getPickDraft(tabId, { sessionId: msg.sessionId })
+    active = frameStateOf(tabId)
+    if (!latest || latest.activeGroupKey !== msg.groupKey || latest.sessionId !== msg.sessionId ||
+        !draftIdentityMatches(msg, latest) || !active || active.sessionId !== msg.sessionId || !draftIdentityMatches(msg, active)) {
+      return { ok: false, error: 'group_conflict', retryable: true, message: '目前頁面選取階段已切換，請重新取名' }
+    }
+    frameId = 0
+    rememberPickFrame(tabId, { ...active, frameId, groupKey: msg.groupKey })
+    try { await injectContent(tabId, { frameId }) } catch (error) {
+      return { ok: false, error: 'name_pick_unavailable', retryable: true, message: String(error?.message || error) }
+    }
+  }
+  let expectedUrl = ''
+  try { expectedUrl = (await chrome.tabs.get(tabId))?.url || '' } catch {}
+  try {
+    await sendToFrame(tabId, {
+      type: MSG.PICK_GROUP_NAME,
+      tabId,
+      requestId: msg.requestId,
+      sessionId: msg.sessionId,
+      groupKey: msg.groupKey,
+      documentGeneration: draft.documentGeneration,
+      routeIdentity: draft.routeIdentity
+    }, frameId, CONTENT_MESSAGE_TIMEOUT_MS, 'Enter group name pick')
+    groupNamePickRequests.set(tabId, {
+      requestId: msg.requestId,
+      sessionId: msg.sessionId,
+      groupKey: msg.groupKey,
+      documentGeneration: structuredClone(draft.documentGeneration),
+      routeIdentity: structuredClone(draft.routeIdentity),
+      frameId,
+      expectedUrl
+    })
+    return { ok: true, frameId }
+  } catch (error) {
+    return { ok: false, error: 'name_pick_unavailable', message: String(error?.message || error), retryable: true }
+  }
+}
+
+function draftIdentityMatches(message, draft) {
+  for (const field of ['documentGeneration', 'routeIdentity']) {
+    if (message?.[field] !== undefined && stableValue(message[field]) !== stableValue(draft?.[field])) return false
+  }
+  return true
+}
+
+function draftRouteMatchesTab(routeIdentity, tabUrl) {
+  const expectedUrl = routeIdentity && typeof routeIdentity === 'object' && typeof routeIdentity.url === 'string'
+    ? routeIdentity.url
+    : ''
+  return !expectedUrl || expectedUrl === tabUrl
+}
+
+function stableValue(value) {
+  if (Array.isArray(value)) return `[${value.map(stableValue).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${stableValue(value[k])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+// 同一草稿／同一組收到另一個 frame 的 PICKED 時追加值；跨 frame 不能把前一層
+// 的 ctx 當成 retarget 覆寫掉。相同來源重送只留一份，避免重試製造重複值。
+function mergeFramePickPayload(previous, next) {
+  if (!previous || !next || !Array.isArray(previous.picks) || !Array.isArray(next.picks)) return next
+  const oldSources = Array.isArray(previous.valueSources) ? previous.valueSources : []
+  const newSources = Array.isArray(next.valueSources) ? next.valueSources : []
+  const keys = new Set(oldSources.map(stableValue))
+  const picks = previous.picks.slice()
+  const valueSources = oldSources.map((item) => structuredClone(item))
+  next.picks.forEach((pick, i) => {
+    const source = newSources[i] || { locator: next.locator, spec: pick }
+    const key = stableValue(source)
+    if (keys.has(key)) return
+    keys.add(key)
+    picks.push(structuredClone(pick))
+    valueSources.push(structuredClone(source))
+  })
+  return {
+    ...next,
+    picks,
+    valueSources,
+    // 顯示用的共用預覽取最新 frame，但保留前面各值的來源清單。
+    source: next.source || previous.source
+  }
 }
 
 /**
@@ -421,10 +1147,18 @@ function canStartPick(ctx) {
  * 或 { blocked: '說明句' }（不進選取，把這句寫進面板的 notice）。
  * 單任務與多任務互不插隊：多任務清單還沒存時不開單任務；表單或清單填到一半時不開多任務。
  */
-function pickEntryOf(ctx, batch) {
+function pickEntryOf(ctx, batch, sessionId, groupKey, tabId) {
   if (canStartPick(ctx)) return { start: true }
   if (ctx?.kind === 'bulk') return { blocked: '有一批任務的排程改到一半，請先套用或取消，再開始選取' }
   if (batch) {
+    if (ctx?.kind === 'new' && ctx.batch === true) {
+      const draft = ctx.pickDraft
+      const validDraftEntry = typeof sessionId === 'string' && draft?.sessionId === sessionId &&
+        draft?.tabId === tabId && draft?.activeGroupKey === groupKey &&
+        Array.isArray(draft?.groups) && draft.groups.some(group => group?.key === groupKey)
+      if (validDraftEntry) return { start: false }
+      return { blocked: '多值選取草稿或作用組已變更，請重新整理草稿後再試' }
+    }
     return { blocked: ctx.kind === 'batch'
       ? '多任務清單還沒存，請先全部儲存或取消，再開始新的多任務'
       : '有一個任務設定到一半，請先儲存或取消，再開始多任務' }
@@ -434,8 +1168,22 @@ function pickEntryOf(ctx, batch) {
 }
 
 // 依 pickEntryOf 的結果處理面板 ctx；回傳 false＝被擋（已留說明），呼叫端不得進選取模式
-async function applyPickEntry(tabId, batch) {
-  const entry = pickEntryOf(await getPanelCtx(tabId), batch)
+async function applyPickEntry(tabId, batch, sessionId, groupKey, documentGeneration, routeIdentity) {
+  const ctx = await getPanelCtx(tabId)
+  if (batch && ctx?.kind === 'new' && ctx.batch === true) {
+    const draft = typeof sessionId === 'string'
+      ? await getPickDraft(tabId, { sessionId, documentGeneration, routeIdentity })
+      : null
+    const validDraftEntry = draft?.tabId === tabId && draft.activeGroupKey === groupKey &&
+      Array.isArray(draft.groups) && draft.groups.some(group => group?.key === groupKey)
+    if (!validDraftEntry) {
+      const message = '多值選取草稿或作用組已變更，請重新整理草稿後再試'
+      await mergePanelCtx(tabId, { notice: message })
+      return false
+    }
+    return true
+  }
+  const entry = pickEntryOf(ctx, batch, sessionId, groupKey, tabId)
   if (entry.blocked) {
     await mergePanelCtx(tabId, { notice: entry.blocked })
     return false
@@ -524,6 +1272,152 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       return { ok: false, error: 'forbidden' }
     }
 
+    if (msg.type === MSG.PICK_GROUP_NAME) return await requestGroupNamePick(msg)
+    if (msg.type === MSG.BEGIN_FIELD_REPAIR) return await beginFieldRepair(msg)
+    if (msg.type === MSG.PICK_GROUP_NAME_RESULT) {
+      const tabId = sender?.tab?.id
+      const active = Number.isInteger(tabId) ? frameStateOf(tabId) : null
+      const request = Number.isInteger(tabId) ? groupNamePickRequests.get(tabId) : null
+      let currentTabUrl = ''
+      try { currentTabUrl = Number.isInteger(tabId) ? ((await chrome.tabs.get(tabId))?.url || '') : '' } catch {}
+      if (!Number.isInteger(tabId) || typeof msg.sessionId !== 'string' || typeof msg.groupKey !== 'string' ||
+          typeof msg.requestId !== 'string' || !request || request.requestId !== msg.requestId ||
+          request.sessionId !== msg.sessionId || request.groupKey !== msg.groupKey ||
+          !draftIdentityMatches(msg, request) ||
+          (request.expectedUrl && currentTabUrl && request.expectedUrl !== currentTabUrl) ||
+          (active && (active.sessionId !== msg.sessionId || (active.groupKey && active.groupKey !== msg.groupKey) ||
+            active.frameId !== (sender?.frameId ?? 0) || !draftIdentityMatches(msg, active))) ||
+          (!active && (sender?.frameId ?? 0) !== 0)) {
+        return { ok: false, error: 'stale_frame', message: '取名回報來自已失效的選取階段' }
+      }
+      const draft = await getPickDraft(tabId, { sessionId: msg.sessionId })
+      if (!draft || draft.activeGroupKey !== msg.groupKey || !draft.groups.some(group => group.key === msg.groupKey) || !draftIdentityMatches(msg, draft)) {
+        return { ok: false, error: 'group_not_found', message: '目前群組已不存在' }
+      }
+      try {
+        await chrome.runtime.sendMessage({
+          type: MSG.PICK_GROUP_NAME_RESULT,
+          tabId,
+          requestId: msg.requestId,
+          sessionId: msg.sessionId,
+          groupKey: msg.groupKey,
+          documentGeneration: draft.documentGeneration,
+          routeIdentity: draft.routeIdentity,
+          text: typeof msg.text === 'string' ? msg.text : ''
+        })
+      } catch {}
+      groupNamePickRequests.delete(tabId)
+      return { ok: true }
+    }
+
+    // C1b：草稿訊息只由 extension page 送出，所有變更都在 pick-protocol
+    // 的 session 鎖內完成。這條路與舊 PICKED／repick 路徑分開，保留舊單任務相容性。
+    if (msg.type === MSG.PICK_DRAFT_BEGIN) return await beginPickDraft(msg, sender)
+    if (msg.type === MSG.PICK_DRAFT_READ) return await readPickDraftMessage(msg, sender)
+    if (msg.type === MSG.PICK_DRAFT_OPERATION) {
+      const operation = msg.operation || msg
+      if (operation.type === 'set-active' || operation.op === 'set-active') {
+        const tabId = msg.tabId ?? sender?.tab?.id
+        const draft = await getPickDraft(tabId, { sessionId: msg.sessionId })
+        if (!draft || draft.sessionId !== msg.sessionId) return { ok: false, error: 'stale_session', message: '選取階段已變更，請重新整理後重試' }
+        const drained = await drainPickDraft(tabId, draft, contentMs)
+        if (!drained.ok) return { ok: false, error: 'drain_failed', retryable: true, message: drained.message }
+        const latest = await getPickDraft(tabId, { sessionId: draft.sessionId })
+        if (!latest || latest.sessionId !== draft.sessionId) return { ok: false, error: 'stale_session', message: '選取階段已變更，請重新整理後重試' }
+        try {
+          const result = await handlePickDraftOperation({ ...msg, expectedRevision: latest.revision }, sender)
+          if (!result?.ok) await drainPickDraft(tabId, latest, contentMs, true)
+          return result
+        } catch (error) {
+          await drainPickDraft(tabId, latest, contentMs, true)
+          throw error
+        }
+      }
+      return await handlePickDraftOperation(msg, sender)
+    }
+    if (msg.type === MSG.PICK_DRAFT_COMPLETE) {
+      const tabId = msg.tabId ?? sender?.tab?.id
+      const before = await getPickDraft(tabId, { sessionId: msg.sessionId })
+      if (!before || before.sessionId !== msg.sessionId) return { ok: false, error: 'stale_session', message: '選取階段已變更，請重新整理後重試' }
+      if (!before.groups?.length || before.groups.some(group => !Array.isArray(group.values) || group.values.length === 0)) {
+        return { ok: false, synchronized: false, error: 'empty_group', message: '每個群組完成前都必須至少有一個值' }
+      }
+      const drained = await drainPickDraft(tabId, before, contentMs)
+      if (!drained.ok) return { ok: false, error: 'drain_failed', retryable: true, message: drained.message }
+      const latest = await getPickDraft(tabId, { sessionId: before.sessionId })
+      if (!latest || latest.sessionId !== before.sessionId) return { ok: false, error: 'stale_session', message: '選取階段已變更，請重新整理後重試' }
+      if (!latest.groups?.length || latest.groups.some(group => !Array.isArray(group.values) || group.values.length === 0)) {
+        await drainPickDraft(tabId, latest, contentMs, true)
+        return { ok: false, synchronized: false, error: 'empty_group', message: '每個群組完成前都必須至少有一個值' }
+      }
+      let completed
+      try {
+        completed = await completePickDraft({ ...msg, expectedRevision: latest.revision }, sender)
+      } catch (error) {
+        await drainPickDraft(tabId, latest, contentMs, true)
+        throw error
+      }
+      if (!completed?.ok) await drainPickDraft(tabId, latest, contentMs, true)
+      if (completed?.ok && completed.snapshot) {
+        const groups = Array.isArray(completed.snapshot.groups) ? completed.snapshot.groups : []
+        if (groups.length === 0 || groups.some(group => !Array.isArray(group?.values) || group.values.length === 0)) {
+          return {
+            ...completed,
+            ok: false,
+            synchronized: false,
+            error: 'empty_group',
+            message: '每個群組完成前都必須至少有一個值'
+          }
+        }
+        const previousPanel = await getPanelCtx(completed.tabId)
+        const stagedDraft = await markPickSnapshotSettings(completed.snapshot)
+        const ctx = await pickerContextOfSnapshot(completed.snapshot)
+        const batch = previousPanel?.batch === true
+        const items = batch ? pickerBatchItemsOfSnapshot(completed.snapshot, ctx) : null
+        const batchNames = batch
+          ? Object.fromEntries(groups.map((group, index) => [group.key, typeof group.name === 'string' && group.name.trim() ? group.name : `值 ${index + 1}`]))
+          : null
+        const panelContext = batch
+          ? {
+              kind: 'batch',
+              batch: true,
+              items,
+              draft: { ...(completed.snapshot.form || {}), batchNames },
+              pickSessionId: completed.snapshot.sessionId,
+              pickGroupKey: null
+            }
+          : {
+              kind: 'new',
+              ctx,
+              draft: { name: groups[0]?.name || '', ...(completed.snapshot.form || {}) },
+              pickSessionId: completed.snapshot.sessionId,
+              pickGroupKey: groups[0]?.key
+            }
+        // 完成後把設定階段寫回同一個分頁 ctx；面板重載時仍會進設定頁，
+        // 而不是再次顯示「等待設定畫面」或重新建立欄位。
+        await setPanelCtx(completed.tabId, panelContext)
+        return { ...completed, draft: stagedDraft, context: ctx, panelContext }
+      }
+      return completed
+    }
+    if (msg.type === MSG.PICK_DRAFT_ABANDON || msg.type === MSG.PICK_DRAFT_FINALIZE) {
+      const result = await abandonPickDraft(msg, sender)
+      if (result?.ok) {
+        const tabId = msg.tabId ?? sender?.tab?.id
+        pickParticipantFrames.delete(tabId)
+        forgetPickFrame(tabId)
+      }
+      return result
+    }
+    if (msg.type === MSG.PICK_DRAFT_PAUSE) {
+      const tabId = Number.isInteger(sender?.tab?.id) ? sender.tab.id : msg.tabId
+      if (msg.operationId !== undefined || msg.expectedRevision !== undefined || msg.operation) {
+        return await handlePickDraftOperation({ ...msg, operation: msg.operation || { type: 'pause' } }, sender)
+      }
+      const draft = await pausePickDraft(tabId)
+      return { ok: true, paused: Boolean(draft), draft }
+    }
+
     if (msg.type === MSG.TEST_TASK) {
       const task = msg.task
       if (!task || typeof task !== 'object' || !task.url || !task.locator || !task.spec) {
@@ -537,35 +1431,46 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       if (!task) {
         return { ok: false, outcome: 'failed', error: '找不到任務' }
       }
+      const multi = task.mode === 'multi' || task.spec?.mode === 'multi'
+      if (multi && (!Array.isArray(task.fields) || task.fields.length === 0)) {
+        return { ok: false, outcome: 'failed', status: 'error', error: '多來源任務沒有可執行欄位', values: [] }
+      }
+      const hasDeclaredFields = Array.isArray(task.fields) && task.fields.length > 0
+      const executionId = globalThis.crypto?.randomUUID?.() || `manual-${Date.now()}-${Math.random().toString(36).slice(2)}`
       const record = await runTask(task, {
         slot: slotOf(Date.now()),
         ...runOpts,
-        reason: 'manual'
+        reason: 'manual',
+        ...(hasDeclaredFields ? { executionId } : {})
       })
       if (!record) {
         return { ok: true, outcome: 'failed', status: 'error', error: '沒有結果' }
       }
       // 多值任務要逐值回報，只回第一筆使用者看不出另外幾個值怎麼了
       let values
-      if (Array.isArray(task.fields) && task.fields.length > 0 && typeof record.slot === 'string') {
-        // 同一分鐘按兩次會有兩組紀錄，每個值只留最新的那一筆
-        const latestById = new Map()
+      if (hasDeclaredFields && typeof record.slot === 'string') {
+        const recordsById = new Map()
         for (const r of await getRecordsByDate(record.slot.slice(0, 10))) {
-          if (r.slot !== record.slot || parentIdOf(r.taskId) !== task.id) continue
-          const prev = latestById.get(r.taskId)
-          if (!prev || String(r.capturedAt) >= String(prev.capturedAt)) latestById.set(r.taskId, r)
+          if (r.slot !== record.slot || r.executionId !== executionId || parentIdOf(r.taskId) !== task.id) continue
+          recordsById.set(r.taskId, r)
         }
-        const sameSlot = [...latestById.values()]
-        if (sameSlot.length > 0) {
-          const idx = buildSeriesIndex([task])
-          values = sameSlot.map(r => ({
+        const idx = buildSeriesIndex([task])
+        values = task.fields.map(field => {
+          const r = recordsById.get(seriesIdOf(task.id, field.key))
+          return r ? ({
             // 按鈕就在那個任務旁邊，用值名就夠，不必每個都重複任務名
             name: idx.byId[r.taskId]?.shortName || nameOf(idx, r.taskId),
             ok: isSuccess(r),
             value: isSuccess(r) ? r.value : undefined,
             error: isSuccess(r) ? undefined : (r.error || statusTextOf(r.status))
-          }))
-        }
+          }) : ({ name: field.name || field.key, ok: false, error: '本次沒有結果' })
+        })
+        const successes = values.filter(value => value.ok).length
+        // 新 multi 協定公開整批完成度；舊 block 呼叫端沿用父紀錄的成功語意。
+        const outcome = multi
+          ? (successes === values.length ? 'done' : successes > 0 ? 'partial' : 'failed')
+          : (isSuccess(record) ? 'done' : 'failed')
+        return { ok: true, outcome, status: record.status, values }
       }
 
       if (isSuccess(record)) {
@@ -621,6 +1526,34 @@ export async function handleMessage(msg, sender, runOpts = {}) {
     }
 
     if (msg.type === MSG.PICKED) {
+      if (msg.repairSessionId !== undefined) return await applyFieldRepair(msg, sender)
+      const pickedTabId = sender?.tab?.id
+      const activeFrame = Number.isInteger(pickedTabId) ? frameStateOf(pickedTabId) : null
+      const participant = Number.isInteger(pickedTabId) ? pickParticipantFrames.get(pickedTabId) : null
+      // Legacy PICKED has no sessionId. Do not match two absent ids and then
+      // dereference a participant frame map; only C2b session messages may use
+      // the per-session participant document guard.
+      const knownParticipant = participant && msg.sessionId !== undefined &&
+        participant.sessionId === msg.sessionId
+        ? participant.frames.get(sender?.frameId ?? 0)
+        : null
+      if (knownParticipant?.documentId && sender?.documentId && knownParticipant.documentId !== sender.documentId) {
+        return { ok: false, error: 'stale_document', retryable: true, message: '這個框架的文件已重新載入，請重新進入後再選取' }
+      }
+      // 進入下一個 frame 後，舊文件晚到的完成回報不可覆蓋新階段。
+      // 沒有 C2a session 欄位的舊單任務仍沿用既有相容路徑。
+      if (activeFrame && msg.sessionId !== undefined) {
+        if (activeFrame.sessionId !== msg.sessionId || activeFrame.frameId !== (sender?.frameId ?? 0)) {
+          await logForbidden(sender, 'PICKED:stale-frame', `選取回報來自非作用中的框架 ${sender?.frameId ?? 0}`)
+          return { ok: false, error: 'stale_frame', retryable: true, message: '這個框架的選取階段已經變更，請重試' }
+        }
+        if (activeFrame.groupKey !== undefined && msg.groupKey !== undefined && activeFrame.groupKey !== msg.groupKey) {
+          return { ok: false, error: 'group_conflict', retryable: true, message: '目前作用中的群組已變更，請重新選取' }
+        }
+        if (!draftIdentityMatches(msg, activeFrame)) {
+          return { ok: false, error: 'stale_document', retryable: true, message: '頁面已變更，請重新整理後再選取' }
+        }
+      }
       // 取消也要轉發給面板：不轉的話「在頁面上選取」那顆按鈕會一直卡在等待狀態
       // （AF-10 修正：原本 cancelled 在轉發之前就 return 了）
       if (msg.purpose === 'preaction' || (typeof msg.purpose === 'string' && msg.purpose.startsWith('login-'))) {
@@ -640,6 +1573,15 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         return { ok: true }
       }
 
+      // AF-22 C2a：有 C1b session/group 的選取結果，先在鎖內寫回 draft；
+      // 舊的無 session PICKED 才走下面相容的 panel ctx 路徑。
+      if (msg.purpose === 'task' && msg.sessionId !== undefined &&
+          (msg.groupKey !== undefined || msg.activeGroupKey !== undefined)) {
+        const draftResult = await appendPickedToDraft(msg, sender)
+        if (draftResult?.ok === true) rememberPickParticipant(sender?.tab?.id, msg.sessionId, sender)
+        if (draftResult) return draftResult
+      }
+
       if (msg.purpose === 'task') {
         const tabId = sender?.tab?.id
         // 批次（一次建立多個任務）：每一組補上與單任務相同的欄位，另給穩定鍵；不帶舊草稿、不算換目標
@@ -648,7 +1590,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
           await setPanelCtx(tabId, { kind: 'batch', items })
           return { ok: true }
         }
-        const payload = taskPayloadOf(msg, sender)
+        let payload = taskPayloadOf(msg, sender, msg)
         // 面板已經開著、使用者也填了一半的表單時，**只換目標**：
         // 名稱、排程、儀表板、進階設定全部留著（右鍵重選一個目標不該把表單清空）
         const existing = await getPanelCtx(tabId)
@@ -658,9 +1600,17 @@ export async function handleMessage(msg, sender, runOpts = {}) {
           await diag.log('panel_missing_on_pick', { tabId, purpose: msg.purpose })
         }
         const keepDraft = existing && (existing.kind === 'new' || existing.kind === 'edit')
+        const sameFrameDraft = existing && existing.pickSessionId !== undefined &&
+          msg.sessionId !== undefined && existing.pickSessionId === msg.sessionId &&
+          (existing.pickGroupKey === undefined || msg.groupKey === undefined || existing.pickGroupKey === msg.groupKey)
+        if (sameFrameDraft) {
+          payload = mergeFramePickPayload(existing.ctx, payload)
+        }
         await mergePanelCtx(tabId, {
           kind: 'new',
           ctx: payload,
+          ...(msg.sessionId !== undefined ? { pickSessionId: msg.sessionId } : {}),
+          ...(msg.groupKey !== undefined ? { pickGroupKey: msg.groupKey } : {}),
           retarget: Boolean(keepDraft && existing.ctx),
           // 淺層合併：被擋時留下的說明與等待態的多任務旗標不得跟到新表單上（AF-18 終檢）
           notice: undefined,
@@ -709,35 +1659,166 @@ export async function handleMessage(msg, sender, runOpts = {}) {
     if (msg.type === MSG.DESCEND_FRAME) {
       const tabId = sender?.tab?.id
       if (!tabId) return { ok: true }
+      const fromFrameId = sender?.frameId ?? 0
+      const activeFrame = frameStateOf(tabId)
+      if (msg.sessionId !== undefined && activeFrame &&
+          (activeFrame.sessionId !== msg.sessionId || activeFrame.frameId !== fromFrameId)) {
+        return { ok: false, error: 'stale_frame', retryable: true, message: '這個框架的選取階段已經變更，請重試' }
+      }
+      if (msg.direction === 'ascend') {
+        if (!activeFrame || activeFrame.frameId !== fromFrameId || !Number.isInteger(activeFrame.parentFrameId)) {
+          return { ok: false, error: 'frame_parent_unknown', retryable: true, message: '找不到這個框架的上一層，請重新進入選取' }
+        }
+        const parentId = activeFrame.parentFrameId
+        const enterParent = {
+          type: MSG.ENTER_PICK,
+          purpose: msg.purpose,
+          taskId: msg.taskId,
+          ...pickIdentityOf(msg),
+          ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
+          ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {}),
+          ...(msg.draftValues !== undefined ? { draftValues: structuredClone(msg.draftValues) } : {}),
+          ...(msg.draftRevision !== undefined ? { draftRevision: msg.draftRevision } : {}),
+          ...(activeFrame.parentFrame ? { frame: activeFrame.parentFrame } : {})
+        }
+        try { await sendToFrame(tabId, { type: MSG.EXIT_PICK, ...pickIdentityOf(msg) }, fromFrameId, contentMs, 'Exit child pick frame') } catch {}
+        try {
+          await injectContent(tabId, { frameId: parentId })
+          const entered = await sendToFrame(tabId, enterParent, parentId, contentMs, 'Enter parent pick frame')
+          const expectedGroup = msg.activeGroupKey ?? msg.groupKey
+          if (expectedGroup !== undefined && entered?.activeGroupKey !== expectedGroup) {
+            const err = new Error('active_group_not_confirmed')
+            err.code = 'group_conflict'
+            throw err
+          }
+          rememberPickFrame(tabId, {
+            frameId: parentId,
+            sessionId: msg.sessionId,
+            groupKey: msg.groupKey,
+            ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
+            ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {}),
+            ...(activeFrame.parentFrame ? { frame: activeFrame.parentFrame } : {})
+          })
+          return { ok: true, frameId: parentId, activeGroupKey: msg.activeGroupKey ?? msg.groupKey }
+        } catch (err) {
+          try {
+            await injectContent(tabId, { frameId: fromFrameId })
+            await sendToFrame(tabId, { ...enterParent, hint: 'frame_not_found', frameError: 'parent_inject_denied' }, fromFrameId, contentMs, 'Resume child pick frame')
+          } catch {}
+          return { ...pickTransitionError('frame_unavailable'), detail: String(err?.message || err) }
+        }
+      }
       const enter = {
         type: MSG.ENTER_PICK,
         purpose: msg.purpose,
         taskId: msg.taskId,
-        preselect: msg.preselect
+        preselect: msg.preselect,
+        ...pickIdentityOf(msg),
+        ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
+        ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {}),
+        ...(msg.draftValues !== undefined ? { draftValues: structuredClone(msg.draftValues) } : {}),
+        ...(msg.frameAnchor ? { frameAnchor: msg.frameAnchor } : {}),
+        ...(msg.draftRevision !== undefined ? { draftRevision: msg.draftRevision } : {})
       }
       // 鑽進 iframe 之後仍是同一輪批次選取
       if (msg.batch === true) enter.batch = true
       // 選取當下沒有目標的 locator 可以驗證，所以只用網址比對；
       // 不是唯一命中就退回原本那一層，硬猜會鑽錯 iframe
-      const matched = matchFrameByUrl(await listFrames(tabId), msg.src)
+      let frames = []
+      try { frames = await listFrames(tabId) } catch {}
+      const matched = matchFrameByUrl(frames, msg.src)
       if (matched?.frameId !== undefined) {
-        await injectContent(tabId, { frameId: matched.frameId })
-        await sendToFrame(tabId, enter, matched.frameId, contentMs, 'Enter pick')
-        return { ok: true }
+        // 舊 frame 先停掉；失敗時會在同一層重新進入並帶明確可重試原因。
+        try { await sendToFrame(tabId, { type: MSG.EXIT_PICK, ...pickIdentityOf(msg) }, fromFrameId, contentMs, 'Exit old pick frame') } catch {}
+        try {
+          await injectContent(tabId, { frameId: matched.frameId })
+          const entered = await sendToFrame(tabId, {
+            ...enter,
+            parentFrameId: fromFrameId,
+            frame: { url: frames.find(f => f.frameId === matched.frameId)?.url || msg.src,
+              ...(msg.frameAnchor ? { anchor: msg.frameAnchor } : {}) }
+          }, matched.frameId, contentMs, 'Enter pick')
+          const expectedGroup = msg.activeGroupKey ?? msg.groupKey
+          if (expectedGroup !== undefined && entered?.activeGroupKey !== expectedGroup) {
+            const err = new Error('active_group_not_confirmed')
+            err.code = 'group_conflict'
+            throw err
+          }
+          rememberPickFrame(tabId, {
+            frameId: matched.frameId,
+            sessionId: msg.sessionId,
+            groupKey: msg.groupKey,
+            ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
+            ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {}),
+            parentFrameId: fromFrameId,
+            ...(fromFrameId !== 0 && typeof sender?.url === 'string' ? { parentFrame: { url: sender.url } } : {}),
+            frame: { url: frames.find(f => f.frameId === matched.frameId)?.url || msg.src,
+              ...(msg.frameAnchor ? { anchor: structuredClone(msg.frameAnchor) } : {}) }
+          })
+          return { ok: true, frameId: matched.frameId, frame: frameStateOf(tabId).frame, activeGroupKey: msg.activeGroupKey ?? msg.groupKey }
+        } catch (err) {
+          // 目的 frame 可能拒絕注入（權限／文件剛換）；不退回頂層靜默繼續。
+          rememberPickFrame(tabId, {
+            frameId: fromFrameId,
+            sessionId: msg.sessionId,
+            groupKey: msg.groupKey,
+            ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
+            ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {})
+          })
+          try {
+            await injectContent(tabId, { frameId: fromFrameId })
+            await sendToFrame(tabId, { ...enter, hint: 'frame_not_found', frameError: 'inject_denied' }, fromFrameId, contentMs, 'Resume old pick frame')
+          } catch {}
+          return { ...pickTransitionError('frame_unavailable', frames), detail: String(err?.message || err) }
+        }
       }
-      const backTo = sender?.frameId ?? 0
-      await sendToFrame(tabId, { ...enter, hint: 'frame_not_found' }, backTo, contentMs, 'Enter pick')
-      return { ok: true }
+      // 舊 content 只認 frame_not_found；詳細的 ambiguous/unavailable 留在回傳狀態，
+      // 讓既有頁面仍能顯示可重試提示而不誤當成成功。
+      const hint = 'frame_not_found'
+      const transitionHint = matched?.ambiguous ? 'frame_ambiguous' : (frames.length === 0 ? 'frame_unavailable' : hint)
+      const backTo = fromFrameId
+      // 只退回發出要求的那一層，並保留 session／group；絕不猜成 top frame。
+      try {
+        await sendToFrame(tabId, { ...enter, hint, frameError: transitionHint }, backTo, contentMs, 'Resume pick frame')
+      } catch {}
+      return { ...pickTransitionError(transitionHint, matched?.ambiguous || frames), frameId: backTo }
     }
 
     if (msg.type === MSG.ENTER_PICK) {
       if (msg.tabId) {
-        const frameId = msg.frameId ?? 0
+        if (msg.sessionId !== undefined && msg.routeIdentity !== undefined) {
+          const currentTab = await chrome.tabs.get(msg.tabId).catch(() => null)
+          if (!draftRouteMatchesTab(msg.routeIdentity, currentTab?.url)) {
+            return { ok: false, error: 'stale_route', retryable: true, message: '目前頁面路徑已變更，請重新確認選取來源' }
+          }
+        }
+        groupNamePickRequests.delete(msg.tabId)
+        let frameId = msg.frameId ?? null
+        let frameCandidates = []
+        if (frameId === null && msg.frame?.url) {
+          try { frameCandidates = await listFrames(msg.tabId) } catch {}
+          const matched = matchFrameByUrl(frameCandidates, msg.frame.url)
+          if (matched?.frameId === undefined) {
+            const hint = matched?.ambiguous ? 'frame_ambiguous' : 'frame_unavailable'
+            return pickTransitionError(hint, matched?.ambiguous || frameCandidates)
+          }
+          frameId = matched.frameId
+        }
+        if (frameId === null) frameId = 0
         // popup 的「選取要抓的內容」走這裡：面板已由 popup 自己開好，
         // 但沒有表單時要先顯示等待態（同右鍵入口），否則面板是一張空白表單
         const batch = msg.batch === true
         // popup 送完就關視窗：被擋時一定要把說明留在面板上，不能只回 ok:false（靜默無事）
-        if (msg.purpose === 'task' && !(await applyPickEntry(msg.tabId, batch))) return { ok: false }
+        if (msg.purpose === 'task' && !(await applyPickEntry(
+          msg.tabId, batch, msg.sessionId, msg.groupKey, msg.documentGeneration, msg.routeIdentity
+        ))) {
+          return { ok: false, error: 'pick_entry_blocked', retryable: true,
+            message: '多值草稿無法進入頁面選取；請確認目前作用組，再重試' }
+        }
+        const previousFrame = frameStateOf(msg.tabId)
+        if (previousFrame && previousFrame.frameId !== frameId) {
+          try { await sendToFrame(msg.tabId, { type: MSG.EXIT_PICK, ...pickIdentityOf(msg) }, previousFrame.frameId, contentMs, 'Exit old pick frame') } catch {}
+        }
         await injectContent(msg.tabId, { frameId })
         const known = msg.taskId ? await getTask(msg.taskId) : null
         const enter = {
@@ -749,9 +1830,23 @@ export async function handleMessage(msg, sender, runOpts = {}) {
           locator: msg.locator || known?.locator,
           preselect: msg.preselect || preselectOf(known)
         }
+        Object.assign(enter, pickIdentityOf(msg))
+        if (msg.documentGeneration !== undefined) enter.documentGeneration = structuredClone(msg.documentGeneration)
+        if (msg.routeIdentity !== undefined) enter.routeIdentity = structuredClone(msg.routeIdentity)
+        if (msg.draftValues !== undefined) enter.draftValues = structuredClone(msg.draftValues)
+        if (msg.frameAnchor) enter.frameAnchor = msg.frameAnchor
         if (batch) enter.batch = true
         await sendToFrame(msg.tabId, enter, frameId, contentMs, 'Enter pick')
-        return { ok: true }
+        const frameUrl = frameCandidates.find(f => f.frameId === frameId)?.url || msg.frame?.url
+        rememberPickFrame(msg.tabId, {
+          frameId,
+          sessionId: msg.sessionId,
+          groupKey: msg.groupKey,
+          ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
+          ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {}),
+          ...(frameUrl ? { frame: { url: frameUrl, ...(msg.frameAnchor ? { anchor: structuredClone(msg.frameAnchor) } : {}) } } : {})
+        })
+        return { ok: true, frameId, activeGroupKey: msg.activeGroupKey ?? msg.groupKey }
       }
 
       const task = await getTask(msg.taskId)
@@ -825,6 +1920,8 @@ export async function handleMessage(msg, sender, runOpts = {}) {
 
     return undefined
   } catch (err) {
+    const protocolError = protocolErrorResponse(err)
+    if (protocolError) return protocolError
     // 背景出錯不得靜默：UI 等結果的按鈕要拿得到 ok:false 與原因
     const message = String(err?.message || err)
     try { await diag.log('message_error', `${msg?.type}：${message}`) } catch {}
@@ -899,11 +1996,44 @@ async function closeRepickTab(taskId) {
  */
 export async function closePanelFor(tabId, opts = {}) {
   if (tabId === undefined || tabId === null) return
+  groupNamePickRequests.delete(tabId)
+  // AF-22 D02/C1b：關閉面板只暫停本輪選取，session 草稿留給 side panel
+  // 或 fallback 視窗恢復；分頁真正關閉時才由 onRemoved 明確清除。
+  let pauseError = null
+  try { await pausePickDraft(tabId) } catch (err) {
+    pauseError = err
+    const protocolError = protocolErrorResponse(err)
+    try {
+      await diag.log('pick_draft_pause_failed', {
+        tabId, error: protocolError?.error || 'storage', message: String(err?.message || err)
+      })
+    } catch {}
+  }
   // 三條通道會重複觸發（onClosed + 分頁關閉…），暫存還在才代表「這一輪還沒清過」。
   // 不擋的話每次都對頁面廣播一輪 EXIT_PICK，白花訊息也可能清到下一輪剛貼上的標示
   const pending = await getPanelCtx(tabId)
   await clearPanelCtx(tabId)
-  if (opts.keepMarks || !pending) return
+  if (opts.keepMarks) {
+    forgetPickFrame(tabId)
+    pickParticipantFrames.delete(tabId)
+    exitedPickTabs.delete(tabId)
+    if (opts.clearDraft) {
+      try { await clearPickDraftForTab(tabId) } catch (err) {
+        try { await diag.log('pick_draft_clear_failed', { tabId, message: String(err?.message || err) }) } catch {}
+      }
+    }
+    return pauseError ? { ok: false, error: String(pauseError?.message || pauseError) } : { ok: true }
+  }
+  if (!pending && exitedPickTabs.has(tabId)) {
+    forgetPickFrame(tabId)
+    pickParticipantFrames.delete(tabId)
+    if (opts.clearDraft) {
+      try { await clearPickDraftForTab(tabId) } catch (err) {
+        try { await diag.log('pick_draft_clear_failed', { tabId, message: String(err?.message || err) }) } catch {}
+      }
+    }
+    return pauseError ? { ok: false, error: String(pauseError?.message || pauseError) } : { ok: true, alreadyClosed: true }
+  }
   // 「面板關掉了、頁面上的標示也清了」要留痕跡：使用者回報「藍框自己不見了」時，
   // 診斷區看得到是哪一次清場、當時面板停在哪個狀態
   await diag.log('panel_closed', { tabId, kind: pending?.kind })
@@ -918,6 +2048,15 @@ export async function closePanelFor(tabId, opts = {}) {
   for (const frameId of targets) {
     try { await sendToFrame(tabId, { type: MSG.EXIT_PICK }, frameId, opts.contentTimeoutMs ?? CONTENT_MESSAGE_TIMEOUT_MS, 'Exit pick') } catch {}
   }
+  exitedPickTabs.add(tabId)
+  forgetPickFrame(tabId)
+  pickParticipantFrames.delete(tabId)
+  if (opts.clearDraft) {
+    try { await clearPickDraftForTab(tabId) } catch (err) {
+      try { await diag.log('pick_draft_clear_failed', { tabId, message: String(err?.message || err) }) } catch {}
+    }
+  }
+  return pauseError ? { ok: false, error: String(pauseError?.message || pauseError) } : { ok: true }
 }
 
 // 處理右鍵選單點擊事件
@@ -940,6 +2079,7 @@ export async function handleContextMenu(info, tab) {
 
     if (info.menuItemId === 'af-site-login') {
       if (!tab?.id) return
+      exitedPickTabs.delete(tab.id)
       let origin = ''
       try {
         origin = tab.url ? new URL(tab.url).origin : ''
@@ -956,6 +2096,7 @@ export async function handleContextMenu(info, tab) {
 
     if (info.menuItemId === 'af-pick') {
       if (!tab?.id) return
+      exitedPickTabs.delete(tab.id)
       const frameId = info.frameId ?? 0
       // 面板先開起來顯示「正在頁面上選取…」，使用者才知道東西在哪裡、也才有地方可以取消。
       // **`open` 要排在最前面**：手勢跨越非同步等待有失效風險
@@ -970,6 +2111,7 @@ export async function handleContextMenu(info, tab) {
 
     if (info.menuItemId === 'af-pick-batch') {
       if (!tab?.id) return
+      exitedPickTabs.delete(tab.id)
       const frameId = info.frameId ?? 0
       // 手勢規則同 af-pick：`open` 必須是第一個 await
       await openPanel(tab.id, 'picker', `tabId=${tab.id}`)
@@ -1005,7 +2147,7 @@ chrome.contextMenus.onClicked.addListener(handleContextMenu)
 if (chrome.sidePanel?.onClosed?.addListener) {
   chrome.sidePanel.onClosed.addListener((info) => { closePanelFor(info?.tabId) })
 }
-chrome.tabs?.onRemoved?.addListener?.((tabId) => { closePanelFor(tabId, { keepMarks: true }) })
+chrome.tabs?.onRemoved?.addListener?.((tabId) => { closePanelFor(tabId, { keepMarks: true, clearDraft: true }) })
 
 // worker 每次啟動（不只瀏覽器啟動）：上一個 worker 留下的抓取分頁與排隊中／執行中的排程槽。
 // storage 是空的時候兩者都只讀不寫

@@ -104,7 +104,7 @@ async function seedV2(c, runs, extra = {}) {
   await c.storage.local.set({ schemaVersion: 2, settings: { retentionDays: 365 }, runs, ...extra })
 }
 
-test('v3 遷移：3 天前進 runs:<date>、30 天前丟、舊鍵移除、schemaVersion 3', async () => {
+test('v3 遷移：3 天前進 runs:<date>、30 天前丟、舊鍵移除、schemaVersion 4', async () => {
   const { c, st } = await fresh({ init: false })
   const d3 = localDaysAgo(3)
   const d30 = localDaysAgo(30)
@@ -114,7 +114,7 @@ test('v3 遷移：3 天前進 runs:<date>、30 天前丟、舊鍵移除、schema
   assert.deepEqual(all['runs:' + d3], { t1: { [d3 + 'T09:00']: 'ok' } })
   assert.equal(('runs:' + d30) in all, false)
   assert.equal('runs' in all, false)
-  assert.equal(all.schemaVersion, 3)
+  assert.equal(all.schemaVersion, 4)
 })
 
 test('v3 遷移：已有 runs:<date> 同日其他格時是併入不是覆蓋', async () => {
@@ -180,11 +180,11 @@ test('匯入 schemaVersion 99 的設定檔：丟白話錯誤、storage 零改動
   assert.equal(callsSince(c, m, 'storage.local.set').length + callsSince(c, m, 'storage.local.remove').length, 0)
 })
 
-test('匯出設定帶目前的 schemaVersion（3）', async () => {
+test('匯出設定帶目前的 schemaVersion（4）', async () => {
   await fresh()
   const io = await import('../src/shared/settings-io.js?t=' + Math.random())
   const obj = JSON.parse(await io.exportSettings())
-  assert.equal(obj.data.schemaVersion, 3)
+  assert.equal(obj.data.schemaVersion, 4)
 })
 
 // ---------- 4. 小時鍵 ----------

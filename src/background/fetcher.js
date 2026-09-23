@@ -1,5 +1,5 @@
 // AutoFetcher 擷取流程：開分頁、注入、擷取、寫紀錄、重試
-import { getTask, updateTasks, appendRecord, appendRecords, getRecordsInRange, getSettings, updateAlertLog, setLastValue, setLastValues, getRunStatus, setRunStatus, getRunState, updateRunState, updateMissedList } from '../shared/storage.js'
+import { getTask, checkTaskExecution, updateTasks, appendRecord, appendRecords, getRecordsByDate, getRecordsInRange, getSettings, getAlertCommitLog, updateAlertLog, updateAlertCommitLog, setLastValue, setLastValues, setLastValuesForExecution, clearLastValuesForExecution, clearHealthForExecution, getLastValues, getHealthMap, getRunStatus, setRunStatus, setRunStatusForExecution, getRunState, updateRunState, updateMissedList } from '../shared/storage.js'
 import { waitMsOf, timeoutMsOf, preActionFailure, DEFAULT_WAIT_TIMEOUT_MS, messageTimeoutMs, holdMsOf, capStepMs, PRE_ACTION_STEP_MAX_MS, PRE_ACTION_STEP_CAP_NOTE } from '../shared/preaction.js'
 import { seriesIdOf, parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
 import { MSG } from '../shared/messages.js'
@@ -9,15 +9,27 @@ import { notify, notifySiteFailure, clearNotifyLog } from './notify.js'
 import { injectContent } from './inject.js'
 import { evaluateAlerts } from '../shared/alerts.js'
 import { isSuccess, healthStatusOf } from '../shared/record-status.js'
-import { setTaskHealth, refreshBadge } from './health.js'
+import { setTaskHealth, setTaskHealthForExecution, refreshBadge } from './health.js'
 import { ensureLoggedIn } from './login.js'
 import { locateFrame, sameOriginPath, PROBE_TIMEOUT_MS } from './frames.js'
 import { acquireFetchTab, openForegroundTab, enqueueForOrigin, waitTabReady, BOOT } from './fetch-tab.js'
 import { sendToFrame, timeoutError } from './messaging.js'
+import { normalizeTaskSources, multiExecutionSnapshot, executionFingerprintOf } from '../shared/task-source.js'
+
+// 保留測試與既有 background 呼叫端的匯出面；canonical 實作在 shared/task-source。
+export { executionFingerprintOf }
 
 // `locateFrame` 找到才有 frameId；失敗時回的是帶候選清單的物件（給診斷用），不是 null
 function frameFound(loc) {
   return Boolean(loc) && typeof loc.frameId === 'number'
+}
+
+function stableActionJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableActionJson).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableActionJson(value[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
 }
 
 // 「立即測試」失敗時給使用者匯出的診斷包（SPEC §3）。
@@ -107,10 +119,18 @@ export function runBudgetMsOf(task, opts = {}) {
   const maxMs = opts.maxMs ?? RUN_BUDGET_MAX_MS
   const stepMaxMs = opts.stepMaxMs ?? PRE_ACTION_STEP_MAX_MS
   let declared = 0
-  for (const action of Array.isArray(task?.preActions) ? task.preActions : []) {
+  const includeDeclaredTime = (action, includeMessageTimeout = false) => {
     if (action?.type === 'wait') declared += capStepMs(waitMsOf(action), stepMaxMs).ms
     else if (action?.type === 'hover') declared += capStepMs(holdMsOf(action), stepMaxMs).ms
     else if (action?.type === 'waitFor') declared += timeoutMsOf(action)
+    else if (includeMessageTimeout && ['click', 'scroll'].includes(action?.type)) declared += messageTimeoutMs(action)
+  }
+  for (const action of Array.isArray(task?.preActions) ? task.preActions : []) includeDeclaredTime(action)
+  const isMulti = task?.mode === 'multi' || task?.spec?.mode === 'multi'
+  if (isMulti) {
+    for (const field of normalizeTaskSources(task)) {
+      for (const action of Array.isArray(field.stateActions) ? field.stateActions : []) includeDeclaredTime(action, true)
+    }
   }
   return Math.min(baseMs + declared, maxMs)
 }
@@ -251,13 +271,14 @@ export async function recoverRunState(runOpts = {}, { detach = false } = {}) {
       })
       if (detach) {
         resumed.push(run.catch(async (err) => {
-          try { await diag.log('run_state_error', `續跑 ${key}：${String(err?.message || err)}`) } catch {}
+          try { await diag.log('run_state_error', 'stage=run_state_recovery result=error') } catch {}
         }))
       } else {
         await run
       }
       continue
     }
+    let markMissed = true
     if (task) {
       // 不寫帳本（寫了補抓就會被冪等擋掉）、不動 lastValues；燈號要紅
       const record = {
@@ -267,11 +288,44 @@ export async function recoverRunState(runOpts = {}, { detach = false } = {}) {
         status: 'interrupted',
         error: '上一次執行被瀏覽器中斷'
       }
-      await appendRecord(slot.slice(0, 10), record)
-      await updateHealth(taskId, healthFromRecords([record]))
+      const isMulti = task.mode === 'multi' || task.spec?.mode === 'multi'
+      if (isMulti) {
+        // 即使 worker 在執行期間被回收，multi 的每個宣告值都要留下可見的
+        // interrupted 子紀錄。共用失敗入口會依 field key 補齊結果並更新父 health；
+        // skipLedger 保留原規則，讓使用者仍可補抓這個 slot。
+        const executionFingerprint = await executionFingerprintOf(task)
+        const executionSnapshot = multiExecutionSnapshot(task)
+        const committed = await recoverCommittedMulti(
+          task, slot, normalizeTaskSources(task), commitIdOf(task, slot), executionFingerprint
+        )
+        if (committed && !committed.invalid) {
+          // 紀錄可能已完整耐久、只差 worker 後續收尾。先完成健康／最後值，
+          // 不造重複 interrupted rows，也不提前寫帳本；下次補抓入口會依同一 commit 對帳。
+          await finalizeMultiRecords(task, slot, committed, {
+            skipLedger: true,
+            preserveExisting: true,
+            executionFingerprint
+          })
+          markMissed = false
+        } else if (committed?.invalid) {
+          // 舊規格的 durable records 不可掛到目前已改過的任務上。
+          // 保留 interrupted 診斷與 daily catch-up，但不發布孤兒序列結果。
+        } else {
+          await writeMultiFailureRecords(task, slot, 'interrupted', record.error, {
+            skipLedger: true,
+            // interrupted 不是已提交的抓取結果；不掛 commitId，下一次 alarm 才能補抓。
+            dedupe: false,
+            executionSnapshot,
+            executionFingerprint
+          })
+        }
+      } else {
+        await appendRecord(slot.slice(0, 10), record)
+        await updateHealth(taskId, healthFromRecords([record]))
+      }
       // 設定頁的「被中斷」次數改從 diag 數，不再掃 7 天紀錄；這是罕見事件，不會洗掉環形緩衝
       try { await diag.log('interrupted', `${taskId}@${slot}`) } catch {}
-      if (task.schedule?.type === 'daily') {
+      if (markMissed && task.schedule?.type === 'daily') {
         await updateMissedList((list) => {
           if (list.some(m => m?.taskId === taskId && m?.slot === slot)) return undefined
           return [...list, { taskId, taskName: task.name || taskId, slot }]
@@ -332,14 +386,14 @@ function getLocalDateStr(d) {
   return `${y}-${m}-${day}`
 }
 
-// 評估告警並發送通知
-async function processAlerts(record, cachedRecordsInRange) {
-  if (!record || !record.taskId) return
+// 只計算告警並把命中標記放進即將寫入的紀錄；這一步不能有通知或 alertLog 副作用。
+async function evaluateRecordAlerts(record, cachedRecordsInRange) {
+  if (!record || !record.taskId) return null
 
   // 1. 取任務：沒有 alerts 或空陣列直接返回
   const task = await getTask(parentIdOf(record.taskId))
   if (!task || !Array.isArray(task.alerts) || task.alerts.length === 0) {
-    return
+    return null
   }
 
   const sIndex = buildSeriesIndex([task])
@@ -366,24 +420,93 @@ async function processAlerts(record, cachedRecordsInRange) {
   // 3. 評估告警
   const { hits } = evaluateAlerts(task, record, prevRecords, displayName)
   if (!Array.isArray(hits) || hits.length === 0) {
-    return
+    return { task, displayName, today, hits: [] }
   }
 
-  // 4. hits 非空時標記紀錄
+  // 命中標記會和紀錄一起 append，通知只能在 append 成功後才做。
   record.alert = true
   record.alertHits = hits.map(h => h.alertId)
+  return { task, displayName, today, hits }
+}
 
-  // 5. 去重與通知：冷卻判斷與蓋章在 alertLog 鎖內一起做（同時兩筆命中不會各通知一次）；
-  //    通知在鎖外發（notify 可能寫診斷，鎖不巢狀）
+// 只保留最近 1000 次 claim；這是有限重入保護，不宣稱跨越淘汰後的永久 exactly-once。
+// durable record 仍保留 alert/alertHits，claim 未被淘汰時恢復不會盲目重播。
+const ALERT_COMMIT_LOG_MAX = 1000
+const ALERT_COMMIT_WATERMARK_KEY = '__watermark__'
+
+// 排程 multi 紀錄帶著穩定 commitId；手動抓取由該次 run 產生並持久化 executionId。
+// 舊紀錄沒有 executionId 時才退回 capturedAt，維持既有資料相容。
+function alertExecutionKey(record, alertId) {
+  const execution = typeof record.commitId === 'string' && record.commitId
+    ? `commit:${record.commitId}`
+    : typeof record.executionId === 'string' && record.executionId
+      ? `manual:${record.executionId}`
+      : `legacy:${record.taskId}\u0000${record.slot || ''}\u0000${record.capturedAt || ''}`
+  return `${execution}\u0000${record.taskId}\u0000${alertId}`
+}
+
+function alertCommitWatermark(log) {
+  return typeof log?.[ALERT_COMMIT_WATERMARK_KEY] === 'number'
+    ? log[ALERT_COMMIT_WATERMARK_KEY]
+    : NaN
+}
+
+function isBeyondAlertClaimWindow(record, log) {
+  const capturedAt = Date.parse(String(record?.capturedAt || ''))
+  const watermark = alertCommitWatermark(log)
+  // 淘汰後只保守跳過更舊的 durable record，不把它猜成新的 execution。
+  return Number.isFinite(capturedAt) && Number.isFinite(watermark) && capturedAt <= watermark
+}
+
+// claim 只在既有 cooldown 通過後執行；寫入前固定上限，避免重入帳本無界增長。
+async function claimAlertExecution(record, alertId, recovery = false) {
+  const key = alertExecutionKey(record, alertId)
+  const now = Date.now()
+  let claimed = false
+  await updateAlertCommitLog((log) => {
+    if (typeof log[key] === 'number' || (recovery && isBeyondAlertClaimWindow(record, log))) return undefined
+    const entries = Object.entries(log)
+      .filter(([entryKey, value]) => entryKey !== ALERT_COMMIT_WATERMARK_KEY && typeof value === 'number')
+      .concat([[key, now]])
+      .sort((a, b) => Number(a[1]) - Number(b[1]))
+    const evicted = entries.length > ALERT_COMMIT_LOG_MAX
+      ? entries.slice(0, entries.length - ALERT_COMMIT_LOG_MAX)
+      : []
+    const kept = entries.slice(-ALERT_COMMIT_LOG_MAX)
+    const next = Object.fromEntries(kept)
+    const previousWatermark = alertCommitWatermark(log)
+    const evictedWatermark = evicted.length > 0 ? Number(evicted[evicted.length - 1][1]) : NaN
+    const watermark = Number.isFinite(evictedWatermark)
+      ? Math.max(Number.isFinite(previousWatermark) ? previousWatermark : -Infinity, evictedWatermark)
+      : previousWatermark
+    if (Number.isFinite(watermark)) next[ALERT_COMMIT_WATERMARK_KEY] = watermark
+    claimed = true
+    return next
+  })
+  return claimed
+}
+
+// 對已耐久的紀錄做 cooldown claim、stable execution claim 與通知。通知失敗仍沿用既有 notify 封裝的吞錯語意；
+// 這裡不再承擔紀錄評估，恢復時可安全重播同一份已落盤結果。
+async function notifyEvaluatedAlerts(record, evaluation, opts = {}) {
+  if (!record || !evaluation || !Array.isArray(evaluation.hits) || evaluation.hits.length === 0) return
+  const { displayName, today, hits } = evaluation
   const settings = await getSettings()
   const cooldownMin = typeof settings?.alertCooldownMin === 'number' ? settings.alertCooldownMin : 60
   const cooldownMs = cooldownMin * 60 * 1000
   const now = Date.now()
+  const recovery = opts.recovery === true
+  const claimedLog = await getAlertCommitLog()
+  const freshHits = hits.filter(hit => (
+    typeof claimedLog[alertExecutionKey(record, hit.alertId)] !== 'number' &&
+    (!recovery || !isBeyondAlertClaimWindow(record, claimedLog))
+  ))
+  if (freshHits.length === 0) return
 
   let toNotify = []
   await updateAlertLog((alertLog) => {
     const taskAlerts = alertLog[record.taskId] ? { ...alertLog[record.taskId] } : {}
-    toNotify = hits.filter((hit) => {
+    toNotify = freshHits.filter((hit) => {
       const lastNotified = taskAlerts[hit.alertId]
       return !(typeof lastNotified === 'number' && (now - lastNotified) < cooldownMs)
     })
@@ -393,10 +516,35 @@ async function processAlerts(record, cachedRecordsInRange) {
     return alertLog
   })
 
+  const claimed = []
   for (const hit of toNotify) {
+    if (await claimAlertExecution(record, hit.alertId, recovery)) claimed.push(hit)
+  }
+
+  for (const hit of claimed) {
     const notificationId = `${record.taskId}:alert:${hit.alertId}:${today}`
     const title = `AutoFetcher: ${displayName}`
     await notify(notificationId, { title, message: hit.message })
+  }
+}
+
+// 恢復只重播已帶 alert 標記的耐久紀錄；兩層 claim 共同保留既有 cooldown 與執行身分去重。
+async function notifyCommittedMultiAlerts(records) {
+  const candidates = records.filter(record => record?.alert === true)
+  if (candidates.length === 0) return
+  const first = candidates[0]
+  const date = typeof first.slot === 'string' && first.slot.length >= 10
+    ? first.slot.slice(0, 10)
+    : getLocalDateStr(new Date())
+  const [y, m, d] = date.split('-').map(Number)
+  const pastDate = new Date(y, m - 1, d - 6, 12, 0, 0)
+  const fromDate = getLocalDateStr(pastDate)
+  const identity = new Set(records.map(record => `${record.taskId}\u0000${record.capturedAt || ''}`))
+  const previous = (await getRecordsInRange(fromDate, date))
+    .filter(record => !identity.has(`${record.taskId}\u0000${record.capturedAt || ''}`))
+  for (const record of candidates) {
+    const evaluation = await evaluateRecordAlerts(record, previous)
+    await notifyEvaluatedAlerts(record, evaluation, { recovery: true })
   }
 }
 
@@ -428,9 +576,13 @@ export function healthFromRecords(records, partial) {
 }
 
 // 更新任務健康狀態並重整圖示
-async function updateHealth(taskId, healthObj) {
-  await setTaskHealth(taskId, healthObj)
+async function updateHealth(taskId, healthObj, executionFingerprint) {
+  const written = executionFingerprint
+    ? await setTaskHealthForExecution(taskId, healthObj, executionFingerprint)
+    : (await setTaskHealth(taskId, healthObj), true)
+  if (!written) return false
   await refreshBadge()
+  return true
 }
 
 // 紀錄裡 raw 的上限（AF-21 定案 5）：只在寫紀錄這一層截，擷取端與立即測試預覽照舊回全文
@@ -452,12 +604,152 @@ function hasAnySuccess(records) {
   return records.some(r => isSuccess(r))
 }
 
+// 排程 multi 的紀錄與帳本不是跨鍵交易：worker 可能在 appendRecords 後、
+// setRunStatus 前被回收。以父 task + slot + field key 辨識同一輪提交，讓復原或
+// 重試只補缺少的子序列，不把已耐久的成功值再追加一份；手動抓取不使用這條
+// 去重路徑，保留同一分鐘手動抓取也各自留紀錄的既有語意。
+async function appendMultiRecordsOnce(date, records, parentId, slot, commitId, dedupe = true, executionFingerprint) {
+  if (!dedupe) {
+    await appendRecords(date, records)
+    return { records, fresh: records }
+  }
+
+  let committed = await getCommittedMultiRecords(date, parentId, slot, commitId, executionFingerprint)
+  const byId = new Map(committed.map(record => [record.taskId, record]))
+  const pending = records.filter(record => !byId.has(record.taskId))
+  if (pending.length > 0) {
+    try {
+      await appendRecords(date, pending)
+    } catch (err) {
+      // storage.set 可能在實際寫入後才把例外傳回；確認所有 field 已落盤時，
+      // 視為提交成功並繼續補帳本，不進外層 failure path 追加第二份紀錄。
+      committed = await getCommittedMultiRecords(date, parentId, slot, commitId, executionFingerprint)
+      const afterIds = new Set(committed.map(record => record.taskId))
+      if (!records.every(record => afterIds.has(record.taskId))) throw err
+      byId.clear()
+      for (const record of committed) byId.set(record.taskId, record)
+    }
+  }
+
+  // 已有紀錄是同一排程輪次的固定結果；新結果只用來填尚未耐久的 field。
+  return {
+    records: records.map(record => byId.get(record.taskId) || record),
+    fresh: pending
+  }
+}
+
+function isOlderCapturedAt(existing, incoming) {
+  if (existing === undefined || existing === null || existing === '') return true
+  const existingMs = Date.parse(String(existing))
+  const incomingMs = Date.parse(String(incoming))
+  if (Number.isFinite(existingMs) && Number.isFinite(incomingMs)) return existingMs < incomingMs
+  return String(existing) < String(incoming)
+}
+
+function healthOlderThanRecords(healthEntry, records) {
+  if (!healthEntry) return true
+  const healthAt = Number(healthEntry.at)
+  if (!Number.isFinite(healthAt)) return false
+  const recordTimes = records
+    .map(record => Date.parse(String(record?.capturedAt || '')))
+    .filter(Number.isFinite)
+  return recordTimes.length > 0 && healthAt < Math.max(...recordTimes)
+}
+
+async function finalizeMultiRecords(task, slot, records, { skipLedger = false, partial = false, preserveExisting = false, executionFingerprint } = {}) {
+  const hasSuccess = records.some(record => isSuccess(record))
+  const firstFail = records.find(record => !isSuccess(record))
+  const ledgerStatus = hasSuccess ? 'ok' : (firstFail ? firstFail.status : 'error')
+  const currentLastValues = await getLastValues()
+  const currentHealth = preserveExisting ? await getHealthMap() : null
+  const preserveHealth = preserveExisting && !healthOlderThanRecords(currentHealth?.[task.id], records)
+  const lastEntries = {}
+  for (const record of records) {
+    if (isSuccess(record)) {
+      const current = currentLastValues?.[record.taskId]
+      if (!current || isOlderCapturedAt(current.capturedAt, record.capturedAt)) {
+        lastEntries[record.taskId] = { value: record.value, capturedAt: record.capturedAt }
+      }
+    }
+  }
+  const lastValuesWritten = executionFingerprint
+    ? await setLastValuesForExecution(task.id, executionFingerprint, lastEntries)
+    : (await setLastValues(lastEntries), true)
+  if (!lastValuesWritten) return { ...TASK_CHANGED_RESULT }
+  if (!preserveHealth) {
+    const healthWritten = await updateHealth(task.id, healthFromRecords(records, partial), executionFingerprint)
+    if (!healthWritten) {
+      if (executionFingerprint) {
+        await clearLastValuesForExecution(task.id, executionFingerprint)
+        await clearHealthForExecution(task.id, executionFingerprint)
+      }
+      return { ...TASK_CHANGED_RESULT }
+    }
+    if (hasSuccess) await clearNotifyLog(task.id)
+    if (records.every(record => isSuccess(record))) await clearNotFoundStreak(task.id)
+  }
+  // 帳本是「這一輪已完成」的最後標記。先寫它會讓 worker 在
+  // lastValues／health 之後被回收時，下一輪誤以為沒有待補工作。
+  if (!skipLedger) {
+    const ledgerWritten = executionFingerprint
+      ? await setRunStatusForExecution(task.id, slot, ledgerStatus, executionFingerprint)
+      : (await setRunStatus(task.id, slot, ledgerStatus), true)
+    if (!ledgerWritten) {
+      if (executionFingerprint) {
+        await clearLastValuesForExecution(task.id, executionFingerprint)
+        await clearHealthForExecution(task.id, executionFingerprint)
+      }
+      return { ...TASK_CHANGED_RESULT }
+    }
+  }
+  return records.find(record => isSuccess(record)) || records[0] || null
+}
+
+async function getCommittedMultiRecords(date, parentId, slot, commitId, executionFingerprint) {
+  const all = await getRecordsByDate(date)
+  return all.filter(record => (
+    record?.slot === slot &&
+    parentIdOf(record.taskId) === parentId &&
+    record?.commitId === commitId &&
+    (executionFingerprint === undefined || record?.executionFingerprint === executionFingerprint)
+  ))
+}
+
+async function recoverCommittedMulti(task, slot, sources, commitId, executionFingerprint) {
+  const date = typeof slot === 'string' && slot.length >= 10
+    ? slot.slice(0, 10)
+    : getLocalDateStr(new Date())
+  const all = await getCommittedMultiRecords(date, task.id, slot, commitId)
+  // Older records have no specification identity.  They remain readable, but
+  // cannot be safely attributed to this execution after the task is edited.
+  // Refuse recovery rather than guessing and publishing them under a new spec.
+  if (all.length > 0 && all.some(record => record?.executionFingerprint !== executionFingerprint)) {
+    return { invalid: true }
+  }
+  const byId = new Map(all.map(record => [record.taskId, record]))
+  const records = sources.map(field => byId.get(seriesIdOf(task.id, field.key))).filter(Boolean)
+  return records.length === sources.length ? records : null
+}
+
+// 舊 worker 可能已先寫帳本才在後續狀態中斷；只要成功值的 lastValue
+// 或父任務 health 尚未對上，就仍要走補完路徑，而不是被帳本冪等門擋住。
+async function multiFinalizeMissing(task, records) {
+  const [lastValues, health] = await Promise.all([getLastValues(), getHealthMap()])
+  if (healthOlderThanRecords(health?.[task.id], records)) return true
+  return records.some(record => {
+    if (!isSuccess(record)) return false
+    const last = lastValues?.[record.taskId]
+    return !last || isOlderCapturedAt(last.capturedAt, record.capturedAt)
+  })
+}
+
 // 寫入抓取紀錄並更新帳本與 health
 async function writeRecord(input, opts = {}) {
-  const { parentId, skipLedger } = opts
-  const record = slimRecord(input)
-  await processAlerts(record)
+  const { parentId, skipLedger, executionId } = opts
+  const record = slimRecord(executionId ? { ...input, executionId } : input)
+  const alertEvaluation = await evaluateRecordAlerts(record)
   await appendRecord(record.slot.slice(0, 10), record)
+  await notifyEvaluatedAlerts(record, alertEvaluation)
   if (!skipLedger) {
     await setRunStatus(parentId, record.slot, record.status)
   }
@@ -470,6 +762,140 @@ async function writeRecord(input, opts = {}) {
   }
   return record
 }
+
+// 多來源遇到擷取前的整體故障時，仍按宣告的 field 形狀留下完整結果。
+// 這條入口與成功／部分成功的 appendRecords 路徑共用帳本、health 與告警語意，
+// 避免離線、登入失敗或外層例外只留下父任務一筆而讓子序列看似沒有結果。
+async function writeMultiFailureRecords(task, slot, status, error, opts = {}) {
+  const sources = normalizeTaskSources(task)
+  if (sources.length === 0) {
+    return await writeRecord({
+      taskId: task.id, slot, capturedAt: new Date().toISOString(), status, error
+    }, { parentId: task.id, skipLedger: opts.skipLedger === true, executionId: opts.executionId })
+  }
+  const dedupe = opts.dedupe !== undefined ? opts.dedupe : opts.skipLedger !== true
+  const commitId = dedupe ? (opts.commitId || commitIdOf(task, slot)) : undefined
+  const capturedAt = new Date().toISOString()
+  const records = sources.map((field) => ({
+    taskId: seriesIdOf(task.id, field.key),
+    slot,
+    capturedAt,
+    status,
+    error,
+    ...(commitId ? { commitId } : {}),
+    ...(opts.executionId ? { executionId: opts.executionId } : {}),
+    ...(opts.executionFingerprint ? { executionFingerprint: opts.executionFingerprint } : {})
+  }))
+  const date = typeof slot === 'string' && slot.length >= 10
+    ? slot.slice(0, 10)
+    : getLocalDateStr(new Date())
+  const [y, m, d] = date.split('-').map(Number)
+  const pastDate = new Date(y, m - 1, d - 6, 12, 0, 0)
+  const fromDate = getLocalDateStr(pastDate)
+  const recordsInRange = await getRecordsInRange(fromDate, date)
+  let existing = []
+  if (dedupe) {
+    try { existing = await getCommittedMultiRecords(date, task.id, slot, commitId) } catch {}
+    if (existing.length > 0 && existing.some(record => record?.executionFingerprint !== opts.executionFingerprint)) {
+      return { ...TASK_CHANGED_RESULT }
+    }
+  }
+  const existingIds = new Set(existing.map(record => record.taskId))
+  const alertEvaluations = []
+  for (const record of records) {
+    if (!existingIds.has(record.taskId)) {
+      alertEvaluations.push({ taskId: record.taskId, evaluation: await evaluateRecordAlerts(record, recordsInRange) })
+    }
+  }
+  if (opts.executionSnapshot && !(await multiExecutionStillValid(task, opts.executionSnapshot))) {
+    return { ...TASK_CHANGED_RESULT }
+  }
+  const committedResult = await appendMultiRecordsOnce(
+    date, records.map(slimRecord), task.id, slot, commitId, dedupe, opts.executionFingerprint
+  )
+  if (opts.executionSnapshot && !(await multiExecutionStillValid(task, opts.executionSnapshot))) {
+    return { ...TASK_CHANGED_RESULT }
+  }
+  for (const { taskId, evaluation } of alertEvaluations) {
+    const committed = committedResult.records.find(record => record.taskId === taskId)
+    await notifyEvaluatedAlerts(committed, evaluation)
+  }
+  // append 若只落了部分 field 後回錯，這裡也要把已落盤且帶標記的 field
+  // 補上通知；cooldown 會擋住上面剛通知過的同一執行。
+  await notifyCommittedMultiAlerts(committedResult.records)
+  if (opts.executionSnapshot && !(await multiExecutionStillValid(task, opts.executionSnapshot))) {
+    return { ...TASK_CHANGED_RESULT }
+  }
+  return await finalizeMultiRecords(task, slot, committedResult.records, {
+    skipLedger: opts.skipLedger === true,
+    executionFingerprint: opts.executionFingerprint
+  })
+}
+
+function multiFailureResult(task, status, error) {
+  const fields = {}
+  for (const field of normalizeTaskSources(task)) {
+    const key = field?.key || `field-${Object.keys(fields).length}`
+    fields[key] = { ok: false, error: status, message: error }
+  }
+  return { ok: false, error: status, message: error, fields }
+}
+
+// 失敗診斷只保留可辨識來源所需的資訊。frame URL 的 query/hash 可能含 token，
+// 因此只記 origin + pathname；locator 本身仍由規格／紀錄索引提供，不把它整包倒進 diag。
+function sourceDiagLabel(field) {
+  const frameUrl = field?.source?.frame?.url
+  if (typeof frameUrl === 'string' && frameUrl.trim() !== '') {
+    try {
+      const url = new URL(frameUrl)
+      // Frame paths can also contain session ids. Keep a short host/path hint,
+      // but redact query, fragment, and path segments that look like credentials.
+      const path = url.pathname.split('/').map(segment => /^(?:bearer|token|key|secret|auth|session)/i.test(segment) || segment.length > 40
+        ? '[redacted]' : segment).join('/').slice(0, 96)
+      return `${url.origin}${path}`
+    } catch {
+      return '嵌入框架'
+    }
+  }
+  return '主文件'
+}
+
+// Diagnostics are exported by the user. Keep only short labels and controlled
+// identifiers here; exception messages can contain DOM text, input values, or URLs.
+function diagnosticLabel(value, fallback = '未命名') {
+  const text = String(value ?? '').replace(/[\r\n\t\u0000-\u001f]/g, ' ').trim()
+  if (!text) return fallback
+  return text
+    .replace(/https?:\/\/[^\s"'<>]+/gi, '[URL]')
+    .replace(/\b(password|passwd|token|secret|api[_-]?key|authorization)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]')
+    .slice(0, 64)
+}
+
+function diagnosticResult(record) {
+  const status = String(record?.status || '')
+  return /^[a-z][a-z0-9_]{0,31}$/i.test(status) ? status : 'failed'
+}
+
+function commitIdOf(task, slot) {
+  return `${typeof task?.id === 'string' ? task.id : ''}@${String(slot || '')}`
+}
+
+function manualExecutionId() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID()
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
+}
+
+async function multiExecutionStillValid(task, snapshot) {
+  return checkTaskExecution(task?.id, (current) => (
+    multiExecutionSnapshot(current) === snapshot
+  ))
+}
+
+const TASK_CHANGED_RESULT = Object.freeze({
+  ok: false,
+  error: 'task_changed',
+  message: '任務在擷取期間已刪除或變更，這次結果未發布'
+})
 
 // 執行任務的主要入口函式
 export async function runTask(task, opts = {}) {
@@ -491,9 +917,31 @@ export async function runTask(task, opts = {}) {
     budgetMaxMs,
     keepAliveMs,
     preActionStepMaxMs = PRE_ACTION_STEP_MAX_MS,
-    dryRun = false
+    dryRun = false,
+    executionId: requestedExecutionId
   } = opts
   const isManual = reason === 'manual'
+  const isMulti = task?.mode === 'multi' || task?.spec?.mode === 'multi'
+  const executionId = isManual
+    ? (typeof requestedExecutionId === 'string' && requestedExecutionId.trim() ? requestedExecutionId : manualExecutionId())
+    : undefined
+  const executionSnapshot = isMulti ? multiExecutionSnapshot(task) : null
+  const executionFingerprint = isMulti ? await executionFingerprintOf(task) : null
+  // 來源索引也要供 legacy `fields` 回覆的診斷使用；舊 block 任務不是
+  // `isMulti`，但擷取結果仍可能帶 fields，不能讓診斷分支對 null 呼叫 find。
+  const multiSources = normalizeTaskSources(task)
+
+  // multi 沒有任何宣告值是設定錯誤，不應為了最後才發現空欄位而開分頁、登入或
+  // 寫入一筆看似抓取失敗的父紀錄。立即測試仍回傳可供 UI 顯示的明確結果，正式
+  // 執行則維持「不寫紀錄、不動帳本」的拒絕語意。
+  if (isMulti && multiSources.length === 0) {
+    return {
+      ok: false,
+      error: 'invalid_multi',
+      message: '多來源任務沒有可執行欄位',
+      fields: {}
+    }
+  }
 
   let extraDelayMs
   if (opts.extraDelayMs !== undefined) {
@@ -505,28 +953,61 @@ export async function runTask(task, opts = {}) {
     extraDelayMs = typeof settings?.extraDelaySec === 'number' ? settings.extraDelaySec * 1000 : 3000
   }
 
-  // 1. 冪等檢查：已在帳本中則直接返回 null（dryRun 與手動抓取略過）
+  // 在任何既有提交恢復或早期失敗寫入前先核對；刪除／改規格的舊執行只收尾，不發布結果。
+  if (!dryRun && isMulti && !(await multiExecutionStillValid(task, executionSnapshot))) {
+    return { ...TASK_CHANGED_RESULT }
+  }
+
+  // appendRecords 已成功但 worker 在帳本前中斷時，下一輪先對同一 task/slot
+  // 對帳；完整 field 集存在就只補後續狀態，不重開頁面、不重跑前置動作，也不
+  // 重新追加紀錄。即使舊 worker 已先寫帳本，只要後續狀態缺漏也要補完；
+  // 讀取失敗則退回既有執行流程，讓原本的錯誤處理接手。
+  if (!dryRun && !isManual && isMulti) {
+    try {
+      const recovered = await recoverCommittedMulti(task, slot, multiSources, commitIdOf(task, slot), executionFingerprint)
+      if (recovered?.invalid) return { ...TASK_CHANGED_RESULT }
+      const committed = recovered
+      const ledgerStatus = committed ? await getRunStatus(task.id, slot) : undefined
+      if (committed && (!ledgerStatus || (await multiFinalizeMissing(task, committed)))) {
+        if (!(await multiExecutionStillValid(task, executionSnapshot))) return { ...TASK_CHANGED_RESULT }
+        await notifyCommittedMultiAlerts(committed)
+        if (!(await multiExecutionStillValid(task, executionSnapshot))) return { ...TASK_CHANGED_RESULT }
+        return await finalizeMultiRecords(task, slot, committed, {
+          preserveExisting: true,
+          executionFingerprint
+        })
+      }
+    } catch {}
+  }
+
+  // 1. 冪等檢查：已在帳本中且後續狀態完整則直接返回 null（dryRun 與手動抓取略過）
   if (!dryRun && !isManual) {
     if (await getRunStatus(task.id, slot)) return null
   }
 
   // 2. 離線檢查：若離線則排 10 分鐘後重試，不得開分頁
   if (globalThis.navigator?.onLine === false) {
-    if (dryRun) return { ok: false, error: 'offline' }
+    if (dryRun) return isMulti ? multiFailureResult(task, 'offline', '目前離線') : { ok: false, error: 'offline' }
     // 手動抓取一律不重試，但要留一筆看得到的紀錄，否則使用者按了沒有任何反應
     if (isManual) {
+      if (isMulti) {
+        return await writeMultiFailureRecords(task, slot, 'error', '目前離線', { skipLedger: true, executionId, executionSnapshot, executionFingerprint })
+      }
       return await writeRecord({
         taskId: task.id,
         slot,
         capturedAt: new Date().toISOString(),
         status: 'error',
         error: '目前離線'
-      }, { parentId: task.id, skipLedger: true })
+      }, { parentId: task.id, skipLedger: true, executionId })
     }
     // 重試也有上限：沒有上限的話 alarm 會自己無限接力下去，一直離線就永遠不留紀錄
     if (attempt < 3) {
       await scheduleRetry(task.id, attempt, true, slot)
       return null
+    }
+    if (isMulti) {
+      return await writeMultiFailureRecords(task, slot, 'error', '目前離線', { executionSnapshot, executionFingerprint })
     }
     return await writeRecord({
       taskId: task.id,
@@ -561,6 +1042,13 @@ export async function runTask(task, opts = {}) {
       let acquiredTab = false
       let reusedPreActions = false
       const hasPreActions = Array.isArray(task.preActions) && task.preActions.length > 0
+      const hasSourceStateActions = isMulti && multiSources.some(field => Array.isArray(field.stateActions) && field.stateActions.length > 0)
+      const preparationSignature = hasSourceStateActions
+        ? JSON.stringify({
+          preActions: task.preActions || [],
+          sources: multiSources.map(field => ({ key: field.key, stateActions: field.stateActions || [] }))
+        })
+        : (hasPreActions ? JSON.stringify(task.preActions) : null)
       // 佇列中再次確認冪等，防止併發重複執行（dryRun 與手動抓取略過）
       if (!dryRun && !isManual) {
         if (await getRunStatus(task.id, slot)) return null
@@ -605,6 +1093,78 @@ export async function runTask(task, opts = {}) {
       }
       // 開頁、等載入的上限也跟著剩餘時間走
       const loadMs = () => within(loadTimeoutMs)
+      // 共用準備與逐來源狀態都走這同一份現有 action engine。
+      const runPreActionSequence = async (actions) => {
+        for (let i = 0; i < actions.length; i++) {
+          const action = actions[i]
+          checkDeadline()
+          const startedAt = Date.now()
+          if (action?.type === 'wait') {
+            const step = capStepMs(waitMsOf(action), preActionStepMaxMs)
+            if (step.ms > 0) await pause(step.ms)
+            const entry = { step: i + 1, type: 'wait', ok: true, ms: Date.now() - startedAt }
+            if (step.capped) {
+              entry.error = PRE_ACTION_STEP_CAP_NOTE
+              capNotes.push(`前置動作第 ${i + 1} 步：${PRE_ACTION_STEP_CAP_NOTE}`)
+            }
+            preActionTrace.push(entry)
+            continue
+          }
+          const holdCapped = action?.type === 'hover' && capStepMs(holdMsOf(action), preActionStepMaxMs).capped
+          if (holdCapped) capNotes.push(`前置動作第 ${i + 1} 步：${PRE_ACTION_STEP_CAP_NOTE}`)
+          const actionTimeout = action?.type === 'waitFor'
+            ? timeoutMsOf(action)
+            : (opts.frameTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS)
+          let actionLoc = await locate(action?.frame, action?.locator, actionTimeout)
+          if (!frameFound(actionLoc)) {
+            preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
+            throw new Error(preActionFailure(i, action, 'frame_not_found'))
+          }
+          // Only waitFor is safe to resend: click and hover have side effects.
+          const resendable = action?.type === 'waitFor'
+          const preAttempts = resendable ? 1 + reviveDelaysMs.length : 1
+          let preRes = null
+          let preLiveErr = null
+          for (let pa = 0; pa < preAttempts; pa++) {
+            if (pa > 0) {
+              await pause(reviveDelaysMs[pa - 1])
+              checkDeadline()
+              const again = await locate(action?.frame, action?.locator, actionTimeout)
+              if (!frameFound(again)) break
+              actionLoc = again
+            }
+            try {
+              await injectContent(tabId, { frameId: actionLoc.frameId })
+              preRes = await send({ type: MSG.RUN_PRE_ACTIONS, actions: [action] }, actionLoc.frameId,
+                opts.preActionTimeoutMs ?? messageTimeoutMs(action), 'Pre-action')
+              preLiveErr = null
+              break
+            } catch (err) {
+              if (err?.afDeadline) {
+                preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
+                throw err
+              }
+              if (err?.afTimeout) {
+                preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
+                throw new Error(preActionFailure(i, action, 'no_response'))
+              }
+              preLiveErr = err
+            }
+          }
+          if (preLiveErr !== null) {
+            preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
+            try { await diag.log('fetch_page_gone', `group=${diagnosticLabel(task.name)} stage=pre_action result=page_gone`) } catch {}
+            throw new Error(preActionFailure(i, action, 'page_gone'))
+          }
+          if (preRes?.ok !== true) {
+            preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
+            throw new Error(preActionFailure(i, action, contentErrorText(preRes)))
+          }
+          const doneEntry = { step: i + 1, type: action?.type, ok: true, ms: Date.now() - startedAt }
+          if (holdCapped) doneEntry.error = PRE_ACTION_STEP_CAP_NOTE
+          preActionTrace.push(doneEntry)
+        }
+      }
 
       try {
         // 取得分頁：指定分頁存在則用、否則開前景分頁或走專用抓取分頁
@@ -637,10 +1197,12 @@ export async function runTask(task, opts = {}) {
           // 同一頁、同一組前置動作、而且那之後頁面沒被換掉 → 前置動作留下的狀態就是這個任務要的:
           // 不重載、不重跑,一個分頁接著抓(使用者定案:同一頁的值一次抓完)。
           // 頁面有沒有被換掉只看入口的載入次數 `loads`(前置動作可能把網址導去別處,不能比網址)。
-          const preSig = hasPreActions ? JSON.stringify(task.preActions) : null
+          const preSig = preparationSignature
           const applied = queueCtx.preApplied
-          let canKeep = preSig !== null && applied?.sig === preSig && sameOriginPath(applied.url, task.url)
-          const freshLoad = !canKeep && (queueCtx.pageDirty === true || hasPreActions)
+          // Stateful source sequences always begin from a fresh page: reusing the
+          // last source's visible state cannot safely infer the site's reset state.
+          let canKeep = !hasSourceStateActions && preSig !== null && applied?.sig === preSig && sameOriginPath(applied.url, task.url)
+          const freshLoad = !canKeep && (queueCtx.pageDirty === true || hasPreActions || hasSourceStateActions)
           tabId = await acquireFetchTab(queueCtx, task.url, { pollMs, loadTimeoutMs: loadMs(), freshLoad, keepPage: canKeep })
           if (canKeep && queueCtx.fetchTab?.loads !== applied.loads) {
             // 做完前置動作之後頁面被換過(中間插進來的站台檢查導去登入頁、或被卸載而重載當下的網址):
@@ -678,14 +1240,17 @@ export async function runTask(task, opts = {}) {
         if (login?.ok !== true) {
           // 登入途中被總時限截斷的，記成超過時限（走重試），不記成登入失敗
           checkDeadline()
-          if (dryRun) return { ok: false, error: 'login_failed' }
+          if (dryRun) return isMulti ? multiFailureResult(task, 'login_failed', login?.reason || '無法登入') : { ok: false, error: 'login_failed' }
+          if (isMulti) {
+            return await writeMultiFailureRecords(task, slot, 'login_failed', login?.reason || '無法登入', { skipLedger: isManual, executionId, executionSnapshot, executionFingerprint })
+          }
           return await writeRecord({
             taskId: task.id,
             slot,
             capturedAt: new Date().toISOString(),
             status: 'login_failed',
             error: login?.reason || '無法登入'
-          }, { parentId: task.id, skipLedger: isManual })
+          }, { parentId: task.id, skipLedger: isManual, executionId })
         }
 
         // 9. 注入 content script（必須在送訊息之前）
@@ -701,89 +1266,11 @@ export async function runTask(task, opts = {}) {
             queueCtx.pageDirty = true
             queueCtx.preApplied = null
           }
-          for (let i = 0; i < task.preActions.length; i++) {
-            const action = task.preActions[i]
-            checkDeadline()
-            const startedAt = Date.now()
-            if (action?.type === 'wait') {
-              // 執行時上限：使用者存的值不改，超過照上限跑並在軌跡／紀錄註明
-              const step = capStepMs(waitMsOf(action), preActionStepMaxMs)
-              if (step.ms > 0) await pause(step.ms)
-              const entry = { step: i + 1, type: 'wait', ok: true, ms: Date.now() - startedAt }
-              if (step.capped) {
-                entry.error = PRE_ACTION_STEP_CAP_NOTE
-                capNotes.push(`前置動作第 ${i + 1} 步：${PRE_ACTION_STEP_CAP_NOTE}`)
-              }
-              preActionTrace.push(entry)
-              continue
-            }
-            // hover 的停留由 content 照上限跑；這裡只負責註明
-            const holdCapped = action?.type === 'hover' && capStepMs(holdMsOf(action), preActionStepMaxMs).capped
-            if (holdCapped) capNotes.push(`前置動作第 ${i + 1} 步：${PRE_ACTION_STEP_CAP_NOTE}`)
-            const actionTimeout = action?.type === 'waitFor'
-              ? timeoutMsOf(action)
-              : (opts.frameTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS)
-            let actionLoc = await locate(action?.frame, action?.locator, actionTimeout)
-            // `locateFrame` 失敗時回的是帶候選清單的物件（診斷用），判定一律看有沒有 frameId
-            if (!frameFound(actionLoc)) {
-              preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
-              throw new Error(preActionFailure(i, action, 'frame_not_found'))
-            }
-            // 前置動作自己也可能「送不到」：前一步的點擊讓頁面換掉，這一步就打中將死的文件
-            // （SPEC §4 推薦的「點擊切頁籤 → 等元素出現」正是這種）。
-            // **只有 `waitFor` 可以重送**——它只觀察不動頁面；`hover`／`click` 有副作用，
-            // 重放就是再按一次，所以只能停下來用中文說清楚。
-            // 沒有逾時的話，回應一旦跟著換掉的文件消失，整個抓取會吊到 service worker 被回收；
-            // 逾時值必須涵蓋動作自己需要的時間（`messageTimeoutMs`，唯一一份）。
-            const resendable = action?.type === 'waitFor'
-            const preAttempts = resendable ? 1 + reviveDelaysMs.length : 1
-            let preRes = null
-            let preLiveErr = null
-            for (let pa = 0; pa < preAttempts; pa++) {
-              if (pa > 0) {
-                await pause(reviveDelaysMs[pa - 1])
-                checkDeadline()
-                const again = await locate(action?.frame, action?.locator, actionTimeout)
-                if (!frameFound(again)) break
-                actionLoc = again
-              }
-              try {
-                await injectContent(tabId, { frameId: actionLoc.frameId })
-                preRes = await send({
-                  type: MSG.RUN_PRE_ACTIONS,
-                  actions: [action]
-                }, actionLoc.frameId, opts.preActionTimeoutMs ?? messageTimeoutMs(action), 'Pre-action')
-                preLiveErr = null
-                break
-              } catch (err) {
-                if (err?.afDeadline) {
-                  preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
-                  throw err
-                }
-                if (err?.afTimeout) {
-                  preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
-                  throw new Error(preActionFailure(i, action, 'no_response'))
-                }
-                preLiveErr = err
-              }
-            }
-            if (preLiveErr !== null) {
-              preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
-              // 原文留給診斷（與擷取那條同一個鍵），使用者看的是說得出怎麼辦的中文
-              try { await diag.log('fetch_page_gone', `「${task.name}」${String(preLiveErr?.message || preLiveErr)}`) } catch {}
-              throw new Error(preActionFailure(i, action, 'page_gone'))
-            }
-            if (preRes?.ok !== true) {
-              preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
-              // 訊息要說得出「第幾步、哪一種動作、怎麼了」，使用者才知道要調哪一列
-              throw new Error(preActionFailure(i, action, contentErrorText(preRes)))
-            }
-            const doneEntry = { step: i + 1, type: action?.type, ok: true, ms: Date.now() - startedAt }
-            if (holdCapped) doneEntry.error = PRE_ACTION_STEP_CAP_NOTE
-            preActionTrace.push(doneEntry)
-          }
+          await runPreActionSequence(task.preActions)
           if (acquiredTab) {
-            queueCtx.preApplied = { sig: JSON.stringify(task.preActions), url: task.url, loads: queueCtx.fetchTab?.loads }
+            queueCtx.preApplied = hasSourceStateActions
+              ? null
+              : { sig: preparationSignature, url: task.url, loads: queueCtx.fetchTab?.loads }
           }
         }
 
@@ -801,48 +1288,169 @@ export async function runTask(task, opts = {}) {
         // 前置動作留在這個區塊**外面**：它有副作用，重放就是把按鈕再按一次。
         let res
         let lastLiveErr = null
-        const maxAttempts = 1 + reviveDelaysMs.length
-        for (let a = 0; a < maxAttempts; a++) {
-          if (a > 0) await pause(reviveDelaysMs[a - 1])
-          checkDeadline()
-          loc = await locate(task.frame, task.locator, opts.frameTimeoutMs ?? 20000)
-          if (!frameFound(loc)) break
-          try {
-            await injectContent(tabId, { frameId: loc.frameId })
-            // 捲動到可視區是**盡力而為**：它逾時不代表擷取也會失敗，
-            // 為它重試就是把 10 秒乘以四卡住同站台佇列，所以逾時就往下走，讓擷取自己去判定。
-            // 但捲動「送不到」是另一回事——那是文件被換掉的訊號，要讓它往上冒出去觸發重試。
-            try {
-              await send({ type: MSG.SCROLL_INTO_VIEW, locator: task.locator }, loc.frameId, scrollTimeoutMs, 'Scroll')
-            } catch (err) {
-              // 總時限到了不算「盡力而為」的那種逾時
-              if (!err?.afTimeout || err.afDeadline) throw err
+        if (isMulti) {
+          // AF-22 E1：每個來源都是獨立的定位／注入／擷取單位；共用前置動作已在上方只執行一次。
+          // 來源失敗只填自己的 field，不能退回 task.locator 或用第一個來源的結果遮住其他值。
+          const fields = {}
+          const sourceFields = multiSources
+          let retryWholeTask = false
+          let deadlineFailure = null
+          let preparedSourceState = null
+          for (const field of sourceFields) {
+            const key = field?.key
+            let fieldRes = null
+            let fieldLoc = null
+            let fieldLiveErr = null
+            if (deadlineFailure) {
+              fields[key || `field-${Object.keys(fields).length}`] = {
+                ok: false,
+                error: 'error',
+                message: deadlineFailure.message || DEADLINE_MESSAGE
+              }
+              continue
             }
-            // 已知找不到元素的任務不必每次再多等短等待（3 秒）：連一次都沒抓到過，等了也是白等
-            const extractMsg = { type: MSG.EXTRACT, locator: task.locator, spec: task.spec }
-            if ((task.notFoundStreak || 0) >= 1) extractMsg.settleMs = 0
-            res = await send(extractMsg, loc.frameId, extractTimeoutMs, 'Extract')
-            lastLiveErr = null
-            break
-          } catch (err) {
-            if (err?.afTimeout) throw err
-            lastLiveErr = err
+            if (typeof key !== 'string' || key.length === 0 || !field?.source?.locator) {
+              preparedSourceState = null
+              fields[key || `field-${Object.keys(fields).length}`] = {
+                ok: false, error: 'invalid_source', message: '多來源欄位缺少有效來源'
+              }
+              continue
+            }
+            const stateActions = Array.isArray(field.stateActions) ? field.stateActions : []
+            const stateSignature = stableActionJson(stateActions)
+            if (preparedSourceState?.signature !== stateSignature) {
+              preparedSourceState = { signature: stateSignature, ok: true }
+              if (stateActions.length > 0) {
+                if (acquiredTab) {
+                  queueCtx.pageDirty = true
+                  queueCtx.preApplied = null
+                }
+                try {
+                  await runPreActionSequence(stateActions)
+                } catch (err) {
+                  if (err?.afDeadline) {
+                    deadlineFailure = err
+                    preparedSourceState = { signature: stateSignature, ok: false, deadline: true, message: String(err.message || DEADLINE_MESSAGE) }
+                  } else {
+                    preparedSourceState = { signature: stateSignature, ok: false, message: String(err?.message || '前置動作失敗') }
+                  }
+                }
+              }
+            }
+            if (!preparedSourceState.ok) {
+              const message = preparedSourceState.deadline
+                ? preparedSourceState.message
+                : `來源「${field.name || key}」狀態準備失敗：${preparedSourceState.message}`
+              fields[key] = { ok: false, error: 'error', message }
+              if (preparedSourceState.deadline) deadlineFailure = deadlineFailure || timeoutError(message)
+              continue
+            }
+            const maxFieldAttempts = 1 + reviveDelaysMs.length
+            try {
+              for (let a = 0; a < maxFieldAttempts; a++) {
+                if (a > 0) await pause(reviveDelaysMs[a - 1])
+                checkDeadline()
+                fieldLoc = await locate(field.source.frame, field.source.locator, opts.frameTimeoutMs ?? 20000)
+                loc = fieldLoc
+                if (!frameFound(fieldLoc)) {
+                  fieldRes = { ok: false, error: 'frame_not_found', message: '找不到目標所在的框架' }
+                  break
+                }
+                try {
+                  await injectContent(tabId, { frameId: fieldLoc.frameId })
+                  try {
+                    await send({ type: MSG.SCROLL_INTO_VIEW, locator: field.source.locator }, fieldLoc.frameId, scrollTimeoutMs, 'Scroll')
+                  } catch (err) {
+                    if (!err?.afTimeout || err.afDeadline) throw err
+                  }
+                  const extractMsg = { type: MSG.EXTRACT, locator: field.source.locator, spec: field.spec }
+                  if ((task.notFoundStreak || 0) >= 1) extractMsg.settleMs = 0
+                  fieldRes = await send(extractMsg, fieldLoc.frameId, extractTimeoutMs, 'Extract')
+                  fieldLiveErr = null
+                  break
+                } catch (err) {
+                  if (err?.afDeadline) throw err
+                  // 一個 field 的 message timeout 不應中斷同批其他來源；文件通訊錯誤則在本 field 內有界重試。
+                  if (err?.afTimeout) {
+                    fieldRes = { ok: false, error: 'timeout', message: String(err?.message || '擷取逾時') }
+                    fieldLiveErr = null
+                    break
+                  }
+                  fieldLiveErr = err
+                }
+              }
+            } catch (err) {
+              // 共享 deadline 到期時保留前面已完成的 field，並把本欄與尚未處理
+              // 的欄位補成同一個可判別結果；不可落到外層 all-failure，否則成功值會被覆寫。
+              if (!err?.afDeadline) throw err
+              deadlineFailure = err
+              fieldRes = { ok: false, error: 'error', message: String(err.message || DEADLINE_MESSAGE) }
+            }
+            if (!fieldRes) {
+              const raw = String(fieldLiveErr?.message || fieldLiveErr || '擷取失敗')
+              fieldRes = { ok: false, error: 'error', message: raw }
+            }
+            // all-field not_found 仍沿用任務層的有限 alarm retry；已有成功值時先完整寫下部分結果。
+            if (fieldRes.ok !== true && fieldRes.error === 'not_found') retryWholeTask = true
+            fields[key] = fieldRes
           }
-        }
-        if (!frameFound(loc)) {
-          if (dryRun) return { ok: false, error: 'frame_not_found', debug: await buildDebug(task, tabId, loc, preActionTrace, { error: 'frame_not_found' }) }
-          return await writeRecord({
-            taskId: task.id,
-            slot,
-            capturedAt: new Date().toISOString(),
-            status: 'not_found',
-            error: '找不到目標所在的框架'
-          }, { parentId: task.id, skipLedger: isManual })
-        }
-        if (lastLiveErr !== null) {
-          // 重試耗盡：標成「頁面沒了」，錯誤訊息在最外層的 catch 統一轉譯
-          lastLiveErr.afPageGone = true
-          throw lastLiveErr
+          const fieldList = Object.values(fields)
+          if (fieldList.length === 0) {
+            res = { ok: false, error: 'invalid_multi', message: '多來源任務沒有可執行欄位' }
+          } else {
+            const anySuccess = fieldList.some(field => field?.ok === true)
+            const anyFailure = fieldList.some(field => field?.ok !== true)
+            const anyPartial = fieldList.some(field => field?.partial === true)
+            res = { ok: true, fields, ...((anyFailure || anyPartial) ? { partial: true } : {}) }
+            if (!anySuccess && retryWholeTask && !isManual && attempt < 3) {
+              await scheduleRetry(task.id, attempt, false, slot)
+              return null
+            }
+          }
+        } else {
+          const maxAttempts = 1 + reviveDelaysMs.length
+          for (let a = 0; a < maxAttempts; a++) {
+            if (a > 0) await pause(reviveDelaysMs[a - 1])
+            checkDeadline()
+            loc = await locate(task.frame, task.locator, opts.frameTimeoutMs ?? 20000)
+            if (!frameFound(loc)) break
+            try {
+              await injectContent(tabId, { frameId: loc.frameId })
+              // 捲動到可視區是**盡力而為**：它逾時不代表擷取也會失敗，
+              // 為它重試就是把 10 秒乘以四卡住同站台佇列，所以逾時就往下走，讓擷取自己去判定。
+              // 但捲動「送不到」是另一回事——那是文件被換掉的訊號，要讓它往上冒出去觸發重試。
+              try {
+                await send({ type: MSG.SCROLL_INTO_VIEW, locator: task.locator }, loc.frameId, scrollTimeoutMs, 'Scroll')
+              } catch (err) {
+                // 總時限到了不算「盡力而為」的那種逾時
+                if (!err?.afTimeout || err.afDeadline) throw err
+              }
+              // 已知找不到元素的任務不必每次再多等短等待（3 秒）：連一次都沒抓到過，等了也是白等
+              const extractMsg = { type: MSG.EXTRACT, locator: task.locator, spec: task.spec }
+              if ((task.notFoundStreak || 0) >= 1) extractMsg.settleMs = 0
+              res = await send(extractMsg, loc.frameId, extractTimeoutMs, 'Extract')
+              lastLiveErr = null
+              break
+            } catch (err) {
+              if (err?.afTimeout) throw err
+              lastLiveErr = err
+            }
+          }
+          if (!frameFound(loc)) {
+            if (dryRun) return { ok: false, error: 'frame_not_found', debug: await buildDebug(task, tabId, loc, preActionTrace, { error: 'frame_not_found' }) }
+            return await writeRecord({
+              taskId: task.id,
+              slot,
+              capturedAt: new Date().toISOString(),
+              status: 'not_found',
+              error: '找不到目標所在的框架'
+            }, { parentId: task.id, skipLedger: isManual, executionId })
+          }
+          if (lastLiveErr !== null) {
+            // 重試耗盡：標成「頁面沒了」，錯誤訊息在最外層的 catch 統一轉譯
+            lastLiveErr.afPageGone = true
+            throw lastLiveErr
+          }
         }
 
         // 演練模式：直接回傳 content script 擷取回覆（附上前置動作做了哪幾步）
@@ -860,6 +1468,10 @@ export async function runTask(task, opts = {}) {
               { error: res?.error, message: res?.message }, page)
           }
           return out
+        }
+
+        if (!dryRun && isMulti && !(await multiExecutionStillValid(task, executionSnapshot))) {
+          return { ...TASK_CHANGED_RESULT }
         }
 
         // 結果處理：成功路徑
@@ -880,12 +1492,20 @@ export async function runTask(task, opts = {}) {
               const rec = {
                 taskId: seriesIdOf(task.id, key),
                 slot,
-                capturedAt
+                capturedAt,
+                ...(isManual ? { executionId } : { commitId: commitIdOf(task, slot) }),
+                ...(executionFingerprint ? { executionFingerprint } : {})
               }
               if (r?.ok) {
                 rec.value = r.value
                 rec.raw = r.raw
                 rec.status = (reason === 'late' || lateRun) ? 'late' : (r.status || 'ok')
+                if (r.strategyUsed !== undefined) {
+                  rec.strategyUsed = r.strategyUsed
+                }
+                if (r.layer !== undefined) {
+                  rec.layer = r.layer
+                }
                 if (r.used !== undefined) {
                   rec.used = r.used
                 }
@@ -927,50 +1547,68 @@ export async function runTask(task, opts = {}) {
             const fromDate = getLocalDateStr(pastDate)
             const recordsInRange = await getRecordsInRange(fromDate, date)
 
-            for (const rec of records) {
-              await processAlerts(rec, recordsInRange)
-            }
-
-            // 批次寫入：整組紀錄只呼叫一次 appendRecords
-            await appendRecords(date, records)
-
-            // 帳本：整組只寫一次，用父任務 id（手動抓取不寫帳本）
+            let existing = []
+            const commitId = isManual ? undefined : commitIdOf(task, slot)
             if (!isManual) {
-              const hasSuccess = records.some(r => isSuccess(r))
-              const firstFail = records.find(r => !isSuccess(r))
-              const ledgerStatus = hasSuccess ? 'ok' : (firstFail ? firstFail.status : 'error')
-              await setRunStatus(task.id, slot, ledgerStatus)
-            }
-
-            // lastValues：成功的值各自以子序列 id 寫入（整組一次寫完，不逐個讀寫）
-            const lastEntries = {}
-            for (const rec of records) {
-              if (isSuccess(rec)) {
-                lastEntries[rec.taskId] = { value: rec.value, capturedAt: rec.capturedAt }
+              try { existing = await getCommittedMultiRecords(date, task.id, slot, commitId) } catch {}
+              if (isMulti && existing.length > 0 && existing.some(record => record?.executionFingerprint !== executionFingerprint)) {
+                return { ...TASK_CHANGED_RESULT }
               }
             }
-            await setLastValues(lastEntries)
-
-            // health：整個任務只寫一次，寫在父任務 id 上；狀態的算法與單值共用同一份
-            const failCount = records.filter(r => !isSuccess(r)).length
-            await updateHealth(task.id, healthFromRecords(records, res.partial))
-            if (hasAnySuccess(records)) await clearNotifyLog(task.id)
-
-            if (failCount === 0) {
-              await clearNotFoundStreak(task.id)
+            const existingIds = new Set(existing.map(record => record.taskId))
+            const alertEvaluations = []
+            for (const rec of records) {
+              // 重試／復原只對本次尚未提交的新 field 評估告警，避免帳本
+              // 寫入中斷後同一批結果再次觸發相同通知。
+              if (!existingIds.has(rec.taskId)) {
+                alertEvaluations.push({ taskId: rec.taskId, evaluation: await evaluateRecordAlerts(rec, recordsInRange) })
+              }
             }
+
+            if (isMulti && !(await multiExecutionStillValid(task, executionSnapshot))) {
+              return { ...TASK_CHANGED_RESULT }
+            }
+
+            // 批次寫入：排程同一 task/slot 只補缺少的 field；手動抓取保留
+            // 每次獨立紀錄。若 storage 在寫入後回錯，helper 會先核對已耐久資料，
+            // 避免外層 catch 再追加一整批重複結果。
+            const committedResult = await appendMultiRecordsOnce(
+              date, records, task.id, slot, commitId, !isManual,
+              isMulti ? executionFingerprint : undefined
+            )
+            const committedRecords = committedResult.records
+            if (isMulti && !(await multiExecutionStillValid(task, executionSnapshot))) {
+              return { ...TASK_CHANGED_RESULT }
+            }
+            for (const { taskId, evaluation } of alertEvaluations) {
+              const committed = committedRecords.find(record => record.taskId === taskId)
+              await notifyEvaluatedAlerts(committed, evaluation)
+            }
+            if (isMulti && !(await multiExecutionStillValid(task, executionSnapshot))) {
+              return { ...TASK_CHANGED_RESULT }
+            }
+            const finalized = await finalizeMultiRecords(task, slot, committedRecords, {
+              skipLedger: isManual,
+              partial: res.partial === true,
+              executionFingerprint: isMulti ? executionFingerprint : undefined
+            })
+            if (finalized?.error === 'task_changed') return finalized
 
             // 設定頁的診斷要看得出這一次抓了幾個值、哪幾個沒抓到
             // 診斷頁是用字串串接顯示；環形緩衝只有 500 筆，全成功就不占位子（否則會把看門狗紀錄擠掉）
-            const failedNames = records
+            const failedNames = committedRecords
               .filter(r => !isSuccess(r))
-              .map(r => buildSeriesIndex([task]).byId[r.taskId]?.shortName || r.taskId)
+              .map(r => {
+                const key = r.taskId.slice(`${task.id}#`.length)
+                const field = multiSources.find(one => one?.key === key)
+                const name = buildSeriesIndex([task]).byId[r.taskId]?.shortName || r.taskId
+                return `${diagnosticLabel(name)}（來源 ${sourceDiagLabel(field)}；stage=extract；result=${diagnosticResult(r)}）`
+              })
             if (failedNames.length > 0) {
-              await diag.log('fetch_fields', `「${task.name}」${records.length} 個值，失敗 ${failedNames.length}：${failedNames.join('、')}`)
+              await diag.log('fetch_fields', `group=${diagnosticLabel(task.name)} values=${committedRecords.length} failures=${failedNames.length}: ${failedNames.join('、').slice(0, 900)}`)
             }
 
-            const firstSuccess = records.find(r => isSuccess(r))
-            return firstSuccess || records[0] || null
+            return committedRecords.find(r => isSuccess(r)) || committedRecords[0] || null
           }
 
           await clearNotFoundStreak(task.id)
@@ -1009,7 +1647,18 @@ export async function runTask(task, opts = {}) {
             record.partial = true
           }
 
-          return await writeRecord(record, { parentId: task.id, skipLedger: isManual })
+          return await writeRecord(record, { parentId: task.id, skipLedger: isManual, executionId })
+        }
+
+        // multi 的格式／協調錯誤也要依 field 產生結果；不能回到單值父任務紀錄。
+        if (isMulti) {
+          const error = contentErrorText(res) || res?.message || '擷取失敗'
+          if (dryRun) return multiFailureResult(task, res?.error || 'error', error)
+          if (!isManual && attempt < 3) {
+            await scheduleRetry(task.id, attempt, false, slot)
+            return null
+          }
+          return await writeMultiFailureRecords(task, slot, res?.error || 'error', error, { skipLedger: isManual, executionId, executionSnapshot, executionFingerprint })
         }
 
         // 結果處理：元素未找到（可重試）
@@ -1040,7 +1689,7 @@ export async function runTask(task, opts = {}) {
             // 「標題找不到，改用位置定位」這種訊息要留在紀錄裡，
             // 只寫 not_found 的話使用者看到的永遠是同一句沒有解法的話
             ...(res.message !== undefined ? { error: res.message } : {})
-          }, { parentId: task.id, skipLedger: isManual })
+          }, { parentId: task.id, skipLedger: isManual, executionId })
         }
 
         // 結果處理：解析錯誤（不重試，不得含 value 欄位）
@@ -1051,7 +1700,7 @@ export async function runTask(task, opts = {}) {
             capturedAt: new Date().toISOString(),
             status: 'parse_error',
             raw: res.raw
-          }, { parentId: task.id, skipLedger: isManual })
+          }, { parentId: task.id, skipLedger: isManual, executionId })
         }
 
         // 其他未知錯誤
@@ -1065,29 +1714,36 @@ export async function runTask(task, opts = {}) {
           capturedAt: new Date().toISOString(),
           status: 'error',
           error: contentErrorText(res) || '擷取失敗'
-        }, { parentId: task.id, skipLedger: isManual })
+        }, { parentId: task.id, skipLedger: isManual, executionId })
 
       } catch (err) {
         // 存活重試耗盡才會走到這裡：把 Chrome 的英文原文換成說得出怎麼辦的中文，
-        // **原文寫進診斷不丟掉**（除錯時找不到原文就等於什麼線索都沒有）。
+        // 診斷匯出可能含敏感資料；只記失敗階段與受控結果代碼，不保存例外原文。
         // 轉譯只能在這裡做一次：放進重試迴圈的話，每重試一次就把原文覆蓋一次。
         const raw = String(err?.message || err)
         let shown = raw
         if (err?.afPageGone === true) {
           shown = PAGE_GONE_MESSAGE
-          try { await diag.log('fetch_page_gone', `「${task.name}」${raw}`) } catch {}
+          try { await diag.log('fetch_page_gone', `group=${diagnosticLabel(task.name)} stage=fetch result=page_gone`) } catch {}
         }
         // 立即測試失敗時也要帶軌跡：使用者最需要知道的是「hover 有做、卡在第幾步」，
         // 只回一句錯誤訊息就是把軌跡丟掉
         if (dryRun) {
+          if (isMulti) return multiFailureResult(task, 'error', shown)
           const out = { ok: false, error: shown }
           if (preActionTrace.length > 0) out.preActionTrace = preActionTrace
           out.debug = await buildDebug(task, tabId, loc, preActionTrace, { error: shown, raw })
           return out
         }
+        if (isMulti && !(await multiExecutionStillValid(task, executionSnapshot))) {
+          return { ...TASK_CHANGED_RESULT }
+        }
         if (!isManual && attempt < 3) {
           await scheduleRetry(task.id, attempt, false, slot)
           return null
+        }
+        if (isMulti) {
+          return await writeMultiFailureRecords(task, slot, 'error', shown, { skipLedger: isManual, executionId, executionSnapshot, executionFingerprint })
         }
         return await writeRecord({
           taskId: task.id,
@@ -1095,7 +1751,7 @@ export async function runTask(task, opts = {}) {
           capturedAt: new Date().toISOString(),
           status: 'error',
           error: shown
-        }, { parentId: task.id, skipLedger: isManual })
+        }, { parentId: task.id, skipLedger: isManual, executionId })
       } finally {
         if (restoreForeground) {
           try {
@@ -1110,7 +1766,7 @@ export async function runTask(task, opts = {}) {
       try {
         await dropRunState(runKey)
       } catch (err) {
-        try { await diag.log('run_state_error', `${runKey}：${String(err?.message || err)}`) } catch {}
+        try { await diag.log('run_state_error', `stage=run_state_cleanup result=error`) } catch {}
       }
     }
   }

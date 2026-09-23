@@ -59,6 +59,44 @@
     [data-batch-result] { font-family: var(--font-mono, monospace); }
     [data-batch-remove] { grid-column: 2; grid-row: 1; }
     #batch-note { font-size: var(--text-xs, 12px); color: var(--text-muted); }
+    #group-draft-section {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2, 10px);
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: var(--space-2, 10px) 0;
+    }
+    #group-draft-section[hidden] { display: none; }
+    #group-draft-head { display: flex; flex-direction: column; gap: 4px; }
+    #group-draft-title { margin: 0; font-size: var(--text-md, 15px); }
+    #group-draft-help, [data-group-source], [data-group-value-source] {
+      color: var(--text-muted);
+      font-size: var(--text-xs, 12px);
+      overflow-wrap: anywhere;
+    }
+    #group-list { display: flex; flex-direction: column; gap: 8px; }
+    [data-group-row] {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 8px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm, 4px);
+    }
+    [data-group-row][data-active="true"] { border-color: var(--focus); }
+    [data-group-row] [data-group-row-head] { display: flex; gap: 6px; align-items: center; }
+    [data-group-row] [data-group-name] { font-weight: 600; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    [data-group-values] { display: flex; flex-direction: column; gap: 2px; padding-left: 8px; }
+    [data-group-value] { font-size: var(--text-xs, 12px); overflow-wrap: anywhere; }
+    [data-group-empty-actions] { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+    #group-name-editor { display: flex; flex-direction: column; gap: 6px; }
+    #group-name-editor[hidden] { display: none; }
+    #group-name-actions, #group-draft-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+    #group-draft-status { min-height: 1.3em; }
+    #group-draft-status[hidden] { display: none; }
+    #group-start-first[hidden], #group-finish[hidden], #group-add[hidden] { display: none; }
     #bulk-list { display: flex; flex-direction: column; gap: 6px; }
     #bulk-note { font-size: var(--text-xs, 12px); color: var(--text-muted); }
     .settings-body {
@@ -313,7 +351,8 @@
     #alert-list { display: flex; flex-direction: column; gap: 6px; }
     [data-alert-row] { display: flex; align-items: center; gap: 6px; }
     [data-alert-row] select { flex: 2; }
-    [data-alert-row] input[type="number"] { flex: 1.5; min-width: 0; }
+    [data-alert-row] input.alert-value { flex: 1.5; min-width: 0; }
+    [data-alert-error] { flex-basis: 100%; color: var(--danger-text); font-size: var(--text-xs, 12px); }
     [data-alert-row] label { display: inline-flex; flex-direction: row; align-items: center; gap: 2px; white-space: nowrap; color: var(--text); font-size: var(--text-xs, 12px); cursor: pointer; }
     [data-alert-row] button {
       flex-shrink: 0;
@@ -427,10 +466,39 @@
   </div>
   <div id="retarget-note" role="status" hidden></div>
   <div id="panel-notice" role="status" hidden></div>
+  <section id="group-draft-section" hidden aria-labelledby="group-draft-title">
+    <div id="group-draft-head">
+      <h2 id="group-draft-title">先建立群組</h2>
+      <div id="group-draft-help">每組先命名，再到頁面選入要抓的值。</div>
+    </div>
+    <div id="group-list" aria-live="polite"></div>
+    <button type="button" id="group-start-first">新增第一個群組</button>
+    <div id="group-name-editor" hidden>
+      <label for="group-name">群組名稱</label>
+      <input type="text" id="group-name" autocomplete="off" placeholder="替這組取個名字">
+      <div id="group-name-help" class="field-hint">名稱確認後才會進入頁面選值。</div>
+      <div id="group-name-actions">
+        <button type="button" id="group-name-from-page">從頁面取名稱</button>
+        <button type="button" id="group-name-confirm" class="btn-primary">確認名稱並開始選值</button>
+      </div>
+    </div>
+    <div id="group-draft-status" role="status" hidden></div>
+    <div id="group-draft-actions">
+      <button type="button" id="group-start-selection" hidden>開始選值</button>
+      <button type="button" id="group-add" hidden>新增群組</button>
+      <button type="button" id="group-undo" hidden>復原上一步</button>
+      <button type="button" id="group-finish" class="btn-primary" hidden>完成選取</button>
+      <button type="button" id="group-abandon">放棄這輪選取</button>
+    </div>
+  </section>
   <form id="picker-form" onsubmit="return false;">
     <div class="settings-body">
+      <div id="source-state-warning" class="banner is-info" role="status" aria-live="polite" hidden>
+        前一個值的狀態動作會留在頁面上；後續值若沒有狀態動作，會沿用目前頁籤或篩選。若該值要回到初始狀態，請明確加入切換或還原動作。此提醒不會阻止儲存。
+      </div>
       <fieldset id="batch-section" hidden>
         <legend>要建立的任務</legend>
+        <button type="button" id="batch-return-selection" hidden>返回選取</button>
         <div id="batch-list"></div>
         <div id="batch-note">每個任務各自命名；多久抓一次與抓完放哪裡共用。要個別調整的，存完到任務頁按編輯。</div>
         <label id="batch-aggregate-label" hidden><span data-term="aggregate"></span>
@@ -493,7 +561,7 @@
       </fieldset>
       <details id="preaction-section">
         <summary><span data-preaction-ask></span> <span id="preaction-count" class="chip" hidden></span></summary>
-        <div class="preaction-desc">抓取前依序執行，例如先關掉彈窗、或等圖表載入完成。<br>
+        <div class="preaction-desc">抓取前依序執行，例如先關掉彈窗、或等圖表載入完成。多值設定可在各值旁按「狀態動作」套用目前這串動作，只在抓該值前執行。沒有狀態動作的值會沿用前一個值留下的頁面狀態，不會自動重載或還原。<br>
           要抓「滑鼠移過去才出現的選單」，用「移到元素上」→「等元素出現」→「點擊元素」三步。
           <strong>純用 CSS <code>:hover</code> 展開的選單無法用這個方式打開</strong>（程式送出的滑鼠事件不是真的游標）；
           這種站台通常選單項目本來就在頁面裡，把「等元素出現」的「要看得見」取消再直接點它即可。</div>

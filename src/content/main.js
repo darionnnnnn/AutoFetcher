@@ -6,10 +6,75 @@ import {
   parseTable, getDataRows, rowHeader, innermostTable,
   hasInner, resolveInnerAt, gridStartsOf, blockRowsOf
 } from '../shared/table.js'
-import { enterPickMode, exitPickMode } from './picker-mode.js'
+import { enterPickMode, exitPickMode, drainPickQueue } from './picker-mode.js'
 
 // 記住使用者最後右鍵點擊的元素
 let lastTarget = null
+let groupNamePickState = null
+
+function endGroupNamePick() {
+  if (!groupNamePickState) return
+  document.removeEventListener('click', groupNamePickState.onClick, true)
+  document.removeEventListener('keydown', groupNamePickState.onKeyDown, true)
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('popstate', groupNamePickState.onRouteChange, true)
+    window.removeEventListener('hashchange', groupNamePickState.onRouteChange, true)
+    window.removeEventListener('pagehide', groupNamePickState.onPageHide, true)
+  }
+  groupNamePickState = null
+}
+
+function beginGroupNamePick(msg) {
+  // 取名狀態與選值互斥；先拆掉舊 overlay 的 capture listener，頁面點文字
+  // 只會回傳名稱，不會同時加值或觸發連結。
+  exitPickMode({ clearOnly: 'task' })
+  endGroupNamePick()
+  const routeAtEntry = typeof location !== 'undefined' ? location.href : ''
+  const onRouteChange = () => {
+    if (routeAtEntry && typeof location !== 'undefined' && location.href !== routeAtEntry) endGroupNamePick()
+  }
+  const onPageHide = () => endGroupNamePick()
+  const onClick = (event) => {
+    onRouteChange()
+    if (!groupNamePickState) return
+    const target = event.target
+    if (!target || target.closest?.('[data-af-overlay]')) return
+    event.preventDefault()
+    event.stopPropagation()
+    const tag = String(target.tagName || '').toLowerCase()
+    const type = String(target.type || '').toLowerCase()
+    // password／敏感可編輯欄位永遠只回空文字，不能把秘密送回面板。
+    const text = type === 'password' ? ''
+      : (tag === 'input' || tag === 'textarea' ? String(target.value || '').trim() : String(target.textContent || '').trim())
+    endGroupNamePick()
+    const pending = chrome.runtime.sendMessage({
+      type: MSG.PICK_GROUP_NAME_RESULT,
+      requestId: msg.requestId,
+      sessionId: msg.sessionId,
+      groupKey: msg.groupKey,
+      documentGeneration: msg.documentGeneration,
+      routeIdentity: msg.routeIdentity,
+      text
+    })
+    if (pending?.catch) pending.catch(() => {})
+  }
+  const onKeyDown = (event) => {
+    onRouteChange()
+    if (!groupNamePickState) return
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    event.stopPropagation()
+    endGroupNamePick()
+  }
+  groupNamePickState = { onClick, onKeyDown, onRouteChange, onPageHide }
+  document.addEventListener('click', onClick, true)
+  document.addEventListener('keydown', onKeyDown, true)
+  if (typeof window !== 'undefined') {
+    window.addEventListener('popstate', onRouteChange, true)
+    window.addEventListener('hashchange', onRouteChange, true)
+    window.addEventListener('pagehide', onPageHide, true)
+  }
+}
 
 
 // 處理 DESCRIBE 訊息：回傳目標元素的四層定位與預覽數值
@@ -413,6 +478,15 @@ async function handlePreActions(msg, sendResponse) {
         if (typeof res.el.click === 'function') {
           res.el.click()
         }
+      } else if (action.type === 'scroll') {
+        const res = resolve(document, action.locator)
+        if (res?.error || !res?.el) throw new Error('preaction_not_found')
+        const top = Number(action.top)
+        if (!Number.isFinite(top) || top < 0) throw new Error('preaction_invalid_scroll')
+        // Set the container position directly; dispatch scroll so virtualized
+        // widgets which listen for it can render the requested window.
+        res.el.scrollTop = top
+        res.el.dispatchEvent(new (res.el.ownerDocument?.defaultView?.Event || Event)('scroll', { bubbles: true }))
       } else if (action.type === 'waitFor') {
         // 「出現」預設是**看得見**：元素早就在 DOM 裡、只是隱藏著的話，
         // 等到了也只是點到看不見的東西（visible: false 可關掉這個要求）
@@ -482,6 +556,12 @@ function route(msg, sendResponse) {
     return true
   }
 
+  if (msg.type === MSG.PICK_GROUP_NAME) {
+    beginGroupNamePick(msg)
+    sendResponse({ ok: true })
+    return true
+  }
+
   if (msg.type === MSG.ENTER_PICK) {
     // 重選是在新分頁開的，沒有「上次右鍵的元素」；先用任務自己的 locator 找回目標
     let target = lastTarget
@@ -492,20 +572,44 @@ function route(msg, sendResponse) {
     enterPickMode({
       purpose: msg.purpose,
       taskId: msg.taskId,
+      repairSessionId: msg.repairSessionId,
+      repairFieldKey: msg.repairFieldKey,
+      repairMode: msg.repairMode,
+      sessionId: msg.sessionId,
+      groupKey: msg.groupKey,
+      activeGroupKey: msg.activeGroupKey,
+      pickStage: msg.pickStage,
+      documentGeneration: msg.documentGeneration,
+      routeIdentity: msg.routeIdentity,
+      draftValues: msg.draftValues,
+      frame: msg.frame,
+      draftRevision: msg.draftRevision,
+      parentFrameId: msg.parentFrameId,
       initialTarget: target,
       preselect: msg.preselect,
       // 下鑽失敗被退回來時 background 會帶 hint，面板要讓使用者知道為什麼還在原地
       hint: msg.hint,
+      frameError: msg.frameError,
       // 右鍵「一次建立多個任務」：每個不同的目標自成一組（picker-mode 只認字面 true）
       ...(msg.batch === true ? { batch: true } : {})
     })
-    sendResponse({ ok: true })
+    sendResponse({ ok: true, activeGroupKey: msg.activeGroupKey ?? msg.groupKey, frame: msg.frame })
     return true
   }
 
   if (msg.type === MSG.EXIT_PICK) {
-    exitPickMode()
+    const exited = exitPickMode({ identity: msg })
+    if (exited === false) {
+      sendResponse({ ok: false, error: 'stale_session' })
+      return true
+    }
+    endGroupNamePick()
     sendResponse({ ok: true })
+    return true
+  }
+
+  if (msg.type === MSG.PICK_DRAIN) {
+    drainPickQueue(msg).then(sendResponse, error => sendResponse({ ok: false, message: String(error?.message || error) }))
     return true
   }
 

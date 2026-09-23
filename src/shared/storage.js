@@ -2,6 +2,7 @@
 import { pruneCardsForTask } from './layout-store.js'
 import { encryptSecret } from './crypto.js'
 import { parentIdOf, SERIES_SEP } from './series-index.js'
+import { validateMultiTask, normalizeTaskSources, multiExecutionSnapshot, changedExecutionSeriesOf, executionFingerprintOf } from './task-source.js'
 import { withLock, lockNameOf } from './lock.js'
 import { isSuccess, isWarn, isRed } from './record-status.js'
 
@@ -148,7 +149,10 @@ async function forEachBatch(keys, onBatch) {
   }
 }
 
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
+
+// 供設定匯入與其他共用讀取端使用；正規化本身是純函式，不會改寫 storage。
+export { normalizeTaskSources }
 
 // ---- 讀-改-寫的唯一一份（AF-21 批次 1）----
 // 規則：對某鍵的 set／remove 一律在 lockNameOf(那個鍵) 的鎖內，讀也在同一次持有內；
@@ -156,6 +160,9 @@ export const SCHEMA_VERSION = 3
 
 // mutator 回傳它表示刪掉這個鍵
 const REMOVE = Symbol('remove')
+// 供少數需要在同一把 session 鎖內條件刪除的資料層使用；一般呼叫端請用
+// clearSessionValue，避免把 storage 的刪除語意散落到各模組。
+export const REMOVE_SESSION_VALUE = REMOVE
 
 const asObject = (v) => (v && typeof v === 'object' && !Array.isArray(v)) ? v : {}
 const asArray = (v) => Array.isArray(v) ? v : []
@@ -188,6 +195,128 @@ function updateValue(key, shape, mutator, area = 'local') {
 // 單純覆寫一個鍵（仍在鎖內讀過再寫，寫入點規則只有一種）
 function writeKey(key, value, area = 'local') {
   return mutateKey(key, () => value, area)
+}
+
+function isMultiExecutionTask(task) {
+  return task?.mode === 'multi' || task?.spec?.mode === 'multi'
+}
+
+const EXECUTION_INVALIDATIONS_KEY = 'executionInvalidations'
+const MAX_EXECUTION_INVALIDATIONS = 100
+const MAX_EXECUTION_INVALIDATION_BYTES = 64 * 1024
+
+function executionSpecChanged(before, after) {
+  if (!isMultiExecutionTask(before)) return false
+  if (!isMultiExecutionTask(after)) return true
+  return multiExecutionSnapshot(before) !== multiExecutionSnapshot(after)
+}
+
+async function invalidationOf(before, after) {
+  if (!executionSpecChanged(before, after)) return null
+  return {
+    taskId: before.id,
+    executionFingerprint: await executionFingerprintOf(before),
+    seriesKeys: changedExecutionSeriesOf(before, after),
+    clearHealth: true
+  }
+}
+
+async function appendExecutionInvalidations(changes) {
+  const valid = (changes || []).filter(change => change?.taskId && change.executionFingerprint)
+  if (!valid.length) return []
+  const markerId = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const marker = { id: markerId, changes: valid.map(change => ({ ...change })) }
+  await mutateKey(EXECUTION_INVALIDATIONS_KEY, current => {
+    const rows = Array.isArray(current) ? current : []
+    const next = [...rows, marker]
+    const bytes = new TextEncoder().encode(JSON.stringify(next)).length
+    if (rows.length >= MAX_EXECUTION_INVALIDATIONS || valid.length > 100 || bytes > MAX_EXECUTION_INVALIDATION_BYTES) {
+      throw new Error('execution invalidation queue is full')
+    }
+    return next
+  })
+  return [marker]
+}
+
+async function removeExecutionInvalidation(id) {
+  await mutateKey(EXECUTION_INVALIDATIONS_KEY, current => {
+    const rows = Array.isArray(current) ? current : []
+    const next = rows.filter(row => row?.id !== id)
+    return next.length === rows.length ? undefined : next
+  })
+}
+
+// 只在目標鍵自己的鎖內清理舊 execution；不持有 tasks 鎖，也不把多鍵操作
+// 假裝成交易。新 execution 帶不同 fingerprint 時會保留下來。
+async function clearInvalidatedExecutionState(changes) {
+  const invalidated = new Map()
+  for (const change of changes || []) {
+    if (!change || typeof change.taskId !== 'string' || typeof change.executionFingerprint !== 'string') continue
+    if (!invalidated.has(change.taskId)) invalidated.set(change.taskId, [])
+    invalidated.get(change.taskId).push(change)
+  }
+  if (invalidated.size === 0) return
+
+  await mutateKey('lastValues', (current) => {
+    const all = asObject(current)
+    const next = Object.fromEntries(Object.entries(all).filter(([seriesId, entry]) => {
+      const taskId = parentIdOf(seriesId)
+      const changesForTask = invalidated.get(taskId)
+      const seriesKey = seriesId === taskId
+        ? ''
+        : (seriesId.startsWith(taskId + SERIES_SEP) ? seriesId.slice(taskId.length + SERIES_SEP.length) : null)
+      return !changesForTask || !changesForTask.some(change =>
+        seriesKey !== null && change.seriesKeys.includes(seriesKey) &&
+        change.executionFingerprint === entry?.executionFingerprint
+      )
+    }))
+    return Object.keys(next).length === Object.keys(all).length ? undefined : next
+  })
+  await mutateKey('health', (current) => {
+    const all = asObject(current)
+    const next = { ...all }
+    for (const [taskId, changesForTask] of invalidated) {
+      if (changesForTask.some(change => change.clearHealth && change.executionFingerprint === all[taskId]?.executionFingerprint)) {
+        delete next[taskId]
+      }
+    }
+    return Object.keys(next).length === Object.keys(all).length ? undefined : next
+  })
+}
+
+// Recovery is deliberately off the fetch path. A marker written before a task
+// mutation is harmless if that mutation never committed; replay only cleans
+// after the task disappeared or its execution identity changed.
+async function replayExecutionInvalidationsForMarker(marker) {
+  const tasks = await getTasks()
+  const eligible = []
+  for (const change of marker?.changes || []) {
+    const current = tasks.find(task => task?.id === change?.taskId)
+    const stillOld = current && isMultiExecutionTask(current) &&
+      await executionFingerprintOf(current) === change.executionFingerprint
+    if (!stillOld) eligible.push(change)
+  }
+  await clearInvalidatedExecutionState(eligible)
+  await removeExecutionInvalidation(marker.id)
+}
+
+export async function replayExecutionInvalidations() {
+  const stored = await chrome.storage.local.get(EXECUTION_INVALIDATIONS_KEY)
+  const markers = Array.isArray(stored?.[EXECUTION_INVALIDATIONS_KEY])
+    ? stored[EXECUTION_INVALIDATIONS_KEY].slice(0, MAX_EXECUTION_INVALIDATIONS)
+    : []
+  for (const marker of markers) {
+    if (!marker || typeof marker.id !== 'string' || !Array.isArray(marker.changes)) continue
+    await replayExecutionInvalidationsForMarker(marker)
+  }
+}
+
+async function currentTaskMatchesExecution(taskId, executionFingerprint) {
+  if (typeof taskId !== 'string' || typeof executionFingerprint !== 'string') return false
+  const result = await chrome.storage.local.get('tasks')
+  const task = (Array.isArray(result?.tasks) ? result.tasks : []).find(item => item?.id === taskId)
+  if (!task || !isMultiExecutionTask(task)) return false
+  return await executionFingerprintOf(task) === executionFingerprint
 }
 
 // 站台的舊欄位 loginPageUrlPrefix 轉成 loginCheck（不碰密碼；init 遷移與設定匯入共用）
@@ -252,6 +381,7 @@ export async function init() {
     const v = typeof cur === 'number' ? cur : SCHEMA_VERSION
     return cur === undefined || v < SCHEMA_VERSION ? SCHEMA_VERSION : undefined
   })
+  await replayExecutionInvalidations()
 }
 
 // v2 → v3：單一 runs 鍵拆成 runs:<date>，只留近 RUNS_KEEP_DAYS 天（以現在的本地日期計），最後刪掉舊鍵。
@@ -349,6 +479,19 @@ export function validateTask(task, index, { keptUrl } = {}) {
     throw err
   }
 
+  // AF-22 新契約採 task.mode/spec.mode = multi；舊單值與舊 block fields
+  // 仍沿用下面的寬鬆相容驗證，不會因讀取而被改寫。
+  if (task.mode === 'multi' || task.spec?.mode === 'multi') {
+    try {
+      validateMultiTask(task)
+    } catch (cause) {
+      const err = new Error(cause?.message || 'multi 任務格式錯誤')
+      err.index = index
+      throw err
+    }
+    return
+  }
+
   if (Array.isArray(task.fields)) {
     const seenKeys = new Set()
     for (const f of task.fields) {
@@ -381,11 +524,30 @@ export async function saveTasks(list) {
   }
 
   let savedTasks = []
+  const beforeTasks = await getTasks()
+  const beforeById = new Map(beforeTasks.map(task => [task?.id, task]))
+  const invalidated = []
+  for (const item of list) {
+    const before = beforeById.get(item?.id)
+    if (before && executionSpecChanged(before, item)) {
+      const change = await invalidationOf(before, item)
+      if (change) invalidated.push(change)
+    }
+  }
+  const markers = await appendExecutionInvalidations(invalidated)
   await mutateKey('tasks', (current) => {
     const tasks = Array.isArray(current) ? [...current] : []
+    for (const change of invalidated) {
+      const before = beforeById.get(change.taskId)
+      const currentTask = tasks.find(task => task?.id === change.taskId)
+      if (!currentTask || JSON.stringify(currentTask) !== JSON.stringify(before)) {
+        throw new Error('task changed while saving; retry the update')
+      }
+    }
     savedTasks = mergeTasksUnlocked(tasks, list)
     return tasks
   })
+  for (const marker of markers) await replayExecutionInvalidationsForMarker(marker)
   return savedTasks
 }
 
@@ -429,26 +591,52 @@ function mergeTasksUnlocked(tasks, list) {
 export async function updateTasks(ids, mutator) {
   if (!Array.isArray(ids) || ids.length === 0) return []
   let savedTasks = []
-  await mutateKey('tasks', async (current) => {
+  const beforeTasks = await getTasks()
+  const prepared = []
+  for (const id of new Set(ids)) {
+    const before = beforeTasks.find(task => task?.id === id)
+    if (!before) continue
+    const next = await mutator(structuredClone(before))
+    if (next === null || next === undefined) continue
+    if (next.id !== before.id) throw new Error('不得在 mutator 內改任務 id')
+    // 舊任務可能留有歷史上的不安全網址；不改網址時照常允許其他欄位更新，
+    // 若明確改網址則 validateTask 只豁免原網址，不豁免新值。
+    validateTask(next, prepared.length, { keptUrl: before.url })
+    prepared.push({ before, next })
+  }
+  const invalidated = []
+  for (const { before, next } of prepared) {
+    if (executionSpecChanged(before, next)) {
+      const change = await invalidationOf(before, next)
+      if (change) invalidated.push(change)
+    }
+  }
+  const markers = await appendExecutionInvalidations(invalidated)
+  await mutateKey('tasks', current => {
     const tasks = Array.isArray(current) ? [...current] : []
-    const changed = []
-    for (const id of new Set(ids)) {
-      const found = tasks.find(t => t.id === id)
-      if (!found) continue
-      const next = await mutator(structuredClone(found))
-      if (next === null || next === undefined) continue
-      // 改了 id 就不是「更新這一筆」而是憑空多一筆（舊的那筆還留著）
-      if (next.id !== found.id) throw new Error('不得在 mutator 內改任務 id')
-      changed.push({ next, keptUrl: found.url })
+    for (const { before } of prepared) {
+      const found = tasks.find(task => task?.id === before.id)
+      if (!found || JSON.stringify(found) !== JSON.stringify(before)) {
+        throw new Error('task changed while updating; retry the update')
+      }
     }
-    if (changed.length === 0) return undefined
-    for (let i = 0; i < changed.length; i++) {
-      validateTask(changed[i].next, i, { keptUrl: changed[i].keptUrl })
-    }
-    savedTasks = mergeTasksUnlocked(tasks, changed.map(c => c.next))
+    if (!prepared.length) return undefined
+    savedTasks = mergeTasksUnlocked(tasks, prepared.map(item => item.next))
     return tasks
   })
+  for (const marker of markers) await replayExecutionInvalidationsForMarker(marker)
   return savedTasks
+}
+
+// 在 tasks 鎖內檢查目前任務；predicate 只能讀鎖內副本，不得在其中再碰 storage。
+// 用 updateTasks 保持與任務改寫相同的鎖與最新值語意，回傳 false 代表已刪除或規格不符。
+export async function checkTaskExecution(id, predicate) {
+  let matched = false
+  await updateTasks([id], (task) => {
+    matched = typeof predicate === 'function' && predicate(task) === true
+    return null
+  })
+  return matched
 }
 
 // 新增或更新任務（驗證 id, name, url；未指定 order 給目前最大 + 1）
@@ -462,8 +650,27 @@ export async function deleteTasks(ids) {
   if (!Array.isArray(ids) || ids.length === 0) return
 
   const targetIds = new Set(ids)
+  const beforeTasks = await getTasks()
+  const invalidated = []
+  for (const task of beforeTasks) {
+    if (targetIds.has(task?.id) && isMultiExecutionTask(task)) {
+      const change = await invalidationOf(task, null)
+      if (change) invalidated.push(change)
+    }
+  }
+  const markers = await appendExecutionInvalidations(invalidated)
   // 逐鍵依序「取鎖→讀→改→寫→放」，不同時持有兩把鎖
-  await mutateKey('tasks', (current) => Array.isArray(current) ? current.filter(t => !targetIds.has(t.id)) : [])
+  await mutateKey('tasks', (current) => {
+    const tasks = Array.isArray(current) ? current : []
+    for (const { taskId } of invalidated) {
+      const before = beforeTasks.find(task => task?.id === taskId)
+      const currentTask = tasks.find(task => task?.id === taskId)
+      if (currentTask && JSON.stringify(currentTask) !== JSON.stringify(before)) {
+        throw new Error('task changed while deleting; retry the update')
+      }
+    }
+    return tasks.filter(t => !targetIds.has(t.id))
+  })
 
   // 先列出有哪些紀錄鍵與帳本鍵（鎖外、只取鍵名），每個鍵再在自己的鎖內重讀最新值來改
   const keys = await listAllKeys()
@@ -500,6 +707,8 @@ export async function deleteTasks(ids) {
   // alertLog／notifyLog／health／missed 裡的殘留也立刻清掉（鎖都放掉之後才做，它自己會逐鍵取鎖）：
   // 不清的話要等看門狗一天一次的清理，刪掉的任務還會在錯過清單與燈號上待一整天
   await pruneOrphanEntries()
+
+  for (const marker of markers) await replayExecutionInvalidationsForMarker(marker)
 }
 
 // 刪除任務並清理所有日期對應的紀錄（剩 0 筆時移除該日期鍵）
@@ -932,6 +1141,34 @@ export async function setLastValues(entries) {
   })
 }
 
+// multi 執行的條件發布：在 lastValues 鎖內讀目前 tasks，規格仍相同才寫入。
+// 不取 tasks 鎖；若 mutation 在這次讀取後發生，由 mutation 鎖外的 fingerprint
+// 清理移除這批舊值。回傳 false 表示已刪除或規格已變更。
+export async function setLastValuesForExecution(taskId, executionFingerprint, entries) {
+  let allowed = false
+  await mutateKey('lastValues', async (current) => {
+    allowed = await currentTaskMatchesExecution(taskId, executionFingerprint)
+    if (!allowed || !entries || typeof entries !== 'object') return undefined
+    const all = { ...asObject(current) }
+    for (const [key, entry] of Object.entries(entries)) {
+      all[key] = { ...entry, executionFingerprint }
+    }
+    return all
+  })
+  return allowed
+}
+
+export async function clearLastValuesForExecution(taskId, executionFingerprint) {
+  if (typeof taskId !== 'string' || typeof executionFingerprint !== 'string') return
+  await mutateKey('lastValues', (current) => {
+    const all = asObject(current)
+    const next = Object.fromEntries(Object.entries(all).filter(([seriesId, entry]) => (
+      !(parentIdOf(seriesId) === taskId && entry?.executionFingerprint === executionFingerprint)
+    )))
+    return Object.keys(next).length === Object.keys(all).length ? undefined : next
+  })
+}
+
 // 記下某個任務最後一次抓到的值
 export async function setLastValue(taskId, entry) {
   return setLastValues({ [taskId]: entry })
@@ -982,6 +1219,17 @@ export async function updateAlertLog(mutator) {
   return updateValue('alertLog', asObject, mutator)
 }
 
+// 在獨立帳本鎖內記錄已對某次 durable execution claim 的告警；不改變既有 alertLog 數字契約。
+export async function updateAlertCommitLog(mutator) {
+  return updateValue('alertCommitLog', asObject, mutator)
+}
+
+// 讀取 stable execution claim（只讀；通知流程先用它排除已 claim hit，再更新 alertLog）。
+export async function getAlertCommitLog() {
+  const res = await chrome.storage.local.get('alertCommitLog')
+  return asObject(res?.alertCommitLog)
+}
+
 // 取得失敗通知冷卻帳本（{ [key]: { status, at } }；無資料回傳空物件）
 export async function getNotifyLog() {
   const res = await chrome.storage.local.get('notifyLog')
@@ -1002,6 +1250,28 @@ export async function updateFailMerge(mutator) {
 // 在 health 鎖內讀健康狀態表 → mutator(副本) 回傳新值 → 寫回（寫入的算法在 background/health.js）
 export async function updateHealthMap(mutator) {
   return updateValue('health', asObject, mutator)
+}
+
+// 與 setLastValuesForExecution 同一契約：health 自己取鎖，鎖內只讀 tasks 最新值。
+export async function updateHealthMapForExecution(taskId, executionFingerprint, mutator) {
+  let allowed = false
+  await mutateKey('health', async (current) => {
+    allowed = await currentTaskMatchesExecution(taskId, executionFingerprint)
+    if (!allowed) return undefined
+    return await mutator(structuredClone(asObject(current)))
+  })
+  return allowed
+}
+
+export async function clearHealthForExecution(taskId, executionFingerprint) {
+  if (typeof taskId !== 'string' || typeof executionFingerprint !== 'string') return
+  await mutateKey('health', (current) => {
+    const all = asObject(current)
+    if (all[taskId]?.executionFingerprint !== executionFingerprint) return undefined
+    const next = { ...all }
+    delete next[taskId]
+    return next
+  })
 }
 
 // 清掉 alertLog／lastValues／health／notifyLog 裡已刪任務與站台的項目（AF-21 定案 6；看門狗一天一次呼叫）
@@ -1077,6 +1347,18 @@ export async function setRunStatus(taskId, slot, status) {
   })
 }
 
+export async function setRunStatusForExecution(taskId, slot, status, executionFingerprint) {
+  let allowed = false
+  await mutateKey(runsKey(String(slot).slice(0, 10)), async (current) => {
+    allowed = await currentTaskMatchesExecution(taskId, executionFingerprint)
+    if (!allowed) return undefined
+    const runs = { ...asObject(current) }
+    runs[taskId] = { ...asObject(runs[taskId]), [slot]: status }
+    return runs
+  })
+  return allowed
+}
+
 /**
  * 取日期範圍內（YYYY-MM-DD，含頭含尾）的帳本：同形狀，只含 slot 日期落在範圍內的格子
  * 由起訖日期列舉 runs:<date> 鍵直接取（不掃整個 storage）
@@ -1143,6 +1425,38 @@ export async function getRepickTabs() {
 // 在 session:repickTabs 鎖內讀 → mutator(副本) 回傳新值 → 寫回
 export async function updateRepickTabs(mutator) {
   return updateValue('repickTabs', asObject, mutator, 'session')
+}
+
+// ---- session 共用小入口 -------------------------------------------------
+// 新增的 session 資料仍必須和既有 runState／repickTabs 一樣，讀改寫在單一
+// storage key 的鎖內完成。資料層（例如 pick-draft）只透過這幾個入口碰
+// chrome.storage.session，避免各模組自行複製鎖與錯誤處理。
+export async function getSessionValue(key) {
+  if (typeof key !== 'string' || key === '') return undefined
+  const res = await chrome.storage.session.get(key)
+  return res?.[key]
+}
+
+export async function setSessionValue(key, value) {
+  if (typeof key !== 'string' || key === '') throw new TypeError('session key 必須是非空字串')
+  return writeKey(key, value, 'session')
+}
+
+export async function updateSessionValue(key, shape, mutator) {
+  if (typeof key !== 'string' || key === '') throw new TypeError('session key 必須是非空字串')
+  if (typeof mutator !== 'function') throw new TypeError('session mutator 必須是函式')
+  return updateValue(key, shape, mutator, 'session')
+}
+
+export async function mutateSessionValue(key, mutator) {
+  if (typeof key !== 'string' || key === '') throw new TypeError('session key 必須是非空字串')
+  if (typeof mutator !== 'function') throw new TypeError('session mutator 必須是函式')
+  return mutateKey(key, mutator, 'session')
+}
+
+export async function clearSessionValue(key) {
+  if (typeof key !== 'string' || key === '') return
+  await mutateKey(key, () => REMOVE, 'session')
 }
 
 // 查詢多個任務在所有日期的紀錄總數與各任務筆數
@@ -1341,4 +1655,3 @@ export function subscribe(handler, opts = {}) {
     subscribers.delete(handler)
   }
 }
-

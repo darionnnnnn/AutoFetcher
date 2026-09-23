@@ -232,6 +232,11 @@ export async function previewSettingsImport(json, { passphrase } = {}) {
       try {
         validateTask(t)
       } catch (err) {
+        // multi 是一筆不可拆的值集合；任何欄位契約錯誤都拒絕整份匯入，
+        // 避免把同一份設定拆成半個群組後靜默寫入。
+        if (t?.mode === 'multi' || t?.spec?.mode === 'multi') {
+          throw new Error(`multi 任務匯入失敗：${err?.message || '格式錯誤'}`)
+        }
         summary.tasks.skipped.push({ name, reason: err.message })
         continue
       }
@@ -350,4 +355,3 @@ export async function importSettings(json, opts = {}) {
   await applySettingsImport(plan)
   return { skippedTasks: summary.tasks.skipped.length, summary }
 }
-

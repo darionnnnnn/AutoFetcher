@@ -7,8 +7,7 @@ import { setIcon, levelChipOf } from '../icons.js'
 import { applySavedTheme } from '../theme-apply.js'
 import { seriesIdOf } from '../../shared/series-index.js'
 import { computeHealth } from '../../background/health.js'
-import { isGap, gapTextOf } from '../../shared/describe.js'
-import { describeSchedule, describeTarget, targetOfTask, EMPTY_GUIDE } from '../../shared/describe.js'
+import { isGap, gapTextOf, describeSchedule, describeTarget, describeField, targetOfTask, EMPTY_GUIDE, describeTaskIdentities } from '../../shared/describe.js'
 
 let currentCtx = null
 
@@ -219,9 +218,10 @@ function renderEmptyGuide() {
 }
 
 // 畫單一任務列（規格限制：只寫一份函式）
-function renderTaskRow(task, { lastValues, nextRuns, healthMap, sites }) {
+function renderTaskRow(task, { lastValues, nextRuns, healthMap, sites, identities }) {
   const row = document.createElement('div')
   row.className = 'task-row'
+  row.dataset.taskId = task.id
   if (task.enabled === false) row.classList.add('disabled')
 
   // 主要資訊：名稱與最後數值
@@ -230,10 +230,13 @@ function renderTaskRow(task, { lastValues, nextRuns, healthMap, sites }) {
 
   const nameSpan = document.createElement('span')
   nameSpan.className = 'task-name'
-  nameSpan.textContent = task.name || task.id || ''
-  // 抓什麼的白話（含略過／排除）與 Picker 摘要卡、任務頁同一份；與任務頁同一條守門：數值／文字任務的句子沒有新資訊
+  // 抓什麼的白話（含略過／排除）與 Picker 摘要卡、任務頁同一份；multi 顯示群組、值型別與來源
   const target = targetOfTask(task)
-  if (target.mode === 'block') nameSpan.title = describeTarget(target)
+  const identity = identities?.get(task.id) || { source: '', shortId: '' }
+  nameSpan.textContent = target.mode === 'multi'
+    ? `群組：${task.name || task.id || ''}`
+    : (task.name || task.id || '')
+  if (target.mode === 'block' || target.mode === 'multi') nameSpan.title = describeTarget(target)
   mainDiv.appendChild(nameSpan)
 
   const valueSpan = document.createElement('span')
@@ -241,8 +244,13 @@ function renderTaskRow(task, { lastValues, nextRuns, healthMap, sites }) {
   // 多值任務的最後值記在子序列 id 底下，查父任務永遠是空的；最多列三個，其餘用 +N 帶過
   const fields = Array.isArray(task.fields) ? task.fields : []
   if (fields.length > 0) {
+    const detailByKey = new Map((target.fields || []).map(field => [field.key, field]))
     const shown = fields.slice(0, 3)
-      .map(f => `${f.name || f.key}: ${formatValue(lastValues?.[seriesIdOf(task.id, f.key)]?.value)}`)
+      .map(f => {
+        const field = target.mode === 'multi' ? (detailByKey.get(f.key) || f) : f
+        const label = target.mode === 'multi' ? describeField(field) : (f.name || f.key)
+        return `${label}: ${formatValue(lastValues?.[seriesIdOf(task.id, f.key)]?.value)}`
+      })
     valueSpan.textContent = shown.join('  ') + (fields.length > 3 ? `  +${fields.length - 3}` : '')
   } else {
     valueSpan.textContent = formatValue(lastValues?.[task.id]?.value)
@@ -271,6 +279,12 @@ function renderTaskRow(task, { lastValues, nextRuns, healthMap, sites }) {
     chip.textContent = '正常'
   }
   subDiv.appendChild(chip)
+
+  const sourceSpan = document.createElement('span')
+  sourceSpan.className = 'task-source'
+  sourceSpan.textContent = `${identity.shortId ? `#${identity.shortId} · ` : ''}${identity.source}`
+  sourceSpan.title = identity.source
+  subDiv.appendChild(sourceSpan)
 
   const nextSpan = document.createElement('span')
   nextSpan.className = 'task-next'
@@ -316,7 +330,8 @@ function renderTaskRow(task, { lastValues, nextRuns, healthMap, sites }) {
       try {
         const res = await chrome.runtime.sendMessage({ type: MSG.RUN_TASK, taskId: task.id })
         if (Array.isArray(res?.values) && res.values.length > 0) {
-          showResult(res.values.map(v => `${v.name}: ${v.ok ? v.value : (v.error || '失敗')}`).join('  '))
+          const detail = res.values.map(v => `${v.name}: ${v.ok ? v.value : (v.error || '失敗')}`).join('  ')
+          showResult(res.outcome === 'partial' ? `部分失敗：${detail}` : detail)
         } else if (res && res.outcome === 'done') {
           showResult(res.value !== null && res.value !== undefined ? `抓到 ${res.value}` : '抓到值')
         } else {
@@ -396,8 +411,9 @@ export function render(ctx) {
     if (!tasks || tasks.length === 0) {
       taskListEl.appendChild(renderEmptyGuide())
     } else {
+      const identities = describeTaskIdentities(tasks)
       for (const t of tasks) {
-        taskListEl.appendChild(renderTaskRow(t, { lastValues, nextRuns, healthMap, sites }))
+        taskListEl.appendChild(renderTaskRow(t, { lastValues, nextRuns, healthMap, sites, identities }))
       }
     }
   }
@@ -500,13 +516,14 @@ function renderGaps(anchorEl, gaps, tasks) {
   }
   box.textContent = ''
   box.hidden = gaps.length === 0
-  const nameOf = new Map((tasks || []).map(t => [t.id, t.name || t.id]))
+  const identities = describeTaskIdentities(tasks)
+  const nameOf = new Map((tasks || []).map(t => [t.id, identities.get(t.id)?.label || t.name || t.id]))
   for (const g of gaps) {
     const row = document.createElement('div')
     row.className = 'missed-gap'
     row.dataset.taskId = g.taskId
     const text = document.createElement('span')
-    text.textContent = `${g.taskName || nameOf.get(g.taskId) || g.taskId}：${gapTextOf(g)} `
+    text.textContent = `${nameOf.get(g.taskId) || g.taskName || g.taskId}：${gapTextOf(g)} `
     row.appendChild(text)
     const ack = document.createElement('button')
     ack.type = 'button'
@@ -519,11 +536,11 @@ function renderGaps(anchorEl, gaps, tasks) {
         // kind:'gap' 讓背景分得出這是休眠空窗的「知道了」（與錯過補抓的略過不同）
         res = await chrome.runtime.sendMessage({ type: MSG.SKIP_ONE, taskId: g.taskId, slot: g.slot, kind: 'gap' })
       } catch (e) {
-        text.textContent = `${g.taskName || nameOf.get(g.taskId) || g.taskId}：知道了沒有完成：${e?.message || e || '背景沒有回應'} `
+        text.textContent = `${nameOf.get(g.taskId) || g.taskName || g.taskId}：知道了沒有完成：${e?.message || e || '背景沒有回應'} `
         return
       }
       if (res?.ok === false) {
-        text.textContent = `${g.taskName || nameOf.get(g.taskId) || g.taskId}：知道了沒有完成：${res.error || '背景處理失敗'} `
+        text.textContent = `${nameOf.get(g.taskId) || g.taskName || g.taskId}：知道了沒有完成：${res.error || '背景處理失敗'} `
         return
       }
       row.remove()

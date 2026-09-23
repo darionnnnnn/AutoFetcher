@@ -1,6 +1,7 @@
 // AutoFetcher 通知唯一入口
-import { getSettings, updateNotifyLog, updateFailMerge } from '../shared/storage.js'
+import { getSettings, getTasks, updateNotifyLog, updateFailMerge } from '../shared/storage.js'
 import { log } from '../shared/diag.js'
+import { describeTaskIdentities } from '../shared/describe.js'
 
 // 相對路徑會相對於「呼叫端的位址」解析（service worker 是 /background/），
 // 在真實瀏覽器會 404 並讓整則通知不顯示，必須用 getURL 取絕對網址。
@@ -92,10 +93,23 @@ export async function notifyFailure(key, status, options = {}) {
   const nowMs = typeof options.nowMs === 'number' ? options.nowMs : Date.now()
   const claim = await claimFailure(key, String(status ?? ''), nowMs)
   if (!claim) return false
-  const { id, nowMs: _omit, ...rest } = options
+  const { id, nowMs: _omit, task: taskForLabel, ...rest } = options
+  if (taskForLabel) {
+    const label = await taskLabel(taskForLabel)
+    rest.title = String(rest.title || '').replaceAll(taskForLabel.name || taskForLabel.id, label)
+    rest.message = String(rest.message || '').replaceAll(taskForLabel.name || taskForLabel.id, label)
+  }
   const shown = await notify(id ?? key, rest)
   if (!shown) await releaseFailure(key, claim)
   return shown
+}
+
+// 給 OS 通知使用全體任務計算同名消歧，並保留呼叫者提供的未儲存任務。
+async function taskLabel(task) {
+  let tasks = []
+  try { tasks = await getTasks() } catch {}
+  if (!tasks.some(item => item?.id === task?.id) && task?.id) tasks.push(task)
+  return describeTaskIdentities(tasks).get(task?.id)?.label || task?.name || task?.id || '未命名任務'
 }
 
 // 恢復正常時清掉冷卻紀錄：下次再壞就會重新通知。
@@ -139,7 +153,7 @@ export function mergedFailureMessage(origin, names) {
  * 抓取失敗通知（冷卻＋同站台合併）：通知 id 一律 fail:<origin>，5 分鐘內同站台的失敗累計在同一則。
  * 被冷卻擋下的任務不列入；累計放 storage.session（worker 被回收也不丟）。
  * @param {string} origin 任務網址的 origin
- * @param {{ id: string, name?: string }} task 任務
+ * @param {{ id: string, name?: string, url?: string }} task 任務
  * @param {string} status 失敗狀態
  * @param {{ nowMs?: number, title?: string }} [opts]
  */
@@ -150,24 +164,32 @@ export async function notifySiteFailure(origin, task, status, opts = {}) {
   if (!claim) return false
 
   const siteKey = String(origin || '')
-  let names = []
+  let items = []
   await updateFailMerge((merge) => {
     const prev = merge[siteKey]
     const fresh = prev && typeof prev.at === 'number' && nowMs - prev.at < FAIL_MERGE_WINDOW_MS
-    const items = fresh && Array.isArray(prev.items) ? prev.items.filter(x => x && x.id !== task.id) : []
-    items.push({ id: task.id, name: task.name || task.id })
+    items = fresh && Array.isArray(prev.items) ? prev.items.filter(x => x && x.id !== task.id) : []
+    items.push({ id: task.id, name: task.name || task.id, url: task.url || '' })
     // 過期的其他站台一併清掉，session 不會越長越大
     for (const [k, v] of Object.entries(merge)) {
       if (k !== siteKey && !(v && typeof v.at === 'number' && nowMs - v.at < FAIL_MERGE_WINDOW_MS)) delete merge[k]
     }
     merge[siteKey] = { at: nowMs, items }
-    names = items.map(x => x.name)
     return merge
   })
 
+  const registered = await getTasks().catch(() => [])
+  const byId = new Map(registered.map(item => [item?.id, item]))
+  const identityTasks = [...registered]
+  for (const item of items) {
+    if (!byId.has(item.id)) identityTasks.push(item)
+  }
+  const identities = describeTaskIdentities(identityTasks)
+  const labels = items.map(item => identities.get(item.id)?.label || item.name || item.id)
+
   const shown = await notify(`fail:${siteKey}`, {
     title: opts.title || 'AutoFetcher 抓取失敗',
-    message: mergedFailureMessage(siteKey, names)
+    message: mergedFailureMessage(siteKey, labels)
   })
   if (!shown) await releaseFailure(task.id, claim)
   return shown

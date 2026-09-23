@@ -236,7 +236,7 @@ test('變動比例只跟自己這個值的前一筆比', async () => {
 
 // ---- 預檢 ----
 
-test('預檢：至少一個值成功就算通過', async () => {
+test('預檢：部分值成功時標成 partial，並指出失敗值', async () => {
   const { st, he } = await fresh({
     ok: true,
     fields: { buy: { ok: true, value: 31.2, raw: '31.2', status: 'ok' }, sell: { ok: false, error: 'not_found' } }
@@ -245,7 +245,10 @@ test('預檢：至少一個值成功就算通過', async () => {
   const t = multi()
   await st.saveTask(t)
   await pc.runPrecheck(t, FAST)
-  assert.equal((await he.getHealth()).bank.status, 'ok')
+  const health = (await he.getHealth()).bank
+  assert.equal(health.status, 'partial')
+  assert.equal(health.reason, '部分失敗')
+  assert.equal(health.detail, '美金賣出')
 })
 
 test('預檢：全部值都失敗才算失敗，原因說明是哪些值', async () => {

@@ -5,8 +5,15 @@ import { MSG } from '../../shared/messages.js'
 import { buildExport, download } from '../../shared/export.js'
 import { confirmDialog, dismissDialog, isDialogOpen } from '../modal.js'
 import { icon } from '../icons.js'
-import { isGap, gapTextOf } from '../../shared/describe.js'
-import { describeSchedule, describeTarget, targetOfTask, exclusionOfTarget, EMPTY_GUIDE, TERMS } from '../../shared/describe.js'
+import { isGap, gapTextOf, describeSchedule, describeTarget, describeFields, targetOfTask, exclusionOfTarget, EMPTY_GUIDE, TERMS, describeTaskIdentities } from '../../shared/describe.js'
+
+// Resolve this extension page's tab while the report is loading, not inside a
+// button gesture. Looking it up on click would put an await before
+// sidePanel.open() and can silently route Edit to the fallback window.
+let reportTabId = null
+try {
+  chrome.tabs.getCurrent().then(tab => { reportTabId = tab?.id ?? null }).catch(() => {})
+} catch {}
 
 let currentTasks = []
 let currentHealth = {}
@@ -35,6 +42,10 @@ function rowStateOf(t, h) {
   if (isRed(h)) return 'failed'
   if (isWarn(h)) return 'warn'
   return ''
+}
+
+function taskIdentityOf(taskId) {
+  return describeTaskIdentities(currentTasks).get(taskId) || { label: taskId, source: '', shortId: '' }
 }
 
 // 重選流程（既有的 ENTER_PICK repick），「重選」與失敗列的「重選目標」共用
@@ -156,10 +167,11 @@ async function openDeleteDialog(ids, fromSelection = false) {
   let msgText = ''
   if (ids.length === 1) {
     const taskObj = currentTasks.find((t) => t.id === ids[0])
-    const taskName = taskObj?.name || ids[0]
-    msgText = `確定要刪除「${taskName}」嗎？此操作將一併刪除 ${count} 筆歷史紀錄。`
+    const taskLabel = taskObj ? taskIdentityOf(taskObj.id).label : ids[0]
+    msgText = `確定要刪除「${taskLabel}」嗎？此操作將一併刪除 ${count} 筆歷史紀錄。`
   } else {
-    msgText = `確定要刪除這 ${ids.length} 個任務嗎？此操作將一併刪除合計 ${count} 筆歷史紀錄。`
+    const labels = ids.map(id => taskIdentityOf(id).label)
+    msgText = `確定要刪除這 ${ids.length} 個任務（${labels.join('、')}）嗎？此操作將一併刪除合計 ${count} 筆歷史紀錄。`
   }
 
   dialogSelectionSig = sig
@@ -461,7 +473,7 @@ function createTaskRow(t) {
   const selectBox = document.createElement('input')
   selectBox.type = 'checkbox'
   selectBox.dataset.action = 'select'
-  selectBox.setAttribute('aria-label', `選取「${t.name || t.id}」`)
+  selectBox.setAttribute('aria-label', `選取「${taskIdentityOf(t.id).label}」`)
   selectBox.checked = selectedIds.has(t.id)
   selectBox.addEventListener('click', (e) => {
     const taskList = document.getElementById('task-list')
@@ -506,7 +518,7 @@ function createTaskRow(t) {
   toggle.dataset.action = 'toggle'
   // 啟用開關畫成 switch（report.css），與左邊的「選取」核取方塊分得開；名稱給螢幕閱讀器與滑鼠提示
   toggle.setAttribute('role', 'switch')
-  toggle.setAttribute('aria-label', `啟用「${t.name || t.id}」`)
+  toggle.setAttribute('aria-label', `啟用「${taskIdentityOf(t.id).label}」`)
   toggleLabel.title = '啟用／停用這個任務'
   toggle.checked = t.enabled !== false
   toggle.addEventListener('change', async () => {
@@ -582,15 +594,19 @@ function createTaskRow(t) {
     }
   })
 
+  const target = targetOfTask(t)
   let fieldsEl = null
   if (Array.isArray(t.fields) && t.fields.length > 0) {
     fieldsEl = document.createElement('span')
     fieldsEl.className = 'task-fields'
-    const fieldNames = t.fields.map(f => (f && f.name) ? f.name : (f?.key || '')).filter(Boolean)
     let text = ''
-    if (t.fields.length > 3) {
+    if (target.mode === 'multi') {
+      text = describeFields(target.fields)
+    } else if (t.fields.length > 3) {
+      const fieldNames = t.fields.map(f => (f && f.name) ? f.name : (f?.key || '')).filter(Boolean)
       text = `${fieldNames.slice(0, 3).join('、')} 等 ${t.fields.length} 個值`
     } else {
+      const fieldNames = t.fields.map(f => (f && f.name) ? f.name : (f?.key || '')).filter(Boolean)
       text = fieldNames.join('、')
     }
     fieldsEl.textContent = text
@@ -598,16 +614,19 @@ function createTaskRow(t) {
 
   const urlEl = document.createElement('span')
   urlEl.className = 'task-url'
-  urlEl.textContent = t.url || ''
+  const identity = taskIdentityOf(t.id)
+  urlEl.textContent = `${identity.shortId ? `#${identity.shortId} · ` : ''}${identity.source}`
+  urlEl.title = identity.source
 
   const modeEl = document.createElement('span')
   modeEl.className = 'task-mode'
   // 模式欄維持原本的短字；有略過／排除時接上 describe.js 的那一段，完整白話句放 title（與 Picker 摘要卡同一份）
-  const target = targetOfTask(t)
-  modeEl.textContent = describeMode(t) + exclusionOfTarget(target)
+  modeEl.textContent = target.mode === 'multi'
+    ? describeTarget(target)
+    : describeMode(t) + exclusionOfTarget(target)
   // 只給區塊任務：數值／文字任務的完整句（「抓 a.test 頁面上的數字」）沒有新資訊，
   // 而且列上的 title 已經有人用（連續失敗的最後錯誤放在 title）
-  if (target.mode === 'block') modeEl.title = describeTarget(target)
+  if (target.mode === 'block' || target.mode === 'multi') modeEl.title = describeTarget(target)
 
   // 有設告警 / 前置動作的任務要一眼看得出來，否則只能逐一點進去看
   const activeAlerts = Array.isArray(t.alerts) ? t.alerts.filter((a) => a && a.enabled !== false) : []
@@ -729,9 +748,10 @@ function createTaskRow(t) {
       const res = await chrome.runtime.sendMessage({ type: MSG.RUN_TASK, taskId: t.id })
       if (Array.isArray(res?.values) && res.values.length > 0) {
         // 多值任務逐值回報，只說一個數字看不出其他值怎麼了
-        await showResult(res.values
+        const detail = res.values
           .map(v => `${v.name}: ${v.ok ? v.value : (v.error || '失敗')}`)
-          .join('  '))
+          .join('  ')
+        await showResult(res.outcome === 'partial' ? `部分失敗：${detail}` : detail)
       } else if (res && res.outcome === 'done') {
         await showResult(res.value !== null && res.value !== undefined ? `抓到 ${res.value}` : '抓到值')
       } else {
@@ -790,18 +810,14 @@ function createTaskRow(t) {
   editBtn.dataset.action = 'edit'
   editBtn.textContent = '編輯'
   editBtn.addEventListener('click', async () => {
-    // 新增與編輯用同一個載體（面板）：以前編輯是另開一個普通分頁，
-    // 「保持在最上層」對分頁根本不適用。網址參數不能用（面板重載會丟掉），走 session。
-    // 擴充功能頁問自己在哪個分頁用 getCurrent（查作用分頁在切換競態下會拿到別人的）
-    let tabId
-    try { tabId = (await chrome.tabs.getCurrent())?.id } catch {}
-    if (tabId === undefined) {
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
-      tabId = tabs?.[0]?.id
-    }
-    if (tabId === undefined) return
-    await setPanelCtx(tabId, { kind: 'edit', taskId: t.id })
-    await openPanel(tabId, 'picker', `taskId=${encodeURIComponent(t.id)}`)
+    // 新增與編輯用同一個載體（面板）；context 放 session，網址只作舊版退路。
+    // 兩個 API 請求都在同一個 click task 發出：先排入 context 寫入，再立刻
+    // 呼叫 openPanel；picker 也監聽 session 變化，若啟動先讀到舊值會再畫一次。
+    const tabId = reportTabId
+    if (!Number.isInteger(tabId)) return
+    const contextWrite = setPanelCtx(tabId, { kind: 'edit', taskId: t.id })
+    const panelOpen = openPanel(tabId, 'picker', `taskId=${encodeURIComponent(t.id)}`)
+    await Promise.all([contextWrite, panelOpen])
   })
   actionsEl.appendChild(editBtn)
 
@@ -948,7 +964,7 @@ export function renderTasks(tasks, health = {}, missed = [], ctx = {}) {
       banner.hidden = false
       banner.textContent = ''
 
-      const taskMap = new Map(currentTasks.map((t) => [t.id, t.name || t.id]))
+      const taskMap = new Map(currentTasks.map((t) => [t.id, taskIdentityOf(t.id).label]))
       const itemRows = []
       // interval 的空窗（kind:'gap'）不可補抓：自己一列、只有「知道了」，不進勾選清單
       const slotItems = currentMissed.filter((m) => !isGap(m))
