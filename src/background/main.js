@@ -981,12 +981,33 @@ async function requestGroupNamePick(msg) {
   if (!draftIdentityMatches(msg, draft)) {
     return { ok: false, error: 'stale_document', message: '頁面已變更，請重新整理後再取名' }
   }
-  const active = frameStateOf(tabId)
-  if (active && (active.sessionId !== msg.sessionId || (active.groupKey && active.groupKey !== msg.groupKey) ||
-      !draftIdentityMatches(msg, active))) {
+  if (draft.activeGroupKey !== msg.groupKey) {
+    return { ok: false, error: 'inactive_group', message: '請先切換到要命名的群組，再從頁面取名' }
+  }
+  let active = frameStateOf(tabId)
+  let frameId = active?.frameId ?? 0
+  if (active && (active.sessionId !== msg.sessionId || !draftIdentityMatches(msg, active))) {
     return { ok: false, error: 'group_conflict', message: '目前頁面選取階段已切換，請重新取名' }
   }
-  const frameId = active?.frameId ?? 0
+  // set-active drains every participant but deliberately leaves the last frame
+  // identity tagged with the previous group. A page-name gesture belongs to the
+  // currently active group; after a drain barrier it can safely move to the top
+  // document, where text outside the previously selected iframe is reachable.
+  if (active && active.groupKey && active.groupKey !== msg.groupKey) {
+    const drained = await drainPickDraft(tabId, draft, CONTENT_MESSAGE_TIMEOUT_MS)
+    if (!drained.ok) return { ok: false, error: 'drain_failed', retryable: true, message: drained.message }
+    const latest = await getPickDraft(tabId, { sessionId: msg.sessionId })
+    active = frameStateOf(tabId)
+    if (!latest || latest.activeGroupKey !== msg.groupKey || latest.sessionId !== msg.sessionId ||
+        !draftIdentityMatches(msg, latest) || !active || active.sessionId !== msg.sessionId || !draftIdentityMatches(msg, active)) {
+      return { ok: false, error: 'group_conflict', retryable: true, message: '目前頁面選取階段已切換，請重新取名' }
+    }
+    frameId = 0
+    rememberPickFrame(tabId, { ...active, frameId, groupKey: msg.groupKey })
+    try { await injectContent(tabId, { frameId }) } catch (error) {
+      return { ok: false, error: 'name_pick_unavailable', retryable: true, message: String(error?.message || error) }
+    }
+  }
   let expectedUrl = ''
   try { expectedUrl = (await chrome.tabs.get(tabId))?.url || '' } catch {}
   try {
@@ -1228,7 +1249,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         return { ok: false, error: 'stale_frame', message: '取名回報來自已失效的選取階段' }
       }
       const draft = await getPickDraft(tabId, { sessionId: msg.sessionId })
-      if (!draft || !draft.groups.some(group => group.key === msg.groupKey) || !draftIdentityMatches(msg, draft)) {
+      if (!draft || draft.activeGroupKey !== msg.groupKey || !draft.groups.some(group => group.key === msg.groupKey) || !draftIdentityMatches(msg, draft)) {
         return { ok: false, error: 'group_not_found', message: '目前群組已不存在' }
       }
       try {

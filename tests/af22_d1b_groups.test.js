@@ -183,6 +183,59 @@ test('D1b 群組取名回報綁 requestId／文件身分，舊回報被拒', asy
   assert.equal(forwarded.args[0].requestId, 'name-1')
 })
 
+test('D1b 切組後可在主頁取名，舊群組 frameState 經同步屏障安全切到新組', async () => {
+  resetChromeMock()
+  const chromeMock = installChromeMock()
+  chromeMock.__setScriptResponder(() => [
+    { frameId: 0, result: 'https://a.test/prices' },
+    { frameId: 2, result: 'https://frame.test/prices' }
+  ])
+  chromeMock.__setTabResponder((_tabId, message) => message.type === 'PICK_DRAIN' ? { ok: true } : { ok: true })
+  const messages = await import('../src/shared/messages.js?t=' + Math.random())
+  const bg = await import('../src/background/main.js?t=' + Math.random())
+  const begin = await bg.handleMessage({
+    type: messages.MSG.PICK_DRAFT_BEGIN,
+    sessionId: 'name-switch-session', tabId: 31, documentGeneration: 'doc-name-switch',
+    routeIdentity: { path: '/prices' },
+    groups: [
+      { key: 'group-old', name: '舊組', values: [] },
+      { key: 'group-new', name: '', values: [] }
+    ], activeGroupKey: 'group-old'
+  }, extensionSender)
+  await bg.handleMessage({
+    type: messages.MSG.ENTER_PICK, tabId: 31, frameId: 2, purpose: 'task', batch: true,
+    sessionId: begin.draft.sessionId, groupKey: 'group-old', activeGroupKey: 'group-old',
+    pickStage: 'selecting', documentGeneration: 'doc-name-switch', routeIdentity: { path: '/prices' }
+  }, extensionSender)
+  const picked = await bg.handleMessage({
+    type: messages.MSG.PICKED, purpose: 'task', sessionId: begin.draft.sessionId,
+    groupKey: 'group-old', locator: { css: '#frame-value' }, picks: [{ mode: 'text' }]
+  }, { tab: { id: 31, url: 'https://a.test/prices' }, frameId: 2, url: 'https://frame.test/prices' })
+  assert.equal(picked.ok, true)
+  const activated = await bg.handleMessage(operation(picked.draft, { type: 'set-active', groupKey: 'group-new' }), extensionSender)
+  assert.equal(activated.ok, true, JSON.stringify(activated))
+  assert.equal(activated.draft.activeGroupKey, 'group-new')
+
+  const staleDocument = await bg.handleMessage({
+    type: messages.MSG.PICK_GROUP_NAME, tabId: 31, requestId: 'stale-name',
+    sessionId: begin.draft.sessionId, groupKey: 'group-new',
+    documentGeneration: 'old-document', routeIdentity: { path: '/prices' }
+  }, extensionSender)
+  assert.equal(staleDocument.error, 'stale_document')
+
+  const named = await bg.handleMessage({
+    type: messages.MSG.PICK_GROUP_NAME, tabId: 31, requestId: 'name-after-switch',
+    sessionId: begin.draft.sessionId, groupKey: 'group-new',
+    documentGeneration: 'doc-name-switch', routeIdentity: { path: '/prices' }
+  }, extensionSender)
+  assert.equal(named.ok, true)
+  assert.equal(named.frameId, 0)
+  const sent = chromeMock.__calls.find(call => call.api === 'tabs.sendMessage' && call.args[1]?.type === messages.MSG.PICK_GROUP_NAME)
+  assert.equal(sent.args[0], 31)
+  assert.deepEqual(sent.args[2], { frameId: 0 })
+  assert.equal(sent.args[1].groupKey, 'group-new')
+})
+
 test('D1b 重新進入同一群組以背景草稿初始化，點既有值送 removePicks', async () => {
   resetChromeMock()
   const chromeMock = installChromeMock()
