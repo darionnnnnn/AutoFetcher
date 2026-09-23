@@ -176,6 +176,7 @@
     <section class="news" aria-labelledby="news-title">
       <h2 id="news-title">這一版改了什麼</h2>
       <ul>
+        <li>右鍵「一次建立多個任務」現在先在面板建立並命名群組，再回頁面選值；一組可以混選不同表格與可存取框架的內容。</li>
         <li>用詞統一：存檔前先抓一次叫「<span class="ui" data-ui-label="ui/picker/picker.html">試抓</span>」，整欄算成一個數字的方式叫「<span class="ui" data-ui-label="shared/describe.js">合計方式</span>」。</li>
         <li>要先點頁籤、關彈窗的頁面，在「抓什麼」下方的「<span class="ui" data-ui-label="shared/describe.js">抓之前要先點什麼嗎？</span>」加一步，不必再翻進階設定。</li>
         <li>想讓新任務都用同一組時間與去處，存檔後按「<span class="ui" data-ui-label="shared/describe.js">下次新任務沿用這組排程與去處</span>」。</li>
@@ -364,13 +365,13 @@
       <!-- 5 -->
       <section class="topic" id="batch" data-help-section>
         <h2>同一頁一次建立好幾個任務</h2>
-        <p class="purpose" data-help-purpose>同一頁有幾張表或幾個數字要抓，一次選好、一次存。</p>
+        <p class="purpose" data-help-purpose>先替每個任務命名，再把不同表格或框架裡的值選進各組。</p>
         <ol class="steps" data-help-steps>
           <li>右鍵選「<span class="ui" data-ui-label="background/main.js">一次建立多個任務</span>」。</li>
-          <li>每張表點你要的格子，頁面上的數字直接點；不同的表會各自成為一個任務。</li>
-          <li>按「<span class="ui" data-ui-label="content/picker-mode.js">完成</span>」，在面板幫每個任務取名。</li>
-          <li>設定共用的抓取時間，按「<span class="ui" data-ui-label="shared/describe.js">全部試抓</span>」看看。</li>
-          <li>沒問題就按「<span class="ui" data-ui-label="ui/picker/picker.js">全部儲存</span>」。</li>
+          <li>按「新增第一個群組」並命名；也可從頁面取名，再回面板確認。</li>
+          <li>確認名稱後開始選值。同組可選不同表格與可存取框架。</li>
+          <li>按「新增群組」開始下一組；每組可另取名並選值。</li>
+          <li>完成選取後設定共用排程、按「<span class="ui" data-ui-label="shared/describe.js">全部試抓</span>」，再按「<span class="ui" data-ui-label="ui/picker/picker.js">全部儲存</span>」。</li>
         </ol>
         <figure class="demo" data-help-figure>
           <div class="demo-row" aria-hidden="true">
@@ -392,11 +393,11 @@
         <details data-help-more>
           <summary>遇到這些狀況</summary>
           <dl>
-            <dt>每個任務想要不同的設定？</dt><dd>多任務共用時間、去處與前置動作。先全部存好，再到報表的「<span class="ui" data-ui-label="ui/report/report.html">任務管理</span>」一個一個編輯。</dd>
+            <dt>每個任務想要不同的設定？</dt><dd>多任務共用時間、去處與一般前置動作；每個值可另外套用來源狀態動作。其他進階設定先全部存好，再到報表的「<span class="ui" data-ui-label="ui/report/report.html">任務管理</span>」逐項編輯。</dd>
             <dt>要先點選單才出現的頁面？</dt><dd>在「<span class="ui" data-ui-label="shared/describe.js">抓之前要先點什麼嗎？</span>」那一列加一步就好（多任務時它寫著「<span class="ui" data-ui-label="shared/describe.js">（套用到每一個任務）</span>」），這一批的每個任務都會照做；同一時間要抓時只會做一次。</dd>
             <dt>存到一半失敗？</dt><dd>面板會說存好了幾個、哪一個失敗；已存的會從清單拿掉，修好再按一次不會重複建立。</dd>
-            <dt>內嵌在頁面裡的框架？</dt><dd>一批只能在同一個框架裡選。框架裡的內容請另外開一批。</dd>
-            <dt>最多幾個？</dt><dd>一次最多 20 個任務。</dd>
+            <dt>內嵌在頁面裡的框架？</dt><dd>多任務的一個群組可混選主頁與瀏覽器允許存取的框架內容；無法存取的框架不會出現在可選目標中。</dd>
+            <dt>最多幾個？</dt><dd>一次最多 20 個群組；每組最多 100 個值。</dd>
           </dl>
         </details>
       </section>
@@ -582,6 +583,13 @@
           <li>到「<span class="ui" data-ui-label="ui/report/report.html">任務管理</span>」按重選，重新點一次那一格。</li>
           <li>還是不行，建新任務時按「<span class="ui" data-ui-label="ui/picker/picker.html">試抓</span>」，失敗就「<span class="ui" data-ui-label="ui/picker/picker.html">匯出診斷</span>」。</li>
         </ol>
+        <h3>同一頁要建立多個任務</h3>
+        <ol class="steps">
+          <li>在目標頁按右鍵，選「一次建立多個任務」。</li>
+          <li>在右側面板按「新增第一個群組」，輸入任務名稱；也可以按「從頁面取名稱」，再到頁面點文字或有名稱的欄位。回到面板確認名稱。</li>
+          <li>按「確認名稱並開始選值」，在頁面點要抓的值。要再建一個任務，按面板的「新增群組」並重複命名與選值。每組可以選不同表格、文字或可存取框架裡的值。</li>
+          <li>按「完成選取」設定共用排程與去處，再試抓或儲存。設定時按「返回選取」可修改群組和值。</li>
+        </ol>
         <figure class="demo" data-help-figure>
           <div class="demo-row" aria-hidden="true">
             <div class="demo-menu">
@@ -599,8 +607,11 @@
         <details data-help-more>
           <summary>做不到的事</summary>
           <dl>
-            <dt>一個任務抓兩張不同的表</dt><dd>不行。一開始就用「一次建立多個任務」，每張表各一個任務。</dd>
-            <dt>多任務一次建立時，個別設定進階選項</dt><dd>不行（前置動作可以設，但整批共用一份）。先存好，再到任務管理一個一個編輯。</dd>
+            <dt>同一個任務抓兩張不同的表</dt><dd>可以。用「一次建立多個任務」建立一個群組，把兩張表上的值都選進同一組；要分開排程就各建一組。</dd>
+            <dt>多任務一次建立時，個別設定進階選項</dt><dd>排程、去處與一般前置動作共用；每個值可以另外套用來源狀態動作。其他進階選項先存好，再到任務管理逐項編輯。</dd>
+            <dt>某個值要先切換頁面狀態才能抓</dt><dd>在設定表單的共用前置動作列設定點擊、等待或捲動等動作，再按該值旁的「來源狀態動作」套用。這串動作只會在抓該值前執行。</dd>
+            <dt>多個值中只有部分抓到</dt><dd>試抓會逐值顯示結果與失敗原因；部分成功會標示「部分失敗」。修正失敗值後可再試抓，試抓不會寫入正式歷史。</dd>
+            <dt>修復或更換既有值</dt><dd>編輯多值任務時，「修復同一個值」保留原歷史；「改成不同指標」會建立新歷史序列，舊歷史保留，原告警不沿用。</dd>
             <dt>畫在圖表裡的數字</dt><dd>抓不到（那是圖片，不是文字）。</dd>
             <dt>Shadow DOM 裡的元素</dt><dd>選不到（常見於用 Web Components 做的網站）。</dd>
             <dt>比 1 分鐘更頻繁地抓</dt><dd>目前最短 1 分鐘。</dd>

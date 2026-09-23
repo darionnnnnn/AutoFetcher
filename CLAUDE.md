@@ -318,3 +318,6 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **tfoot 預設排除只在「建立」整欄值的當下做一次**，preselect 帶回來的值不得再加（使用者取消過的不能復活）。
 - **頭尾空白自動略過是 `skip.blank`，不是另一個鍵**（AF-17）：一律經 `skipOf`／`putSkip`，只認字面 `true`、關著時不寫 `blank` 鍵。併在 `skip` 裡才能沿用既有五個搬運點——另開鍵就是第三次「每段自己都綠、規格裡就是沒有」。**新建預設勾、編輯照舊任務回填**，不得把預設套到舊任務。
 - **逐格明細 `items` 與 `blank` 只給立即測試預覽**（AF-17）：擷取端一律回傳，`fetcher` 單值與多值寫紀錄的兩份白名單**不得**抄它們（每筆紀錄夾帶整欄明細，storage 會長到 MB 級；`tests/x3_test_detail.test.js` 會擋）。處置分類只有 `extract.js` 一份，八態與結果的 `used`／`skipped`／`excluded`／`blank` 四條口徑必須對得上，改其中一邊要一起改。
+- **AF-22 多來源任務的來源正規化與驗證只有 `shared/task-source.js`**：舊單值／舊 block 與新 `mode:'multi'` 都由 `normalizeTaskSources` 轉為每值一個 `source + spec`;field key 是序列身分，source locator/frame 是目標身分的一部分，勿在消費端各自猜舊形狀。multi 的正式紀錄按 `taskId#fieldKey` 寫子序列，排程帳本與 health 用父 task id（SPEC §7）。
+- **AF-22 的 `stateActions` 屬於單一 field**：任務層 `preActions` 是共用前置動作草稿；某值旁的「來源狀態動作」複製當下共用動作到該 field，之後只在處理該來源前執行。修改值的來源／規格／狀態動作會使在途結果失效；擴充快照與編輯匯入驗證時要保留此欄位。
+- **單值修復／替換授權只在 `background/main.js`**：一次性 grant 綁定 task、field、tab、frame、document generation 與 repair mode；不可接受頁面任意指定 key。修復保留 field key，替換新建 key 並移除原告警，對應資料變更仍走 storage 的任務更新入口。
