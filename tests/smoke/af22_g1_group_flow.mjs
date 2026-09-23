@@ -172,7 +172,7 @@ try {
   await new Promise(resolveWait => setTimeout(resolveWait, 700))
   const firstGroupState = await picker.evaluate(async id => {
     const result = await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id })
-    return { groups: document.querySelectorAll('[data-group-row]').length, editorHidden: document.querySelector('#group-name-editor')?.hidden, status: document.querySelector('#group-draft-status')?.textContent, activeGroupKey: result?.draft?.activeGroupKey, sessionId: result?.draft?.sessionId, stage: result?.draft?.stage }
+    return { groups: document.querySelectorAll('[data-group-row]').length, editorHidden: document.querySelector('#group-name-editor')?.hidden, status: document.querySelector('#group-draft-status')?.textContent, activeGroupKey: result?.draft?.activeGroupKey, sessionId: result?.draft?.sessionId, documentGeneration: result?.draft?.documentGeneration, routeIdentity: result?.draft?.routeIdentity, stage: result?.draft?.stage }
   }, tabId)
   console.log('[checkpoint detail] first group state', firstGroupState)
   if (!firstGroupState.activeGroupKey || firstGroupState.editorHidden) {
@@ -221,6 +221,16 @@ try {
     if ((state.groupValues?.length || 0) < 2) throw new Error(`first group expected two canonical values; saw ${state.groupValues?.length || 0}`)
   }
   ck('first group selected two same-page sources')
+  const firstGroupSources = await picker.evaluate(async id => {
+    const draft = (await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id }))?.draft
+    const group = draft?.groups?.find(item => item.key === draft.activeGroupKey)
+    return (group?.values || []).map(value => ({ key: value.key, source: value.source, spec: value.spec }))
+  }, tabId)
+  const samePageDistinctSources = firstGroupSources.filter(value => !value.source?.frame?.url)
+  if (samePageDistinctSources.length < 2 || new Set(samePageDistinctSources.map(value => JSON.stringify(value.source))).size < 2 || new Set(samePageDistinctSources.map(value => value.key)).size < 2) {
+    throw new Error(`same-page values collapsed to one source identity: ${JSON.stringify(firstGroupSources)}`)
+  }
+  ck('same-page values retain distinct canonical source identities')
 
   // The frame is deliberately cross-origin (different port); record a gap if
   // content injection/overlay cannot safely reach it in the current build.
@@ -574,12 +584,33 @@ try {
     document.body.append(button)
     await chrome.tabs.update(tab.id, { active: true })
     return { id: tab.id, url }
-  }, `http://127.0.0.1:${mainPort}/`)
+  }, `http://127.0.0.1:${mainPort}/second-round`)
   pickerTargetPinned = false
   await clickPanel({ evaluate: (...args) => report.evaluate(...args) }, '#open-second-round-panel')
   await picker.waitForFunction(() => document.querySelector('#group-start-first') && !document.querySelector('#group-start-first').hidden, { timeout: 20000 })
   const freshDraft = await picker.evaluate(async id => (await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id }))?.draft, newTab.id)
   if (!freshDraft || freshDraft.sessionId === firstGroupState.sessionId || freshDraft.groups.length !== 0) throw new Error('second round inherited old picker draft groups')
+  const freshContext = await picker.evaluate(async id => (await chrome.storage.session.get(`panel:${id}`))[`panel:${id}`], newTab.id)
+  const priorTaskIds = persisted.map(task => task.id)
+  const freshDraftJson = JSON.stringify(freshDraft)
+  if (freshContext?.kind !== 'new' || freshContext.items || freshContext.batchRun || priorTaskIds.some(id => freshDraftJson.includes(id))) {
+    throw new Error(`second round inherited saved group/list state: ${JSON.stringify({ context: freshContext, taskIds: priorTaskIds, draft: freshDraft })}`)
+  }
+  if (freshDraftJson.includes(`:${framePort}/frame`) || firstTask.fields.some(field => field.key && freshDraftJson.includes(field.key))) {
+    throw new Error('second round inherited a previous source key or frame source')
+  }
+  const wrongPage = await picker.evaluate(async ({ id, sessionId, identity }) => {
+    let response
+    try {
+      response = await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id, sessionId, ...identity })
+    } catch (error) { response = { ok: false, error: String(error?.message || error) } }
+    const after = await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id })
+    return { response, revision: after?.draft?.revision, groups: after?.draft?.groups }
+  }, { id: newTab.id, sessionId: freshDraft.sessionId, identity: { documentGeneration: firstGroupState.documentGeneration, routeIdentity: firstGroupState.routeIdentity } })
+  if (wrongPage.response?.ok === true || wrongPage.groups?.length !== 0 || wrongPage.revision !== freshDraft.revision) {
+    throw new Error(`wrong-page draft restore was accepted or mutated state: ${JSON.stringify(wrongPage)}`)
+  }
+  ck('new tab rejects restoration under the prior page identity')
   const crossTab = await picker.evaluate(async ({ id, oldSession }) => {
     const response = await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_OPERATION', tabId: id, sessionId: oldSession, operationId: `g1-cross-tab-${Date.now()}`, expectedRevision: 0, operation: { type: 'create-group', group: { key: 'cross-tab-probe', name: 'wrong page', values: [] } } })
     const after = await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id })
@@ -587,7 +618,7 @@ try {
   }, { id: newTab.id, oldSession: firstGroupState.sessionId })
   console.log('[diagnostic] wrong-session cross-tab restore', crossTab)
   if (crossTab.response?.ok === true || crossTab.groups?.length !== 0) throw new Error('wrong-session cross-tab message mutated the fresh draft')
-  ck('second round starts empty and rejects a wrong-session cross-tab write')
+  ck('second round is empty, with no prior sources/frame/tasks, and rejects a wrong-session cross-tab write')
 
   if (!frameCommitted) throw new Error('cross-origin frame click was not committed to the canonical draft')
   console.log(JSON.stringify({ browser: CHROME, tabId, framePicked, frameCommitted, groups: await picker.evaluate(() => document.querySelectorAll('[data-group-row]').length), partialResults, fullResults, savedTasks: persisted, repairedFieldKey: fieldKey, retainedSeriesRecords: afterRepair.records.length, secondRoundSessionId: freshDraft.sessionId, status: 'PARTIAL_G1' }, null, 2))
