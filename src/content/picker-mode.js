@@ -38,6 +38,7 @@ const COLORS = {
 let active = false, currentPurpose = null, currentTaskId = undefined, currentTargetEl = null, backStack = []
 // AF-22 C2a：短命選取工作階段的協調欄位；永久草稿仍由 background 保存。
 let pickSessionId = undefined, pickGroupKey = undefined, pickFrame = undefined, pickRevision = undefined, parentFrameId = undefined
+let repairSessionId = undefined, repairFieldKey = undefined, repairMode = undefined
 let pickDocumentGeneration = undefined, pickRouteIdentity = undefined
 let pickLocationAtEntry = ''
 let pickImmediateDraft = false
@@ -2900,6 +2901,13 @@ async function confirmPick() {
     ...buildPickPayload(currentTargetEl, picks, { index: currentCellIndex(), headerText: getHeaderText() })
   }
   if (currentTaskId !== undefined) msg.taskId = currentTaskId
+  if (repairSessionId !== undefined) {
+    msg.repairSessionId = repairSessionId
+    msg.repairFieldKey = repairFieldKey
+    msg.repairMode = repairMode
+    msg.documentGeneration = structuredClone(pickDocumentGeneration)
+    msg.routeIdentity = structuredClone(pickRouteIdentity)
+  }
 
   chrome.runtime.sendMessage(msg)
   // 設定面板就開在旁邊，使用者要看得到自己剛剛選的是哪一格；
@@ -2973,6 +2981,12 @@ function requestCancel() {
 function cancelPick() {
   const msg = { type: MSG.PICKED, purpose: currentPurpose, cancelled: true }
   if (currentTaskId !== undefined) msg.taskId = currentTaskId
+  if (repairSessionId !== undefined) {
+    msg.repairSessionId = repairSessionId
+    msg.repairFieldKey = repairFieldKey
+    msg.repairMode = repairMode
+    msg.documentGeneration = structuredClone(pickDocumentGeneration)
+  }
   const purpose = currentPurpose
   chrome.runtime.sendMessage(msg)
   exitPickMode({ clearOnly: purpose })
@@ -4759,6 +4773,9 @@ export function enterPickMode(opts) {
   currentPurpose = opts?.purpose || null
   currentTaskId = opts?.taskId !== undefined ? opts.taskId : undefined
   pickSessionId = opts?.sessionId !== undefined ? opts.sessionId : undefined
+  repairSessionId = opts?.repairSessionId
+  repairFieldKey = opts?.repairFieldKey
+  repairMode = opts?.repairMode
   pickGroupKey = opts?.groupKey ?? opts?.activeGroupKey
   pickImmediateDraft = opts?.batch === true || opts?.pickStage === 'selecting'
   pickFrame = opts?.frame && typeof opts.frame === 'object' ? structuredClone(opts.frame) : undefined
@@ -4988,6 +5005,7 @@ export function exitPickMode(opts = {}) {
   yieldedEl = null; lastProxySync = 0
   active = false; currentPurpose = null; currentTaskId = undefined; currentTargetEl = null; backStack = []
   pickSessionId = undefined; pickGroupKey = undefined; pickFrame = undefined; pickRevision = undefined; parentFrameId = undefined
+  repairSessionId = undefined; repairFieldKey = undefined; repairMode = undefined
   pickDocumentGeneration = undefined; pickRouteIdentity = undefined
   pickLocationAtEntry = ''
   pickImmediateDraft = false

@@ -29,7 +29,7 @@ import {
 } from './precheck.js'
 import { injectContent } from './inject.js'
 import { sendToFrame } from './messaging.js'
-import { locateFrame, listFrames, matchFrameByUrl } from './frames.js'
+import { locateFrame, listFrames, matchFrameByUrl, sameOriginPath } from './frames.js'
 import { isAnchorText, putSkip } from '../shared/table.js'
 import { pickSpecOf, pickSourceOf, reconcileFields, sameSpec, stripPos } from '../shared/field-match.js'
 import { parseNumber } from '../shared/extract.js'
@@ -60,6 +60,120 @@ const exitedPickTabs = new Set()
 const activePickFrames = new Map()
 const pickParticipantFrames = new Map()
 const groupNamePickRequests = new Map()
+// Per-field repair grants are deliberately worker-memory only: a worker restart
+// invalidates every outstanding grant, so a stale page cannot replay a repair.
+const fieldRepairSessions = new Map()
+
+async function beginFieldRepair(msg) {
+  if (typeof msg.taskId !== 'string' || typeof msg.fieldKey !== 'string' ||
+      msg.repairMode !== 'repair') return { ok: false, error: 'invalid_repair' }
+  const task = await getTask(msg.taskId)
+  const fields = Array.isArray(task?.fields) ? task.fields : []
+  const field = fields.find(item => item?.key === msg.fieldKey)
+  const specs = Array.isArray(task?.spec?.fields) ? task.spec.fields : []
+  const fieldSpec = specs.find(item => item?.key === msg.fieldKey)
+  const source = field?.source || fieldSpec?.source || task?.source
+  const locator = source?.locator || task?.locator
+  if (!task || !field || !fieldSpec || !locator || task.mode !== 'multi') {
+    return { ok: false, error: 'field_not_found', message: '找不到這個多值任務欄位，請重新載入設定' }
+  }
+  const sessionId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const tab = await chrome.tabs.create({ url: task.url, active: true })
+  if (!Number.isInteger(tab?.id)) return { ok: false, error: 'tab_failed', message: '無法開啟來源頁面' }
+  const loc = await locateFrame(tab.id, source.frame, locator)
+  if (!loc || !Number.isInteger(loc.frameId)) {
+    try { await chrome.tabs.remove(tab.id) } catch {}
+    return { ok: false, error: 'frame_not_found', message: '找不到此值原本所在的框架' }
+  }
+  let frames = []
+  try { frames = await listFrames(tab.id) } catch {}
+  const frameUrl = frames.find(item => item.frameId === loc.frameId)?.url || task.url
+  const routeIdentity = { url: frameUrl }
+  const documentGeneration = `repair:${sessionId}`
+  fieldRepairSessions.set(sessionId, {
+    sessionId, taskId: task.id, fieldKey: field.key, repairMode: msg.repairMode,
+    tabId: tab.id, frameId: loc.frameId, frameUrl,
+    documentGeneration, routeIdentity
+  })
+  await injectContent(tab.id, { frameId: loc.frameId })
+  const entered = await sendToFrame(tab.id, {
+    type: MSG.ENTER_PICK, purpose: 'repick', taskId: task.id, locator,
+    repairSessionId: sessionId, repairFieldKey: field.key, repairMode: msg.repairMode,
+    documentGeneration, routeIdentity,
+    preselect: fieldSpec.cell ? [{ cell: fieldSpec.cell }] : [{ block: fieldSpec.block }]
+  }, loc.frameId, CONTENT_MESSAGE_TIMEOUT_MS, 'Enter field repair pick')
+  if (entered?.ok === false) {
+    fieldRepairSessions.delete(sessionId)
+    try { await chrome.tabs.remove(tab.id) } catch {}
+    return { ok: false, error: 'enter_failed', message: '無法進入此值的重選模式' }
+  }
+  return { ok: true, sessionId, tabId: tab.id }
+}
+
+async function applyFieldRepair(msg, sender) {
+  const grant = typeof msg.repairSessionId === 'string' ? fieldRepairSessions.get(msg.repairSessionId) : null
+  const tabId = sender?.tab?.id
+  const frameId = sender?.frameId ?? 0
+  if (!grant || grant.taskId !== msg.taskId || grant.fieldKey !== msg.repairFieldKey ||
+      grant.repairMode !== msg.repairMode || tabId !== grant.tabId || frameId !== grant.frameId ||
+      msg.documentGeneration !== grant.documentGeneration || !sameOriginPath(sender?.url, grant.frameUrl)) {
+    return { ok: false, error: 'stale_field_repair', message: '這次單值重選已失效，請重新開始' }
+  }
+  if (msg.cancelled === true) {
+    fieldRepairSessions.delete(grant.sessionId)
+    try { await chrome.tabs.remove(grant.tabId) } catch {}
+    return { ok: true, cancelled: true }
+  }
+  if (!Array.isArray(msg.picks) || msg.picks.length !== 1) {
+    return { ok: false, error: 'invalid_repair_pick', message: '一次只能重選一個值' }
+  }
+  // One-shot grant: duplicate delivery cannot repair twice, and a worker restart
+  // naturally loses the grant so old page messages fail closed.
+  fieldRepairSessions.delete(grant.sessionId)
+  const pick = msg.picks[0]
+  const spec = pickSpecOf(pick)
+  if (!spec) return { ok: false, error: 'invalid_repair_pick', message: '這個選取沒有可用的定位規格' }
+  const locator = msg.locator && typeof msg.locator === 'object' ? structuredClone(msg.locator) : {}
+  const frame = frameDescriptorOf(sender, msg)
+  const source = { locator, ...(frame?.url ? { frame: { url: frame.url } } : {}) }
+  let found = false
+  const [updated] = await updateTasks([grant.taskId], task => {
+    const fields = Array.isArray(task.fields) ? task.fields : []
+    const field = fields.find(item => item?.key === grant.fieldKey)
+    const specs = Array.isArray(task.spec?.fields) ? task.spec.fields : []
+    const entry = specs.find(item => item?.key === grant.fieldKey)
+    if (!field || !entry || task.mode !== 'multi') return null
+    const previous = entry.spec || (entry.cell ? { cell: entry.cell } : entry.block ? { block: entry.block } : {})
+    if (Boolean(previous.cell) !== Boolean(spec.cell) || Boolean(previous.block) !== Boolean(spec.block)) {
+      return null
+    }
+    const next = structuredClone(spec)
+    if (next.cell && previous.cell) {
+      for (const axis of ['row', 'col']) {
+        if (previous.cell[axis]?.pos && next.cell[axis]) next.cell[axis].pos = previous.cell[axis].pos
+      }
+      if (!next.cell.inner && previous.cell.inner) next.cell.inner = structuredClone(previous.cell.inner)
+    } else if (next.block && previous.block) {
+      for (const key of ['aggregate', 'skip', 'exclude', 'pos', 'inner']) {
+        if (next.block[key] === undefined && previous.block[key] !== undefined) next.block[key] = structuredClone(previous.block[key])
+      }
+    }
+    entry.source = source
+    entry.spec = next
+    // Legacy normalized copies are removed so future reads use this single spec.
+    delete entry.cell
+    delete entry.block
+    found = true
+    return task
+  })
+  if (!updated || !found) return { ok: false, error: 'field_not_found', message: '這個值已移除或選取類型不同，沒有套用重選結果' }
+  const repaired = updated.spec.fields.find(item => item.key === grant.fieldKey)
+  const result = { ok: true, taskId: updated.id, fieldKey: grant.fieldKey,
+    source: structuredClone(repaired.source), spec: structuredClone(repaired.spec) }
+  try { await chrome.runtime.sendMessage({ type: 'FIELD_REPAIR_DONE', ...result }) } catch {}
+  try { await chrome.tabs.remove(grant.tabId) } catch {}
+  return result
+}
 
 function frameDescriptorOf(sender, extra = {}) {
   const frameId = sender?.frameId
@@ -1030,6 +1144,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
     }
 
     if (msg.type === MSG.PICK_GROUP_NAME) return await requestGroupNamePick(msg)
+    if (msg.type === MSG.BEGIN_FIELD_REPAIR) return await beginFieldRepair(msg)
     if (msg.type === MSG.PICK_GROUP_NAME_RESULT) {
       const tabId = sender?.tab?.id
       const active = Number.isInteger(tabId) ? frameStateOf(tabId) : null
@@ -1282,6 +1397,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
     }
 
     if (msg.type === MSG.PICKED) {
+      if (msg.repairSessionId !== undefined) return await applyFieldRepair(msg, sender)
       const pickedTabId = sender?.tab?.id
       const activeFrame = Number.isInteger(pickedTabId) ? frameStateOf(pickedTabId) : null
       const participant = Number.isInteger(pickedTabId) ? pickParticipantFrames.get(pickedTabId) : null

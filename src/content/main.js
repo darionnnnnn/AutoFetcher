@@ -563,6 +563,9 @@ function route(msg, sendResponse) {
     enterPickMode({
       purpose: msg.purpose,
       taskId: msg.taskId,
+      repairSessionId: msg.repairSessionId,
+      repairFieldKey: msg.repairFieldKey,
+      repairMode: msg.repairMode,
       sessionId: msg.sessionId,
       groupKey: msg.groupKey,
       activeGroupKey: msg.activeGroupKey,

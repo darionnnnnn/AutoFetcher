@@ -1179,6 +1179,27 @@ export function render(ctx) {
   bindAlertEvents()
   bindPreActionEvents()
   bindPreActionMessageListener()
+  chrome.runtime.onMessage?.addListener(message => {
+    if (message?.type !== 'FIELD_REPAIR_DONE' || message.taskId !== currentCtx?.task?.id) return undefined
+    const row = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
+      .find(item => item.dataset.fieldKey === message.fieldKey)
+    if (!row) return undefined
+    row._source = structuredClone(message.source)
+    row._spec = structuredClone(message.spec)
+    fieldSpecs.set(message.fieldKey, row._spec)
+    const where = row.querySelector('[data-field-where]')
+    if (where) {
+      where.textContent = fieldWhereText(row._spec)
+      where.title = where.textContent
+    }
+    const savedSpec = currentCtx.task.spec?.fields?.find(item => item.key === message.fieldKey)
+    if (savedSpec) {
+      savedSpec.source = structuredClone(message.source)
+      savedSpec.spec = structuredClone(message.spec)
+    }
+    setFieldRowHint(row, '這個值的來源已更新；名稱、告警與歷史序列保留')
+    return undefined
+  })
   bindPosEvents()
   bindBlurValidation()
   updateFrameHint(currentCtx)
@@ -2179,11 +2200,37 @@ function createFieldRow({ key, name, spec, source, mode }) {
     updateFieldListState()
   })
 
+  const repairBtn = document.createElement('button')
+  repairBtn.type = 'button'
+  repairBtn.setAttribute('data-field-repair', '')
+  repairBtn.textContent = '修復同一個值'
+  repairBtn.title = '只修復這個值的來源，保留原名稱、告警與歷史序列；不同指標請建立新值'
+  repairBtn.hidden = !(currentCtx?.task?.mode === 'multi' &&
+    Array.isArray(currentCtx.task.fields) && currentCtx.task.fields.length > 1)
+  repairBtn.addEventListener('click', async () => {
+    repairBtn.setAttribute('aria-disabled', 'true')
+    setFieldRowHint(row, '')
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: MSG.BEGIN_FIELD_REPAIR,
+        taskId: currentCtx?.task?.id,
+        fieldKey: row.dataset.fieldKey,
+        repairMode: 'repair'
+      })
+      if (!response?.ok) setFieldRowHint(row, response?.message || '無法開始單值重選，請重試')
+    } catch (error) {
+      setFieldRowHint(row, String(error?.message || '無法開始單值重選，請重試'))
+    } finally {
+      repairBtn.removeAttribute('aria-disabled')
+    }
+  })
+
   row.appendChild(input)
   row.appendChild(whereEl)
   row.appendChild(resultEl)
   row.appendChild(upBtn)
   row.appendChild(downBtn)
+  row.appendChild(repairBtn)
   row.appendChild(removeBtn)
 
   return row
