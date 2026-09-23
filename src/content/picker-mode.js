@@ -4164,6 +4164,17 @@ function onClick(event) {
     }
   }
 
+  // R18 明確選擇「改成不同指標」時，允許以表格外的新元素取代預選欄位。
+  // 一般 repick 仍維持鎖表，避免誤點把既有多值來源換掉。
+  if (repairSessionId !== undefined && repairMode === 'replace' && selectedList.length > 0 && pickedTableEl &&
+      !pickedTableEl.contains(event.target) && !frameOfProxy(event.target)) {
+    clearPickedMarks(pickedTableEl)
+    selectedList = []
+    pickedTableEl = null
+    clearPendingConfirms()
+    setTarget(upgradeTarget(event.target, { deliberate: true }))
+  }
+
   // 已選值後目標被鎖在某張表，點到那張表以外（例如外層表的格子）：什麼都不做。
   // 往下落會走到第 8 段直接送出，等於點外層一下就把內層的已選送走了
   if (isTableMode(currentTargetEl) && isMultiPickPurpose() &&
@@ -4302,7 +4313,11 @@ function onClick(event) {
       const snapToPreserve = (justPromoted ? undoSnapshot : null)
       clearPendingConfirms()
 
-      if (event.shiftKey && lastCellPick() && candidate.cell) {
+      if (repairSessionId !== undefined && candidate) {
+        // Field repair always writes one value. A click on the preselected value
+        // confirms it instead of toggling the repair to an empty selection.
+        replaceSelection(candidate)
+      } else if (event.shiftKey && lastCellPick() && candidate.cell) {
         // Shift 點：從上一個已選的格子拉出矩形範圍
         addRange(lastCellPick(), candidate.cell)
       } else {

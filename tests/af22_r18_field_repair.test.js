@@ -64,6 +64,10 @@ test('R18 same-value repair updates only the authorized field and preserves key/
   assert.equal(grant.enter.repairFieldKey, 'f1')
   assert.equal(grant.enter.taskId, 'repair-task')
   assert.equal(grant.enter.frameId, undefined, 'persisted frame identity stays URL based')
+  assert.deepEqual(grant.enter.preselect, [{ block: {
+    axis: 'col', index: 2, aggregate: 'sum', skip: { head: 1, blank: true },
+    exclude: [{ index: 4 }], pos: 'first', inner: [{ tag: 'span', index: 1 }]
+  } }], 'preselect is read from the nested saved field spec')
   const result = await picked(f, grant)
   assert.equal(result.ok, true)
   const after = await f.storage.getTask('repair-task')
@@ -178,6 +182,75 @@ test('R18 different metric gets a new series, retires old active references, and
     assert.ok(headers.some(header => header.includes('新指標')))
   } finally {
     globalThis.document = previousDocument
+    dom.window.close()
+  }
+})
+
+test('R18 replacement accepts a matching locator-only element pick with its scalar mode and rejects unsafe locators', async t => {
+  const f = await setup(t)
+  const before = await f.storage.getTask('repair-task')
+  const grant = await beginReplacement(f)
+  const invalid = await picked(f, grant, {
+    locator: { css: '#different' }, pickModes: ['text'], picks: [{ locator: { css: '#attacker' } }]
+  })
+  assert.equal(invalid.error, 'invalid_repair_pick')
+  assert.deepEqual(await f.storage.getTask('repair-task'), before)
+
+  const result = await picked(f, grant, {
+    locator: { css: '#different', path: '/html/body/strong[1]', xpath: '/html[1]/body[1]/strong[1]' },
+    pickModes: ['text'], preview: 'Suspended', picks: [{ locator: { css: '#different', path: '/html/body/strong[1]', xpath: '/html[1]/body[1]/strong[1]' } }]
+  })
+  assert.equal(result.ok, true)
+  assert.notEqual(result.fieldKey, 'f1')
+  assert.equal(result.spec.mode, 'text')
+  assert.equal(result.source.locator.css, '#different')
+  const after = await f.storage.getTask('repair-task')
+  assert.deepEqual(after.fields.map(field => field.key), [result.fieldKey, 'f2'])
+  assert.equal(after.fields[0].mode, 'text')
+  assert.deepEqual(after.spec.fields[1], before.spec.fields[1])
+  assert.equal(after.archivedFields[0].key, 'f1')
+})
+
+test('R18 content repick sends a locator-only element replacement through the grant handler', async t => {
+  const f = await setup(t)
+  const grant = await beginReplacement(f)
+  const dom = new JSDOM('<!doctype html><html><body><table id="old"><tbody><tr><td>0</td><td>1</td><td>2</td></tr></tbody></table><strong id="different">Suspended</strong></body></html>', { url: 'https://a.test/prices' })
+  const previous = {
+    window: globalThis.window, document: globalThis.document, Event: globalThis.Event,
+    MouseEvent: globalThis.MouseEvent, KeyboardEvent: globalThis.KeyboardEvent
+  }
+  globalThis.window = dom.window
+  globalThis.document = dom.window.document
+  globalThis.Event = dom.window.Event
+  globalThis.MouseEvent = dom.window.MouseEvent
+  globalThis.KeyboardEvent = dom.window.KeyboardEvent
+  f.chrome.__setRuntimeResponder(message => f.bg.handleMessage(message, grant.sender))
+  try {
+    const picker = await import('../src/content/picker-mode.js?r18-dom=' + Math.random())
+    picker.enterPickMode({
+      purpose: 'repick', taskId: 'repair-task', repairSessionId: grant.enter.repairSessionId,
+      repairFieldKey: grant.enter.repairFieldKey, repairMode: 'replace',
+      documentGeneration: grant.enter.documentGeneration, routeIdentity: grant.enter.routeIdentity,
+      initialTarget: document.getElementById('old'), preselect: grant.enter.preselect
+    })
+    const target = document.getElementById('different')
+    target.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    document.querySelector('[data-af-done]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    await new Promise(resolve => setTimeout(resolve, 40))
+
+    const after = await f.storage.getTask('repair-task')
+    assert.notEqual(after.fields[0].key, 'f1')
+    assert.equal(after.fields[0].mode, 'text')
+    assert.equal(after.spec.fields[0].source.locator.css, '#different')
+    assert.equal(after.spec.fields[0].source.locator.xpath, '/html[1]/body[1]/strong[1]')
+    assert.equal(after.archivedFields[0].key, 'f1')
+  } finally {
+    globalThis.window = previous.window
+    globalThis.document = previous.document
+    globalThis.Event = previous.Event
+    globalThis.MouseEvent = previous.MouseEvent
+    globalThis.KeyboardEvent = previous.KeyboardEvent
     dom.window.close()
   }
 })

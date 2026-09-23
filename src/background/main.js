@@ -100,7 +100,10 @@ async function beginFieldRepair(msg) {
     type: MSG.ENTER_PICK, purpose: 'repick', taskId: task.id, locator,
     repairSessionId: sessionId, repairFieldKey: field.key, repairMode: msg.repairMode,
     documentGeneration, routeIdentity,
-    preselect: fieldSpec.cell ? [{ cell: fieldSpec.cell }] : [{ block: fieldSpec.block }]
+    preselect: fieldSpec.spec?.cell ? [{ cell: fieldSpec.spec.cell }]
+      : fieldSpec.spec?.block ? [{ block: fieldSpec.spec.block }]
+        : fieldSpec.cell ? [{ cell: fieldSpec.cell }]
+          : fieldSpec.block ? [{ block: fieldSpec.block }] : undefined
   }, loc.frameId, CONTENT_MESSAGE_TIMEOUT_MS, 'Enter field repair pick')
   if (entered?.ok === false) {
     fieldRepairSessions.delete(sessionId)
@@ -127,15 +130,29 @@ async function applyFieldRepair(msg, sender) {
   if (!Array.isArray(msg.picks) || msg.picks.length !== 1) {
     return { ok: false, error: 'invalid_repair_pick', message: '一次只能重選一個值' }
   }
+  const pick = msg.picks[0]
+  let spec = pickSpecOf(pick)
+  const selectedMode = msg.pickModes?.[0]
+  const hasLocator = value => value && typeof value === 'object' &&
+    ['css', 'path', 'xpath'].some(key => typeof value[key] === 'string' && value[key].trim() !== '')
+  const locatorSignature = value => hasLocator(value)
+    ? JSON.stringify(['css', 'path', 'xpath'].map(key => value[key] || ''))
+    : ''
+  if (!spec && ['number', 'text'].includes(selectedMode) && hasLocator(pick?.locator) &&
+      locatorSignature(pick.locator) === locatorSignature(msg.locator)) {
+    // A non-table metric is identified by its URL-only locator and has no
+    // cell/block selector. Accept only the one target emitted by this pick and
+    // retain the content-side scalar type hint.
+    spec = { mode: selectedMode }
+  }
+  if (!spec) return { ok: false, error: 'invalid_repair_pick', message: '這個選取沒有可用的定位規格' }
+  const locator = msg.locator && typeof msg.locator === 'object' ? structuredClone(msg.locator) : {}
+  if (!hasLocator(locator)) return { ok: false, error: 'invalid_repair_pick', message: '這個選取沒有可用的定位規格' }
+  const frame = frameDescriptorOf(sender, msg)
+  const source = { locator, ...(frame?.url ? { frame: { url: frame.url } } : {}) }
   // One-shot grant: duplicate delivery cannot repair twice, and a worker restart
   // naturally loses the grant so old page messages fail closed.
   fieldRepairSessions.delete(grant.sessionId)
-  const pick = msg.picks[0]
-  const spec = pickSpecOf(pick)
-  if (!spec) return { ok: false, error: 'invalid_repair_pick', message: '這個選取沒有可用的定位規格' }
-  const locator = msg.locator && typeof msg.locator === 'object' ? structuredClone(msg.locator) : {}
-  const frame = frameDescriptorOf(sender, msg)
-  const source = { locator, ...(frame?.url ? { frame: { url: frame.url } } : {}) }
   let found = false
   let replacement = null
   let archivedField = null
@@ -166,6 +183,7 @@ async function applyFieldRepair(msg, sender) {
       const newKey = `field-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
       const fieldIndex = fields.findIndex(item => item?.key === grant.fieldKey)
       const name = defaultFieldName(pick, fields.length + 1)
+      const mode = ['number', 'text'].includes(selectedMode) ? selectedMode : (field.mode || pick.mode || 'number')
       const oldAlerts = (Array.isArray(task.alerts) ? task.alerts : []).filter(alert => alert?.field === grant.fieldKey)
       task.archivedFields = Array.isArray(task.archivedFields) ? task.archivedFields : []
       archivedField = {
@@ -174,10 +192,10 @@ async function applyFieldRepair(msg, sender) {
         alerts: structuredClone(oldAlerts), archivedAt: new Date().toISOString()
       }
       task.archivedFields.push(archivedField)
-      task.fields[fieldIndex] = { ...field, key: newKey, name, mode: field.mode || pick.mode || 'number' }
+      task.fields[fieldIndex] = { ...field, key: newKey, name, mode }
       entry.key = newKey
       entry.name = name
-      entry.mode = field.mode || pick.mode || 'number'
+      entry.mode = mode
       entry.source = source
       entry.spec = next
       task.alerts = (Array.isArray(task.alerts) ? task.alerts : []).filter(alert => alert?.field !== grant.fieldKey)
