@@ -296,6 +296,8 @@ export async function renderFilters() {
 
       const childCbs = []
       const children = seriesIndex.childrenOf[t.id] || []
+      const historyChildren = (seriesIndex.historySeriesIds || seriesIndex.seriesIds)
+        .filter(sid => seriesIndex.byId[sid]?.parentId === t.id)
 
       function updateParentState() {
         const checkedCount = childCbs.filter(c => c.checked).length
@@ -318,7 +320,7 @@ export async function renderFilters() {
         }
       })
 
-      for (const sid of children) {
+      for (const sid of historyChildren) {
         const item = seriesIndex.byId[sid]
         const childLabel = document.createElement('label')
         const childCb = document.createElement('input')
@@ -328,7 +330,7 @@ export async function renderFilters() {
         childCbs.push(childCb)
 
         childLabel.appendChild(childCb)
-        childLabel.appendChild(document.createTextNode(` ${identity?.label || t.name || t.id} · ${item?.shortName || item?.name || sid}`))
+        childLabel.appendChild(document.createTextNode(` ${identity?.label || t.name || t.id} · ${item?.shortName || item?.name || sid}${item?.archived ? '（舊歷史）' : ''}`))
         childrenContainer.appendChild(childLabel)
 
         childCb.addEventListener('change', () => {
@@ -1176,7 +1178,7 @@ export function renderPivot(records = [], tasks = []) {
 
   const sortedTasks = [...tasks].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
   const seriesIndex = buildSeriesIndex(sortedTasks)
-  const seriesIds = seriesIndex.seriesIds
+  const seriesIds = seriesIndex.historySeriesIds || seriesIndex.seriesIds
 
   const { columns, rows } = pivot(records, seriesIds, { taskOrder: seriesIds })
 
@@ -1211,7 +1213,7 @@ export async function renderCompare(compareDate) {
   try { tasks = await getTasks() } catch {}
   const sortedTasks = [...tasks].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
   const seriesIndex = buildSeriesIndex(sortedTasks)
-  const seriesIds = seriesIndex.seriesIds
+  const seriesIds = seriesIndex.historySeriesIds || seriesIndex.seriesIds
 
   const recordsA = await getRecordsInRange(state.from, state.to)
   const recordsB = await getRecordsByDate(compareDate)

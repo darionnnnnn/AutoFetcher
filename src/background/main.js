@@ -66,7 +66,7 @@ const fieldRepairSessions = new Map()
 
 async function beginFieldRepair(msg) {
   if (typeof msg.taskId !== 'string' || typeof msg.fieldKey !== 'string' ||
-      msg.repairMode !== 'repair') return { ok: false, error: 'invalid_repair' }
+      !['repair', 'replace'].includes(msg.repairMode)) return { ok: false, error: 'invalid_repair' }
   const task = await getTask(msg.taskId)
   const fields = Array.isArray(task?.fields) ? task.fields : []
   const field = fields.find(item => item?.key === msg.fieldKey)
@@ -137,6 +137,9 @@ async function applyFieldRepair(msg, sender) {
   const frame = frameDescriptorOf(sender, msg)
   const source = { locator, ...(frame?.url ? { frame: { url: frame.url } } : {}) }
   let found = false
+  let replacement = null
+  let archivedField = null
+  const oldSeriesId = seriesIdOf(grant.taskId, grant.fieldKey)
   const [updated] = await updateTasks([grant.taskId], task => {
     const fields = Array.isArray(task.fields) ? task.fields : []
     const field = fields.find(item => item?.key === grant.fieldKey)
@@ -144,7 +147,8 @@ async function applyFieldRepair(msg, sender) {
     const entry = specs.find(item => item?.key === grant.fieldKey)
     if (!field || !entry || task.mode !== 'multi') return null
     const previous = entry.spec || (entry.cell ? { cell: entry.cell } : entry.block ? { block: entry.block } : {})
-    if (Boolean(previous.cell) !== Boolean(spec.cell) || Boolean(previous.block) !== Boolean(spec.block)) {
+    if (grant.repairMode === 'repair' &&
+        (Boolean(previous.cell) !== Boolean(spec.cell) || Boolean(previous.block) !== Boolean(spec.block))) {
       return null
     }
     const next = structuredClone(spec)
@@ -158,18 +162,51 @@ async function applyFieldRepair(msg, sender) {
         if (next.block[key] === undefined && previous.block[key] !== undefined) next.block[key] = structuredClone(previous.block[key])
       }
     }
-    entry.source = source
-    entry.spec = next
-    // Legacy normalized copies are removed so future reads use this single spec.
-    delete entry.cell
-    delete entry.block
+    if (grant.repairMode === 'replace') {
+      const newKey = `field-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
+      const fieldIndex = fields.findIndex(item => item?.key === grant.fieldKey)
+      const name = defaultFieldName(pick, fields.length + 1)
+      const oldAlerts = (Array.isArray(task.alerts) ? task.alerts : []).filter(alert => alert?.field === grant.fieldKey)
+      task.archivedFields = Array.isArray(task.archivedFields) ? task.archivedFields : []
+      archivedField = {
+        key: grant.fieldKey, name: field.name || grant.fieldKey, mode: field.mode,
+        source: structuredClone(entry.source || field.source || {}), spec: structuredClone(previous),
+        alerts: structuredClone(oldAlerts), archivedAt: new Date().toISOString()
+      }
+      task.archivedFields.push(archivedField)
+      task.fields[fieldIndex] = { ...field, key: newKey, name, mode: field.mode || pick.mode || 'number' }
+      entry.key = newKey
+      entry.name = name
+      entry.mode = field.mode || pick.mode || 'number'
+      entry.source = source
+      entry.spec = next
+      task.alerts = (Array.isArray(task.alerts) ? task.alerts : []).filter(alert => alert?.field !== grant.fieldKey)
+      if (task.alerts.length === 0) delete task.alerts
+      replacement = { oldFieldKey: grant.fieldKey, newFieldKey: newKey, name, oldSeriesId }
+    } else {
+      entry.source = source
+      entry.spec = next
+      // Legacy normalized copies are removed so future reads use this single spec.
+      delete entry.cell
+      delete entry.block
+    }
     found = true
     return task
   })
   if (!updated || !found) return { ok: false, error: 'field_not_found', message: '這個值已移除或選取類型不同，沒有套用重選結果' }
-  const repaired = updated.spec.fields.find(item => item.key === grant.fieldKey)
-  const result = { ok: true, taskId: updated.id, fieldKey: grant.fieldKey,
+  if (replacement) {
+    await pruneSeries([replacement.oldSeriesId])
+    await deleteLastValues([replacement.oldSeriesId])
+    await rebuildAlarms()
+  }
+  const resultFieldKey = replacement?.newFieldKey || grant.fieldKey
+  const repaired = updated.spec.fields.find(item => item.key === resultFieldKey)
+  const result = { ok: true, taskId: updated.id, fieldKey: resultFieldKey,
     source: structuredClone(repaired.source), spec: structuredClone(repaired.spec) }
+  if (replacement) Object.assign(result, replacement, {
+    repairMode: 'replace', fieldName: replacement.name,
+    archivedField: structuredClone(archivedField)
+  })
   try { await chrome.runtime.sendMessage({ type: 'FIELD_REPAIR_DONE', ...result }) } catch {}
   try { await chrome.tabs.remove(grant.tabId) } catch {}
   return result
@@ -222,8 +259,15 @@ function rememberPickParticipant(tabId, sessionId, sender) {
 
 async function drainPickDraft(tabId, draft, timeoutMs, resume = false) {
   if (!draft || !Number.isInteger(tabId)) return { ok: false, message: '選取草稿不存在，無法同步' }
-  const listed = await listFrames(tabId)
   const registered = pickParticipantFrames.get(tabId)
+  const activeBeforeDrain = frameStateOf(tabId)
+  const hasQueuedValues = (draft.groups || []).some(group => (group.values || []).length > 0)
+  // Before the first value is selected, the panel may safely create/switch its
+  // initial group without any page content frame participating in the session.
+  if (!hasQueuedValues && registered?.sessionId !== draft.sessionId && activeBeforeDrain?.sessionId !== draft.sessionId) {
+    return { ok: true }
+  }
+  const listed = await listFrames(tabId)
   const targets = new Set()
   if (registered?.sessionId === draft.sessionId) {
     for (const [frameId, identity] of registered.frames) {
@@ -1040,10 +1084,18 @@ function canStartPick(ctx) {
  * 或 { blocked: '說明句' }（不進選取，把這句寫進面板的 notice）。
  * 單任務與多任務互不插隊：多任務清單還沒存時不開單任務；表單或清單填到一半時不開多任務。
  */
-function pickEntryOf(ctx, batch) {
+function pickEntryOf(ctx, batch, sessionId, groupKey, tabId) {
   if (canStartPick(ctx)) return { start: true }
   if (ctx?.kind === 'bulk') return { blocked: '有一批任務的排程改到一半，請先套用或取消，再開始選取' }
   if (batch) {
+    if (ctx?.kind === 'new' && ctx.batch === true) {
+      const draft = ctx.pickDraft
+      const validDraftEntry = typeof sessionId === 'string' && draft?.sessionId === sessionId &&
+        draft?.tabId === tabId && draft?.activeGroupKey === groupKey &&
+        Array.isArray(draft?.groups) && draft.groups.some(group => group?.key === groupKey)
+      if (validDraftEntry) return { start: false }
+      return { blocked: '多值選取草稿或作用組已變更，請重新整理草稿後再試' }
+    }
     return { blocked: ctx.kind === 'batch'
       ? '多任務清單還沒存，請先全部儲存或取消，再開始新的多任務'
       : '有一個任務設定到一半，請先儲存或取消，再開始多任務' }
@@ -1053,8 +1105,22 @@ function pickEntryOf(ctx, batch) {
 }
 
 // 依 pickEntryOf 的結果處理面板 ctx；回傳 false＝被擋（已留說明），呼叫端不得進選取模式
-async function applyPickEntry(tabId, batch) {
-  const entry = pickEntryOf(await getPanelCtx(tabId), batch)
+async function applyPickEntry(tabId, batch, sessionId, groupKey, documentGeneration, routeIdentity) {
+  const ctx = await getPanelCtx(tabId)
+  if (batch && ctx?.kind === 'new' && ctx.batch === true) {
+    const draft = typeof sessionId === 'string'
+      ? await getPickDraft(tabId, { sessionId, documentGeneration, routeIdentity })
+      : null
+    const validDraftEntry = draft?.tabId === tabId && draft.activeGroupKey === groupKey &&
+      Array.isArray(draft.groups) && draft.groups.some(group => group?.key === groupKey)
+    if (!validDraftEntry) {
+      const message = '多值選取草稿或作用組已變更，請重新整理草稿後再試'
+      await mergePanelCtx(tabId, { notice: message })
+      return false
+    }
+    return true
+  }
+  const entry = pickEntryOf(ctx, batch, sessionId, groupKey, tabId)
   if (entry.blocked) {
     await mergePanelCtx(tabId, { notice: entry.blocked })
     return false
@@ -1680,7 +1746,12 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         // 但沒有表單時要先顯示等待態（同右鍵入口），否則面板是一張空白表單
         const batch = msg.batch === true
         // popup 送完就關視窗：被擋時一定要把說明留在面板上，不能只回 ok:false（靜默無事）
-        if (msg.purpose === 'task' && !(await applyPickEntry(msg.tabId, batch))) return { ok: false }
+        if (msg.purpose === 'task' && !(await applyPickEntry(
+          msg.tabId, batch, msg.sessionId, msg.groupKey, msg.documentGeneration, msg.routeIdentity
+        ))) {
+          return { ok: false, error: 'pick_entry_blocked', retryable: true,
+            message: '多值草稿無法進入頁面選取；請確認目前作用組，再重試' }
+        }
         const previousFrame = frameStateOf(msg.tabId)
         if (previousFrame && previousFrame.frameId !== frameId) {
           try { await sendToFrame(msg.tabId, { type: MSG.EXIT_PICK, ...pickIdentityOf(msg) }, previousFrame.frameId, contentMs, 'Exit old pick frame') } catch {}

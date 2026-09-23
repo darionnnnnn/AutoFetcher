@@ -830,6 +830,9 @@ export function buildTask(values, locator, existing, frame) {
     }
   }
   if (existing?.order !== undefined) task.order = existing.order
+  if (Array.isArray(existing?.archivedFields) && existing.archivedFields.length > 0) {
+    task.archivedFields = structuredClone(existing.archivedFields)
+  }
   // 既有任務有哪個鍵才帶哪個：沒有的不得憑空長出來（`enabled` 缺省照舊視為啟用）
   if (existing) {
     for (const k of RUNTIME_FIELDS) {
@@ -1181,9 +1184,27 @@ export function render(ctx) {
   bindPreActionMessageListener()
   chrome.runtime.onMessage?.addListener(message => {
     if (message?.type !== 'FIELD_REPAIR_DONE' || message.taskId !== currentCtx?.task?.id) return undefined
+    const replacing = message.repairMode === 'replace' && typeof message.oldFieldKey === 'string'
     const row = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
-      .find(item => item.dataset.fieldKey === message.fieldKey)
+      .find(item => item.dataset.fieldKey === (replacing ? message.oldFieldKey : message.fieldKey))
     if (!row) return undefined
+    const oldFieldKey = row.dataset.fieldKey
+    if (replacing) {
+      row.dataset.fieldKey = message.fieldKey
+      const nameInput = row.querySelector('input[data-field-name]')
+      if (nameInput && message.fieldName) nameInput.value = message.fieldName
+      for (const alertRow of document.querySelectorAll('[data-alert-row]')) {
+        if (alertRow.querySelector('select[data-alert-field]')?.value === oldFieldKey) alertRow.remove()
+      }
+      fieldSpecs.delete(oldFieldKey)
+      currentCtx.task.fields = (currentCtx.task.fields || []).map(field => field.key === oldFieldKey
+        ? { ...field, key: message.fieldKey, name: message.fieldName || field.name } : field)
+      currentCtx.task.alerts = (currentCtx.task.alerts || []).filter(alert => alert.field !== oldFieldKey)
+      if (Array.isArray(message.archivedField)) currentCtx.task.archivedFields = message.archivedField
+      else if (message.archivedField) {
+        currentCtx.task.archivedFields = [...(currentCtx.task.archivedFields || []), message.archivedField]
+      }
+    }
     row._source = structuredClone(message.source)
     row._spec = structuredClone(message.spec)
     fieldSpecs.set(message.fieldKey, row._spec)
@@ -1192,12 +1213,17 @@ export function render(ctx) {
       where.textContent = fieldWhereText(row._spec)
       where.title = where.textContent
     }
-    const savedSpec = currentCtx.task.spec?.fields?.find(item => item.key === message.fieldKey)
+    const savedSpec = currentCtx.task.spec?.fields?.find(item => item.key === (replacing ? oldFieldKey : message.fieldKey))
     if (savedSpec) {
+      savedSpec.key = message.fieldKey
+      savedSpec.name = message.fieldName || savedSpec.name
       savedSpec.source = structuredClone(message.source)
       savedSpec.spec = structuredClone(message.spec)
     }
-    setFieldRowHint(row, '這個值的來源已更新；名稱、告警與歷史序列保留')
+    setFieldRowHint(row, replacing
+      ? '已建立不同指標的新歷史序列；舊紀錄保留，舊告警不會套用到新值'
+      : '這個值的來源已更新；名稱、告警與歷史序列保留')
+    if (replacing) updateFieldListState()
     return undefined
   })
   bindPosEvents()
@@ -2231,6 +2257,31 @@ function createFieldRow({ key, name, spec, source, mode }) {
   row.appendChild(upBtn)
   row.appendChild(downBtn)
   row.appendChild(repairBtn)
+  const replaceBtn = document.createElement('button')
+  replaceBtn.type = 'button'
+  replaceBtn.setAttribute('data-field-replace', '')
+  replaceBtn.textContent = '改成不同指標'
+  replaceBtn.title = '建立新的值與歷史序列；舊歷史保留，原告警不會沿用'
+  replaceBtn.hidden = repairBtn.hidden
+  replaceBtn.addEventListener('click', async () => {
+    if (!globalThis.confirm?.('這會把目前欄位改成不同指標，建立新的歷史序列並移除原告警設定。舊歷史會保留。要繼續嗎？')) return
+    replaceBtn.setAttribute('aria-disabled', 'true')
+    setFieldRowHint(row, '')
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: MSG.BEGIN_FIELD_REPAIR,
+        taskId: currentCtx?.task?.id,
+        fieldKey: row.dataset.fieldKey,
+        repairMode: 'replace'
+      })
+      if (!response?.ok) setFieldRowHint(row, response?.message || '無法開始更換指標，請重試')
+    } catch (error) {
+      setFieldRowHint(row, String(error?.message || '無法開始更換指標，請重試'))
+    } finally {
+      replaceBtn.removeAttribute('aria-disabled')
+    }
+  })
+  row.appendChild(replaceBtn)
   row.appendChild(removeBtn)
 
   return row
@@ -3946,8 +3997,11 @@ function bindPickDraftEvents() {
     }
     const group = { key: newPickGroupKey(), name: '', values: [] }
     const response = await sendPickDraftOperation({ type: 'create-group', group })
-    if (!response) return
-    if (pickDraftState.activeGroupKey !== group.key) await sendPickDraftOperation({ type: 'set-active', groupKey: group.key })
+    if (response?.ok !== true) return
+    if (pickDraftState.activeGroupKey !== group.key) {
+      const activated = await sendPickDraftOperation({ type: 'set-active', groupKey: group.key })
+      if (activated?.ok !== true) return
+    }
     document.getElementById('group-name')?.focus()
     setGroupDraftStatus('請輸入名稱，或從頁面取名稱；確認後才會開始選值。')
   }

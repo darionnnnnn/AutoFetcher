@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { JSDOM } from 'jsdom'
 import { installChromeMock, resetChromeMock } from './chrome-mock.js'
 
 const extensionSender = { url: 'chrome-extension://autofetcher/ui/picker/picker.html' }
@@ -38,7 +39,7 @@ async function begin(f, fieldKey = 'f1') {
   }, extensionSender)
   assert.equal(response.ok, true)
   const enter = f.chrome.__calls.filter(call => call.api === 'tabs.sendMessage')
-    .map(call => call.args[1]).find(message => message?.type === f.messages.MSG.ENTER_PICK)
+    .map(call => call.args[1]).reverse().find(message => message?.type === f.messages.MSG.ENTER_PICK)
   assert.ok(enter)
   return { response, enter, sender: { tab: { id: response.tabId, url: 'https://a.test/prices' }, frameId: 0, url: 'https://a.test/prices' } }
 }
@@ -87,6 +88,11 @@ test('R18 cancelled, wrong-tab, wrong-field, and post-worker-restart grants do n
   assert.equal(cancel.cancelled, true)
   assert.deepEqual(await f.storage.getTask('repair-task'), original)
 
+  const cancelledReplacement = await beginReplacement(f)
+  const replaceCancel = await picked(f, cancelledReplacement, { cancelled: true, picks: [] })
+  assert.equal(replaceCancel.cancelled, true)
+  assert.deepEqual(await f.storage.getTask('repair-task'), original, 'cancelled new-metric replacement leaves the task byte-identical')
+
   const wrongTab = await begin(f)
   const rejected = await f.bg.handleMessage({
     type: f.messages.MSG.PICKED, taskId: 'repair-task', repairSessionId: wrongTab.enter.repairSessionId,
@@ -106,3 +112,83 @@ test('R18 cancelled, wrong-tab, wrong-field, and post-worker-restart grants do n
   assert.equal(replay.error, 'stale_field_repair')
   assert.deepEqual(await f.storage.getTask('repair-task'), original)
 })
+
+test('R18 different metric gets a new series, retires old active references, and keeps old history addressable', async t => {
+  const f = await setup(t)
+  const before = await f.storage.getTask('repair-task')
+  const siblingBefore = structuredClone(before.spec.fields[1])
+  const { appendRecord, setLastValues, getLastValues, getRecordsByDate } = f.storage
+  const date = '2026-09-23'
+  await appendRecord(date, { taskId: 'repair-task#f1', capturedAt: `${date}T09:00:00.000Z`, slot: `${date}T09:00`, value: 12, raw: '12', status: 'ok' })
+  await setLastValues({ 'repair-task#f1': { value: 12 }, 'repair-task#f2': { value: 8 } })
+  const layout = await import('../src/shared/layout-store.js?r18-layout=' + Math.random())
+  await layout.saveLayout({ version: 1, dashboards: [{ id: 'dash', name: 'Dash', cards: [
+    { id: 'old-series-card', type: 'line', source: [{ taskId: 'repair-task#f1' }] },
+    { id: 'sibling-card', type: 'line', source: [{ taskId: 'repair-task#f2' }] }
+  ] }] })
+
+  const grant = await beginReplacement(f)
+  const replacementPick = {
+    cell: { row: { index: 8, header: '商品 X' }, col: { index: 3, header: '新指標' } }
+  }
+  const result = await picked(f, grant, { picks: [replacementPick] })
+  assert.equal(result.ok, true)
+  assert.notEqual(result.fieldKey, 'f1')
+  assert.equal(result.repairMode, 'replace')
+  const after = await f.storage.getTask('repair-task')
+  assert.deepEqual(after.fields.map(field => field.key), [result.fieldKey, 'f2'])
+  assert.deepEqual(after.spec.fields[1], siblingBefore)
+  assert.equal(after.archivedFields[0].key, 'f1')
+  assert.equal(after.archivedFields[0].name, '現價')
+  assert.equal(after.alerts.some(alert => alert.field === 'f1'), false)
+  assert.equal(after.alerts.some(alert => alert.field === 'f2'), true)
+  assert.equal((await getLastValues())['repair-task#f1'], undefined)
+  assert.equal((await getLastValues())['repair-task#f2'].value, 8)
+  assert.deepEqual((await layout.getLayout()).dashboards[0].cards.map(card => card.id), ['sibling-card'])
+  assert.equal((await getRecordsByDate(date)).some(record => record.taskId === 'repair-task#f1'), true)
+
+  const { buildSeriesIndex } = await import('../src/shared/series-index.js?r18-index=' + Math.random())
+  const index = buildSeriesIndex([after])
+  assert.equal(index.seriesIds.includes('repair-task#f1'), false, 'archived history is excluded from active/dashboard sources')
+  assert.equal(index.historySeriesIds.includes('repair-task#f1'), true)
+  assert.equal(index.byId['repair-task#f1'].shortName, '現價')
+  assert.equal(index.byId['repair-task#f1'].archived, true)
+
+  const exporter = await import('../src/shared/export.js?r18-export=' + Math.random())
+  const exported = await exporter.buildExport({ from: date, to: date, format: 'json' })
+  assert.match(exported.content, /現價/)
+  assert.match(exported.content, /repair-task#f1/)
+  await f.storage.deleteRecord(date, 'repair-task#f1', `${date}T09:00:00.000Z`)
+  assert.equal((await getRecordsByDate(date)).some(record => record.taskId === 'repair-task#f1'), false)
+  const restored = await f.storage.importRecords(JSON.parse(exported.content))
+  assert.equal(restored.added, 1)
+  assert.equal((await getRecordsByDate(date)).some(record => record.taskId === 'repair-task#f1'), true)
+
+  const dom = new JSDOM('<table id="record-table"><thead></thead><tbody></tbody></table><div id="empty-state"></div>')
+  const previousDocument = globalThis.document
+  globalThis.document = dom.window.document
+  try {
+    const report = await import('../src/ui/report/report.js?r18-report=' + Math.random())
+    report.renderPivot([
+      { taskId: 'repair-task#f1', capturedAt: `${date}T09:00:00.000Z`, value: 12 },
+      { taskId: `repair-task#${result.fieldKey}`, capturedAt: `${date}T10:00:00.000Z`, value: 20 }
+    ], [after])
+    const headers = Array.from(document.querySelectorAll('#record-table thead th')).map(th => th.textContent)
+    assert.ok(headers.includes('多來源 · 現價'))
+    assert.ok(headers.some(header => header.includes('新指標')))
+  } finally {
+    globalThis.document = previousDocument
+    dom.window.close()
+  }
+})
+
+async function beginReplacement(f) {
+  const response = await f.bg.handleMessage({
+    type: f.messages.MSG.BEGIN_FIELD_REPAIR, taskId: 'repair-task', fieldKey: 'f1', repairMode: 'replace'
+  }, extensionSender)
+  assert.equal(response.ok, true)
+  const enter = f.chrome.__calls.filter(call => call.api === 'tabs.sendMessage')
+    .map(call => call.args[1]).reverse().find(message => message?.type === f.messages.MSG.ENTER_PICK)
+  assert.ok(enter)
+  return { response, enter, sender: { tab: { id: response.tabId, url: 'https://a.test/prices' }, frameId: 0, url: 'https://a.test/prices' } }
+}

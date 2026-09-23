@@ -54,9 +54,10 @@ export function buildSeriesIndex(tasks) {
   const parents = {}
   const childrenOf = {}
   const seriesIds = []
+  const historySeriesIds = []
 
   if (!Array.isArray(tasks)) {
-    return { byId, parents, childrenOf, seriesIds }
+    return { byId, parents, childrenOf, seriesIds, historySeriesIds }
   }
 
   for (const task of tasks) {
@@ -74,13 +75,13 @@ export function buildSeriesIndex(tasks) {
     parents[task.id] = task
 
     if (hasFields) {
+      const taskName = typeof task.name === 'string' ? task.name : ''
       for (const field of task.fields) {
         if (!field || typeof field.key !== 'string' || field.key === '') {
           continue
         }
         const sid = seriesIdOf(task.id, field.key)
         const fieldName = typeof field.name === 'string' ? field.name : ''
-        const taskName = typeof task.name === 'string' ? task.name : ''
         // 新 multi 的型別由唯一的 task-source 正規化契約提供；舊單值／舊
         // block fields 仍回傳 task.mode，確保既有 id/name/mode byte-compatible。
         const normalized = normalizedByKey.get(field.key)
@@ -94,7 +95,21 @@ export function buildSeriesIndex(tasks) {
           mode: fieldMode
         }
         seriesIds.push(sid)
+        historySeriesIds.push(sid)
         children.push(sid)
+      }
+      // Archived values remain addressable by their old series id for historical
+      // reports and exports, while staying out of active task/dashboard children.
+      for (const field of Array.isArray(task.archivedFields) ? task.archivedFields : []) {
+        if (!field || typeof field.key !== 'string' || field.key === '' || byId[seriesIdOf(task.id, field.key)]) continue
+        const sid = seriesIdOf(task.id, field.key)
+        const fieldName = typeof field.name === 'string' ? field.name : field.key
+        byId[sid] = {
+          id: sid, parentId: task.id, name: `${taskName} · ${fieldName}`,
+          shortName: fieldName, fieldKey: field.key, mode: field.mode || task.mode,
+          archived: true
+        }
+        historySeriesIds.push(sid)
       }
     } else {
       const taskName = typeof task.name === 'string' ? task.name : ''
@@ -107,13 +122,14 @@ export function buildSeriesIndex(tasks) {
         mode: task.mode
       }
       seriesIds.push(task.id)
+      historySeriesIds.push(task.id)
       children.push(task.id)
     }
 
     childrenOf[task.id] = children
   }
 
-  return { byId, parents, childrenOf, seriesIds }
+  return { byId, parents, childrenOf, seriesIds, historySeriesIds }
 }
 
 /**

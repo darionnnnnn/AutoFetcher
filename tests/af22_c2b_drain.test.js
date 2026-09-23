@@ -52,6 +52,57 @@ test('C2b set-active 等慢 frame drain／PICKED ACK，再以最新 revision 切
   assert.equal(result.draft.revision, lateAck.draft.revision + 1)
 })
 
+test('C2b first group can become active before any page frame has joined the session', async t => {
+  resetChromeMock()
+  const chrome = installChromeMock()
+  const tab = await chrome.tabs.create({ url: tabUrl })
+  chrome.__setScriptResponder(() => [])
+  const messages = await import('../src/shared/messages.js?first=' + Math.random())
+  const bg = await import('../src/background/main.js?first=' + Math.random())
+  t.after(() => resetChromeMock())
+  const sessionId = `first-group-${Math.random()}`
+  const begun = await bg.handleMessage({
+    type: messages.MSG.PICK_DRAFT_BEGIN, tabId: tab.id, sessionId,
+    documentGeneration: 'document-first', routeIdentity: 'route-first',
+    activeGroupKey: null, groups: [], stage: 'empty', form: {}
+  }, extensionSender)
+  assert.equal(begun.ok, true)
+  const op = (draft, operation) => ({
+    type: messages.MSG.PICK_DRAFT_OPERATION, tabId: tab.id, sessionId,
+    expectedRevision: draft.revision, operationId: `first-${Math.random()}`,
+    documentGeneration: 'document-first', routeIdentity: 'route-first', operation
+  })
+  const group = { key: 'first-group', name: '', values: [] }
+  const created = await bg.handleMessage(op(begun.draft, { type: 'create-group', group }), extensionSender)
+  assert.equal(created.ok, true)
+  const activated = await bg.handleMessage(op(created.draft, { type: 'set-active', groupKey: group.key }), extensionSender)
+  assert.equal(activated.ok, true)
+  assert.equal(activated.draft.activeGroupKey, group.key)
+})
+
+test('D1a ENTER_PICK allows only the matching active group draft through a new batch panel ctx', async t => {
+  const f = await fixture(t)
+  const { setPanelCtx } = await import('../src/shared/storage.js?enter-pick=' + Math.random())
+  const draft = {
+    sessionId: f.sessionId, tabId: f.tab.id, activeGroupKey: 'g1',
+    groups: [{ key: 'g1', name: '第一組', values: [] }]
+  }
+  await setPanelCtx(f.tab.id, { kind: 'new', batch: true, pickDraft: draft })
+  const enter = async (tabId, sessionId, groupKey) => f.bg.handleMessage({
+    type: f.messages.MSG.ENTER_PICK, purpose: 'task', batch: true, tabId,
+    sessionId, groupKey, documentGeneration: 'document-1', routeIdentity: 'route-1'
+  }, extensionSender)
+  const allowed = await enter(f.tab.id, f.sessionId, 'g1')
+  assert.equal(allowed.ok, true)
+  const wrongGroup = await enter(f.tab.id, f.sessionId, 'g2')
+  assert.equal(wrongGroup.ok, false)
+  assert.equal(wrongGroup.error, 'pick_entry_blocked')
+  const ordinaryTab = await f.chrome.tabs.create({ url: tabUrl })
+  await setPanelCtx(ordinaryTab.id, { kind: 'new', batch: true })
+  const missingDraft = await enter(ordinaryTab.id, f.sessionId, 'g1')
+  assert.equal(missingDraft.ok, false, 'ordinary unfinished single/batch forms do not inherit the bypass')
+})
+
 test('C2b frame 失聯與相同 URL 歧義都拒絕切組並保留草稿', async t => {
   const missing = await fixture(t)
   let draft = (await missing.pick('g1', '#one')).draft
