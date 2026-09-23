@@ -101,7 +101,7 @@ try {
   await report.mouse.click(openBox.x + openBox.width / 2, openBox.y + openBox.height / 2)
   await new Promise(resolveWait => setTimeout(resolveWait, 1000))
   console.log('[debug] side panel open result', await report.$eval('#open-real-side-panel', el => ({ opened: el.dataset.opened, error: el.dataset.error })))
-  const pickerTarget = await bounded('real side panel target', async () => {
+  let pickerTarget = await bounded('real side panel target', async () => {
     const end = Date.now() + 12000
     while (Date.now() < end) {
       const found = browser.targets().find(t => t.url().includes('/ui/picker/picker.html'))
@@ -111,10 +111,32 @@ try {
     throw new Error(`side panel picker target missing: ${JSON.stringify(browser.targets().map(t => ({ type: t.type(), url: t.url() })))}`)
   })
   console.log('[debug] picker target type', pickerTarget.type(), pickerTarget.url())
-  const pickerCdp = await pickerTarget.createCDPSession()
+  let pickerCdp = await pickerTarget.createCDPSession()
   await pickerCdp.send('Runtime.enable')
+  const refreshPickerTarget = async (preferEdit = false) => {
+    const candidates = browser.targets().filter(t => t.url().includes('/ui/picker/picker.html'))
+    let current = null
+    for (const candidate of candidates) {
+      let probe
+      try {
+        const session = await candidate.createCDPSession()
+        await session.send('Runtime.enable')
+        const result = await session.send('Runtime.evaluate', { expression: `(() => ({ fields: document.querySelectorAll('#field-list [data-field-row]').length, batchVisible: Boolean(document.querySelector('#batch-section') && !document.querySelector('#batch-section').hidden), groupVisible: Boolean(document.querySelector('#group-draft-section') && !document.querySelector('#group-draft-section').hidden), url: location.href }))()`, returnByValue: true })
+        probe = result.result?.value
+        await session.detach()
+      } catch {}
+      if (preferEdit ? probe?.fields >= 2 : probe) { current = candidate; break }
+    }
+    if (!current || current === pickerTarget) return
+    try { await pickerCdp.detach() } catch {}
+    pickerTarget = current
+    pickerCdp = await pickerTarget.createCDPSession()
+    await pickerCdp.send('Runtime.enable')
+    console.log('[debug] rebound picker target', pickerTarget.type(), pickerTarget.url())
+  }
   const picker = {
     async evaluate(fn, ...args) {
+      await refreshPickerTarget()
       const expression = `(${fn.toString()})(...${JSON.stringify(args)})`
       const result = await pickerCdp.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true, userGesture: true })
       if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text)
@@ -148,7 +170,7 @@ try {
   await new Promise(resolveWait => setTimeout(resolveWait, 700))
   const firstGroupState = await picker.evaluate(async id => {
     const result = await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id })
-    return { groups: document.querySelectorAll('[data-group-row]').length, editorHidden: document.querySelector('#group-name-editor')?.hidden, status: document.querySelector('#group-draft-status')?.textContent, activeGroupKey: result?.draft?.activeGroupKey, stage: result?.draft?.stage }
+    return { groups: document.querySelectorAll('[data-group-row]').length, editorHidden: document.querySelector('#group-name-editor')?.hidden, status: document.querySelector('#group-draft-status')?.textContent, activeGroupKey: result?.draft?.activeGroupKey, sessionId: result?.draft?.sessionId, stage: result?.draft?.stage }
   }, tabId)
   console.log('[checkpoint detail] first group state', firstGroupState)
   if (!firstGroupState.activeGroupKey || firstGroupState.editorHidden) {
@@ -201,6 +223,7 @@ try {
   // The frame is deliberately cross-origin (different port); record a gap if
   // content injection/overlay cannot safely reach it in the current build.
   let framePicked = false
+  let frameCommitted = false
   let crossOriginFrame = null
   try {
     crossOriginFrame = target.frames().find(f => f.url().includes(`:${framePort}/frame`))
@@ -212,6 +235,25 @@ try {
     await crossOriginFrame.waitForSelector('[data-af-overlay] [data-af-done]', { timeout: 10000 })
     await clickFrameTarget(target, crossOriginFrame, '[data-af-done]')
     ck('cross-origin frame selection finished')
+    const end = Date.now() + 8000
+    let frameValues = []
+    while (Date.now() < end && !frameCommitted) {
+      frameValues = await picker.evaluate(async id => {
+        const draft = (await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id }))?.draft
+        const group = draft?.groups?.find(item => item.key === draft.activeGroupKey)
+        return (group?.values || []).map(value => ({
+          key: value.key,
+          name: value.name,
+          source: value.source,
+          frameUrl: value.source?.frame?.url || value.frame?.url || value.frameUrl || ''
+        }))
+      }, tabId)
+      frameCommitted = frameValues.some(value => value.frameUrl.includes(`:${framePort}/frame`))
+      if (!frameCommitted) await new Promise(resolveWait => setTimeout(resolveWait, 150))
+    }
+    console.log('[checkpoint detail] canonical cross-origin values', JSON.stringify(frameValues, null, 2))
+    if (frameCommitted) ck('cross-origin frame source is present in canonical draft')
+    else console.log('[gap] frame click and Done completed, but no frame URL was committed to the canonical group')
   }
   if (await target.$('[data-af-done]')) await clickSelector(target, '[data-af-done]')
   await picker.waitForFunction(() => document.querySelectorAll('[data-group-row]').length === 1, { timeout: 15000 })
@@ -346,14 +388,182 @@ try {
   }
   const persisted = await report.evaluate(async id => {
     const tasks = (await chrome.storage.local.get('tasks')).tasks || []
-    return tasks.filter(task => task.id).map(task => ({ id: task.id, name: task.name, fields: task.fields?.map(field => ({ key: field.key, name: field.name })) }))
+    return tasks.filter(task => task.id).map(task => ({ id: task.id, name: task.name, mode: task.mode, fields: task.fields?.map(field => ({ key: field.key, name: field.name })), specFields: task.spec?.fields || [] }))
   }, tabId)
   if (!persisted.some(task => task.name === 'Manual First Group') || !persisted.some(task => task.name === 'Second Group Picked Name')) {
     throw new Error(`save did not persist both group tasks: ${JSON.stringify(persisted)}`)
   }
   ck('save and first run persisted both named tasks')
-  console.log('[gap] reopen edit/reselect/history-key checkpoint remains for a separate pass')
-  console.log(JSON.stringify({ browser: CHROME, tabId, framePicked, groups: await picker.evaluate(() => document.querySelectorAll('[data-group-row]').length), partialResults, fullResults, savedTasks: persisted, status: 'PARTIAL_G1' }, null, 2))
+
+  const firstTask = persisted.find(task => task.name === 'Manual First Group')
+  if (!firstTask || firstTask.fields.length < 2 || firstTask.mode !== 'multi') throw new Error(`saved task is not a multi-value task: ${JSON.stringify(firstTask)}`)
+  const beforeEdit = await report.evaluate(async taskId => {
+    const storage = await import(chrome.runtime.getURL('shared/storage.js'))
+    const dates = await storage.listDates()
+    const records = (await Promise.all(dates.map(date => storage.getRecordsByDate(date)))).flat()
+    return { task: await storage.getTask(taskId), dates, records: records.filter(record => record.taskId.startsWith(`${taskId}#`)).map(record => ({ taskId: record.taskId, capturedAt: record.capturedAt, value: record.value })) }
+  }, firstTask.id)
+  if (!beforeEdit.records.length) throw new Error('first-run produced no field-addressed history records')
+  const fieldKey = firstTask.fields[0].key
+  const oldSeriesId = `${firstTask.id}#${fieldKey}`
+  const oldSeriesRecords = beforeEdit.records.filter(record => record.taskId === oldSeriesId)
+  if (!oldSeriesRecords.length) throw new Error(`history missing original field series ${oldSeriesId}`)
+  ck('first-run history exists under taskId#fieldKey')
+
+  await report.bringToFront()
+  await report.evaluate(() => document.querySelector('#tab-tasks')?.click())
+  await report.waitForSelector(`#task-list [data-task-id="${firstTask.id}"] [data-action="edit"]`, { timeout: 15000 })
+  await report.evaluate(taskId => document.querySelector(`#task-list [data-task-id="${CSS.escape(taskId)}"] [data-action="edit"]`)?.click(), firstTask.id)
+  const editTarget = await bounded('picker editor target', async () => {
+    const end = Date.now() + 12000
+    while (Date.now() < end) {
+      const candidates = browser.targets().filter(t => t.url().includes('/ui/picker/picker.html'))
+      for (const candidate of candidates) {
+        const session = await candidate.createCDPSession()
+        await session.send('Runtime.enable')
+        const result = await session.send('Runtime.evaluate', { expression: `(() => ({ fields: document.querySelectorAll('#field-list [data-field-row]').length, batchVisible: Boolean(document.querySelector('#batch-section') && !document.querySelector('#batch-section').hidden), url: location.href }))()`, returnByValue: true })
+        await session.detach()
+        if (result.result?.value?.fields >= 2) return candidate
+      }
+      await new Promise(resolveWait => setTimeout(resolveWait, 150))
+    }
+    throw new Error(`picker edit target missing; targets=${JSON.stringify(browser.targets().filter(t => t.url().includes('/ui/picker/picker.html')).map(t => ({ type: t.type(), url: t.url() })))}`)
+  }, 13000)
+  if (editTarget !== pickerTarget) {
+    try { await pickerCdp.detach() } catch {}
+    pickerTarget = editTarget
+    pickerCdp = await pickerTarget.createCDPSession()
+    await pickerCdp.send('Runtime.enable')
+  }
+  console.log('[diagnostic] picker after task edit click', await picker.evaluate(() => ({ rows: document.querySelectorAll('#field-list [data-field-row]').length, batchHidden: document.querySelector('#batch-section')?.hidden, groupHidden: document.querySelector('#group-draft-section')?.hidden, title: document.title })))
+  await picker.waitForFunction(() => document.querySelectorAll('#field-list [data-field-row]').length >= 2, { timeout: 20000 })
+  ck('reopened saved multi task for editing')
+  const editRows = await picker.evaluate(() => [...document.querySelectorAll('#field-list [data-field-row]')].map(row => ({
+    key: row.dataset.fieldKey,
+    name: row.querySelector('[data-field-name]')?.value,
+    source: row._source,
+    spec: row._spec
+  })))
+  const editField = editRows.find(row => row.key === fieldKey)
+  if (!editField) throw new Error(`reopened task lost original field key ${fieldKey}`)
+  const repairButton = await picker.$(`[data-field-row][data-field-key="${fieldKey}"] [data-field-repair]`)
+  if (!repairButton) throw new Error('reopened multi field is missing the same-metric repair action')
+  await repairButton.click()
+  const repairPage = await bounded('repair page opens', async () => {
+    const end = Date.now() + 15000
+    while (Date.now() < end) {
+      const page = (await browser.pages()).find(candidate => candidate !== target && candidate !== report && candidate.url().includes(`:${mainPort}/`))
+      if (page) return page
+      await new Promise(resolveWait => setTimeout(resolveWait, 100))
+    }
+    throw new Error('field repair did not open its source tab')
+  }, 16000)
+  await repairPage.waitForSelector('[data-af-overlay] [data-af-done]', { timeout: 15000 })
+  await clickTarget(repairPage, '#price-a')
+  await clickSelector(repairPage, '[data-af-done]')
+  await bounded('repair tab closes after accepted pick', async () => {
+    const end = Date.now() + 12000
+    while (Date.now() < end) {
+      if (!(await browser.pages()).includes(repairPage)) return true
+      await new Promise(resolveWait => setTimeout(resolveWait, 100))
+    }
+    throw new Error('same-metric repair tab stayed open; the pick was not accepted')
+  }, 13000)
+  await bounded('same-metric repair applied', async () => {
+    const end = Date.now() + 15000
+    while (Date.now() < end) {
+      const current = await report.evaluate(async taskId => {
+        const tasks = (await chrome.storage.local.get('tasks')).tasks || []
+        return tasks.find(item => item.id === taskId)?.spec?.fields?.map(field => field.key) || []
+      }, firstTask.id)
+      if (current.includes(fieldKey)) return true
+      await new Promise(resolveWait => setTimeout(resolveWait, 200))
+    }
+    throw new Error('same-metric repair did not update task storage before timeout')
+  }, 16000)
+  const afterRepair = await report.evaluate(async taskId => {
+    const storage = await import(chrome.runtime.getURL('shared/storage.js'))
+    const task = await storage.getTask(taskId)
+    const records = (await Promise.all((await storage.listDates()).map(date => storage.getRecordsByDate(date)))).flat()
+    return { task, records: records.filter(record => record.taskId === `${taskId}#${task.fields[0].key}`).map(record => ({ taskId: record.taskId, capturedAt: record.capturedAt, value: record.value })) }
+  }, firstTask.id)
+  if (!afterRepair.task.fields.some(field => field.key === fieldKey)) throw new Error('same-metric reselect changed the field key')
+  if (afterRepair.records.length < oldSeriesRecords.length) throw new Error('same-metric reselect removed history from the original field series')
+  ck('same-metric reselect preserved field key and history')
+
+  await picker.evaluate(() => { window.confirm = () => true })
+  const replaceButton = await picker.$(`[data-field-row][data-field-key="${fieldKey}"] [data-field-replace]`)
+  if (!replaceButton) throw new Error('reopened multi field is missing the different-metric action')
+  await replaceButton.click()
+  const replacementPage = await bounded('replacement page opens', async () => {
+    const end = Date.now() + 15000
+    while (Date.now() < end) {
+      const page = (await browser.pages()).find(candidate => candidate !== target && candidate !== report && candidate.url().includes(`:${mainPort}/`))
+      if (page) return page
+      await new Promise(resolveWait => setTimeout(resolveWait, 100))
+    }
+    throw new Error('different-metric replacement did not open its source tab')
+  }, 16000)
+  await replacementPage.waitForSelector('[data-af-overlay] [data-af-done]', { timeout: 15000 })
+  await clickTarget(replacementPage, '#price-b')
+  await clickSelector(replacementPage, '[data-af-done]')
+  await bounded('replacement task key changes', async () => {
+    const end = Date.now() + 15000
+    while (Date.now() < end) {
+      const keys = await report.evaluate(async taskId => {
+        const tasks = (await chrome.storage.local.get('tasks')).tasks || []
+        return tasks.find(item => item.id === taskId)?.fields?.map(field => field.key) || []
+      }, firstTask.id)
+      if (keys.some(key => key !== fieldKey)) return true
+      await new Promise(resolveWait => setTimeout(resolveWait, 150))
+    }
+    throw new Error('different-metric replacement did not allocate a new field key')
+  }, 16000)
+  await bounded('replacement tab closes after accepted pick', async () => {
+    const end = Date.now() + 12000
+    while (Date.now() < end) {
+      if (!(await browser.pages()).includes(replacementPage)) return true
+      await new Promise(resolveWait => setTimeout(resolveWait, 100))
+    }
+    throw new Error('different-metric replacement tab stayed open; the pick was not accepted')
+  }, 13000)
+  const afterReplace = await report.evaluate(async taskId => {
+    const storage = await import(chrome.runtime.getURL('shared/storage.js'))
+    const task = await storage.getTask(taskId)
+    const records = (await Promise.all((await storage.listDates()).map(date => storage.getRecordsByDate(date)))).flat()
+    return { task, records: records.filter(record => record.taskId.startsWith(`${taskId}#`)).map(record => record.taskId) }
+  }, firstTask.id)
+  const newField = afterReplace.task.fields.find(field => field.key !== fieldKey)
+  if (!newField || !afterReplace.task.archivedFields?.some(field => field.key === fieldKey)) throw new Error('replacement did not archive the prior metric/key')
+  if (!afterReplace.records.includes(oldSeriesId)) throw new Error('different-metric replacement deleted the original history series')
+  ck(`different metric created new key ${newField.key} and retained old history`)
+
+  const newTab = await report.evaluate(async url => {
+    const tab = await chrome.tabs.create({ url, active: true })
+    await chrome.storage.session.set({ [`panel:${tab.id}`]: { kind: 'new', batch: true, tabId: tab.id, url } })
+    await chrome.sidePanel.setOptions({ tabId: tab.id, path: 'ui/picker/picker.html', enabled: true })
+    const button = document.createElement('button')
+    button.id = 'open-second-round-panel'
+    button.onclick = async () => { try { await chrome.sidePanel.open({ tabId: tab.id }); button.dataset.opened = 'true' } catch (error) { button.dataset.error = String(error) } }
+    document.body.append(button)
+    await chrome.tabs.update(tab.id, { active: true })
+    return { id: tab.id, url }
+  }, `http://127.0.0.1:${mainPort}/`)
+  await clickPanel({ evaluate: (...args) => report.evaluate(...args) }, '#open-second-round-panel')
+  await picker.waitForFunction(() => document.querySelector('#group-start-first') && !document.querySelector('#group-start-first').hidden, { timeout: 20000 })
+  const freshDraft = await picker.evaluate(async id => (await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id }))?.draft, newTab.id)
+  if (!freshDraft || freshDraft.sessionId === firstGroupState.sessionId || freshDraft.groups.length !== 0) throw new Error('second round inherited old picker draft groups')
+  const crossTab = await picker.evaluate(async ({ id, oldSession }) => {
+    const response = await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_OPERATION', tabId: id, sessionId: oldSession, operationId: `g1-cross-tab-${Date.now()}`, expectedRevision: 0, operation: { type: 'create-group', group: { key: 'cross-tab-probe', name: 'wrong page', values: [] } } })
+    const after = await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id })
+    return { response, groups: after?.draft?.groups }
+  }, { id: newTab.id, oldSession: firstGroupState.sessionId })
+  console.log('[diagnostic] wrong-session cross-tab restore', crossTab)
+  if (crossTab.response?.ok === true || crossTab.groups?.length !== 0) throw new Error('wrong-session cross-tab message mutated the fresh draft')
+  ck('second round starts empty and rejects a wrong-session cross-tab write')
+
+  if (!frameCommitted) throw new Error('cross-origin frame click was not committed to the canonical draft')
+  console.log(JSON.stringify({ browser: CHROME, tabId, framePicked, frameCommitted, groups: await picker.evaluate(() => document.querySelectorAll('[data-group-row]').length), partialResults, fullResults, savedTasks: persisted, repairedFieldKey: fieldKey, retainedSeriesRecords: afterRepair.records.length, secondRoundSessionId: freshDraft.sessionId, status: 'PARTIAL_G1' }, null, 2))
 } catch (error) {
   console.error(`FAIL G1 checkpoint: ${error?.stack || error}`)
   process.exitCode = 1
