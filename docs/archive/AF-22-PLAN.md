@@ -365,7 +365,7 @@
 
 | ID | 補強契約 | 歸屬與客觀驗收 |
 |---|---|---|
-| R01 | 「同頁」分開辨識分頁、文件世代、SPA 路由／資料集、頁面互動狀態；不能只用 tabId 或 origin+pathname 認定同一批資料。網址 query/hash 變化不一律當新頁，也不一律忽略。頁面主要資料變更先暫停選取並重新核對，保留草稿。 | C1/C2；同 tab、同 URL frame 導覽後的延遲回報不得套用；query 改商品與只改追蹤參數各有測例。沿用 sameOriginPath 原用途，不全專案改其定義。 |
+| R01 | 「同頁」分開辨識分頁、文件世代、SPA 路由／資料集、頁面互動狀態；不能只用 tabId 或 origin+pathname 認定同一批資料。網址 query/hash 變化不一律當新頁，也不一律忽略。只有明列的追蹤 query（`utm_*`、`gclid`、`dclid`、`gbraid`、`wbraid`、`fbclid`、`msclkid`、`mc_cid`、`mc_eid`、`_ga`、`_gl`）增刪或重排可沿用草稿；其他 query 與所有 hash 變化保守暫停選取、保留草稿並要求重新核對。 | C1/C2；同 tab、同 URL frame 導覽後的延遲回報不得套用；追蹤 query 增刪／重排、商品 query 與 hash 變更均有測例。沿用 sameOriginPath 原用途，不全專案改其定義。 |
 | R02 | 群組清單名稱旁一直顯示「目前選入此組」；切組需停止舊手勢並等選取端確認作用組，再接受新加值。已選錯組可用「移到群組」一次移動所選值；目標已有同值先提示合併，不靜默遺失設定。 | C1/D2；按住拖曳途中切組、慢 frame 收到舊指令、移值前後 key 與 Undo 均驗。只限未存草稿移動；已存任務搬值涉及歷史，不新增此功能。 |
 | R03 | 完成送出必須先取得最後一筆名稱／選值變更的確認版本，再凍結草稿快照；未收到確認只提示「正在同步」，不能送舊清單。傳送採操作身分去重、可重送與確認；toggle 指令不得因重送切回原狀。 | C1/F1；最後一次點值立刻完成、最後一字未 blur、ACK 丟失與兩 frame 同 revision 操作都無遺漏／重複；不能把所有舊 revision 一概丟掉而吞合法操作。 |
 | R04 | 取名需有 hover 文字預覽與取用範圍，讀文字型 input／textarea 的可見值；password 欄位不取值。點頁面文字一次回填可編輯，不自動存 HTML，不以現有 nameHint 的 20 字截斷使用者名稱。長名畫面省略但完整值可查看；空白只修剪頭尾，不誤刪含冒號等合法名稱。 | D1；輸入框、巢狀標籤、emoji、長名、換行、空內容、密碼欄、取消取名、IME 與安全 textContent 的測例。名稱長度界線如需限制於 B1/D1 公告，超限明確說明。 |
@@ -441,7 +441,16 @@ D01 額外的可行性邊界：現有動作為 click／hover／wait／waitFor，
 - R15 的最壞容量案例 100 次切組中位 ACK 約 1321ms，仍可能讓人感到慢；CDP 分段探針逾時，未能分離 drain、session 寫入與回傳成本。孤立 world 的內部快取數量亦無法直接觀察；Node 同站佇列數字不冒充真實 Chrome 基線。後續若優化，需維持 durable draft、revision 與 ACK 的契約並另做可比較量測。
 - 不接觸或備份使用者實際瀏覽器資料；發布前需由使用者按 SPEC 的設定與歷史雙份匯出流程自行備份並驗檔。舊二進位拒收 schema 4 已在隔離 profile 實測，但不等於舊版可安全共用升級後的 local storage。
 
+## 結案後逐項核對補正（2026-09-23）
+
+以下補正保留上方歷史交接與當時驗收記錄；這些項目是結案後針對規格宣稱再核對發現的缺口。本輪文件已同步實作行為。基線定向測試 77/77 通過；修正後主代理全套 `npm test` 3199/3199 通過，A1 Chrome for Testing 煙霧通過。最新 Chrome for Testing G1 第二輪以 `G1_SECOND_ROUND_VERIFIED` 通過端到端流程；跨網域 iframe overlay 在環境中不可用，該子能力仍明確未驗證。主代理獨立重跑亦以 `G1_SECOND_ROUND_VERIFIED` 通過。
+
+- **F1 共用前置動作草稿**：原完成記錄未涵蓋面板文件重載後完整還原共用前置動作列。實作已補 `snapshotForm`／`restoreDraft` 保存與恢復完整列，並在進入頁面選取前等待草稿保存；保存失敗會停止並提示。文件修正：SPEC §2 批次表單草稿說明。定向測試：`z7`／`o7`／`q3` 30/30、`a4`+`b3` 25/25、`af22_c2b_drain` 22/22；其後主代理 `npm test` 3199/3199 通過。
+- **PICKED 回覆競態**：Picker 的前置動作 message listener 原先對其他 `PICKED` 非同步回傳 `Promise<undefined>`，可能搶先被 content 當作 ACK，早於 background 持久化群組草稿。現由 listener 只接收 `purpose:'preaction'` 並對其他訊息同步回 `false`；前置動作更新完成後再保存表單草稿。SPEC §2 已補回覆通道契約；修正後主代理全套 `npm test` 3199/3199 通過，A1 CfT smoke 通過。
+- **R04 從頁面取名稱**：原完成記錄未充分描述 hover 文字範圍／預覽、password 欄遮蔽與長文預覽截短但點擊取全文。文件修正：SPEC §2 AF-22 群組命名流程。定向測試：`z7`／`o7`／`q3` 30/30、`a4`+`b3` 25/25、`af22_c2b_drain` 22/22；其後主代理 `npm test` 3199/3199 通過。
+- **R01 路由判定與同 URL SPA 來源有效性**：原規格容易被讀成 query 一概忽略，亦未定義 hash；另須明定路由相同不取代已選 DOM 節點／所屬表格連接狀態核驗，SPA 替換來源時保留草稿並要求重選。修正後僅忽略明確 tracking 參數（`utm_*`、`gclid`、`dclid`、`gbraid`、`wbraid`、`fbclid`、`msclkid`、`mc_cid`、`mc_eid`、`_ga`、`_gl`），其他 query/hash 差異保守暫停選取並要求重新核對。`document`／`session` gate 不放寬。文件修正：SPEC §2／§3 路由說明。定向測試：`z7`／`o7`／`q3` 30/30、`a4`+`b3` 25/25、`af22_c2b_drain` 22/22；其後主代理 `npm test` 3199/3199 通過。
+
 ## 終檢輪（2026-09-23）
 
 - `r22` 以無衝突 merge commit 併入 `dev`；合併後主代理重跑 `npm test`，**3185/3185 通過**、失敗 0。
-- 實作前後的獨立程式／文件終檢、真實瀏覽器 A1／G1、六類突變還原、舊版相容與容量量測已逐項記於上方；目前沒有未完成的本輪規劃項目。實際使用者資料備份屬發布前操作，不在隔離驗收中代做。
+- 實作前後的獨立程式／文件終檢、真實瀏覽器 A1／G1、六類突變還原、舊版相容與容量量測已逐項記於上方。結案後補正的定向測試 77/77 通過；其後 listener ACK race 修正後主代理 `npm test` 3199/3199 通過，A1 Chrome for Testing 煙霧通過。G1 第二輪 CfT 煙霧以 `G1_SECOND_ROUND_VERIFIED` 通過端到端流程，涵蓋完成屏障、共用設定、儲存、首次抓取、編輯與歷史；測試環境無法提供跨網域 iframe overlay，該子能力明確未驗證。主代理獨立重跑亦以 `G1_SECOND_ROUND_VERIFIED` 通過。實際使用者資料備份屬發布前操作，不在隔離驗收中代做。

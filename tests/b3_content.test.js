@@ -145,3 +145,85 @@ test('content script 不得自行排程或寫 storage', async () => {
   assert.equal(apis.filter(a => a.startsWith('alarms.')).length, 0)
   assert.equal(apis.filter(a => a.startsWith('storage.')).length, 0)
 })
+
+test('群組取名 hover 預覽可見文字與文字欄位，離開/取消清理且點擊只回填同一文字', async () => {
+  const { c, doc, win } = await setup('<div id="nested">外層 <span id="leaf">標題 😀</span></div><textarea id="note">欄位文字</textarea><input id="secret" type="password" value="不應顯示">')
+  const pick = { type: 'PICK_GROUP_NAME', requestId: 'r1', sessionId: 's1', groupKey: 'g1' }
+  await c.__emitMessage(pick)
+  const nested = doc.getElementById('nested')
+  const leaf = doc.getElementById('leaf')
+  const hover = (el, type = 'mouseover', relatedTarget = null) => {
+    const event = new win.MouseEvent(type, { bubbles: true, cancelable: true, clientX: 100, clientY: 80, relatedTarget })
+    el.dispatchEvent(event)
+    return event
+  }
+  const rects = () => [{ width: 100, height: 20 }]
+  leaf.getClientRects = rects
+  hover(leaf)
+  let overlay = doc.querySelector('[data-af-overlay="group-name-preview"]')
+  assert.ok(overlay)
+  assert.equal(overlay.shadowRoot.querySelector('.label').textContent, '可取用範圍：此元素及其子元素的文字')
+  assert.equal(overlay.shadowRoot.querySelector('.value').textContent, '標題 😀')
+  assert.match(overlay.shadowRoot.querySelector('.note').textContent, /只回填群組名稱/)
+
+  const textarea = doc.getElementById('note')
+  textarea.getClientRects = rects
+  hover(textarea, 'mousemove')
+  assert.equal(overlay.shadowRoot.querySelector('.label').textContent, '可取用範圍：此欄位的文字')
+  assert.equal(overlay.shadowRoot.querySelector('.value').textContent, '欄位文字')
+  hover(textarea, 'mouseout', null)
+  assert.equal(overlay.style.display, 'none', '游標離開時預覽隱藏')
+  hover(leaf)
+  assert.equal(overlay.style.display, 'block')
+
+  let pageClick = false
+  doc.addEventListener('click', () => { pageClick = true })
+  const click = new win.MouseEvent('click', { bubbles: true, cancelable: true })
+  leaf.dispatchEvent(click)
+  assert.equal(click.defaultPrevented, true)
+  assert.equal(pageClick, false, '選名稱不執行頁面 click 動作')
+  const result = c.__calls.find(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICK_GROUP_NAME_RESULT')
+  assert.equal(result.args[0].text, '標題 😀')
+  assert.equal(doc.querySelector('[data-af-overlay="group-name-preview"]'), null, '點擊後 overlay 清理')
+  assert.equal(c.__calls.some(call => ['PICKED', 'ENTER_PICK'].includes(call.args[0]?.type)), false)
+
+  await c.__emitMessage({ ...pick, requestId: 'r-long' })
+  const longText = '界😀'.repeat(400)
+  const long = doc.createElement('div')
+  long.textContent = longText
+  doc.body.appendChild(long)
+  hover(long)
+  overlay = doc.querySelector('[data-af-overlay="group-name-preview"]')
+  assert.match(overlay.shadowRoot.querySelector('.value').textContent, /預覽已截短/)
+  assert.ok(overlay.shadowRoot.querySelector('.value').textContent.startsWith(longText.slice(0, 500)))
+  long.dispatchEvent(new win.MouseEvent('click', { bubbles: true, cancelable: true }))
+  const longResult = c.__calls.filter(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICK_GROUP_NAME_RESULT').at(-1)
+  assert.equal(longResult.args[0].text, longText, '截短僅用於預覽，回填仍取完整文字')
+
+  await c.__emitMessage({ ...pick, requestId: 'r-empty' })
+  const empty = doc.createElement('div')
+  doc.body.appendChild(empty)
+  hover(empty)
+  overlay = doc.querySelector('[data-af-overlay="group-name-preview"]')
+  assert.equal(overlay.shadowRoot.querySelector('.value').textContent, '（空白）')
+  empty.dispatchEvent(new win.MouseEvent('click', { bubbles: true, cancelable: true }))
+  const emptyResult = c.__calls.filter(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICK_GROUP_NAME_RESULT').at(-1)
+  assert.equal(emptyResult.args[0].text, '')
+
+  await c.__emitMessage({ ...pick, requestId: 'r2' })
+  const secret = doc.getElementById('secret')
+  secret.getClientRects = rects
+  hover(secret)
+  overlay = doc.querySelector('[data-af-overlay="group-name-preview"]')
+  assert.equal(overlay.style.display, 'none')
+  assert.doesNotMatch(overlay.shadowRoot.textContent, /不應顯示/)
+  secret.dispatchEvent(new win.MouseEvent('click', { bubbles: true, cancelable: true }))
+  const passwordResult = c.__calls.filter(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICK_GROUP_NAME_RESULT').at(-1)
+  assert.equal(passwordResult.args[0].text, '')
+  assert.equal(doc.querySelector('[data-af-overlay="group-name-preview"]'), null)
+
+  await c.__emitMessage({ ...pick, requestId: 'r3' })
+  assert.ok(doc.querySelector('[data-af-overlay="group-name-preview"]'))
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+  assert.equal(doc.querySelector('[data-af-overlay="group-name-preview"]'), null, 'Escape 取消時清理')
+})

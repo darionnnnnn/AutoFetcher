@@ -2,10 +2,19 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { JSDOM } from 'jsdom'
 import { installChromeMock, resetChromeMock } from './chrome-mock.js'
+import { sameRouteIgnoringTracking } from '../src/shared/route.js'
 
 const extensionSender = { url: 'chrome-extension://autofetcher/ui/picker/picker.html' }
 const tabUrl = 'https://a.test/page'
 const frameUrl = 'https://a.test/frame'
+
+test('R01 shared route helper ignores only tracking query keys', () => {
+  const base = 'https://user:secret@a.test/catalog?item=one&sort=asc&utm_source=mail'
+  assert.equal(sameRouteIgnoringTracking(base, 'https://user:secret@a.test/catalog?item=one&sort=asc&utm_source=other'), true)
+  assert.equal(sameRouteIgnoringTracking(base, 'https://other:secret@a.test/catalog?item=one&sort=asc&utm_source=mail'), false)
+  assert.equal(sameRouteIgnoringTracking(base, 'https://user:changed@a.test/catalog?item=one&sort=asc&utm_source=mail'), false)
+  assert.equal(sameRouteIgnoringTracking(base, 'https://user:secret@a.test/catalog?sort=asc&item=one&utm_source=mail'), false)
+})
 
 async function fixture(t, frames = [{ frameId: 4, result: frameUrl }, { frameId: 0, result: tabUrl }], routeIdentity = 'route-1') {
   resetChromeMock()
@@ -39,7 +48,7 @@ test('C2b set-active 等慢 frame drain／PICKED ACK，再以最新 revision 切
   const first = await f.pick('g1', '#first')
   let releaseDrain
   f.chrome.__setTabResponder((_tab, message, options) => message.type === 'PICK_DRAIN'
-    ? (options?.frameId === 4 ? new Promise(resolve => { releaseDrain = () => resolve({ ok: true, drained: true }) }) : { ok: true, drained: true })
+    ? (options?.frameId === 4 && !message.validateSources && !message.resume ? new Promise(resolve => { releaseDrain = () => resolve({ ok: true, drained: true }) }) : { ok: true, drained: true, validatedSources: message.expectedSources?.length })
     : undefined)
   const switching = f.bg.handleMessage(f.operation(first.draft, 'set-active', { groupKey: 'g2' }), extensionSender)
   while (!releaseDrain) await new Promise(resolve => setTimeout(resolve, 0))
@@ -115,7 +124,7 @@ test('C2b frame 失聯與相同 URL 歧義都拒絕切組並保留草稿', async
   const ambiguous = await fixture(t)
   draft = (await ambiguous.pick('g1', '#one')).draft
   ambiguous.chrome.__setScriptResponder(() => [
-    { frameId: 4, result: frameUrl }, { frameId: 5, result: frameUrl }, { frameId: 0, result: tabUrl }
+    { frameId: 4, result: `${frameUrl}?utm_source=one` }, { frameId: 5, result: `${frameUrl}?gclid=two` }, { frameId: 0, result: tabUrl }
   ])
   result = await ambiguous.bg.handleMessage(ambiguous.operation(draft, 'set-active', { groupKey: 'g2' }), extensionSender)
   assert.equal(result.error, 'drain_failed')
@@ -172,6 +181,10 @@ test('C2b worker 重啟後由草稿來源 URL 重建唯一 frame 目標並安全
     }
     return undefined
   })
+  f.chrome.__setScriptResponder(() => [
+    { frameId: 4, result: `${frameUrl}?utm_source=campaign&gclid=abc` },
+    { frameId: 0, result: tabUrl }
+  ])
   const operation = f.operation(one.draft, 'set-active', { groupKey: 'g2' })
   const result = await restartedBackground.handleMessage(operation, extensionSender)
   assert.equal(result.ok, true)
@@ -185,7 +198,7 @@ test('C2b 立刻完成會等慢 frame 的最後一筆 PICKED ACK 並完成最新
   const second = await f.pick('g2', '#second')
   let releaseDrain
   f.chrome.__setTabResponder((_tab, message, options) => message.type === 'PICK_DRAIN'
-    ? (options?.frameId === 4 ? new Promise(resolve => { releaseDrain = () => resolve({ ok: true, drained: true }) }) : { ok: true, drained: true })
+    ? (options?.frameId === 4 && !message.validateSources && !message.resume ? new Promise(resolve => { releaseDrain = () => resolve({ ok: true, drained: true }) }) : { ok: true, drained: true, validatedSources: message.expectedSources?.length })
     : undefined)
   const completing = f.bg.handleMessage({
     type: f.messages.MSG.PICK_DRAFT_COMPLETE, tabId: f.tab.id, sessionId: f.sessionId,
@@ -195,10 +208,106 @@ test('C2b 立刻完成會等慢 frame 的最後一筆 PICKED ACK 並完成最新
   const lateAck = await f.pick('g2', '#last')
   releaseDrain()
   const result = await completing
-  assert.equal(result.ok, true)
+  assert.equal(result.ok, true, JSON.stringify(result))
   assert.equal(result.synchronized, true)
   assert.equal(result.snapshot.groups[1].values.length, 2)
   assert.equal(result.revision, lateAck.draft.revision)
+})
+
+test('R01 同 URL 替換已選 table 後，完成 drain 拒絕舊來源', async t => {
+  resetChromeMock()
+  const chrome = installChromeMock()
+  const dom = new JSDOM('<!doctype html><html><body><table id="old"><tbody><tr><td id="old-cell">舊值</td></tr></tbody></table><button id="switch">切組</button></body></html>', { url: tabUrl })
+  globalThis.window = dom.window
+  globalThis.document = dom.window.document
+  globalThis.location = dom.window.location
+  globalThis.Event = dom.window.Event
+  globalThis.MouseEvent = dom.window.MouseEvent
+  chrome.__setRuntimeResponder(message => message.type === 'PICKED' ? { ok: true, revision: 1 } : undefined)
+  const picker = await import('../src/content/picker-mode.js?replace=' + Math.random())
+  const common = { purpose: 'task', sessionId: 'same-url-replace', pickStage: 'selecting', batch: true, documentGeneration: 'doc-1', routeIdentity: 'same-route' }
+  const oldTable = document.querySelector('#old')
+  const oldCell = document.querySelector('#old-cell')
+  oldCell.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+  picker.enterPickMode({ ...common, groupKey: 'g1', initialTarget: oldTable })
+  oldCell.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }))
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const pickedMessage = chrome.__calls.find(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICKED')?.args[0]
+  const expectedSources = [{ groupKey: 'g1', value: {
+    source: { locator: pickedMessage.locator }, spec: pickedMessage.picks[0]
+  } }]
+  picker.exitPickMode()
+  picker.enterPickMode({ ...common, groupKey: 'g2', initialTarget: document.querySelector('#switch') })
+  const replacement = document.createElement('table')
+  replacement.id = 'old'
+  replacement.innerHTML = '<tbody><tr><td id="new-cell">新值</td></tr></tbody>'
+  oldTable.replaceWith(replacement)
+  const result = await picker.drainPickQueue({ sessionId: common.sessionId, documentGeneration: common.documentGeneration, routeIdentity: common.routeIdentity, validateSources: true, expectedSources })
+  assert.equal(result.ok, false, 'same-URL DOM replacement must invalidate the prior source')
+  assert.equal(result.error, 'stale_source')
+  assert.match(result.message, /g1|舊值/)
+  picker.releaseDraftSources(common.sessionId)
+  const missingCache = await picker.drainPickQueue({ sessionId: common.sessionId, documentGeneration: common.documentGeneration, routeIdentity: common.routeIdentity, validateSources: true, expectedSources })
+  assert.equal(missingCache.error, 'stale_source', 'missing frame cache must fail closed')
+  assert.match(missingCache.message, /未經目前文件核對/)
+  picker.exitPickMode()
+  dom.window.close()
+  delete globalThis.window; delete globalThis.document; delete globalThis.location; delete globalThis.Event; delete globalThis.MouseEvent
+  t.after(() => resetChromeMock())
+})
+
+test('R01 complete 對 frame 來源核對失敗會保留所有值並留在選取階段', async t => {
+  const f = await fixture(t)
+  const first = await f.pick('g1', '#old-source')
+  const second = await f.pick('g2', '#other-source')
+  const before = await f.bg.handleMessage({ type: f.messages.MSG.PICK_DRAFT_READ, tabId: f.tab.id, sessionId: f.sessionId }, extensionSender)
+  f.chrome.__setTabResponder((_tab, message) => message.type === 'PICK_DRAIN' && message.validateSources
+    ? { ok: false, error: 'stale_source', message: '第 g1 組的「舊值」來源未經目前文件核對，請重新選取' }
+    : { ok: true, drained: true })
+  const result = await f.bg.handleMessage({
+    type: f.messages.MSG.PICK_DRAFT_COMPLETE, tabId: f.tab.id, sessionId: f.sessionId,
+    documentGeneration: 'document-1', routeIdentity: 'route-1', expectedRevision: second.draft.revision
+  }, extensionSender)
+  assert.equal(result.ok, false)
+  assert.equal(result.error, 'drain_failed')
+  assert.match(result.message, /g1.*舊值/)
+  const read = await f.bg.handleMessage({ type: f.messages.MSG.PICK_DRAFT_READ, tabId: f.tab.id, sessionId: f.sessionId }, extensionSender)
+  assert.equal(read.draft.stage, before.draft.stage)
+  assert.equal(read.draft.revision, before.draft.revision)
+  assert.deepEqual(read.draft.groups.map(group => group.values.length), [1, 1])
+})
+
+test('R01 保持連接的來源可更新、移組，已移除值不受孤兒 cache 阻擋', async t => {
+  resetChromeMock()
+  const chrome = installChromeMock()
+  const dom = new JSDOM('<!doctype html><html><body><table><tbody><tr><td id="cell">初值</td></tr></tbody></table></body></html>', { url: tabUrl })
+  globalThis.window = dom.window
+  globalThis.document = dom.window.document
+  globalThis.location = dom.window.location
+  globalThis.Event = dom.window.Event
+  globalThis.MouseEvent = dom.window.MouseEvent
+  chrome.__setRuntimeResponder(message => message.type === 'PICKED' ? { ok: true } : undefined)
+  const picker = await import('../src/content/picker-mode.js?move=' + Math.random())
+  const identity = { sessionId: 'same-node-move', documentGeneration: 'doc-1', routeIdentity: 'same-route' }
+  const cell = document.querySelector('#cell')
+  picker.enterPickMode({ purpose: 'task', ...identity, groupKey: 'g1', pickStage: 'selecting', initialTarget: document.querySelector('table') })
+  cell.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+  cell.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const picked = chrome.__calls.find(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICKED')?.args[0]
+  const value = { source: { locator: picked.locator }, spec: picked.picks[0] }
+  const expected = [{ groupKey: 'g1', value }]
+  cell.textContent = '動態更新值'
+  assert.equal((await picker.drainPickQueue({ ...identity, validateSources: true, expectedSources: expected })).validatedSources, 1)
+  expected[0].groupKey = 'g2' // a draft move changes group ownership, not DOM identity
+  assert.equal((await picker.drainPickQueue({ ...identity, validateSources: true, expectedSources: expected })).validatedSources, 1)
+  cell.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal((await picker.drainPickQueue({ ...identity, validateSources: true, expectedSources: [] })).validatedSources, 0)
+  picker.exitPickMode()
+  dom.window.close()
+  delete globalThis.window; delete globalThis.document; delete globalThis.location; delete globalThis.Event; delete globalThis.MouseEvent
+  t.after(() => resetChromeMock())
 })
 
 test('C2b content drain 會重送相同 PICKED operation，ACK 前封鎖新手勢', async t => {
@@ -263,6 +372,150 @@ test('C2b 同一文件的 SPA 路徑變更後，完成屏障拒絕舊草稿並�
   dom.window.close()
   delete globalThis.window; delete globalThis.document; delete globalThis.location; delete globalThis.Event; delete globalThis.MouseEvent
   t.after(() => resetChromeMock())
+})
+
+test('R01 content 僅忽略白名單追蹤參數的新增、刪除與重排', async t => {
+  resetChromeMock()
+  const chrome = installChromeMock()
+  const initialUrl = 'https://a.test/catalog?item=one&utm_source=old&gclid=old&fbclid=old'
+  const dom = new JSDOM('<!doctype html><html><body><table><tbody><tr><td id="cell">值一</td><td id="cell2">值二</td></tr></tbody></table></body></html>', { url: initialUrl })
+  globalThis.window = dom.window
+  globalThis.document = dom.window.document
+  globalThis.location = dom.window.location
+  globalThis.Event = dom.window.Event
+  globalThis.MouseEvent = dom.window.MouseEvent
+  chrome.__setRuntimeResponder(message => message.type === 'PICKED' ? { ok: true } : undefined)
+  const picker = await import('../src/content/picker-mode.js?t=' + Math.random())
+  const cell = document.querySelector('#cell')
+  const identity = { sessionId: 'tracking-route', documentGeneration: 'doc-1', routeIdentity: { url: initialUrl } }
+  picker.enterPickMode({ purpose: 'task', ...identity, groupKey: 'g1', pickStage: 'selecting', initialTarget: document.querySelector('table') })
+
+  dom.window.history.pushState({}, '', '/catalog?fbclid=new&item=one&utm_campaign=next&gclid=new')
+  dom.window.dispatchEvent(new dom.window.PopStateEvent('popstate'))
+  cell.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+  cell.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(chrome.__calls.filter(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICKED').length, 1)
+
+  dom.window.history.pushState({}, '', '/catalog?item=one')
+  dom.window.dispatchEvent(new dom.window.PopStateEvent('popstate'))
+  const secondCell = document.querySelector('#cell2')
+  secondCell.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+  secondCell.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  assert.equal((await picker.drainPickQueue(identity)).ok, true, 'tracking-only additions, removals and reordering keep capture active')
+  assert.equal(chrome.__calls.filter(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICKED').length, 2)
+  picker.exitPickMode()
+  dom.window.close()
+  delete globalThis.window; delete globalThis.document; delete globalThis.location; delete globalThis.Event; delete globalThis.MouseEvent
+  t.after(() => resetChromeMock())
+})
+
+test('R01 content hash 變更保守暫停並拒絕路由外的舊 drain', async t => {
+  resetChromeMock()
+  const chrome = installChromeMock()
+  const initialUrl = 'https://a.test/catalog?item=one'
+  const dom = new JSDOM('<!doctype html><html><body><table><tbody><tr><td id="cell">值</td></tr></tbody></table></body></html>', { url: initialUrl })
+  globalThis.window = dom.window
+  globalThis.document = dom.window.document
+  globalThis.location = dom.window.location
+  globalThis.Event = dom.window.Event
+  globalThis.MouseEvent = dom.window.MouseEvent
+  chrome.__setRuntimeResponder(message => message.type === 'PICKED' ? { ok: true } : undefined)
+  const picker = await import('../src/content/picker-mode.js?t=' + Math.random())
+  const identity = { sessionId: 'hash-route', documentGeneration: 'doc-1', routeIdentity: { url: initialUrl } }
+  picker.enterPickMode({ purpose: 'task', ...identity, groupKey: 'g1', pickStage: 'selecting', initialTarget: document.querySelector('table') })
+  dom.window.location.hash = '#section'
+  assert.equal((await picker.drainPickQueue(identity)).error, 'stale_route')
+  document.querySelector('#cell').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  assert.equal(chrome.__calls.filter(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICKED').length, 0)
+  dom.window.close()
+  delete globalThis.window; delete globalThis.document; delete globalThis.location; delete globalThis.Event; delete globalThis.MouseEvent
+  t.after(() => resetChromeMock())
+})
+
+test('R01 資料集路由變更後，先前 PICKED 的延遲 stale ACK 不能恢復舊 drain', async t => {
+  resetChromeMock()
+  const chrome = installChromeMock()
+  const initialUrl = 'https://a.test/catalog?item=one'
+  const dom = new JSDOM('<!doctype html><html><body><table><tbody><tr><td id="cell">值</td></tr></tbody></table></body></html>', { url: initialUrl })
+  globalThis.window = dom.window
+  globalThis.document = dom.window.document
+  globalThis.location = dom.window.location
+  globalThis.Event = dom.window.Event
+  globalThis.MouseEvent = dom.window.MouseEvent
+  let releaseAck
+  let markSent
+  const sent = new Promise(resolve => { markSent = resolve })
+  chrome.__setRuntimeResponder(message => {
+    if (message.type !== 'PICKED') return undefined
+    markSent()
+    return new Promise(resolve => { releaseAck = resolve })
+  })
+  const picker = await import('../src/content/picker-mode.js?t=' + Math.random())
+  const identity = { sessionId: 'stale-route-ack', documentGeneration: 'doc-1', routeIdentity: { url: initialUrl } }
+  const cell = document.querySelector('#cell')
+  picker.enterPickMode({ purpose: 'task', ...identity, groupKey: 'g1', pickStage: 'selecting', initialTarget: document.querySelector('table') })
+  cell.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+  cell.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  await sent
+  dom.window.history.pushState({}, '', '/catalog?item=two')
+  dom.window.dispatchEvent(new dom.window.PopStateEvent('popstate'))
+  releaseAck({ ok: false, error: 'stale_route', message: '頁面資料已變更' })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal((await picker.drainPickQueue(identity)).error, 'stale_route')
+  cell.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  assert.equal(chrome.__calls.filter(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICKED').length, 1)
+  dom.window.close()
+  delete globalThis.window; delete globalThis.document; delete globalThis.location; delete globalThis.Event; delete globalThis.MouseEvent
+  t.after(() => resetChromeMock())
+})
+
+test('R01 background PICKED 和 ENTER_PICK 接受 tracker 變化，仍維持文件世代守門', async t => {
+  const f = await fixture(t, undefined, { url: tabUrl })
+  const trackedUrl = 'https://a.test/page?utm_source=mail&gclid=abc'
+  f.chrome.__setTabState(f.tab.id, { url: trackedUrl })
+  f.chrome.__setTabResponder((_tabId, message) => message.type === f.messages.MSG.ENTER_PICK
+    ? { ok: true, activeGroupKey: 'g1' }
+    : undefined)
+
+  const entered = await f.bg.handleMessage({
+    type: f.messages.MSG.ENTER_PICK, tabId: f.tab.id, frameId: 0, purpose: 'task', batch: true,
+    sessionId: f.sessionId, groupKey: 'g1', activeGroupKey: 'g1', documentGeneration: 'document-1',
+    routeIdentity: { url: tabUrl }, draftValues: []
+  }, extensionSender)
+  assert.equal(entered.ok, true)
+
+  const staleDocument = await f.bg.handleMessage({
+    type: f.messages.MSG.PICKED, purpose: 'task', sessionId: f.sessionId, groupKey: 'g1',
+    documentGeneration: 'old-document', routeIdentity: { url: tabUrl }, operationId: 'tracker-stale-doc',
+    locator: { css: '#stale-document' }, picks: [{ mode: 'text' }]
+  }, { tab: { id: f.tab.id, url: trackedUrl }, frameId: 0, url: trackedUrl })
+  assert.equal(staleDocument.error, 'stale_document')
+
+  const picked = await f.bg.handleMessage({
+    type: f.messages.MSG.PICKED, purpose: 'task', sessionId: f.sessionId, groupKey: 'g1',
+    documentGeneration: 'document-1', routeIdentity: { url: tabUrl }, operationId: 'tracker-valid-pick',
+    locator: { css: '#valid' }, picks: [{ mode: 'text' }]
+  }, { tab: { id: f.tab.id, url: trackedUrl }, frameId: 0, url: trackedUrl })
+  assert.equal(picked.ok, true)
+  assert.equal(picked.draft.groups[0].values.length, 1)
+})
+
+test('R01 background dataset query 與 hash 變更都拒絕延遲 PICKED', async t => {
+  for (const [label, changedUrl] of [
+    ['dataset query', 'https://a.test/page?item=two'],
+    ['hash', 'https://a.test/page#section']
+  ]) {
+    const f = await fixture(t, undefined, { url: tabUrl })
+    const result = await f.bg.handleMessage({
+      type: f.messages.MSG.PICKED, purpose: 'task', sessionId: f.sessionId, groupKey: 'g1',
+      documentGeneration: 'document-1', routeIdentity: { url: tabUrl }, operationId: `late-${label}`,
+      locator: { css: '#stale' }, picks: [{ mode: 'text' }]
+    }, { tab: { id: f.tab.id, url: changedUrl }, frameId: 4, url: frameUrl })
+    assert.equal(result.error, 'stale_route', label)
+    const read = await f.bg.handleMessage({ type: f.messages.MSG.PICK_DRAFT_READ, tabId: f.tab.id, sessionId: f.sessionId }, extensionSender)
+    assert.equal(read.draft.groups[0].values.length, 0, label)
+  }
 })
 
 test('C2b 背景收到路徑已變更的延遲 PICKED 時拒絕寫入草稿', async t => {

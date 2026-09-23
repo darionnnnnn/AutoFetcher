@@ -172,6 +172,7 @@ test('批次畫面的「在頁面上選取」要帶得出 tabId(還沒試抓、�
   await pk.renderFromPanelCtx(batchCtx([payloadT2, payloadP]))
   doc.getElementById('preaction-add').click()
   doc.querySelector('#preaction-list [data-action="preaction-pick"]').click()
+  await new Promise(resolve => setTimeout(resolve, 10))
   const msgs = enterPicks(c)
   assert.equal(msgs.length, 1)
   assert.equal(msgs[0].purpose, 'preaction')
@@ -184,8 +185,134 @@ test('批次的框架提示按「加入點擊步驟」:新增一列並直接進�
   const { c, pk, doc } = await freshPanel()
   await pk.renderFromPanelCtx(batchCtx([payloadT2, { ...payloadP, frameUrl: FRAME }]))
   doc.getElementById('frame-hint-add').click()
+  await new Promise(resolve => setTimeout(resolve, 10))
   assert.equal(doc.querySelectorAll('#preaction-list [data-preaction-row]').length, 1)
   assert.equal(enterPicks(c)[0]?.tabId, 9)
+  globalThis.window.close = () => {}
+})
+
+test('Picker 草稿重載還原共用前置動作順序、locator/frame、秒數、可見勾選與刪列', async () => {
+  const { pk, doc } = await freshPanel()
+  const savedDraft = {
+    name: '草稿',
+    preActions: [
+      { type: 'waitFor', locator: { css: '#menu' }, frame: { url: FRAME }, timeoutMs: 4500, visible: false },
+      { type: 'wait', sec: 2.5 },
+      // 未完成列仍保留，讓使用者可以回來繼續選取。
+      { type: 'click', locator: null, frame: null }
+    ]
+  }
+  await pk.renderFromPanelCtx({ kind: 'new', ctx: payloadP, draft: savedDraft })
+  let rows = doc.querySelectorAll('#preaction-list [data-preaction-row]')
+  assert.equal(rows.length, 3)
+  assert.deepEqual(rows[0]._locator, { css: '#menu' })
+  assert.deepEqual(rows[0]._frame, { url: FRAME })
+  assert.equal(rows[0].querySelector('.preaction-type').value, 'waitFor')
+  assert.equal(rows[0].querySelector('.preaction-num').value, '4.5')
+  assert.equal(rows[0].querySelector('[data-preaction-visible]').checked, false)
+  assert.equal(rows[1].querySelector('.preaction-num').value, '2.5')
+  assert.equal(rows[2]._locator, null)
+
+  // 第二次文件載入讀同一份草稿，模擬切頁後重新打開 Picker。
+  const { pk: reloaded, doc: doc2 } = await freshPanel()
+  await reloaded.renderFromPanelCtx({ kind: 'new', ctx: payloadP, draft: savedDraft })
+  rows = doc2.querySelectorAll('#preaction-list [data-preaction-row]')
+  assert.equal(rows.length, 3)
+  assert.equal(rows[0].querySelector('.preaction-num').value, '4.5')
+  assert.equal(rows[1].querySelector('.preaction-num').value, '2.5')
+  rows[1].querySelector('[data-action="preaction-remove"]').click()
+  assert.equal(doc2.querySelectorAll('#preaction-list [data-preaction-row]').length, 2)
+  globalThis.window.close = () => {}
+})
+
+test('編輯前置動作即時寫入 session，無等待重載仍能接回原列', async () => {
+  resetChromeMock()
+  const c = installChromeMock()
+  const st = await import('../src/shared/storage.js?preaction-reload=' + Math.random())
+  await st.init()
+  const batchSettings = { ...batchCtx([payloadT2, payloadP]), pickSessionId: 'session-9' }
+  await st.setPanelCtx(9, batchSettings)
+  c.__setRuntimeResponder((message) => message?.type === 'PICK_DRAFT_READ'
+    ? { draft: { sessionId: 'session-9', tabId: 9, revision: 2, stage: 'settings', groups: [], form: {} } }
+    : undefined)
+
+  const loadPanel = async () => {
+    const dom = new JSDOM(html, { url: 'chrome-extension://abc/ui/picker/picker.html?tabId=9' })
+    globalThis.window = dom.window
+    globalThis.document = dom.window.document
+    globalThis.Event = dom.window.Event
+    const pk = await import('../src/ui/picker/picker.js?preaction-reload=' + Math.random())
+    // boot 的 tab ctx 讀取為非同步；等它完成後再操作列。
+    await new Promise(resolve => setTimeout(resolve, 100))
+    // 對應 boot 讀到 protocol draft 的 settings 階段；批次仍留在設定面板。
+    pk.setPickDraftContext({ sessionId: 'session-9', tabId: 9, revision: 2, stage: 'settings', groups: [], form: {} }, { render: false })
+    await pk.renderFromPanelCtx(await st.getPanelCtx(9))
+    return { pk, doc: dom.window.document }
+  }
+
+  const { doc } = await loadPanel()
+  doc.getElementById('preaction-add').click()
+  let row = doc.querySelector('#preaction-list [data-preaction-row]')
+  row.querySelector('select').value = 'click'
+  row.querySelector('select').dispatchEvent(new window.Event('change', { bubbles: true }))
+  row.querySelector('[data-action="preaction-pick"]').click()
+  await new Promise(resolve => setTimeout(resolve, 10))
+  for (const listener of c.runtime.onMessage._listeners) {
+    await listener({ type: 'PICKED', purpose: 'preaction', locator: { css: '#nav' }, frameUrl: FRAME }, {}, () => {})
+  }
+  doc.getElementById('preaction-add').click()
+  row = doc.querySelectorAll('#preaction-list [data-preaction-row]')[1]
+  row.querySelector('select').value = 'waitFor'
+  row.querySelector('select').dispatchEvent(new window.Event('change', { bubbles: true }))
+  row.querySelector('.preaction-num').value = '3.25'
+  row.querySelector('.preaction-num').dispatchEvent(new window.Event('input', { bubbles: true }))
+  row.querySelector('[data-preaction-visible]').checked = false
+  row.querySelector('[data-preaction-visible]').dispatchEvent(new window.Event('change', { bubbles: true }))
+  // 轉回目標頁前的寫入屏障必須等前面所有列編輯落盤。
+  row.querySelector('[data-action="preaction-pick"]').click()
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  const stored = await st.getPanelCtx(9)
+  assert.equal(stored.draft.preActions.length, 2)
+  assert.deepEqual(stored.draft.preActions[0].locator, { css: '#nav' })
+  assert.deepEqual(stored.draft.preActions[0].frame, { url: FRAME })
+  assert.equal(stored.draft.preActions[1].timeoutMs, 3250)
+
+  const reloaded = await loadPanel()
+  const rows = reloaded.doc.querySelectorAll('#preaction-list [data-preaction-row]')
+  assert.equal(rows.length, 2)
+  assert.deepEqual(rows[0]._locator, { css: '#nav' })
+  assert.deepEqual(rows[0]._frame, { url: FRAME })
+  assert.equal(rows[1].querySelector('.preaction-num').value, '3.25')
+  assert.equal(rows[1].querySelector('[data-preaction-visible]').checked, false)
+  globalThis.window.close = () => {}
+})
+
+test('前置動作草稿寫入失敗時停止頁面選取並顯示可重試提示', async () => {
+  resetChromeMock()
+  const c = installChromeMock()
+  const st = await import('../src/shared/storage.js?preaction-write-fail=' + Math.random())
+  await st.init()
+  const ctx = { ...batchCtx([payloadT2, payloadP]), pickSessionId: 'session-fail' }
+  await st.setPanelCtx(9, ctx)
+  const dom = new JSDOM(html, { url: 'chrome-extension://abc/ui/picker/picker.html?tabId=9' })
+  globalThis.window = dom.window
+  globalThis.document = dom.window.document
+  globalThis.Event = dom.window.Event
+  const pk = await import('../src/ui/picker/picker.js?preaction-write-fail=' + Math.random())
+  await new Promise(resolve => setTimeout(resolve, 100))
+  pk.setPickDraftContext({ sessionId: 'session-fail', tabId: 9, revision: 2, stage: 'settings', groups: [], form: {} }, { render: false })
+  await pk.renderFromPanelCtx(ctx)
+  const doc = document
+  doc.getElementById('preaction-add').click()
+  const originalSet = c.storage.session.set
+  c.storage.session.set = async () => { throw new Error('session full') }
+  doc.querySelector('#preaction-list [data-action="preaction-pick"]').click()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  c.storage.session.set = originalSet
+  assert.equal(enterPicks(c).length, 0, '寫入失敗不得送 ENTER_PICK')
+  assert.match(doc.getElementById('errors').textContent, /草稿未能保存.*再試一次選取/)
+  assert.equal(doc.getElementById('errors').hidden, false)
   globalThis.window.close = () => {}
 })
 

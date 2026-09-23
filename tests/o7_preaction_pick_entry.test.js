@@ -30,6 +30,7 @@ test('目標在 iframe 內時，前置動作的選取仍要從最上層開始', 
   pk.render({ tabId: 3, frameId: 7, frameUrl: 'https://b.example/w.html', locator: { css: '#v' } })
   doc.getElementById('preaction-add').click()
   doc.querySelector('[data-action="preaction-pick"]').click()
+  await new Promise(resolve => setTimeout(resolve, 0))
   const msg = enterPicks(c).at(-1)
   assert.equal(msg.purpose, 'preaction')
   assert.equal(
@@ -43,6 +44,7 @@ test('目標在最上層時行為不變', async () => {
   pk.render({ tabId: 3, locator: { css: '#v' } })
   doc.getElementById('preaction-add').click()
   doc.querySelector('[data-action="preaction-pick"]').click()
+  await new Promise(resolve => setTimeout(resolve, 0))
   assert.equal(enterPicks(c).at(-1).frameId, 0)
 })
 

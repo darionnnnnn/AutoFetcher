@@ -2602,6 +2602,7 @@ function addPreActionRow(data = {}) {
   select.value = data.type || 'waitFor'
   select.addEventListener('change', () => {
     updatePreActionRowVisibility(row)
+    flushDraftSave()
   })
 
   const pickBtn = document.createElement('button')
@@ -2611,6 +2612,12 @@ function addPreActionRow(data = {}) {
   pickBtn.addEventListener('click', async () => {
     lastPreActionPickRow = row
     if (globalThis.chrome?.runtime?.sendMessage) {
+      // 轉回目標頁前先落盤，避免面板因分頁切換重載時，300ms debounce 尚未執行。
+      const draftSaved = await flushDraftSave()
+      if (!draftSaved) {
+        showDraftSaveError()
+        return
+      }
       await reportEnterPick(chrome.runtime.sendMessage({
         type: MSG.ENTER_PICK,
         purpose: 'preaction',
@@ -2633,6 +2640,7 @@ function addPreActionRow(data = {}) {
   input.className = 'preaction-num'
   input.min = '0'
   input.step = '1'
+  input.addEventListener('input', flushDraftSave)
   if (data.type === 'wait') {
     // 舊任務存的是毫秒，畫面一律以秒顯示（換算只有 shared/preaction.js 一份）
     if (data.sec !== undefined && data.sec !== null && String(data.sec).trim() !== '') {
@@ -2665,6 +2673,7 @@ function addPreActionRow(data = {}) {
   visibleBox.type = 'checkbox'
   visibleBox.setAttribute('data-preaction-visible', '')
   visibleBox.checked = data.visible !== false
+  visibleBox.addEventListener('change', flushDraftSave)
   visibleWrap.appendChild(visibleBox)
   visibleWrap.appendChild(document.createTextNode('要看得見'))
   visibleWrap.title = '勾選＝元素要真的顯示出來才算出現；取消＝只要在頁面裡就算'
@@ -2680,6 +2689,7 @@ function addPreActionRow(data = {}) {
     row.remove()
     updatePreActionCount()
     updateFrameHint(batchViewOn ? null : currentCtx)
+    flushDraftSave()
   })
 
   row.appendChild(select)
@@ -2766,6 +2776,7 @@ function bindPreActionEvents() {
     addBtn.addEventListener('click', () => {
       addPreActionRow()
       updateFrameHint(batchViewOn ? null : currentCtx)
+      flushDraftSave()
     })
     addBtn._preactionEventsBound = true
   }
@@ -2777,8 +2788,13 @@ function bindPreActionEvents() {
 function bindPreActionMessageListener() {
   if (_preActionMessageBound) return
   if (globalThis.chrome?.runtime?.onMessage?.addListener) {
+    // This UI listener observes preaction picks; it must never participate in
+    // the response channel for ordinary task picks. An async listener implicitly
+    // returns a Promise<undefined> for unrelated messages, which can win the
+    // content script's sendMessage ACK race before the background persists PICKED.
     chrome.runtime.onMessage.addListener((msg) => {
-      if (msg?.type === MSG.PICKED && msg.purpose === 'preaction') {
+      if (msg?.type !== MSG.PICKED || msg.purpose !== 'preaction') return false
+      void (async () => {
         // 那一列可能已經被刪掉、或整份清單被重畫過（編輯既有任務時會 replaceChildren）：
         // 寫進孤兒節點的話，使用者會看到「選好了卻沒反應」
         if (lastPreActionPickRow && !lastPreActionPickRow.isConnected) {
@@ -2788,8 +2804,10 @@ function bindPreActionMessageListener() {
           lastPreActionPickRow._locator = msg.locator || null
           lastPreActionPickRow._frame = msg.frameUrl ? { url: msg.frameUrl } : null
           updatePreActionLocatorText(lastPreActionPickRow)
+          await flushDraftSave()
         }
-      }
+      })().catch(() => {})
+      return false
     })
     _preActionMessageBound = true
   }
@@ -4631,7 +4649,6 @@ function applyRetarget(payload) {
   }))
   const prevForm = getFormData()
   const prevAlerts = Array.isArray(prevForm.alerts) ? prevForm.alerts : []
-  const prevPreActions = Array.isArray(prevForm.preActions) ? prevForm.preActions : []
 
   render(payload)
   restoreDraft(keep, { skipTarget: true })
@@ -4676,9 +4693,7 @@ function applyRetarget(payload) {
     if (next.field && !liveKeys.has(next.field)) next.field = ''
     addAlertRow(next)
   }
-  for (const pa of prevPreActions) {
-    addPreActionRow(pa)
-  }
+  // 前置動作已由 snapshotForm → restoreDraft 重建，避免再加一次而重複列。
 
   const note = document.getElementById('retarget-note')
   if (note) {
@@ -4714,6 +4729,8 @@ export function snapshotForm() {
     const boxes = Array.from(document.querySelectorAll(sel))
     if (boxes.length > 0) out[key] = boxes.filter(cb => cb.checked).map(cb => cb.value)
   }
+  // 前置動作列是動態 DOM，保留尚未選 locator 或尚未填秒數的列，讓草稿重載後可接著編輯。
+  out.preActions = preActionsFromForm()
   return out
 }
 
@@ -4733,6 +4750,15 @@ function restoreDraft(draft, opts = {}) {
   for (const [key, sel] of Object.entries(DRAFT_GROUPS)) {
     if (!Array.isArray(draft[key])) continue
     for (const cb of document.querySelectorAll(sel)) cb.checked = draft[key].includes(cb.value)
+  }
+  // 舊草稿沒有這個欄位時維持 render 出來的既有任務設定；有欄位時才以草稿列重建。
+  if (Array.isArray(draft.preActions)) {
+    const list = document.getElementById('preaction-list')
+    if (list) {
+      list.replaceChildren()
+      for (const action of draft.preActions) addPreActionRow(action || {})
+      updatePreActionCount({ syncOpen: true })
+    }
   }
   // 排程欄位是連動的（類型切換顯示哪一組、時刻 chip、時段欄、預覽與摘要）：值貼回去之後畫面要跟上
   syncScheduleFields()
@@ -4760,16 +4786,35 @@ function scheduleDraftSave() {
   if (draftTimer) clearTimeout(draftTimer)
   draftTimer = setTimeout(async () => {
     draftTimer = null
-    const draft = snapshotForm()
-    if (batchItems) {
-      // 批次畫面：各列名稱以穩定鍵記、共用的合計方式另記（單任務草稿的形狀不變）
-      draft.batchNames = batchNamesFromDom()
-      const agg = document.getElementById('batch-aggregate')
-      if (agg) draft['batch-aggregate'] = agg.value
-    }
-    // 使用者已經在動表單了：被擋時留下的說明一併收掉（沒有別的清除路徑，會一直掛著；體檢抓到）
-    try { await mergePanelCtx(panelTabId, { draft, notice: undefined }) } catch {}
+    await flushDraftSave()
   }, 300)
+}
+
+function showDraftSaveError() {
+  const errors = document.getElementById('errors')
+  if (errors) {
+    errors.textContent = '前置動作草稿未能保存，請確認儲存空間後再試一次選取。'
+    errors.hidden = false
+  }
+}
+
+async function flushDraftSave() {
+  if (draftTimer) { clearTimeout(draftTimer); draftTimer = null }
+  if (panelTabId === null) return true
+  const draft = snapshotForm()
+  if (batchItems) {
+    // 批次畫面：各列名稱以穩定鍵記、共用的合計方式另記（單任務草稿的形狀不變）
+    draft.batchNames = batchNamesFromDom()
+    const agg = document.getElementById('batch-aggregate')
+    if (agg) draft['batch-aggregate'] = agg.value
+  }
+  // 使用者已經在動表單了：被擋時留下的說明一併收掉（沒有別的清除路徑，會一直掛著；體檢抓到）
+  try {
+    await mergePanelCtx(panelTabId, { draft, notice: undefined })
+    return true
+  } catch (error) {
+    return false
+  }
 }
 
 /**

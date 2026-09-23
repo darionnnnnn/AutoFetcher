@@ -29,7 +29,7 @@ test('F1a 實際完成訊息把 snapshot 寫成設定 ctx，表單與 buildTask 
     { frameId: 0, result: 'https://a.test/prices', documentId: 'top-doc' },
     { frameId: 7, result: 'https://b.test/embed', documentId: 'frame-doc' }
   ])
-  chromeMock.__setTabResponder((_tabId, message) => message?.type === 'PICK_DRAIN' ? { ok: true, drained: true } : undefined)
+  chromeMock.__setTabResponder((_tabId, message) => message?.type === 'PICK_DRAIN' ? { ok: true, drained: true, ...(message.validateSources ? { validatedSources: message.expectedSources?.length || 0 } : {}) } : undefined)
   const bg = await import('../src/background/main.js?f1a=' + Math.random())
   const extensionSender = { url: 'chrome-extension://autofetcher-test/ui/picker/picker.html' }
   const begin = await bg.handleMessage(draftBegin(tab.id), extensionSender)

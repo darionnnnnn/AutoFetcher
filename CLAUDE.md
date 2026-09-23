@@ -247,6 +247,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   換算 `promotePicksToOuter`(全有或全無)、加值前的觸發 `promoteBeforeAddingInOuter`(點擊／雙擊／拖曳／右鍵共用)。**`repick` 不升級**(key 會重生)。
   **`↑` 已選之後照樣離開這張表**,換不過去時鎖改認 `↑` 選定的外層表(`upgradeTarget` 的 anchor),否則 P1 會在版面表格上重現。
 - **點一下＝加選／再點取消**(AF-18 推翻 AF-8);**移除類動作都要存復原快照,`Ctrl+Z` 自己做的移除不存**(存了連按兩次互相抵銷);換表已選 ≥2 要再點一次確認。
+- **選取模式的雙擊／Enter 出口須分清模式**:單任務與 `repick` 可雙擊或 `Enter` 完成；AF-22 群組雙擊只加值，完成走固定按鈕或 `Ctrl/Cmd+Enter`，普通 `Enter` 操作焦點控制項。
 - **AF-18 舊版多任務選取協定**:同一張表最多一組(升到外層後要合併)、點 `body` 不成組、payload 只有 `buildPickPayload` 一份；這是相容路徑，不是 AF-22 新建群組的行為契約。AF-22 以 Picker `pickDraft:<tabId>` 管理明確群組，單組也保存為 multi；見 SPEC §2／§7。
   面板批次儲存一律走 `render → 收集 → saveTaskFromForm`(與單任務共用存檔核心),**逐一 render 會把合成方式洗回預設,收集前要貼回共用設定**。
 - **面板 `kind:'saved'`**(AF-18):存完當下就收成它;進選取的入口只經 `canStartPick`;同一份面板文件從 `saved` 進下一輪一律重載面板文件。
@@ -319,6 +320,8 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **tfoot 預設排除只在「建立」整欄值的當下做一次**，preselect 帶回來的值不得再加（使用者取消過的不能復活）。
 - **頭尾空白自動略過是 `skip.blank`，不是另一個鍵**（AF-17）：一律經 `skipOf`／`putSkip`，只認字面 `true`、關著時不寫 `blank` 鍵。併在 `skip` 裡才能沿用既有五個搬運點——另開鍵就是第三次「每段自己都綠、規格裡就是沒有」。**新建預設勾、編輯照舊任務回填**，不得把預設套到舊任務。
 - **逐格明細 `items` 與 `blank` 只給立即測試預覽**（AF-17）：擷取端一律回傳，`fetcher` 單值與多值寫紀錄的兩份白名單**不得**抄它們（每筆紀錄夾帶整欄明細，storage 會長到 MB 級；`tests/x3_test_detail.test.js` 會擋）。處置分類只有 `extract.js` 一份，八態與結果的 `used`／`skipped`／`excluded`／`blank` 四條口徑必須對得上，改其中一邊要一起改。
+- **runtime message listener 不得攔截無關訊息的 ACK**:Chrome listener 若 async 回傳 `Promise<undefined>`，可能被當成 sendMessage 回覆並早於真正的持久化 ACK；按 `type`／`purpose` 同步排除無關訊息，再對目標訊息執行非同步工作。
+- **AF-22 路由核對只有 `shared/route.js`**:它只判 Picker 選取期間的 URL／query／hash 變化；不得取代 §3 frame 定位或 §4 fetch-tab 的 `sameOriginPath`。通過路由核對後仍逐值核驗已選 DOM 節點與所屬表格連接狀態，同 URL SPA 替換來源時保留草稿並要求重選。
 - **AF-22 多來源任務的來源正規化與驗證只有 `shared/task-source.js`**：舊單值／舊 block 與新 `mode:'multi'` 都由 `normalizeTaskSources` 轉為每值一個 `source + spec`;field key 是序列身分，source locator/frame 是目標身分的一部分，勿在消費端各自猜舊形狀。multi 的正式紀錄按 `taskId#fieldKey` 寫子序列，排程帳本與 health 用父 task id（SPEC §7）。
 - **AF-22 的 `stateActions` 屬於單一 field**：任務層 `preActions` 是共用前置動作草稿；某值旁的「來源狀態動作」複製當下共用動作到該 field，之後只在處理該來源前執行。修改值的來源／規格／狀態動作會使在途結果失效；擴充快照與編輯匯入驗證時要保留此欄位。
 - **單值修復／替換授權只在 `background/main.js`**：一次性 grant 綁定 task、field、tab、frame、document generation 與 repair mode；不可接受頁面任意指定 key。修復保留 field key，替換新建 key 並移除原告警，對應資料變更仍走 storage 的任務更新入口。
