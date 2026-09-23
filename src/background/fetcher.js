@@ -1,5 +1,5 @@
 // AutoFetcher 擷取流程：開分頁、注入、擷取、寫紀錄、重試
-import { getTask, checkTaskExecution, updateTasks, appendRecord, appendRecords, getRecordsByDate, getRecordsInRange, getSettings, getAlertCommitLog, updateAlertLog, updateAlertCommitLog, setLastValue, setLastValues, getLastValues, getHealthMap, getRunStatus, setRunStatus, getRunState, updateRunState, updateMissedList } from '../shared/storage.js'
+import { getTask, checkTaskExecution, updateTasks, appendRecord, appendRecords, getRecordsByDate, getRecordsInRange, getSettings, getAlertCommitLog, updateAlertLog, updateAlertCommitLog, setLastValue, setLastValues, setLastValuesForExecution, clearLastValuesForExecution, clearHealthForExecution, getLastValues, getHealthMap, getRunStatus, setRunStatus, setRunStatusForExecution, getRunState, updateRunState, updateMissedList } from '../shared/storage.js'
 import { waitMsOf, timeoutMsOf, preActionFailure, DEFAULT_WAIT_TIMEOUT_MS, messageTimeoutMs, holdMsOf, capStepMs, PRE_ACTION_STEP_MAX_MS, PRE_ACTION_STEP_CAP_NOTE } from '../shared/preaction.js'
 import { seriesIdOf, parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
 import { MSG } from '../shared/messages.js'
@@ -9,12 +9,15 @@ import { notify, notifySiteFailure, clearNotifyLog } from './notify.js'
 import { injectContent } from './inject.js'
 import { evaluateAlerts } from '../shared/alerts.js'
 import { isSuccess, healthStatusOf } from '../shared/record-status.js'
-import { setTaskHealth, refreshBadge } from './health.js'
+import { setTaskHealth, setTaskHealthForExecution, refreshBadge } from './health.js'
 import { ensureLoggedIn } from './login.js'
 import { locateFrame, sameOriginPath, PROBE_TIMEOUT_MS } from './frames.js'
 import { acquireFetchTab, openForegroundTab, enqueueForOrigin, waitTabReady, BOOT } from './fetch-tab.js'
 import { sendToFrame, timeoutError } from './messaging.js'
-import { normalizeTaskSources } from '../shared/task-source.js'
+import { normalizeTaskSources, multiExecutionSnapshot, executionFingerprintOf } from '../shared/task-source.js'
+
+// 保留測試與既有 background 呼叫端的匯出面；canonical 實作在 shared/task-source。
+export { executionFingerprintOf }
 
 // `locateFrame` 找到才有 frameId；失敗時回的是帶候選清單的物件（給診斷用），不是 null
 function frameFound(loc) {
@@ -523,9 +526,13 @@ export function healthFromRecords(records, partial) {
 }
 
 // 更新任務健康狀態並重整圖示
-async function updateHealth(taskId, healthObj) {
-  await setTaskHealth(taskId, healthObj)
+async function updateHealth(taskId, healthObj, executionFingerprint) {
+  const written = executionFingerprint
+    ? await setTaskHealthForExecution(taskId, healthObj, executionFingerprint)
+    : (await setTaskHealth(taskId, healthObj), true)
+  if (!written) return false
   await refreshBadge()
+  return true
 }
 
 // 紀錄裡 raw 的上限（AF-21 定案 5）：只在寫紀錄這一層截，擷取端與立即測試預覽照舊回全文
@@ -599,7 +606,7 @@ function healthOlderThanRecords(healthEntry, records) {
   return recordTimes.length > 0 && healthAt < Math.max(...recordTimes)
 }
 
-async function finalizeMultiRecords(task, slot, records, { skipLedger = false, partial = false, preserveExisting = false } = {}) {
+async function finalizeMultiRecords(task, slot, records, { skipLedger = false, partial = false, preserveExisting = false, executionFingerprint } = {}) {
   const hasSuccess = records.some(record => isSuccess(record))
   const firstFail = records.find(record => !isSuccess(record))
   const ledgerStatus = hasSuccess ? 'ok' : (firstFail ? firstFail.status : 'error')
@@ -615,15 +622,36 @@ async function finalizeMultiRecords(task, slot, records, { skipLedger = false, p
       }
     }
   }
-  await setLastValues(lastEntries)
+  const lastValuesWritten = executionFingerprint
+    ? await setLastValuesForExecution(task.id, executionFingerprint, lastEntries)
+    : (await setLastValues(lastEntries), true)
+  if (!lastValuesWritten) return { ...TASK_CHANGED_RESULT }
   if (!preserveHealth) {
-    await updateHealth(task.id, healthFromRecords(records, partial))
+    const healthWritten = await updateHealth(task.id, healthFromRecords(records, partial), executionFingerprint)
+    if (!healthWritten) {
+      if (executionFingerprint) {
+        await clearLastValuesForExecution(task.id, executionFingerprint)
+        await clearHealthForExecution(task.id, executionFingerprint)
+      }
+      return { ...TASK_CHANGED_RESULT }
+    }
     if (hasSuccess) await clearNotifyLog(task.id)
     if (records.every(record => isSuccess(record))) await clearNotFoundStreak(task.id)
   }
   // 帳本是「這一輪已完成」的最後標記。先寫它會讓 worker 在
   // lastValues／health 之後被回收時，下一輪誤以為沒有待補工作。
-  if (!skipLedger) await setRunStatus(task.id, slot, ledgerStatus)
+  if (!skipLedger) {
+    const ledgerWritten = executionFingerprint
+      ? await setRunStatusForExecution(task.id, slot, ledgerStatus, executionFingerprint)
+      : (await setRunStatus(task.id, slot, ledgerStatus), true)
+    if (!ledgerWritten) {
+      if (executionFingerprint) {
+        await clearLastValuesForExecution(task.id, executionFingerprint)
+        await clearHealthForExecution(task.id, executionFingerprint)
+      }
+      return { ...TASK_CHANGED_RESULT }
+    }
+  }
   return records.find(record => isSuccess(record)) || records[0] || null
 }
 
@@ -748,8 +776,10 @@ async function writeMultiFailureRecords(task, slot, status, error, opts = {}) {
   if (opts.executionSnapshot && !(await multiExecutionStillValid(task, opts.executionSnapshot))) {
     return { ...TASK_CHANGED_RESULT }
   }
-  await finalizeMultiRecords(task, slot, committedResult.records, { skipLedger: opts.skipLedger === true })
-  return committedResult.records[0]
+  return await finalizeMultiRecords(task, slot, committedResult.records, {
+    skipLedger: opts.skipLedger === true,
+    executionFingerprint: opts.executionFingerprint
+  })
 }
 
 function multiFailureResult(task, status, error) {
@@ -785,40 +815,6 @@ function manualExecutionId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
 }
 
-// 任務名稱／顯示順序不是抓取身分；其餘會影響這次 multi 擷取的規格固定成快照。
-function stableExecutionJson(value) {
-  if (Array.isArray(value)) return `[${value.map(stableExecutionJson).join(',')}]`
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableExecutionJson(value[key])}`).join(',')}}`
-  }
-  return JSON.stringify(value)
-}
-
-function multiExecutionSnapshot(task) {
-  return stableExecutionJson({
-    url: task?.url,
-    enabled: task?.enabled,
-    foreground: task?.foreground,
-    mode: task?.mode,
-    specMode: task?.spec?.mode,
-    preActions: task?.preActions,
-    sources: normalizeTaskSources(task)
-      .map(({ key, mode, source, spec }) => ({ key, mode, source, spec }))
-      .sort((a, b) => String(a.key).localeCompare(String(b.key)))
-  })
-}
-
-// Durable records only need a bounded identity for the captured specification.
-// Keep the full snapshot in memory for the publish gate, but persist a SHA-256
-// digest so a task with many sources does not copy its whole spec into every row.
-export async function executionFingerprintOf(task) {
-  const subtle = globalThis.crypto?.subtle
-  if (!subtle) throw new Error('Web Crypto is required for execution fingerprints')
-  const bytes = new TextEncoder().encode(multiExecutionSnapshot(task))
-  const digest = new Uint8Array(await subtle.digest('SHA-256', bytes))
-  return Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join('')
-}
-
 async function multiExecutionStillValid(task, snapshot) {
   return checkTaskExecution(task?.id, (current) => (
     multiExecutionSnapshot(current) === snapshot
@@ -851,11 +847,14 @@ export async function runTask(task, opts = {}) {
     budgetMaxMs,
     keepAliveMs,
     preActionStepMaxMs = PRE_ACTION_STEP_MAX_MS,
-    dryRun = false
+    dryRun = false,
+    executionId: requestedExecutionId
   } = opts
   const isManual = reason === 'manual'
   const isMulti = task?.mode === 'multi' || task?.spec?.mode === 'multi'
-  const executionId = isManual ? manualExecutionId() : undefined
+  const executionId = isManual
+    ? (typeof requestedExecutionId === 'string' && requestedExecutionId.trim() ? requestedExecutionId : manualExecutionId())
+    : undefined
   const executionSnapshot = isMulti ? multiExecutionSnapshot(task) : null
   const executionFingerprint = isMulti ? await executionFingerprintOf(task) : null
   // 來源索引也要供 legacy `fields` 回覆的診斷使用；舊 block 任務不是
@@ -903,7 +902,10 @@ export async function runTask(task, opts = {}) {
         if (!(await multiExecutionStillValid(task, executionSnapshot))) return { ...TASK_CHANGED_RESULT }
         await notifyCommittedMultiAlerts(committed)
         if (!(await multiExecutionStillValid(task, executionSnapshot))) return { ...TASK_CHANGED_RESULT }
-        return await finalizeMultiRecords(task, slot, committed, { preserveExisting: true })
+        return await finalizeMultiRecords(task, slot, committed, {
+          preserveExisting: true,
+          executionFingerprint
+        })
       }
     } catch {}
   }
@@ -1481,10 +1483,12 @@ export async function runTask(task, opts = {}) {
             if (isMulti && !(await multiExecutionStillValid(task, executionSnapshot))) {
               return { ...TASK_CHANGED_RESULT }
             }
-            await finalizeMultiRecords(task, slot, committedRecords, {
+            const finalized = await finalizeMultiRecords(task, slot, committedRecords, {
               skipLedger: isManual,
-              partial: res.partial === true
+              partial: res.partial === true,
+              executionFingerprint: isMulti ? executionFingerprint : undefined
             })
+            if (finalized?.error === 'task_changed') return finalized
 
             // 設定頁的診斷要看得出這一次抓了幾個值、哪幾個沒抓到
             // 診斷頁是用字串串接顯示；環形緩衝只有 500 筆，全成功就不占位子（否則會把看門狗紀錄擠掉）

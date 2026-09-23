@@ -1,5 +1,5 @@
 // AutoFetcher 健康狀態彙總與工具列燈號 (SPEC §12.1)
-import { getTasks, getHealthMap, updateHealthMap, getMissedList } from '../shared/storage.js'
+import { getTasks, getHealthMap, updateHealthMap, updateHealthMapForExecution, getMissedList } from '../shared/storage.js'
 import { RED_STATUSES, WARN_STATUSES, statusTextOf } from '../shared/record-status.js'
 
 // 健康紀錄裡站台項目的鍵前綴（sitecheck.js 寫入）
@@ -107,9 +107,9 @@ export async function getHealth() {
 }
 
 // 寫入單一任務的健康狀態紀錄並補上時間戳
-export async function setTaskHealth(taskId, { status, reason, detail } = {}) {
+async function setTaskHealthInternal(taskId, { status, reason, detail } = {}, executionFingerprint) {
   let record
-  await updateHealthMap((health) => {
+  const mutate = (health) => {
     const prev = health[taskId]
 
     // status 與上一次不同時重設為未讀（false），相同時保留既有 read 標記
@@ -125,15 +125,28 @@ export async function setTaskHealth(taskId, { status, reason, detail } = {}) {
       reason: resolvedReason,
       detail,
       at: Date.now(),
-      read
+      read,
+      ...(executionFingerprint ? { executionFingerprint } : {})
     }
 
     return {
       ...health,
       [taskId]: record
     }
-  })
+  }
+  const written = executionFingerprint
+    ? await updateHealthMapForExecution(taskId, executionFingerprint, mutate)
+    : (await updateHealthMap(mutate), true)
+  if (!written) return null
   return record
+}
+
+export async function setTaskHealth(taskId, healthObj = {}) {
+  return setTaskHealthInternal(taskId, healthObj)
+}
+
+export async function setTaskHealthForExecution(taskId, healthObj, executionFingerprint) {
+  return setTaskHealthInternal(taskId, healthObj, executionFingerprint)
 }
 
 // 將指定任務的健康紀錄標示為已讀

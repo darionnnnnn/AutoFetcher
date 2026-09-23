@@ -7,7 +7,7 @@ import {
   nextDailyRun,
   nextIntervalRun
 } from './scheduler.js'
-import { getTasks, trimOldRecords, trimOldRuns, pruneOrphanEntries, runOncePerDay, getLastTimezone, setLastTimezone } from '../shared/storage.js'
+import { getTasks, trimOldRecords, trimOldRuns, pruneOrphanEntries, runOncePerDay, getLastTimezone, setLastTimezone, replayExecutionInvalidations } from '../shared/storage.js'
 import { ensureSiteCheck } from './sitecheck.js'
 import { cleanOrphanFetchTabs } from './fetch-tab.js'
 import { recoverRunState, parseRetryName } from './fetcher.js'
@@ -97,6 +97,10 @@ async function cleanStaleAlarms() {
 
 // 執行看門狗檢查巡迴（runOpts 只給測試縮短續跑的等待，正式接線不傳）
 export async function runWatchdog(runOpts = {}) {
+  try {
+    await replayExecutionInvalidations()
+  } catch {}
+
   try {
     await checkWatchdogAlarm()
   } catch {}

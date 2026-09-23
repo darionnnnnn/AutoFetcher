@@ -94,6 +94,63 @@ export function normalizeTaskSources(task) {
 // 便於不需要記住模組內部命名的呼叫端；兩者是同一個純函式契約。
 export const taskSourcesOf = normalizeTaskSources
 
+// 執行身分只包含會改變擷取結果的規格；名稱與欄位顯示順序不在其中。
+// 這份 canonical snapshot 供 background 的 publish gate 與 storage 的條件寫入共用。
+function stableExecutionJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableExecutionJson).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableExecutionJson(value[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+export function multiExecutionSnapshot(task) {
+  return stableExecutionJson({
+    url: task?.url,
+    enabled: task?.enabled,
+    foreground: task?.foreground,
+    mode: task?.mode,
+    specMode: task?.spec?.mode,
+    preActions: task?.preActions,
+    sources: normalizeTaskSources(task)
+      .map(({ key, mode, source, spec }) => ({ key, mode, source, spec }))
+      .sort((a, b) => String(a.key).localeCompare(String(b.key)))
+  })
+}
+
+export function changedExecutionSeriesOf(before, after) {
+  const oldSources = normalizeTaskSources(before)
+  if (!(after?.mode === 'multi' || after?.spec?.mode === 'multi')) {
+    return oldSources.map(field => field.key)
+  }
+  const common = (task) => stableExecutionJson({
+    url: task?.url,
+    enabled: task?.enabled,
+    foreground: task?.foreground,
+    mode: task?.mode,
+    specMode: task?.spec?.mode,
+    preActions: task?.preActions
+  })
+  const oldByKey = new Map(oldSources.map(field => [field.key, field]))
+  const newByKey = new Map(normalizeTaskSources(after).map(field => [field.key, field]))
+  if (common(before) !== common(after)) return oldSources.map(field => field.key)
+  return oldSources
+    .filter(field => {
+      const current = newByKey.get(field.key)
+      return !current || stableExecutionJson({ key: field.key, mode: field.mode, source: field.source, spec: field.spec }) !==
+        stableExecutionJson({ key: current.key, mode: current.mode, source: current.source, spec: current.spec })
+    })
+    .map(field => field.key)
+}
+
+export async function executionFingerprintOf(task) {
+  const subtle = globalThis.crypto?.subtle
+  if (!subtle) throw new Error('Web Crypto is required for execution fingerprints')
+  const bytes = new TextEncoder().encode(multiExecutionSnapshot(task))
+  const digest = new Uint8Array(await subtle.digest('SHA-256', bytes))
+  return Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
 function invalid(message) {
   throw new Error(`multi 任務格式錯誤：${message}`)
 }

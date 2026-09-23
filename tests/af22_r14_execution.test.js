@@ -138,7 +138,6 @@ test('R14：durable A 規格在帳本中斷後改成 B，不把 A 舊紀錄當�
   assert.equal(beforeRecords.every(record => !Object.hasOwn(record, 'executionSnapshot')), true)
   assert.equal(beforeRecords.every(record => JSON.stringify(record).length < 1000), true)
   const beforeLastValues = await st.getLastValues()
-  const beforeHealth = await st.getHealthMap()
 
   await c.storage.local.remove(`runs:${slot.slice(0, 10)}`)
   const taskB = structuredClone(taskA)
@@ -149,8 +148,8 @@ test('R14：durable A 規格在帳本中斷後改成 B，不把 A 舊紀錄當�
   assert.equal(result.error, 'task_changed')
   assert.equal(c.__calls.filter(x => x.api === 'tabs.create').length, 0)
   assert.deepEqual(await st.getRecordsByDate(slot.slice(0, 10)), beforeRecords)
-  assert.deepEqual(await st.getLastValues(), beforeLastValues)
-  assert.deepEqual(await st.getHealthMap(), beforeHealth)
+  assert.deepEqual(await st.getLastValues(), { 'r14-exec#label': beforeLastValues['r14-exec#label'] })
+  assert.equal((await st.getHealthMap())[taskB.id], undefined)
 })
 
 test('R14：沒有規格摘要的舊 durable multi 只安全拒絕恢復，不猜成目前規格', async () => {
@@ -189,6 +188,31 @@ test('R14：執行中只改 field 名稱仍沿用原 key／規格並發布結果
   assert.deepEqual(Object.keys(await st.getLastValues()).sort(), ['r14-exec#label', 'r14-exec#price'])
   assert.equal((await st.getHealthMap())[task.id].status, 'ok')
   assert.deepEqual(await st.getRunState(), {})
+})
+
+test('R11：手動 multi 採用 caller executionId，未提供時仍產生本輪 id', async () => {
+  const { c, st, fe } = await fresh()
+  const task = multiTask()
+  await st.saveTask(task)
+  c.__setScriptResponder(framesResponder())
+  c.__setTabResponder((tabId, msg) => msg.type === 'EXTRACT'
+    ? (msg.locator?.css === '#price'
+      ? { ok: true, value: 12, raw: '12', status: 'ok' }
+      : { ok: true, value: '標籤', raw: '標籤', status: 'ok' })
+    : { ok: true })
+
+  await fe.runTask(task, { reason: 'manual', executionId: 'caller-execution-17', slot: '2026-09-22T09:35', ...FAST })
+  const supplied = await st.getRecordsByDate('2026-09-22')
+  assert.deepEqual(supplied.map(record => record.executionId), ['caller-execution-17', 'caller-execution-17'])
+
+  await fe.runTask(task, { reason: 'manual', slot: '2026-09-22T09:36', ...FAST })
+  const all = await st.getRecordsByDate('2026-09-22')
+  const generated = all.filter(record => record.slot === '2026-09-22T09:36').map(record => record.executionId)
+  assert.equal(generated.length, 2)
+  assert.equal(typeof generated[0], 'string')
+  assert.ok(generated[0].length > 0)
+  assert.equal(generated[0], generated[1])
+  assert.notEqual(generated[0], 'caller-execution-17')
 })
 
 test('R14a legacy：同 slot 重入沿用無 fingerprint 的既有 fields 對帳', async () => {
