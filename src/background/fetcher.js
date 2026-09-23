@@ -255,7 +255,7 @@ export async function recoverRunState(runOpts = {}, { detach = false } = {}) {
       })
       if (detach) {
         resumed.push(run.catch(async (err) => {
-          try { await diag.log('run_state_error', `續跑 ${key}：${String(err?.message || err)}`) } catch {}
+          try { await diag.log('run_state_error', 'stage=run_state_recovery result=error') } catch {}
         }))
       } else {
         await run
@@ -798,12 +798,32 @@ function sourceDiagLabel(field) {
   if (typeof frameUrl === 'string' && frameUrl.trim() !== '') {
     try {
       const url = new URL(frameUrl)
-      return `${url.origin}${url.pathname}`
+      // Frame paths can also contain session ids. Keep a short host/path hint,
+      // but redact query, fragment, and path segments that look like credentials.
+      const path = url.pathname.split('/').map(segment => /^(?:bearer|token|key|secret|auth|session)/i.test(segment) || segment.length > 40
+        ? '[redacted]' : segment).join('/').slice(0, 96)
+      return `${url.origin}${path}`
     } catch {
       return '嵌入框架'
     }
   }
   return '主文件'
+}
+
+// Diagnostics are exported by the user. Keep only short labels and controlled
+// identifiers here; exception messages can contain DOM text, input values, or URLs.
+function diagnosticLabel(value, fallback = '未命名') {
+  const text = String(value ?? '').replace(/[\r\n\t\u0000-\u001f]/g, ' ').trim()
+  if (!text) return fallback
+  return text
+    .replace(/https?:\/\/[^\s"'<>]+/gi, '[URL]')
+    .replace(/\b(password|passwd|token|secret|api[_-]?key|authorization)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]')
+    .slice(0, 64)
+}
+
+function diagnosticResult(record) {
+  const status = String(record?.status || '')
+  return /^[a-z][a-z0-9_]{0,31}$/i.test(status) ? status : 'failed'
 }
 
 function commitIdOf(task, slot) {
@@ -1183,8 +1203,7 @@ export async function runTask(task, opts = {}) {
             }
             if (preLiveErr !== null) {
               preActionTrace.push({ step: i + 1, type: action?.type, ok: false, ms: Date.now() - startedAt })
-              // 原文留給診斷（與擷取那條同一個鍵），使用者看的是說得出怎麼辦的中文
-              try { await diag.log('fetch_page_gone', `「${task.name}」${String(preLiveErr?.message || preLiveErr)}`) } catch {}
+              try { await diag.log('fetch_page_gone', `group=${diagnosticLabel(task.name)} stage=pre_action result=page_gone`) } catch {}
               throw new Error(preActionFailure(i, action, 'page_gone'))
             }
             if (preRes?.ok !== true) {
@@ -1498,10 +1517,10 @@ export async function runTask(task, opts = {}) {
                 const key = r.taskId.slice(`${task.id}#`.length)
                 const field = multiSources.find(one => one?.key === key)
                 const name = buildSeriesIndex([task]).byId[r.taskId]?.shortName || r.taskId
-                return `${name}（${sourceDiagLabel(field)}）`
+                return `${diagnosticLabel(name)}（來源 ${sourceDiagLabel(field)}；stage=extract；result=${diagnosticResult(r)}）`
               })
             if (failedNames.length > 0) {
-              await diag.log('fetch_fields', `「${task.name}」${committedRecords.length} 個值，失敗 ${failedNames.length}：${failedNames.join('、')}`)
+              await diag.log('fetch_fields', `group=${diagnosticLabel(task.name)} values=${committedRecords.length} failures=${failedNames.length}: ${failedNames.join('、').slice(0, 900)}`)
             }
 
             return committedRecords.find(r => isSuccess(r)) || committedRecords[0] || null
@@ -1614,13 +1633,13 @@ export async function runTask(task, opts = {}) {
 
       } catch (err) {
         // 存活重試耗盡才會走到這裡：把 Chrome 的英文原文換成說得出怎麼辦的中文，
-        // **原文寫進診斷不丟掉**（除錯時找不到原文就等於什麼線索都沒有）。
+        // 診斷匯出可能含敏感資料；只記失敗階段與受控結果代碼，不保存例外原文。
         // 轉譯只能在這裡做一次：放進重試迴圈的話，每重試一次就把原文覆蓋一次。
         const raw = String(err?.message || err)
         let shown = raw
         if (err?.afPageGone === true) {
           shown = PAGE_GONE_MESSAGE
-          try { await diag.log('fetch_page_gone', `「${task.name}」${raw}`) } catch {}
+          try { await diag.log('fetch_page_gone', `group=${diagnosticLabel(task.name)} stage=fetch result=page_gone`) } catch {}
         }
         // 立即測試失敗時也要帶軌跡：使用者最需要知道的是「hover 有做、卡在第幾步」，
         // 只回一句錯誤訊息就是把軌跡丟掉
@@ -1662,7 +1681,7 @@ export async function runTask(task, opts = {}) {
       try {
         await dropRunState(runKey)
       } catch (err) {
-        try { await diag.log('run_state_error', `${runKey}：${String(err?.message || err)}`) } catch {}
+        try { await diag.log('run_state_error', `stage=run_state_cleanup result=error`) } catch {}
       }
     }
   }

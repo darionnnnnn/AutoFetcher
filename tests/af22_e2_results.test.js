@@ -71,6 +71,45 @@ test('E2a：一值成功、一值缺回覆，按 field key 完整落紀錄且成
   assert.doesNotMatch(String(fieldDiag?.detail), /secret=should-not-be-diagnostic/)
 })
 
+test('R17：失敗診斷保留來源與階段線索，但限制長度並移除敏感 URL／名稱內容', async () => {
+  const { c, st, fe } = await fresh()
+  c.__setScriptResponder((injection) => Array.isArray(injection?.args)
+    ? []
+    : [{ frameId: 0, result: 'https://a.test/page' }, { frameId: 7, result: 'https://b.test/embed/token123' }])
+  c.__setTabResponder((tabId, msg) => msg.type === 'EXTRACT'
+    ? { ok: false, error: 'parse_error', message: 'password=hunter2 <input value="private">' }
+    : { ok: true })
+  const task = multiTask({
+    name: `Group token=group-secret ${'very-long-group-label '.repeat(8)}`,
+    spec: {
+      ...multiTask().spec,
+      fields: [
+        multiTask().spec.fields[0],
+        { ...multiTask().spec.fields[1], name: `Value secret=value-secret ${'long-value '.repeat(20)}`, source: {
+          ...multiTask().spec.fields[1].source,
+          frame: { url: 'https://b.test/embed/token123?access_token=query-secret#private-fragment' }
+        } }
+      ]
+    },
+    fields: [{ key: 'price', name: '價格' }, { key: 'label', name: `Value secret=value-secret ${'long-value '.repeat(20)}` }]
+  })
+  await st.saveTask(task)
+  await fe.runTask(task, { slot: '2026-09-21T10:15', attempt: 3, ...FAST })
+  const entry = (await st.getDiagList()).find(item => item.kind === 'fetch_fields')
+  const detail = String(entry?.detail || '')
+  assert.ok(detail.includes('group='))
+  assert.ok(detail.includes('來源 https://b.test/embed'))
+  assert.ok(detail.includes('https://b.test/embed/[redacted]'))
+  assert.ok(detail.includes('stage=extract'))
+  assert.ok(detail.includes('result=parse_error'))
+  assert.ok(detail.length <= 1100, `diagnostic detail length=${detail.length}`)
+  for (const secret of ['group-secret', 'value-secret', 'token123', 'query-secret', 'private-fragment', 'hunter2', 'private']) {
+    assert.equal(detail.includes(secret), false, `diagnostic leaked ${secret}: ${detail}`)
+  }
+  const records = await st.getRecordsByDate('2026-09-21')
+  assert.equal(records.length, 2, '診斷摘要不得改變完整正式結果集')
+})
+
 test('E2a：frame 在前一值完成後消失，既有成功值保留、消失值明確失敗', async () => {
   const { c, st, fe } = await fresh()
   let frameListCalls = 0
