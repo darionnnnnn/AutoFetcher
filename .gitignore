@@ -5,3 +5,4 @@ dist/
 .gemini-tasks/
 .browsers/
 publish/
+.local-backups/

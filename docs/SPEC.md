@@ -899,7 +899,7 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
 
 ## §5 儲存
 
-- 主資料:`chrome.storage.local`,`schemaVersion` 目前為 **3**(AF-21)
+- 主資料:`chrome.storage.local`,`schemaVersion` 目前為 **4**(AF-22 R16;0.20 的 v3 資料由初始化遷移)
   - `tasks: Task[]`、`sites: Record<origin, Site>`
   - **紀錄按小時分鍵** `rec2:<YYYY-MM-DD>:<HH>`(`HH` 取 slot 的本地小時,沒有 slot 取 `capturedAt` 換算的本地小時)。舊的 `rec:<YYYY-MM-DD>` **不遷移、只讀與刪**,隨保留天數到期;**刻意換前綴**:舊版以 `startsWith('rec:')` 認紀錄鍵,沿用前綴的話降版時小時鍵會被當成日期。同一天的所有紀錄鍵共用一把鎖 `rec@<日期>`。單日讀合併舊鍵與 24 個小時鍵、同日依 `capturedAt` 排序;範圍讀 ≤62 天由日期列舉鍵直接取(**不經 `listDates`、不 `get(null)`**——抓取路徑的告警評估會呼叫它),超過才取所有鍵名分批讀。
   - **帳本按日分鍵** `runs:<YYYY-MM-DD>` = `{ [taskId]: { [slot]: status } }`,介面 `getRunStatus`／`setRunStatus`／`getLedgerRange`;保留 14 天(`trimOldRuns`,不受保留天數影響)。v2 → v3 遷移把舊單一 `runs` 近 14 天併入按日鍵、刪舊鍵,中途失敗重跑結果相同。
@@ -907,7 +907,8 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
   - 需要「所有鍵」的操作(`listDates`、清理、刪任務、計數、用量)有 `getKeys` 就用它、每批最多 50 鍵取值,不一次讀滿。
   - 保留天數預設 365,超過自動刪最舊(設定可調;**調低要先確認**,§8.5);由看門狗執行,一天最多掃一次,不放在抓取寫入路徑。
   - **紀錄瘦身**(AF-21):`raw` 超過 500 字在寫紀錄那一層截斷並設 `rawTruncated`(擷取端與試抓預覽不截);`snippet` 不進紀錄;locator 的 anchor 文字超過 120 字不產生 anchor。
-  - **升級注意**:v3 之後不建議降版(舊版看不到 `rec2:` 紀錄、帳本是空的);升級前先匯出設定與紀錄。
+  - **升級與回退**(AF-22 R16):schemaVersion 拒收只保護設定檔匯入,不保證舊程式讀取已升級的同一份 `chrome.storage.local` 安全。升級前在設定頁分別手動匯出設定檔與 JSON 歷史日檔,並確認檔案可開啟、內容日期/任務正確。設定檔不含抓取紀錄;歷史檔不含任務完整設定。
+    回退須安裝可讀取該資料形狀的相容版本,再分別匯入設定與歷史檔;不得只修改 schemaVersion 冒充降版。還原設定會以備份覆蓋同 id 任務設定、備份包含的站台與設定欄位,並替換整份版面,因此備份後對既有任務的修改及這些設定變更會被覆蓋;匯入是合併,備份後新增的任務不會自動刪除。歷史匯入按既有去重規則合併,不會回滾備份後新增紀錄。還原不涵蓋 health、lastValues、排程執行帳本、通知冷卻與 session 暫存。若更新後擷取了新 schema 的資料,舊程式可能看不到小時分鍵 `rec2:` 與按日帳本;必須用相容版本恢復,不能以舊程式直接覆寫新版 storage。
 - 檔案匯出(**只在使用者手動觸發**,不自動下載):
   - Report 設定頁「匯出」區:選日期範圍(單日 / 本月 / 全部)與格式(JSON 日檔、CSV、獨立 HTML 報表 §8.5),
     按下才呼叫 `chrome.downloads.download`(`saveAs:true` 讓使用者選位置;預設檔名 `AutoFetcher/<YYYY-MM-DD>.json`)。
