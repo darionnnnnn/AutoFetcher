@@ -5,8 +5,7 @@ import { MSG } from '../../shared/messages.js'
 import { buildExport, download } from '../../shared/export.js'
 import { confirmDialog, dismissDialog, isDialogOpen } from '../modal.js'
 import { icon } from '../icons.js'
-import { isGap, gapTextOf } from '../../shared/describe.js'
-import { describeSchedule, describeTarget, describeFields, targetOfTask, exclusionOfTarget, EMPTY_GUIDE, TERMS } from '../../shared/describe.js'
+import { isGap, gapTextOf, describeSchedule, describeTarget, describeFields, targetOfTask, exclusionOfTarget, EMPTY_GUIDE, TERMS, describeTaskIdentities } from '../../shared/describe.js'
 
 let currentTasks = []
 let currentHealth = {}
@@ -35,6 +34,10 @@ function rowStateOf(t, h) {
   if (isRed(h)) return 'failed'
   if (isWarn(h)) return 'warn'
   return ''
+}
+
+function taskIdentityOf(taskId) {
+  return describeTaskIdentities(currentTasks).get(taskId) || { label: taskId, source: '', shortId: '' }
 }
 
 // 重選流程（既有的 ENTER_PICK repick），「重選」與失敗列的「重選目標」共用
@@ -156,10 +159,11 @@ async function openDeleteDialog(ids, fromSelection = false) {
   let msgText = ''
   if (ids.length === 1) {
     const taskObj = currentTasks.find((t) => t.id === ids[0])
-    const taskName = taskObj?.name || ids[0]
-    msgText = `確定要刪除「${taskName}」嗎？此操作將一併刪除 ${count} 筆歷史紀錄。`
+    const taskLabel = taskObj ? taskIdentityOf(taskObj.id).label : ids[0]
+    msgText = `確定要刪除「${taskLabel}」嗎？此操作將一併刪除 ${count} 筆歷史紀錄。`
   } else {
-    msgText = `確定要刪除這 ${ids.length} 個任務嗎？此操作將一併刪除合計 ${count} 筆歷史紀錄。`
+    const labels = ids.map(id => taskIdentityOf(id).label)
+    msgText = `確定要刪除這 ${ids.length} 個任務（${labels.join('、')}）嗎？此操作將一併刪除合計 ${count} 筆歷史紀錄。`
   }
 
   dialogSelectionSig = sig
@@ -461,7 +465,7 @@ function createTaskRow(t) {
   const selectBox = document.createElement('input')
   selectBox.type = 'checkbox'
   selectBox.dataset.action = 'select'
-  selectBox.setAttribute('aria-label', `選取「${t.name || t.id}」`)
+  selectBox.setAttribute('aria-label', `選取「${taskIdentityOf(t.id).label}」`)
   selectBox.checked = selectedIds.has(t.id)
   selectBox.addEventListener('click', (e) => {
     const taskList = document.getElementById('task-list')
@@ -506,7 +510,7 @@ function createTaskRow(t) {
   toggle.dataset.action = 'toggle'
   // 啟用開關畫成 switch（report.css），與左邊的「選取」核取方塊分得開；名稱給螢幕閱讀器與滑鼠提示
   toggle.setAttribute('role', 'switch')
-  toggle.setAttribute('aria-label', `啟用「${t.name || t.id}」`)
+  toggle.setAttribute('aria-label', `啟用「${taskIdentityOf(t.id).label}」`)
   toggleLabel.title = '啟用／停用這個任務'
   toggle.checked = t.enabled !== false
   toggle.addEventListener('change', async () => {
@@ -602,7 +606,9 @@ function createTaskRow(t) {
 
   const urlEl = document.createElement('span')
   urlEl.className = 'task-url'
-  urlEl.textContent = t.url || ''
+  const identity = taskIdentityOf(t.id)
+  urlEl.textContent = `${identity.shortId ? `#${identity.shortId} · ` : ''}${identity.source}`
+  urlEl.title = identity.source
 
   const modeEl = document.createElement('span')
   modeEl.className = 'task-mode'
@@ -734,9 +740,10 @@ function createTaskRow(t) {
       const res = await chrome.runtime.sendMessage({ type: MSG.RUN_TASK, taskId: t.id })
       if (Array.isArray(res?.values) && res.values.length > 0) {
         // 多值任務逐值回報，只說一個數字看不出其他值怎麼了
-        await showResult(res.values
+        const detail = res.values
           .map(v => `${v.name}: ${v.ok ? v.value : (v.error || '失敗')}`)
-          .join('  '))
+          .join('  ')
+        await showResult(res.outcome === 'partial' ? `部分失敗：${detail}` : detail)
       } else if (res && res.outcome === 'done') {
         await showResult(res.value !== null && res.value !== undefined ? `抓到 ${res.value}` : '抓到值')
       } else {
@@ -953,7 +960,7 @@ export function renderTasks(tasks, health = {}, missed = [], ctx = {}) {
       banner.hidden = false
       banner.textContent = ''
 
-      const taskMap = new Map(currentTasks.map((t) => [t.id, t.name || t.id]))
+      const taskMap = new Map(currentTasks.map((t) => [t.id, taskIdentityOf(t.id).label]))
       const itemRows = []
       // interval 的空窗（kind:'gap'）不可補抓：自己一列、只有「知道了」，不進勾選清單
       const slotItems = currentMissed.filter((m) => !isGap(m))

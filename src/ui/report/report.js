@@ -21,6 +21,7 @@ import { closeDrawer, isDrawerOpen } from './drawer.js'
 import { isSuccess, statusTextOf } from '../../shared/record-status.js'
 import { MSG } from '../../shared/messages.js'
 import { buildSeriesIndex, nameOf } from '../../shared/series-index.js'
+import { describeTaskIdentities } from '../../shared/describe.js'
 import { computeHealth } from '../../background/health.js'
 import { icon, setIcon, levelChipOf } from '../icons.js'
 
@@ -270,6 +271,7 @@ export async function renderFilters() {
   const tasksContainer = document.createElement('div')
   tasksContainer.id = 'filter-tasks'
   const seriesIndex = buildSeriesIndex(tasks)
+  const identities = describeTaskIdentities(tasks)
 
   for (const t of tasks) {
     if (!t || !t.id) continue
@@ -282,7 +284,8 @@ export async function renderFilters() {
     parentCb.value = t.id
 
     parentLabel.appendChild(parentCb)
-    parentLabel.appendChild(document.createTextNode(` ${t.name || t.id}`))
+    const identity = identities.get(t.id)
+    parentLabel.appendChild(document.createTextNode(` ${identity?.label || t.name || t.id}`))
     taskGroup.appendChild(parentLabel)
 
     const isMulti = Array.isArray(t.fields) && t.fields.length > 0
@@ -325,7 +328,7 @@ export async function renderFilters() {
         childCbs.push(childCb)
 
         childLabel.appendChild(childCb)
-        childLabel.appendChild(document.createTextNode(` ${item?.shortName || item?.name || sid}`))
+        childLabel.appendChild(document.createTextNode(` ${identity?.label || t.name || t.id} · ${item?.shortName || item?.name || sid}`))
         childrenContainer.appendChild(childLabel)
 
         childCb.addEventListener('change', () => {

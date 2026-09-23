@@ -6,6 +6,7 @@ import { getLayout, updateCard, removeCard } from '../../shared/layout-store.js'
 import { getTasks } from '../../shared/storage.js'
 import { rerenderCard, renderDashboard, flushDashboardRefresh } from './dashboard.js'
 import { buildSeriesIndex } from '../../shared/series-index.js'
+import { describeTaskIdentities } from '../../shared/describe.js'
 import { confirmDialog, isDialogOpen } from '../modal.js'
 import { setIcon } from '../icons.js'
 
@@ -141,6 +142,7 @@ function updateSourcesDisabledState(type) {
   if (!container) return
   const isNumeric = ['number', 'line', 'bar', 'gauge'].includes(type)
   const index = buildSeriesIndex(cachedTasks)
+  const identities = describeTaskIdentities(cachedTasks)
 
   for (const t of cachedTasks) {
     const isMulti = Array.isArray(t.fields) && t.fields.length > 0
@@ -156,7 +158,8 @@ function updateSourcesDisabledState(type) {
         if (label) {
           label.textContent = ''
           label.appendChild(parentBox)
-          label.appendChild(document.createTextNode(isNumeric && eligibleIds.length === 0 ? ` ${t.name || t.id}（文字模式不可選）` : ` ${t.name || t.id}`))
+          const taskLabel = identities.get(t.id)?.label || t.name || t.id
+          label.appendChild(document.createTextNode(isNumeric && eligibleIds.length === 0 ? ` ${taskLabel}（文字模式不可選）` : ` ${taskLabel}`))
         }
       }
       for (const sid of (index.childrenOf[t.id] || [])) {
@@ -170,7 +173,7 @@ function updateSourcesDisabledState(type) {
         if (label) {
           label.textContent = ''
           label.appendChild(input)
-          const displayName = seriesInfo?.shortName || seriesInfo?.name || sid
+          const displayName = `${identities.get(t.id)?.label || t.name || t.id} · ${seriesInfo?.shortName || seriesInfo?.name || sid}`
           label.appendChild(document.createTextNode(disabled ? ` ${displayName}（文字模式不可選）` : ` ${displayName}`))
         }
       }
@@ -186,7 +189,7 @@ function updateSourcesDisabledState(type) {
       if (label) {
         label.textContent = ''
         label.appendChild(input)
-        const displayName = t.name || t.id
+        const displayName = identities.get(t.id)?.label || t.name || t.id
         label.appendChild(document.createTextNode(disabled ? ` ${displayName}（文字模式不可選）` : ` ${displayName}`))
       }
     }
@@ -207,6 +210,7 @@ function renderSources(tasks, currentSources = [], type = 'number') {
   const selectedIds = (currentSources || []).map(s => s && s.taskId).filter(Boolean)
   const selectedSet = new Set(selectedIds)
   const index = buildSeriesIndex(tasks)
+  const identities = describeTaskIdentities(tasks)
 
   // 組織任務與序列的排序
   const taskEntries = []
@@ -275,7 +279,8 @@ function renderSources(tasks, currentSources = [], type = 'number') {
       }
 
       parentLabel.appendChild(parentInput)
-      parentLabel.appendChild(document.createTextNode(isTextMode ? ` ${t.name || t.id}（文字模式不可選）` : ` ${t.name || t.id}`))
+      const taskLabel = identities.get(t.id)?.label || t.name || t.id
+      parentLabel.appendChild(document.createTextNode(isTextMode ? ` ${taskLabel}（文字模式不可選）` : ` ${taskLabel}`))
       parentRow.appendChild(parentLabel)
       container.appendChild(parentRow)
 
@@ -300,7 +305,7 @@ function renderSources(tasks, currentSources = [], type = 'number') {
         const isChildTextMode = isNumeric && seriesInfo?.mode === 'text'
         childInput.disabled = isChildTextMode
 
-        const displayName = seriesInfo?.shortName || seriesInfo?.name || sid
+        const displayName = `${taskLabel} · ${seriesInfo?.shortName || seriesInfo?.name || sid}`
         childLabel.appendChild(childInput)
         childLabel.appendChild(document.createTextNode(isChildTextMode ? ` ${displayName}（文字模式不可選）` : ` ${displayName}`))
         childRow.appendChild(childLabel)
@@ -345,7 +350,8 @@ function renderSources(tasks, currentSources = [], type = 'number') {
       input.disabled = isTextMode
 
       label.appendChild(input)
-      label.appendChild(document.createTextNode(isTextMode ? ` ${t.name || t.id}（文字模式不可選）` : ` ${t.name || t.id}`))
+      const taskLabel = identities.get(t.id)?.label || t.name || t.id
+      label.appendChild(document.createTextNode(isTextMode ? ` ${taskLabel}（文字模式不可選）` : ` ${taskLabel}`))
       row.appendChild(label)
 
       if (isChecked) {
@@ -380,6 +386,7 @@ function renderStatusTasks(tasks, taskIds = []) {
   container.textContent = ''
 
   const selectedSet = new Set(Array.isArray(taskIds) ? taskIds : [])
+  const identities = describeTaskIdentities(tasks)
 
   for (const t of tasks) {
     const label = document.createElement('label')
@@ -389,7 +396,7 @@ function renderStatusTasks(tasks, taskIds = []) {
     input.checked = selectedSet.has(t.id)
 
     label.appendChild(input)
-    label.appendChild(document.createTextNode(` ${t.name || t.id}`))
+    label.appendChild(document.createTextNode(` ${identities.get(t.id)?.label || t.name || t.id}`))
     container.appendChild(label)
   }
 }

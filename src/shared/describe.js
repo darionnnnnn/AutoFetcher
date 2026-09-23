@@ -5,6 +5,63 @@
 
 import { isAnchorText, skipOf, excludeOf } from './table.js'
 
+// 同名任務在同一個清單出現時，補上安全的來源摘要；同名同來源再附穩定 id 短碼。
+// URL 摘要刻意省略 query 與 fragment，避免把 token 顯示在標籤或提示文字中。
+export function describeTaskIdentities(tasks) {
+  const list = Array.isArray(tasks) ? tasks.filter(task => task && typeof task.id === 'string') : []
+  const baseOf = task => {
+    let source = typeof task.url === 'string' ? task.url : ''
+    try {
+      const url = new URL(source)
+      source = `${url.host}${url.pathname === '/' ? '' : url.pathname}`
+    } catch {
+      source = source.split(/[?#]/, 1)[0]
+    }
+    const name = typeof task.name === 'string' && task.name.trim() ? task.name : task.id
+    return { name, nameKey: name.trim(), source: source || '來源不明' }
+  }
+  const bases = new Map(list.map(task => [task.id, baseOf(task)]))
+  const groups = new Map()
+  const nameCounts = new Map()
+  for (const task of list) {
+    const base = bases.get(task.id)
+    const key = `${base.nameKey}\u0000${base.source}`
+    const group = groups.get(key) || []
+    group.push(task)
+    groups.set(key, group)
+    nameCounts.set(base.nameKey, (nameCounts.get(base.nameKey) || 0) + 1)
+  }
+
+  const out = new Map()
+  for (const group of groups.values()) {
+    const duplicate = group.length > 1
+    for (const task of group) {
+      const base = bases.get(task.id)
+      let shortId = ''
+      if (duplicate) {
+        const ids = group.map(other => other.id)
+        const maximum = Math.max(...ids.map(id => id.length))
+        let uniqueLength = 0
+        for (let length = Math.min(6, Math.min(...ids.map(id => id.length))); length <= maximum; length++) {
+          const suffixes = ids.map(id => id.slice(-length).toLowerCase())
+          if (new Set(suffixes).size === suffixes.length) {
+            uniqueLength = length
+            break
+          }
+        }
+        shortId = uniqueLength ? task.id.slice(-uniqueLength) : task.id
+      }
+      out.set(task.id, {
+        name: base.name,
+        source: base.source,
+        shortId,
+        label: `${base.name}${shortId ? ` · #${shortId}` : ''}${nameCounts.get(base.nameKey) > 1 ? ` · ${base.source}` : ''}`
+      })
+    }
+  }
+  return out
+}
+
 const WEEKDAY_NAMES = ['日', '一', '二', '三', '四', '五', '六']
 // 以週一為起點排序：使用者看的是「週一～五」，不是「週日、週一…」
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0]

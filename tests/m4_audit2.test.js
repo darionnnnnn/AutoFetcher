@@ -102,12 +102,13 @@ test('開抽屜改個標題不會把按天分列改掉', async () => {
 test('多值任務按立即抓取要看得到每個值', async () => {
   const { c, st, bg } = await freshBg()
   await st.saveTask(multi())
+  let fields = {
+    k1: { ok: true, value: 31.2, raw: '31.2', status: 'ok' },
+    k2: { ok: false, error: 'not_found' }
+  }
   c.__setTabResponder(() => ({
     ok: true,
-    fields: {
-      k1: { ok: true, value: 31.2, raw: '31.2', status: 'ok' },
-      k2: { ok: false, error: 'not_found' }
-    }
+    fields
   }))
   const res = await runTask(bg, 'bank', FAST)
   assert.ok(Array.isArray(res.values), '多值任務要回傳每個值的結果')
@@ -116,6 +117,13 @@ test('多值任務按立即抓取要看得到每個值', async () => {
   assert.equal(buy.value, 31.2)
   const sell = res.values.find(v => v.name === '美金賣出')
   assert.equal(sell.ok, false)
+
+  fields = {
+    k1: { ok: true, value: 44, raw: '44', status: 'ok' },
+    k2: { ok: true, value: 55, raw: '55', status: 'ok' }
+  }
+  const second = await runTask(bg, 'bank', FAST)
+  assert.deepEqual(second.values.map(v => v.value), [44, 55], 'legacy block 也必須按本次手動 executionId 回傳')
 })
 
 test('單值任務的回傳形狀不變', async () => {

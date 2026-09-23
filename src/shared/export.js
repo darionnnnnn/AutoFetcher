@@ -5,7 +5,8 @@ import { getLayout } from './layout-store.js'
 import { renderCard } from '../ui/report/cards.js'
 import { isSuccess } from './record-status.js'
 import { effectiveTimeOf } from '../ui/report/series.js'
-import { buildSeriesIndex, nameOf } from './series-index.js'
+import { buildSeriesIndex, nameOf, parentIdOf, fieldKeyOf } from './series-index.js'
+import { describeTaskIdentities } from './describe.js'
 
 // 跳脫 HTML 特殊字元
 function escapeHtml(str) {
@@ -49,14 +50,25 @@ async function collectDays(from, to) {
 }
 
 // 將紀錄資料格式化為 JSON 字串
-function formatJson(days, seriesIndex, isSingleDay) {
+function readableTaskName(seriesIndex, identities, seriesId) {
+  const parentId = parentIdOf(seriesId)
+  const identity = identities.get(parentId)
+  if (!identity) return nameOf(seriesIndex, seriesId)
+  const fieldKey = fieldKeyOf(seriesId)
+  const taskName = identity.label
+  if (!fieldKey) return taskName
+  const fieldName = seriesIndex.byId[seriesId]?.shortName || fieldKey
+  return identity.shortId || identity.label !== identity.name ? `${taskName} · ${fieldName}` : nameOf(seriesIndex, seriesId)
+}
+
+function formatJson(days, seriesIndex, identities, isSingleDay) {
   const dayObjects = days.map(({ date, records }) => {
     const dayTasks = {}
     for (const record of records) {
       const taskId = record.taskId
       if (!dayTasks[taskId]) {
         dayTasks[taskId] = {
-          name: nameOf(seriesIndex, taskId),
+          name: readableTaskName(seriesIndex, identities, taskId),
           records: []
         }
       }
@@ -72,13 +84,13 @@ function formatJson(days, seriesIndex, isSingleDay) {
 }
 
 // 將紀錄資料格式化為 CSV 字串
-function formatCsv(days, seriesIndex) {
+function formatCsv(days, seriesIndex, identities) {
   const lines = ['date,slot,capturedAt,taskId,taskName,value,raw,status']
 
   for (const { date, records } of days) {
     for (const record of records) {
       const taskId = record.taskId
-      const taskName = nameOf(seriesIndex, taskId)
+      const taskName = readableTaskName(seriesIndex, identities, taskId)
       const row = [
         escapeCsvCell(date),
         escapeCsvCell(record.slot),
@@ -166,8 +178,14 @@ export async function buildHtmlReport({ from, to, dashId }) {
 
   const tasks = await getTasks()
   const seriesIndex = buildSeriesIndex(tasks)
-  const tasksById = seriesIndex.byId
-  const parentTasksById = seriesIndex.parents
+  const identities = describeTaskIdentities(tasks)
+  const tasksById = Object.fromEntries(Object.entries(seriesIndex.byId).map(([id, info]) => {
+    const name = readableTaskName(seriesIndex, identities, id)
+    return [id, { ...info, name, shortName: name }]
+  }))
+  const parentTasksById = Object.fromEntries(Object.entries(seriesIndex.parents).map(([id, task]) => [
+    id, { ...task, name: identities.get(id)?.label || task.name }
+  ]))
   const records = await getRecordsInRange(from, to)
 
   let health = {}
@@ -218,7 +236,7 @@ export async function buildHtmlReport({ from, to, dashId }) {
 
     const rows = sortedRecords.map(r => {
       const time = effectiveTimeOf(r) || r.date || ''
-      const taskName = nameOf(seriesIndex, r.taskId)
+      const taskName = readableTaskName(seriesIndex, identities, r.taskId)
       const val = r.value !== undefined && r.value !== null
         ? String(r.value)
         : (r.raw !== undefined && r.raw !== null ? String(r.raw) : '—')
@@ -499,6 +517,7 @@ export async function buildExport({ from, to, format, dashId }) {
 
   const tasks = await getTasks()
   const seriesIndex = buildSeriesIndex(tasks)
+  const identities = describeTaskIdentities(tasks)
   const days = await collectDays(from, to)
 
   const filename = from === to
@@ -506,8 +525,8 @@ export async function buildExport({ from, to, format, dashId }) {
     : `AutoFetcher/${from}_${to}.${format}`
 
   const content = format === 'json'
-    ? formatJson(days, seriesIndex, from === to)
-    : formatCsv(days, seriesIndex)
+    ? formatJson(days, seriesIndex, identities, from === to)
+    : formatCsv(days, seriesIndex, identities)
 
   return { filename, content }
 }
@@ -553,4 +572,3 @@ export async function download({ filename, content }, opts = {}) {
   if (endedEarly.has(downloadId)) release()
   return downloadId
 }
-
