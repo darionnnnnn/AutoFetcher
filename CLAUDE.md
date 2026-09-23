@@ -19,7 +19,8 @@ src/
 ├── content/             ← 注入頁面:main.js 訊息路由/擷取/填登入/前置動作(hover/等/點/等待)
 │                          picker-mode.js 選取模式(高亮 overlay、↑↓、右上角工具列四段
 │                          「單格(預設)/整欄→一個值/整欄→每格/整列→一個值」、可互動的已選 chip 面板、完成/取消鈕;
-│                          點一下加選／再點取消、Shift 拉範圍、雙擊送出;巢狀小表升到外層;批次模式的「組」)
+│                          點一下加選／再點取消、Shift 拉範圍;單任務／repick 雙擊送出;AF-22 群組雙擊只加值、Ctrl/Cmd+Enter 完成;
+│                          巢狀小表升到外層;群組草稿由 Picker 管理)
 ├── ui/theme.css         ← **顏色的唯一來源**(亮/暗雙軌 + --chart-1~8 圖表調色盤)
 ├── ui/theme-apply.js    ← **套用使用者主題設定的唯一一份**(`applyTheme`/`applySavedTheme`;Report、Picker、站台、popup、教學頁都用)
 ├── ui/help/             ← 使用教學頁(help.html＋help.js;文案由 Claude 寫;寫法契約見 SPEC §2〈使用教學頁〉)
@@ -246,7 +247,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
   換算 `promotePicksToOuter`(全有或全無)、加值前的觸發 `promoteBeforeAddingInOuter`(點擊／雙擊／拖曳／右鍵共用)。**`repick` 不升級**(key 會重生)。
   **`↑` 已選之後照樣離開這張表**,換不過去時鎖改認 `↑` 選定的外層表(`upgradeTarget` 的 anchor),否則 P1 會在版面表格上重現。
 - **點一下＝加選／再點取消**(AF-18 推翻 AF-8);**移除類動作都要存復原快照,`Ctrl+Z` 自己做的移除不存**(存了連按兩次互相抵銷);換表已選 ≥2 要再點一次確認。
-- **多任務的「組」**(AF-18):同一張表只能是一組(升到外層後要合併)、點 `body` 不成組、payload 只有 `buildPickPayload` 一份、恰好 1 組時訊息與非批次逐欄相同。
+- **AF-18 舊版多任務選取協定**:同一張表最多一組(升到外層後要合併)、點 `body` 不成組、payload 只有 `buildPickPayload` 一份；這是相容路徑，不是 AF-22 新建群組的行為契約。AF-22 以 Picker `pickDraft:<tabId>` 管理明確群組，單組也保存為 multi；見 SPEC §2／§7。
   面板批次儲存一律走 `render → 收集 → saveTaskFromForm`(與單任務共用存檔核心),**逐一 render 會把合成方式洗回預設,收集前要貼回共用設定**。
 - **面板 `kind:'saved'`**(AF-18):存完當下就收成它;進選取的入口只經 `canStartPick`;同一份面板文件從 `saved` 進下一輪一律重載面板文件。
 - **選取模式的模組狀態要在 `exitPickMode` 全部重設**:漏一個(例如「已選屬於哪張表」)

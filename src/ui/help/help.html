@@ -322,8 +322,8 @@
             <dt>面板說「<span class="ui" data-ui-label="content/picker-mode.js">頁面剛剛更新過，請重新點選</span>」？</dt><dd>選到一半網頁自己重新整理了內容，剛才選的格子已經不在了。為了不抓錯，已選的會清掉，重新點一次就好。</dd>
             <dt>面板說「<span class="ui" data-ui-label="content/picker-mode.js">這個區塊在網頁元件裡，只能整塊抓，選不到裡面的格子</span>」？</dt><dd>有些網站把內容包在獨立的元件裡，選取模式看不進去，只能抓那一整塊的文字。</dd>
             <dt>中鍵點到連結？</dt><dd>選取時中鍵點連結不會有反應，不怕被帶離這一頁。</dd>
-            <dt>點到另一張表了？</dt><dd>一個任務只能抓同一張表。點另一張表會換成那張表（已選兩個以上時要再點一次確認），可以按「<span class="ui" data-ui-label="content/picker-mode.js">復原</span>」。要兩張表都抓，用「一次建立好幾個任務」。</dd>
-            <dt>鍵盤操作</dt><dd>Enter 完成（只送已經選的，滑鼠停著的那格要先點）、Esc 取消（選了兩個以上要按兩次；面板或右鍵的「取消」也一樣）、Backspace 或 Delete 移除最後一個、Ctrl＋A 全選這張表、Tab 切換工具列。</dd>
+            <dt>點到另一張表了？</dt><dd>單任務選取一次只抓同一張表；按「<span class="ui" data-ui-label="content/picker-mode.js">復原</span>」可還原。要在同一組抓兩張表，改用「一次建立多個任務」並把兩邊的值選進同一組。</dd>
+            <dt>鍵盤操作</dt><dd>單任務與重選時，Enter 完成（只送已選的值）、Esc 取消、Backspace 或 Delete 移除最後一個、Ctrl＋A 全選這張表。多任務群組時，雙擊只加入一次；按「完成選取」或 Ctrl／⌘＋Enter 完成。</dd>
             <dt>選了很多格，認不出哪個是哪格？</dt><dd>滑鼠移到面板上的名稱，頁面上那一格會加粗標出來；點名稱會捲到那一格。</dd>
             <dt>其實想分成好幾個任務？</dt><dd>按「<span class="ui" data-ui-label="content/picker-mode.js">完成</span>」之後，在面板按「<span class="ui" data-ui-label="ui/picker/picker.html">拆成每個值一個任務</span>」，每個值會各自成為一個任務。</dd>
           </dl>
@@ -397,6 +397,7 @@
             <dt>要先點選單才出現的頁面？</dt><dd>在「<span class="ui" data-ui-label="shared/describe.js">抓之前要先點什麼嗎？</span>」那一列加一步就好（多任務時它寫著「<span class="ui" data-ui-label="shared/describe.js">（套用到每一個任務）</span>」），這一批的每個任務都會照做；同一時間要抓時只會做一次。</dd>
             <dt>存到一半失敗？</dt><dd>面板會說存好了幾個、哪一個失敗；已存的會從清單拿掉，修好再按一次不會重複建立。</dd>
             <dt>內嵌在頁面裡的框架？</dt><dd>多任務的一個群組可混選主頁與瀏覽器允許存取的框架內容；無法存取的框架不會出現在可選目標中。</dd>
+            <dt>關掉右側面板會怎樣？</dt><dd>這輪選取會暫停。相同瀏覽器工作階段重開面板，可選擇繼續或放棄；若瀏覽器已重啟，未儲存的草稿就無法恢復。</dd>
             <dt>最多幾個？</dt><dd>一次最多 20 個群組；每組最多 100 個值。</dd>
           </dl>
         </details>
