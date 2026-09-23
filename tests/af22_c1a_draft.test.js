@@ -141,3 +141,30 @@ test('C1a 草稿資料模型表達暫停階段，hover 等非操作事件不會�
   assert.equal(writes.length, 1)
   assert.equal((await draft.getPickDraft(value.tabId)).stage, 'paused')
 })
+
+test('D2 return-selection 僅能由 settings 階段回選值，保留群組與共用表單', async () => {
+  const protocol = await import('../src/shared/pick-protocol.js?t=' + Math.random())
+  const base = baseDraft({ stage: 'settings', paused: true })
+  const result = protocol.applyPickDraftOperation(base, {
+    sessionId: base.sessionId,
+    tabId: base.tabId,
+    documentGeneration: base.documentGeneration,
+    routeIdentity: base.routeIdentity,
+    operationId: 'return-1',
+    expectedRevision: base.revision,
+    operation: { type: 'return-selection' }
+  })
+  assert.equal(result.draft.stage, 'selecting')
+  assert.equal(result.draft.paused, false)
+  assert.deepEqual(result.draft.groups, base.groups)
+  assert.deepEqual(result.draft.form, base.form)
+  assert.throws(() => protocol.applyPickDraftOperation({ ...base, stage: 'selecting' }, {
+    sessionId: base.sessionId,
+    tabId: base.tabId,
+    documentGeneration: base.documentGeneration,
+    routeIdentity: base.routeIdentity,
+    operationId: 'return-2',
+    expectedRevision: base.revision,
+    operation: { type: 'return-selection' }
+  }), /設定階段/)
+})

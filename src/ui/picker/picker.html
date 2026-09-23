@@ -90,6 +90,7 @@
     [data-group-row] [data-group-name] { font-weight: 600; flex: 1; min-width: 0; overflow-wrap: anywhere; }
     [data-group-values] { display: flex; flex-direction: column; gap: 2px; padding-left: 8px; }
     [data-group-value] { font-size: var(--text-xs, 12px); overflow-wrap: anywhere; }
+    [data-group-empty-actions] { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
     #group-name-editor { display: flex; flex-direction: column; gap: 6px; }
     #group-name-editor[hidden] { display: none; }
     #group-name-actions, #group-draft-actions { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -350,7 +351,8 @@
     #alert-list { display: flex; flex-direction: column; gap: 6px; }
     [data-alert-row] { display: flex; align-items: center; gap: 6px; }
     [data-alert-row] select { flex: 2; }
-    [data-alert-row] input[type="number"] { flex: 1.5; min-width: 0; }
+    [data-alert-row] input.alert-value { flex: 1.5; min-width: 0; }
+    [data-alert-error] { flex-basis: 100%; color: var(--danger-text); font-size: var(--text-xs, 12px); }
     [data-alert-row] label { display: inline-flex; flex-direction: row; align-items: center; gap: 2px; white-space: nowrap; color: var(--text); font-size: var(--text-xs, 12px); cursor: pointer; }
     [data-alert-row] button {
       flex-shrink: 0;
@@ -493,6 +495,7 @@
     <div class="settings-body">
       <fieldset id="batch-section" hidden>
         <legend>要建立的任務</legend>
+        <button type="button" id="batch-return-selection" hidden>返回選取</button>
         <div id="batch-list"></div>
         <div id="batch-note">每個任務各自命名；多久抓一次與抓完放哪裡共用。要個別調整的，存完到任務頁按編輯。</div>
         <label id="batch-aggregate-label" hidden><span data-term="aggregate"></span>

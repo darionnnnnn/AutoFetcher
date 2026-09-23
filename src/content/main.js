@@ -6,7 +6,7 @@ import {
   parseTable, getDataRows, rowHeader, innermostTable,
   hasInner, resolveInnerAt, gridStartsOf, blockRowsOf
 } from '../shared/table.js'
-import { enterPickMode, exitPickMode } from './picker-mode.js'
+import { enterPickMode, exitPickMode, drainPickQueue } from './picker-mode.js'
 
 // 記住使用者最後右鍵點擊的元素
 let lastTarget = null
@@ -16,6 +16,11 @@ function endGroupNamePick() {
   if (!groupNamePickState) return
   document.removeEventListener('click', groupNamePickState.onClick, true)
   document.removeEventListener('keydown', groupNamePickState.onKeyDown, true)
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('popstate', groupNamePickState.onRouteChange, true)
+    window.removeEventListener('hashchange', groupNamePickState.onRouteChange, true)
+    window.removeEventListener('pagehide', groupNamePickState.onPageHide, true)
+  }
   groupNamePickState = null
 }
 
@@ -24,7 +29,14 @@ function beginGroupNamePick(msg) {
   // 只會回傳名稱，不會同時加值或觸發連結。
   exitPickMode({ clearOnly: 'task' })
   endGroupNamePick()
+  const routeAtEntry = typeof location !== 'undefined' ? location.href : ''
+  const onRouteChange = () => {
+    if (routeAtEntry && typeof location !== 'undefined' && location.href !== routeAtEntry) endGroupNamePick()
+  }
+  const onPageHide = () => endGroupNamePick()
   const onClick = (event) => {
+    onRouteChange()
+    if (!groupNamePickState) return
     const target = event.target
     if (!target || target.closest?.('[data-af-overlay]')) return
     event.preventDefault()
@@ -47,14 +59,21 @@ function beginGroupNamePick(msg) {
     if (pending?.catch) pending.catch(() => {})
   }
   const onKeyDown = (event) => {
+    onRouteChange()
+    if (!groupNamePickState) return
     if (event.key !== 'Escape') return
     event.preventDefault()
     event.stopPropagation()
     endGroupNamePick()
   }
-  groupNamePickState = { onClick, onKeyDown }
+  groupNamePickState = { onClick, onKeyDown, onRouteChange, onPageHide }
   document.addEventListener('click', onClick, true)
   document.addEventListener('keydown', onKeyDown, true)
+  if (typeof window !== 'undefined') {
+    window.addEventListener('popstate', onRouteChange, true)
+    window.addEventListener('hashchange', onRouteChange, true)
+    window.addEventListener('pagehide', onPageHide, true)
+  }
 }
 
 
@@ -567,9 +586,18 @@ function route(msg, sendResponse) {
   }
 
   if (msg.type === MSG.EXIT_PICK) {
+    const exited = exitPickMode({ identity: msg })
+    if (exited === false) {
+      sendResponse({ ok: false, error: 'stale_session' })
+      return true
+    }
     endGroupNamePick()
-    exitPickMode()
     sendResponse({ ok: true })
+    return true
+  }
+
+  if (msg.type === MSG.PICK_DRAIN) {
+    drainPickQueue(msg).then(sendResponse, error => sendResponse({ ok: false, message: String(error?.message || error) }))
     return true
   }
 

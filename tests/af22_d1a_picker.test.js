@@ -354,3 +354,89 @@ test('D1a 完成前等待最後名稱 ACK，完成屏障使用最新 revision', 
   assert.equal(rename.operation.type, 'rename')
   assert.equal(complete.expectedRevision, 1)
 })
+
+test('D2 空組有直達繼續或刪除操作，完成會定位第一個空組', async () => {
+  const { chromeMock, picker, doc } = await fresh()
+  let current = draft({ groups: [
+    { key: 'g1', name: '有值', values: [{ key: 'v1', name: '值' }] },
+    { key: 'g2', name: '空組', values: [] }
+  ], activeGroupKey: 'g1', stage: 'selecting' })
+  chromeMock.__setRuntimeResponder(async message => {
+    if (message.type === 'PICK_DRAFT_OPERATION') {
+      const op = message.operation
+      if (op.type === 'set-active') current = { ...current, activeGroupKey: op.groupKey }
+      current = { ...current, revision: current.revision + 1 }
+      return { ok: true, draft: structuredClone(current), revision: current.revision }
+    }
+    if (message.type === 'ENTER_PICK') return { ok: true }
+    if (message.type === 'PICK_DRAFT_COMPLETE') return { ok: false, synchronized: false, message: '空組' }
+    return undefined
+  })
+  picker.setPickDraftContext(current)
+  picker.renderPickDraft(current)
+  assert.equal(doc.getElementById('group-finish').disabled, false)
+  assert.match(doc.querySelector('[data-group-row][data-group-key="g2"]').textContent, /繼續選值/)
+  assert.match(doc.querySelector('[data-group-row][data-group-key="g2"]').textContent, /刪除此空組/)
+  await doc.getElementById('group-finish').click()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(current.activeGroupKey, 'g2')
+  const enter = chromeMock.__calls.filter(call => call.api === 'runtime.sendMessage')
+    .map(call => call.args[0]).find(message => message.type === 'ENTER_PICK')
+  assert.equal(enter.groupKey, 'g2')
+  assert.match(doc.getElementById('group-draft-status').textContent, /沒有值/)
+})
+
+test('D2 設定畫面返回選取沿用 session 與作用組，並重新進入原群組', async () => {
+  const { chromeMock, picker, doc } = await fresh()
+  const current = draft({
+    groups: [{ key: 'g1', name: '目前組', values: [{ key: 'v1', name: '值', source: { locator: { css: '.value' } }, spec: { mode: 'number' } }] }],
+    activeGroupKey: 'g1', stage: 'settings', form: { schedule: { type: 'interval' } }
+  })
+  chromeMock.__setRuntimeResponder(async message => {
+    if (message.type === 'PICK_DRAFT_OPERATION') return {
+      ok: true, draft: { ...structuredClone(current), stage: 'selecting', paused: false, revision: 1 }, revision: 1
+    }
+    if (message.type === 'ENTER_PICK') return { ok: true }
+    return undefined
+  })
+  picker.setPickDraftContext(current)
+  picker.renderPickDraft(current)
+  await doc.getElementById('batch-return-selection').click()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const messages = chromeMock.__calls.filter(call => call.api === 'runtime.sendMessage').map(call => call.args[0])
+  const operation = messages.find(message => message.type === 'PICK_DRAFT_OPERATION')
+  const enter = messages.find(message => message.type === 'ENTER_PICK')
+  assert.deepEqual(operation.operation, { type: 'return-selection' })
+  assert.equal(operation.sessionId, current.sessionId)
+  assert.equal(enter.sessionId, current.sessionId)
+  assert.equal(enter.groupKey, 'g1')
+  assert.equal(enter.draftValues[0].key, 'v1')
+})
+
+test('D2 復原移除值後另一組改名會使舊復原失效', async () => {
+  const { chromeMock, picker, doc } = await fresh()
+  let current = draft({ groups: [
+    { key: 'g1', name: '甲', values: [{ key: 'v1', name: '值' }] },
+    { key: 'g2', name: '乙', values: [] }
+  ], activeGroupKey: 'g2', stage: 'selecting' })
+  chromeMock.__setRuntimeResponder(async message => {
+    if (message.type !== 'PICK_DRAFT_OPERATION') return undefined
+    const op = message.operation
+    if (op.type === 'remove') current.groups.find(group => group.key === op.groupKey).values = []
+    if (op.type === 'rename') current.groups.find(group => group.key === op.groupKey).name = op.name
+    current = { ...current, revision: current.revision + 1 }
+    return { ok: true, draft: structuredClone(current), revision: current.revision }
+  })
+  picker.setPickDraftContext(current)
+  picker.renderPickDraft(current)
+  await doc.querySelector('[data-group-row][data-group-key="g1"] [data-group-value] button').click()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(doc.getElementById('group-undo').hidden, false)
+  const input = doc.getElementById('group-name')
+  input.value = '乙已修正'
+  input.dispatchEvent(new window.Event('input', { bubbles: true }))
+  await new Promise(resolve => setTimeout(resolve, 300))
+  assert.equal(current.groups[1].name, '乙已修正')
+  assert.equal(doc.getElementById('group-undo').hidden, true)
+  assert.equal(current.groups[0].values.length, 0)
+})

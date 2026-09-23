@@ -16,6 +16,8 @@ const taskOf = (id, name) => ({
 async function setupSaved(states, firstResults = []) {
   resetChromeMock()
   const chromeMock = installChromeMock()
+  chromeMock.__setScriptResponder(() => [{ frameId: 0, result: 'https://a.test/prices' }])
+  chromeMock.__setTabResponder((_tabId, message) => message.type === 'PICK_DRAIN' ? { ok: true, drained: true } : undefined)
   chromeMock.runtime.id = 'autofetcher-test'
   const storage = await import('../src/shared/storage.js?f1c2-storage=' + Math.random())
   const tab = await chrome.tabs.create({ url: 'https://a.test/prices' })

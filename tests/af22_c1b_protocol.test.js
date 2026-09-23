@@ -52,6 +52,25 @@ test('C1b runtime protocol: begin/add/remove/move/rename/set-active/patch-form/p
   assert.equal(resumed.draft.groups[0].values[0].key, 'v1')
 })
 
+test('D2 block exclude/include uses one atomic replace-value operation and preserves stable source key', async () => {
+  const { protocol } = await fresh()
+  const sender = { url: 'chrome-extension://test/ui/picker/picker.html' }
+  await protocol.beginPickDraft(begin(), sender)
+  const original = { key: 'pick-stable', mode: 'block', source: { locator: { css: '#prices' }, frame: { frameId: 0 } },
+    locator: { css: '#prices' }, spec: { block: { axis: 'col', index: 2, exclude: [{ index: 1 }] } } }
+  let result = await protocol.handlePickDraftOperation(op('add-block', 0,
+    { type: 'add', groupKey: 'g1', value: original }), sender)
+  const changed = structuredClone(original)
+  changed.spec.block.exclude.push({ index: 3 })
+  result = await protocol.handlePickDraftOperation(op('replace-block', 1,
+    { type: 'replace-value', groupKey: 'g1', valueKey: original.key, value: changed }), sender)
+  const value = result.draft.groups[0].values[0]
+  assert.equal(result.draft.groups[0].values.length, 1)
+  assert.equal(value.key, original.key)
+  assert.deepEqual(value.source, original.source)
+  assert.deepEqual(value.spec.block.exclude.map(item => item.index), [1, 3])
+})
+
 test('C1b operationId 去重：ACK 重送不增加 revision，明確 add/remove 不會因重送反轉', async () => {
   const { protocol } = await fresh()
   const sender = { url: 'chrome-extension://test/ui/picker/picker.html' }

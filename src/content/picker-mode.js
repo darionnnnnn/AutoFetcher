@@ -39,6 +39,7 @@ let active = false, currentPurpose = null, currentTaskId = undefined, currentTar
 // AF-22 C2a：短命選取工作階段的協調欄位；永久草稿仍由 background 保存。
 let pickSessionId = undefined, pickGroupKey = undefined, pickFrame = undefined, pickRevision = undefined, parentFrameId = undefined
 let pickDocumentGeneration = undefined, pickRouteIdentity = undefined
+let pickLocationAtEntry = ''
 let pickImmediateDraft = false
 let pickOperationSeq = 0
 // 進不去框架時要說出來；代理層是 iframe 的替身（見 frameOfProxy）
@@ -136,6 +137,9 @@ let batchMode = false, batchGroups = [], currentGroupIdx = -1
 let draftPickEntries = new Map()
 let draftPickSendQueue = Promise.resolve()
 let draftPickGeneration = 0
+let draftPickDrainPaused = false
+let draftRangeAnchor = null
+const draftPickPending = new Map()
 const draftPickFailures = new Map()
 
 function isDraftGroupMode() {
@@ -262,6 +266,7 @@ function queueDraftPick(target, pick, remove = false) {
   if (remove) draftPickEntries.delete(key)
   else draftPickEntries.set(key, { target, pick })
 
+  draftPickPending.set(operationKey, queuedPayload)
   const run = draftPickSendQueue.then(async () => {
     let response
     try {
@@ -287,6 +292,7 @@ function queueDraftPick(target, pick, remove = false) {
       return false
     }
     draftPickFailures.delete(operationKey)
+    draftPickPending.delete(operationKey)
     if (generation !== draftPickGeneration || identity.sessionId !== pickSessionId || identity.groupKey !== pickGroupKey) return true
     if (Number.isInteger(response.revision)) pickRevision = response.revision
     if (response.draft) {
@@ -310,10 +316,79 @@ function toggleDraftPick(target, pick, suppressRemove = false) {
   // 第二個 click 會緊接 dblclick；D03 規定雙擊已選值維持選取，避免 click→click
   // 先加後刪。單獨的第二次點擊沒有 detail=2，仍保留 toggle 語意。
   if (remove && suppressRemove) return
+  if (!remove && draftPickEntries.size >= maxPicks) {
+    toolbarNotice = `最多可選 ${maxPicks} 個值；這次沒有新增`
+    if (panelEl) updatePanel(panelEl, currentTargetEl)
+    return
+  }
   selectedList = [pick]
   pickedTableEl = target && isTableMode(target) ? target : null
   if (target && isTableMode(target)) applyPickedMarks(target)
   queueDraftPick(target, pick, remove)
+}
+
+function addDraftPickBatch(target, picks) {
+  const unique = []
+  const seen = new Set()
+  for (const pick of picks || []) {
+    const key = draftPickKey(target, pick)
+    if (!seen.has(key) && !draftPickEntries.has(key)) { seen.add(key); unique.push(pick) }
+  }
+  const remaining = maxPicks - draftPickEntries.size
+  if (unique.length > remaining) {
+    toolbarNotice = `這次需要 ${unique.length} 個位置，只剩 ${Math.max(0, remaining)} 個；沒有新增任何值`
+    if (panelEl) updatePanel(panelEl, currentTargetEl)
+    return false
+  }
+  for (const pick of unique) queueDraftPick(target, pick, false)
+  return true
+}
+
+function replaceDraftBlock(target, pick) {
+  const key = draftPickKey(target, pick)
+  const entry = draftPickEntries.get(key)
+  if (!entry) return false
+  const identity = { purpose: currentPurpose, sessionId: pickSessionId, groupKey: pickGroupKey,
+    documentGeneration: pickDocumentGeneration, routeIdentity: pickRouteIdentity, frame: pickFrame }
+  const payload = draftPickPayload(target, pick, identity)
+  payload.type = MSG.PICKED
+  payload.operationId = nextPickOperationId()
+  payload.picks = [structuredClone(pick)]
+  payload.replacePicks = [{ pick: structuredClone(pick) }]
+  const generation = draftPickGeneration
+  const run = draftPickSendQueue.then(async () => {
+    let response
+    try { response = await chrome.runtime.sendMessage(payload) }
+    catch (error) { response = { ok: false, message: String(error?.message || error) } }
+    if (generation !== draftPickGeneration || identity.groupKey !== pickGroupKey) return false
+    if (!response?.ok) {
+      toolbarNotice = response?.message || '這項排除設定尚未同步，請再試一次'
+      if (panelEl) updatePanel(panelEl, currentTargetEl)
+      return false
+    }
+    if (Number.isInteger(response.revision)) pickRevision = response.revision
+    const group = response.draft?.groups?.find(item => item.key === identity.groupKey)
+    if (group) syncDraftPickEntries(group.values)
+    if (panelEl) updatePanel(panelEl, currentTargetEl)
+    return true
+  })
+  draftPickSendQueue = run.catch(() => {})
+  return run
+}
+
+function draftGesturePicks(target, candidate) {
+  if (!candidate) return []
+  if (pickMode === 'colEach' && candidate.cell) {
+    return resolveColEachCells(target, candidate.cell.col.index, candidate.cell.inner, currentHoverEl || currentCellEl)?.picks || []
+  }
+  if (pickMode === 'rowEach' && candidate.cell) {
+    const rows = resolveDataRows(target), row = rows[candidate.cell.row.index]
+    return getRowCells(row).filter(cell => !isHeaderCell(cell)).map(cell => {
+      const c = gridIndexOf(row, cell)
+      return c >= 0 ? makeCellPick(candidate.cell.row.index, c, target, rows) : null
+    }).filter(Boolean)
+  }
+  return [candidate]
 }
 // 各表最後一次 hover 的列欄（送出時非目前這張表的組要用它組 blockInfo，與非批次送出同一口徑）
 const batchHover = new Map()
@@ -2952,6 +3027,13 @@ function openMenu(event) {
       }
     }
   }
+  if (cellInfo && isImmediateDraftGroupMode()) {
+    const entry = [...draftPickEntries.entries()].reverse().find(([key, value]) => {
+      const block = value.pick?.block
+      return key === draftPickKey(tableEl, value.pick) && block && blockCoversCell(block, cellInfo.rIdx, cellInfo.cIdx)
+    })?.[1]
+    if (entry) matchedBlock = entry.pick.block
+  }
   menuTargetContext = { target, tableEl, cellInfo, targetPickIndex: matchedPickIndex }
 
   while (menuEl.firstChild) {
@@ -3028,12 +3110,58 @@ function handleMenuAction(action) {
     return
   }
 
+  if ((action === 'exclude' || action === 'include') && isImmediateDraftGroupMode() && cellInfo && tableEl) {
+    const entry = [...draftPickEntries.entries()].reverse().find(([key, value]) => {
+      const block = value.pick?.block
+      return key === draftPickKey(tableEl, value.pick) && block &&
+        blockCoversCell(block, cellInfo.rIdx, cellInfo.cIdx)
+    })?.[1]
+    if (entry?.pick?.block) {
+      const pick = structuredClone(entry.pick)
+      const block = pick.block
+      const excludes = excludeOf(block).map(item => ({ ...item }))
+      const axis = block.axis === 'col' ? 'row' : 'col'
+      const index = block.axis === 'col' ? cellInfo.rIdx : cellInfo.cIdx
+      const header = block.axis === 'col' ? (cellInfo.row ? rowHeader(cellInfo.row) : '') : (columnHeaders(tableEl)[index] || '')
+      const next = action === 'exclude'
+        ? (excludes.some(item => item.index === index) ? excludes : [...excludes, { index, header }])
+        : excludes.filter(item => item.index !== index)
+      if (next.length) block.exclude = next
+      else delete block.exclude
+      replaceDraftBlock(tableEl, pick)
+    }
+    return
+  }
+
   if (['cell', 'col-each', 'col', 'row-each', 'row'].includes(action)) {
     if (promoteBeforeAddingInOuter() === 'blocked') return
     if (!batchFollowTarget(tableEl)) {
       updatePanel(panelEl, currentTargetEl)
       return
     }
+  }
+
+  if (isImmediateDraftGroupMode() && tableEl && isTableMode(tableEl) &&
+      ['cell', 'col-each', 'col', 'row-each', 'row'].includes(action)) {
+    const rows = resolveDataRows(tableEl)
+    const r = cellInfo?.rIdx ?? rowIndex ?? 0
+    const c = cellInfo?.cIdx ?? colIndex ?? 0
+    let picks = []
+    if (action === 'cell') picks = [makeCellPick(r, c, tableEl, rows, inner)]
+    else if (action === 'col-each') picks = resolveColEachCells(tableEl, c, inner, cellInfo?.subEl || cellInfo?.cell)?.picks || []
+    else if (action === 'row-each') {
+      picks = (rows[r] ? gridStartsOf(rows[r]) : []).filter(index => targetAtGrid(rows[r], index, inner) !== null)
+        .map(index => makeCellPick(r, index, tableEl, rows, inner))
+    } else {
+      const block = action === 'col'
+        ? { axis: 'col', index: c, headerText: columnHeaders(tableEl)[c] || '' }
+        : { axis: 'row', index: r, headerText: rows[r] ? rowHeader(rows[r]) : '' }
+      pendingFooterNotice = action === 'col' ? withFooterExclude(block, tableEl) : 0
+      picks = [{ block }]
+    }
+    if (picks.length > 1) addDraftPickBatch(tableEl, picks)
+    else if (picks.length === 1) toggleDraftPick(tableEl, picks[0])
+    return
   }
 
   if (action === 'cell') {
@@ -3431,7 +3559,8 @@ function setToolbarCorner(corner) {
 
 // 事件監聽處理常式
 function onMouseMove(event) {
-  if (!active) return
+  routeChanged()
+  if (!active || draftPickDrainPaused) return
   let target = event.target
   syncProxyRects()
   // 指標已經離開讓路的那個元素：把代理層裝回去，不然 iframe 從此選不到
@@ -3471,7 +3600,8 @@ function onMouseMove(event) {
 }
 
 function onKeyDown(event) {
-  if (!active) return
+  routeChanged()
+  if (!active || draftPickDrainPaused) return
   // 頁面輸入欄／contenteditable 的快捷鍵交回網站；尤其不能攔 Enter、Delete
   // 來誤完成或移除選取值（群組命名輸入在擴充功能頁，不會走這裡）。
   const keyTarget = event.target
@@ -3530,6 +3660,18 @@ function onKeyDown(event) {
     event.preventDefault()
     const dataRows = resolveDataRows(currentTargetEl)
     if (dataRows.length === 0) return
+    if (isImmediateDraftGroupMode()) {
+      const picks = []
+      for (let r = 0; r < dataRows.length; r++) {
+        for (const cell of getRowCells(dataRows[r])) {
+          if (isHeaderCell(cell)) continue
+          const c = gridIndexOf(dataRows[r], cell)
+          if (c >= 0) picks.push(makeCellPick(r, c, currentTargetEl, dataRows))
+        }
+      }
+      addDraftPickBatch(currentTargetEl, picks)
+      return
+    }
     if (!batchFollowTarget(currentTargetEl)) {
       updatePanel(panelEl, currentTargetEl)
       return
@@ -3737,7 +3879,8 @@ function relockAfterMove() {
 }
 
 function onClick(event) {
-  if (!active) return
+  routeChanged()
+  if (!active || draftPickDrainPaused) return
   event.preventDefault(); event.stopPropagation()
 
   if (suppressClick) {
@@ -3976,7 +4119,24 @@ function onClick(event) {
     if (isTableMode(currentTargetEl) && currentTargetEl.contains(event.target)) {
       const candidate = candidateAt(event.target)
       if (candidate) {
-        toggleDraftPick(currentTargetEl, candidate, event.detail === 2)
+        const cell = candidate.cell
+        if (event.shiftKey && cell && draftRangeAnchor?.groupKey === pickGroupKey &&
+            draftRangeAnchor.table === currentTargetEl) {
+          const a = draftRangeAnchor.cell
+          const rows = resolveDataRows(currentTargetEl)
+          const picks = []
+          for (let r = Math.min(a.row.index, cell.row.index); r <= Math.max(a.row.index, cell.row.index); r++) {
+            for (let c = Math.min(a.col.index, cell.col.index); c <= Math.max(a.col.index, cell.col.index); c++) {
+              if (targetAtGrid(rows[r], c, a.inner) !== null) picks.push(makeCellPick(r, c, currentTargetEl, rows, a.inner))
+            }
+          }
+          addDraftPickBatch(currentTargetEl, picks)
+        } else {
+          const picks = draftGesturePicks(currentTargetEl, candidate)
+          if (picks.length > 1) addDraftPickBatch(currentTargetEl, picks)
+          else toggleDraftPick(currentTargetEl, candidate, event.detail === 2)
+          if (cell) draftRangeAnchor = { table: currentTargetEl, groupKey: pickGroupKey, cell }
+        }
         return
       }
     } else if (!isTableMode(currentTargetEl) && currentTargetEl !== document.body && currentTargetEl !== document.documentElement) {
@@ -4376,7 +4536,7 @@ function addRange(anchorCell, targetCell) {
 
 // 雙擊＝選這一個並送出（檔案總管開啟檔案的習慣）
 function onDblClick(event) {
-  if (!active) return
+  if (!active || draftPickDrainPaused) return
   event.preventDefault(); event.stopPropagation()
   // 拖曳框選放開的瞬間瀏覽器會補 click，兩下拖曳就會湊成 dblclick，那不是使用者要送出
   if (Date.now() - lastDragEndAt < 200) return
@@ -4427,7 +4587,7 @@ function onDblClick(event) {
 }
 
 function onMouseDown(event) {
-  if (!active) return
+  if (!active || draftPickDrainPaused) return
   if (menuEl) {
     if (!menuEl.contains(event.target)) {
       closeMenu()
@@ -4458,9 +4618,27 @@ function onMouseDown(event) {
 }
 
 function onMouseUp(event) {
-  if (!active) return
+  if (!active || draftPickDrainPaused) return
   if (!dragStart) return
   if (isDragging && currentTargetEl && isTableMode(currentTargetEl)) {
+    if (isImmediateDraftGroupMode()) {
+      const endInfo = resolveCell(event.target, currentTargetEl)
+      const endR = endInfo ? endInfo.rIdx : dragStart.rIdx
+      const endC = endInfo ? endInfo.cIdx : dragStart.cIdx
+      const rows = resolveDataRows(currentTargetEl), picks = []
+      for (let r = Math.min(dragStart.rIdx, endR); r <= Math.max(dragStart.rIdx, endR); r++) {
+        for (let c = Math.min(dragStart.cIdx, endC); c <= Math.max(dragStart.cIdx, endC); c++) {
+          if (targetAtGrid(rows[r], c, dragStart.inner) !== null) picks.push(makeCellPick(r, c, currentTargetEl, rows, dragStart.inner))
+        }
+      }
+      addDraftPickBatch(currentTargetEl, picks)
+      suppressClick = true
+      setTimeout(() => { suppressClick = false }, 0)
+      lastDragEndAt = Date.now()
+      dragStart = null
+      isDragging = false
+      return
+    }
     const promoted = promoteBeforeAddingInOuter()
     if (promoted === 'blocked') {
       dragStart = null
@@ -4506,7 +4684,7 @@ function onMouseUp(event) {
 
 // 中鍵點到頁面上的連結會開新分頁、把使用者帶走；overlay 自己的元素不擋（AF-21 定案 7-4）
 function onAuxClick(event) {
-  if (!active) return
+  if (!active || draftPickDrainPaused) return
   // 中鍵（1）＝新分頁開連結／自動捲動，上一頁（3）與下一頁（4）＝整頁跑掉：選取模式裡都要擋
   if (event.button !== 1 && event.button !== 3 && event.button !== 4) return
   if (overlayEl && overlayEl.contains(event.target) && !frameOfProxy(event.target)) return
@@ -4515,10 +4693,60 @@ function onAuxClick(event) {
 }
 
 function onContextMenu(event) {
-  if (!active) return
+  if (!active || draftPickDrainPaused) return
   event.preventDefault()
   event.stopPropagation()
   openMenu(event)
+}
+
+export async function drainPickQueue(identity = {}) {
+  if (identity.sessionId && identity.sessionId !== pickSessionId) return { ok: false, error: 'stale_session', message: '選取階段已變更' }
+  if (identity.documentGeneration !== undefined && JSON.stringify(stableDraftIdentity(identity.documentGeneration)) !== JSON.stringify(stableDraftIdentity(pickDocumentGeneration))) return { ok: false, error: 'stale_document', message: '目前頁面文件已變更，請重新進入選取' }
+  if (identity.routeIdentity !== undefined && JSON.stringify(stableDraftIdentity(identity.routeIdentity)) !== JSON.stringify(stableDraftIdentity(pickRouteIdentity))) return { ok: false, error: 'stale_route', message: '目前頁面路徑已變更，請重新進入選取' }
+  if (identity.resume === true) { draftPickDrainPaused = false; return { ok: true, resumed: true } }
+  if (isDraftGroupMode() && pickLocationAtEntry && typeof location !== 'undefined' && location.href !== pickLocationAtEntry) {
+    invalidatePickForRouteChange()
+    return { ok: false, error: 'stale_route', message: '頁面路徑已變更，請重新進入選取' }
+  }
+  draftPickDrainPaused = true
+  await draftPickSendQueue
+  const sessionId = identity.sessionId ?? pickSessionId
+  const pending = [...draftPickPending.entries()].filter(([, payload]) => payload.sessionId === sessionId)
+  for (const [key, payload] of pending) {
+    let response
+    try { response = await chrome.runtime.sendMessage(payload) } catch (error) {
+      response = { ok: false, message: String(error?.message || error) }
+    }
+    if (response?.ok !== true) {
+      draftPickDrainPaused = false
+      return { ok: false, error: 'pick_ack_failed', message: response?.message || draftPickFailures.get(key)?.message || '選取尚未同步，請重試' }
+    }
+    draftPickFailures.delete(key)
+    draftPickPending.delete(key)
+  }
+  const remaining = [...draftPickPending.values()].some(payload => payload.sessionId === sessionId)
+  if (remaining) {
+    draftPickDrainPaused = false
+    return { ok: false, error: 'pick_ack_failed', message: '有選取尚未同步，請重試' }
+  }
+  return { ok: true, drained: true }
+}
+
+function invalidatePickForRouteChange() {
+  if (!isDraftGroupMode()) return
+  // A SPA can replace the data set without replacing this document. Stop
+  // capturing immediately and detach pending callbacks from the live picker.
+  draftPickGeneration++
+  draftPickDrainPaused = true
+  draftPickPending.clear()
+  draftPickFailures.clear()
+  exitPickMode()
+}
+
+function routeChanged() {
+  if (pickLocationAtEntry && typeof location !== 'undefined' && location.href !== pickLocationAtEntry) {
+    invalidatePickForRouteChange()
+  }
 }
 
 export function enterPickMode(opts) {
@@ -4526,6 +4754,8 @@ export function enterPickMode(opts) {
   // 前置動作要選一個元素時，任務目標的藍框要留在畫面上（面板還開著、使用者還在看）
   exitPickMode({ clearOnly: opts?.purpose || null })
   active = true
+  draftRangeAnchor = null
+  draftPickDrainPaused = false
   currentPurpose = opts?.purpose || null
   currentTaskId = opts?.taskId !== undefined ? opts.taskId : undefined
   pickSessionId = opts?.sessionId !== undefined ? opts.sessionId : undefined
@@ -4535,6 +4765,7 @@ export function enterPickMode(opts) {
   pickRevision = opts?.draftRevision
   pickDocumentGeneration = opts?.documentGeneration !== undefined ? structuredClone(opts.documentGeneration) : undefined
   pickRouteIdentity = opts?.routeIdentity !== undefined ? structuredClone(opts.routeIdentity) : undefined
+  pickLocationAtEntry = typeof location !== 'undefined' ? location.href : ''
   parentFrameId = Number.isInteger(opts?.parentFrameId) ? opts.parentFrameId : undefined
   // 批次只對建立新任務有意義（重選、前置動作、登入一次就是一個目標）
   // 新群組 session 雖沿用 batch 入口訊息以相容舊端，但組別由草稿 activeGroupKey
@@ -4544,6 +4775,7 @@ export function enterPickMode(opts) {
   limitReached = false
   headerChangedNotice = false
   selectedList = []
+  draftRangeAnchor = null
   draftPickEntries = new Map()
   syncDraftPickEntries(opts?.draftValues)
   draftPickGeneration++
@@ -4677,6 +4909,11 @@ export function enterPickMode(opts) {
   document.addEventListener('dblclick', onDblClick, true)
   document.addEventListener('contextmenu', onContextMenu, true)
   document.addEventListener('auxclick', onAuxClick, true)
+  if (typeof window !== 'undefined') {
+    window.addEventListener('popstate', routeChanged, true)
+    window.addEventListener('hashchange', routeChanged, true)
+    window.addEventListener('pagehide', invalidatePickForRouteChange, { once: true })
+  }
 }
 
 /**
@@ -4686,6 +4923,10 @@ export function enterPickMode(opts) {
  *   不給就是全清（`EXIT_PICK`、取消、測試清場都走這條）。
  */
 export function exitPickMode(opts = {}) {
+  const expected = opts?.identity
+  if (expected?.sessionId !== undefined && expected.sessionId !== pickSessionId) return false
+  if (expected?.documentGeneration !== undefined && JSON.stringify(stableDraftIdentity(expected.documentGeneration)) !== JSON.stringify(stableDraftIdentity(pickDocumentGeneration))) return false
+  if (expected?.routeIdentity !== undefined && JSON.stringify(stableDraftIdentity(expected.routeIdentity)) !== JSON.stringify(stableDraftIdentity(pickRouteIdentity))) return false
   currentHint = null
   // 取消／`Esc` 只清自己這一輪的保留標示：前置動作選到一半反悔，
   // 不該把任務目標的藍框一起抹掉（那是另一個用途的成果）
@@ -4739,10 +4980,16 @@ export function exitPickMode(opts = {}) {
     // 代理層貼在 <body> 底下（見 buildFrameProxies），不會隨 overlay 一起拆掉
     for (const el of allProxies()) el.remove()
   }
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('popstate', routeChanged, true)
+    window.removeEventListener('hashchange', routeChanged, true)
+    window.removeEventListener('pagehide', invalidatePickForRouteChange)
+  }
   yieldedEl = null; lastProxySync = 0
   active = false; currentPurpose = null; currentTaskId = undefined; currentTargetEl = null; backStack = []
   pickSessionId = undefined; pickGroupKey = undefined; pickFrame = undefined; pickRevision = undefined; parentFrameId = undefined
   pickDocumentGeneration = undefined; pickRouteIdentity = undefined
+  pickLocationAtEntry = ''
   pickImmediateDraft = false
   overlayEl = null; highlightEl = null; panelEl = null; toolbarEl = null; menuEl = null
   pickMode = 'cell'; cellIndex = null; colIndex = null; rowIndex = null; currentCellEl = null; nestedNoticeOn = false

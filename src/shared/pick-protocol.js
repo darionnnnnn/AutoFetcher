@@ -18,7 +18,7 @@ import {
 
 export const PICK_PROTOCOL_VERSION = 1
 export const PICK_OPERATION_TYPES = Object.freeze([
-  'create-group', 'add', 'remove', 'move', 'rename', 'set-active', 'patch-form', 'save-state', 'pause', 'abandon'
+  'create-group', 'add', 'remove', 'replace-value', 'move', 'rename', 'set-active', 'patch-form', 'save-state', 'pause', 'return-selection', 'abandon'
 ])
 export const DRAFT_OPERATION_TYPES = PICK_OPERATION_TYPES
 
@@ -174,6 +174,18 @@ function applyRemove(draft, source) {
   group.values = group.values.filter(item => item.key !== valueKey)
 }
 
+// Atomic edit of one existing value. The stable key and source identity remain
+// fixed while its selector details (for example block exclusions) are updated.
+function applyReplaceValue(draft, source) {
+  const group = groupOf(draft, source.groupKey)
+  const key = nonEmpty(source.valueKey, 'valueKey')
+  const index = group.values.findIndex(item => item.key === key)
+  if (index < 0) fail('invalid_operation', `找不到值：${key}`)
+  const value = valuePayload(source)
+  if (value.key !== key) fail('invalid_operation', 'replace-value 不可變更穩定值鍵')
+  group.values[index] = value
+}
+
 function applyMove(draft, source) {
   const from = groupOf(draft, source.fromGroupKey ?? source.groupKey)
   const to = groupOf(draft, source.toGroupKey)
@@ -287,6 +299,7 @@ export function applyPickDraftOperation(inputDraft, inputOperation, context = {}
   if (type === 'create-group') applyCreateGroup(next, source)
   else if (type === 'add') applyAdd(next, source)
   else if (type === 'remove') applyRemove(next, source)
+  else if (type === 'replace-value') applyReplaceValue(next, source)
   else if (type === 'move') applyMove(next, source)
   else if (type === 'rename') applyRename(next, source)
   else if (type === 'set-active') {
@@ -298,6 +311,11 @@ export function applyPickDraftOperation(inputDraft, inputOperation, context = {}
   else if (type === 'pause') {
     next.stage = 'paused'
     next.paused = true
+  } else if (type === 'return-selection') {
+    if (current.stage !== 'settings') fail('invalid_stage', '只有設定階段可以返回選值')
+    if (!next.groups.length) fail('invalid_stage', '沒有群組可返回選值')
+    next.stage = 'selecting'
+    next.paused = false
   } else if (type === 'abandon') {
     next.stage = 'cancelled'
   }

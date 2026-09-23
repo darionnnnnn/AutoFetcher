@@ -31,7 +31,11 @@ export async function listFrames(tabId) {
       func: () => location.href
     })
     if (!Array.isArray(results)) return []
-    return results.map((r) => ({ frameId: r.frameId, url: r.result }))
+    return results.map((r) => ({
+      frameId: r.frameId,
+      url: r.result,
+      ...(typeof r.documentId === 'string' && r.documentId ? { documentId: r.documentId } : {})
+    }))
   } catch {
     return []
   }

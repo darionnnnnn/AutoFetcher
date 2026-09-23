@@ -10,6 +10,8 @@ const html = readFileSync(new URL('../src/ui/picker/picker.html', import.meta.ur
 test('F1c-1 saveTask 後 done checkpoint 中斷，reload/retry 沿用固定 taskId 且不重複首抓', async () => {
   resetChromeMock()
   const chromeMock = installChromeMock()
+  chromeMock.__setScriptResponder(() => [{ frameId: 0, result: 'https://a.test/prices' }])
+  chromeMock.__setTabResponder((_tabId, message) => message.type === 'PICK_DRAIN' ? { ok: true, drained: true } : undefined)
   chromeMock.runtime.id = 'autofetcher-test'
   const storage = await import('../src/shared/storage.js?f1c-storage=' + Math.random())
   const tab = await chrome.tabs.create({ url: 'https://a.test/prices' })

@@ -121,7 +121,7 @@ function clearGuardState() {
 }
 
 // 驗證錯誤鍵 → 要跳過去的欄位（星期沒有單一欄位，交給動作處理）
-const ERROR_FIELDS = { name: 'name', times: 'time-input', everyMinutes: 'every-minutes', window: 'window-from', regex: 'regex' }
+const ERROR_FIELDS = { name: 'name', times: 'time-input', everyMinutes: 'every-minutes', window: 'window-from', regex: 'regex', alerts: 'alert-list' }
 
 function skipFromForm() {
   const row = document.querySelector('[data-skip-row]')
@@ -233,6 +233,46 @@ function preActionsFromForm() {
   })
 }
 
+function alertTargetMode(values, fieldKey = '') {
+  if (fieldKey) {
+    const field = (Array.isArray(values?.fields) ? values.fields : []).find(item => item?.key === fieldKey)
+    return field?.mode === 'text' ? 'text' : 'number'
+  }
+  if (values?.mode === 'text') return 'text'
+  return 'number'
+}
+
+function refreshAlertRow(row) {
+  const typeSelect = row?.querySelector('select.alert-type')
+  const valueInput = row?.querySelector('input.alert-value')
+  if (!typeSelect || !valueInput) return
+  const mode = alertTargetMode({
+    mode: document.getElementById('mode')?.value || 'number',
+    fields: Array.from(document.querySelectorAll('#field-list [data-field-row]')).map(fieldRow => ({
+      key: fieldRow.dataset.fieldKey,
+      mode: fieldRow._mode || fieldRow.dataset.mode
+    }))
+  }, row.querySelector('select[data-alert-field]')?.value || '')
+  const incompatible = mode === 'text' && ['gt', 'lt', 'deltaPct'].includes(typeSelect.value)
+  valueInput.type = mode === 'text' && typeSelect.value === 'eq' ? 'text' : 'number'
+  valueInput.inputMode = valueInput.type === 'number' ? 'decimal' : 'text'
+  valueInput.placeholder = mode === 'text' && typeSelect.value === 'eq' ? '文字（完全相等）' : '數值'
+  let message = row.querySelector('[data-alert-error]')
+  if (!message) {
+    message = document.createElement('span')
+    message.setAttribute('data-alert-error', '')
+    message.setAttribute('role', 'alert')
+    row.appendChild(message)
+  }
+  message.hidden = !incompatible
+  message.textContent = incompatible ? '文字值不支援大小門檻或變動百分比，請改用「值等於」。' : ''
+  row.dataset.invalid = String(incompatible)
+}
+
+function refreshAllAlertRows() {
+  document.querySelectorAll('[data-alert-row]').forEach(refreshAlertRow)
+}
+
 export function getFormData() {
   const name = document.getElementById('name')?.value ?? ''
   const urlEl = document.getElementById('url')
@@ -260,16 +300,14 @@ export function getFormData() {
     const id = row.dataset.id || crypto.randomUUID()
     const type = row.querySelector('select.alert-type')?.value || row.querySelector('select')?.value || 'gt'
     const valInput = row.querySelector('input:not([type="checkbox"])') || row.querySelector('input')
-    const valStr = valInput?.value?.trim() ?? ''
-    const value = valStr === '' ? NaN : Number(valStr)
+    const valStr = valInput?.value ?? ''
+    const field = row.querySelector('select[data-alert-field]')?.value?.trim() || ''
+    const isText = alertTargetMode({ mode, fields: Array.from(document.querySelectorAll('#field-list [data-field-row]')).map(fieldRow => ({ key: fieldRow.dataset.fieldKey, mode: fieldRow._mode || fieldRow.dataset.mode })) }, field) === 'text'
+    const value = valStr.trim() === '' ? NaN : (isText && type === 'eq' ? valStr : Number(valStr))
     const cb = row.querySelector('input[type="checkbox"]')
     const enabled = cb ? cb.checked : true
     const alertItem = { id, type, value, enabled }
-    const fieldSel = row.querySelector('select[data-alert-field]')
-    const fieldVal = fieldSel?.value?.trim()
-    if (fieldVal) {
-      alertItem.field = fieldVal
-    }
+    if (field) alertItem.field = field
     return alertItem
   })
 
@@ -288,6 +326,7 @@ export function getFormData() {
       const name = rawName || `值 ${index + 1}`
       const spec = row._spec || fieldSpecs.get(key) || {}
       const item = { key, name }
+      if (row._mode) item.mode = row._mode
       // AF-22 F1a：完成選取後的每個值可以來自不同元素／frame；
       // 這些欄位不屬於舊同表 block 格式，必須沿著表單原樣帶到 buildTask。
       if (row._source) {
@@ -469,6 +508,11 @@ export function validateForm(values) {
         errors.regex = '正規表達式語法不正確'
       }
     }
+  }
+
+  if ((values.alerts || []).some(alert => alert && alert.enabled !== false &&
+    alertTargetMode(values, alert.field) === 'text' && ['gt', 'lt', 'deltaPct'].includes(alert.type))) {
+    errors.alerts = '文字值只能使用「值等於」或「連續失敗次數達到」；請修正告警條件。'
   }
 
   return Object.keys(errors).length > 0 ? { ok: false, errors } : { ok: true }
@@ -755,12 +799,13 @@ export function buildTask(values, locator, existing, frame) {
   }
   if (Array.isArray(values.alerts)) {
     const validAlerts = values.alerts
-      .filter(a => a && typeof a === 'object' && Number.isFinite(a.value))
+      .filter(a => a && typeof a === 'object' && (typeof a.value === 'string' || Number.isFinite(a.value)))
       .map(a => {
+        const textValue = alertTargetMode(values, a.field) === 'text' && a.type === 'eq'
         const item = {
           id: a.id || crypto.randomUUID(),
           type: a.type,
-          value: Number(a.value),
+          value: textValue ? String(a.value) : Number(a.value),
           enabled: a.enabled !== false
         }
         if (a.field) {
@@ -1060,13 +1105,15 @@ export function render(ctx) {
   } else if (ctx?.task && Array.isArray(ctx.task.fields) && ctx.task.fields.length > 0) {
     const items = ctx.task.fields.map(field => {
       const matchingSpec = ctx.task.spec?.fields?.find(f => f.key === field.key)
-      const spec = {}
+      const spec = structuredClone(matchingSpec?.spec || {})
       if (matchingSpec?.cell) spec.cell = matchingSpec.cell
       if (matchingSpec?.block) spec.block = matchingSpec.block
       return {
         key: field.key,
         name: field.name,
-        spec
+        spec,
+        source: matchingSpec?.source,
+        mode: matchingSpec?.mode || matchingSpec?.spec?.mode || (ctx.task.mode === 'text' ? 'text' : undefined)
       }
     })
     renderFieldList(items)
@@ -1740,6 +1787,7 @@ function bindModeEvents() {
     modeEl.addEventListener('change', () => {
       applyDefaultCardTypes()
       updateBlockSection()
+      refreshAllAlertRows()
     })
     modeEl._modeEventsBound = true
   }
@@ -1861,7 +1909,12 @@ function populateAlertFieldOptions(select, selectedKey) {
 function updateAlertRowsFields() {
   const fieldRows = document.querySelectorAll('#field-list [data-field-row]')
   const alertRows = document.querySelectorAll('[data-alert-row]')
-  const hasMulti = fieldRows.length >= 2
+  // Keep an explicit field target visible when a multi-value edit shrinks to
+  // one remaining field; otherwise the alert silently becomes task-wide.
+  const hasMulti = fieldRows.length >= 2 || Array.from(alertRows).some(row => {
+    const select = row.querySelector('select[data-alert-field]')
+    return Boolean(select?.value)
+  })
 
   for (const row of alertRows) {
     let fieldSelect = row.querySelector('select[data-alert-field]')
@@ -1883,6 +1936,7 @@ function updateAlertRowsFields() {
         fieldSelect.remove()
       }
     }
+    refreshAlertRow(row)
   }
 }
 
@@ -2166,8 +2220,17 @@ async function splitIntoTasks() {
   const items = rows.map((r, i) => {
     const key = `b${i + 1}`
     const name = r.querySelector('input[data-field-name]')?.value?.trim()
+    const fieldKey = r.dataset.fieldKey || `field-${i + 1}`
+    const spec = structuredClone(r._spec || fieldSpecs.get(fieldKey) || {})
+    const field = {
+      key: fieldKey,
+      name: name || `值 ${i + 1}`,
+      ...(r._mode ? { mode: r._mode } : {}),
+      ...(r._source ? { source: structuredClone(r._source) } : {}),
+      spec
+    }
     draft.batchNames[key] = name || `值 ${i + 1}`
-    return { key, ...common, picks: [r._spec || fieldSpecs.get(r.dataset.fieldKey || '')] }
+    return { key, ...common, fields: [field], picks: [spec] }
   })
   if (draftTimer) { clearTimeout(draftTimer); draftTimer = null }
   await setPanelCtx(tabId, { kind: 'batch', items, draft })
@@ -2202,10 +2265,12 @@ function addAlertRow(data = {}) {
   row.dataset.id = data.id || crypto.randomUUID()
 
   const fieldRows = document.querySelectorAll('#field-list [data-field-row]')
-  if (fieldRows.length >= 2) {
-    const fieldSelect = document.createElement('select')
+  let fieldSelect = null
+  if (fieldRows.length >= 2 || data.field) {
+    fieldSelect = document.createElement('select')
     fieldSelect.setAttribute('data-alert-field', '')
     populateAlertFieldOptions(fieldSelect, data.field || '')
+    if (data.field) fieldSelect.value = data.field
     row.appendChild(fieldSelect)
   }
 
@@ -2230,13 +2295,22 @@ function addAlertRow(data = {}) {
   select.value = data.type || 'gt'
 
   const input = document.createElement('input')
-  input.type = 'number'
+  const initialMode = alertTargetMode({
+    mode: document.getElementById('mode')?.value || 'number',
+    fields: Array.from(document.querySelectorAll('#field-list [data-field-row]')).map(fieldRow => ({
+      key: fieldRow.dataset.fieldKey,
+      mode: fieldRow._mode || fieldRow.dataset.mode
+    }))
+  }, data.field || '')
+  input.type = initialMode === 'text' && (data.type || 'gt') === 'eq' ? 'text' : 'number'
   input.className = 'alert-value'
   input.placeholder = '數值'
   input.step = 'any'
   if (data.value !== undefined && data.value !== null && !Number.isNaN(data.value) && String(data.value).trim() !== '') {
     input.value = String(data.value)
   }
+  select.addEventListener('change', () => refreshAlertRow(row))
+  fieldSelect?.addEventListener('change', () => refreshAlertRow(row))
 
   const label = document.createElement('label')
   label.className = 'alert-enable'
@@ -2261,6 +2335,7 @@ function addAlertRow(data = {}) {
   row.appendChild(removeBtn)
 
   list.appendChild(row)
+  refreshAlertRow(row)
   return row
 }
 
@@ -2870,7 +2945,7 @@ function firstResultOf(res, err) {
     const parts = res.values.map(v => `${v.name}: ${v.ok ? formatFirstValue(v.value) : (v.error || '失敗')}`)
     return allOk
       ? { ok: true, text: `第一筆：${parts.join('、')}` }
-      : { ok: false, text: `第一筆有值沒抓到：${parts.join('、')}。${FIRST_NEXT_STEP}` }
+      : { ok: false, text: `第一筆部分失敗：${parts.join('、')}。${FIRST_NEXT_STEP}` }
   }
   if (res.outcome === 'done') return { ok: true, text: `第一筆：${formatFirstValue(res.value)}` }
   const reason = res.error || (res.status ? statusTextOf(res.status) : '') || '抓取失敗'
@@ -3539,6 +3614,7 @@ let pickDraftNameRequestPending = false
 let pickDraftNameRequest = null
 let pickDraftNameRequestSeq = 0
 let pickDraftUndo = null
+let pickDraftUndoRevision = null
 let pickDraftUndoToken = 0
 let pickDraftKeyHandlerBound = false
 
@@ -3619,9 +3695,10 @@ function sendPickDraftOperationWithUndo(operation, inverse) {
   const token = ++pickDraftUndoToken
   pickDraftUndo = null
   renderPickDraft(pickDraftState)
-  return sendPickDraftOperation(operation).then(response => {
+  return sendPickDraftOperation(operation, { preserveUndo: true }).then(response => {
     if (response && token === pickDraftUndoToken) {
       pickDraftUndo = inverse && typeof inverse === 'object' ? inverse : null
+      pickDraftUndoRevision = pickDraftState?.revision ?? null
       renderPickDraft(pickDraftState)
     }
     return response
@@ -3669,7 +3746,12 @@ async function refreshPickDraftAfterConflict() {
   } catch { return null }
 }
 
-async function sendPickDraftOperation(operation) {
+async function sendPickDraftOperation(operation, { preserveUndo = false } = {}) {
+  if (!preserveUndo && pickDraftUndo) {
+    pickDraftUndo = null
+    pickDraftUndoRevision = null
+    ++pickDraftUndoToken
+  }
   try {
     return await queuePickDraftOperation(operation)
   } catch (error) {
@@ -3787,6 +3869,7 @@ function bindPickDraftEvents() {
   const finish = document.getElementById('group-finish')
   const undo = document.getElementById('group-undo')
   const abandon = document.getElementById('group-abandon')
+  const returnSelection = document.getElementById('batch-return-selection')
 
   if (!pickDraftKeyHandlerBound) {
     pickDraftKeyHandlerBound = true
@@ -3817,6 +3900,22 @@ function bindPickDraftEvents() {
   }
   start.addEventListener('click', () => { void createGroup() })
   add?.addEventListener('click', () => { void createGroup() })
+  returnSelection?.addEventListener('click', async () => {
+    const draft = pickDraftState
+    if (!draft || draft.stage !== 'settings') return
+    const response = await sendPickDraftOperation({ type: 'return-selection' })
+    const resumed = response?.draft
+    const group = resumed?.groups?.find(item => item.key === resumed.activeGroupKey)
+    if (!resumed || !group) {
+      setGroupDraftStatus('無法返回選取：找不到目前作用組。', { error: true })
+      return
+    }
+    setPickDraftContext(resumed, { render: false })
+    setBatchView(false)
+    showPickDraftView()
+    renderPickDraft(resumed)
+    await enterPickForDraftGroup(resumed, group)
+  })
   input?.addEventListener('input', () => {
     schedulePickGroupRename(input.value)
     const startButton = document.getElementById('group-start-selection')
@@ -3884,8 +3983,14 @@ function bindPickDraftEvents() {
     try { await pickDraftOperationQueue } catch { return }
     const draft = pickDraftState
     if (!draft) return
-    if (draft.groups.some(group => !Array.isArray(group.values) || group.values.length === 0)) {
-      setGroupDraftStatus('還有空組，請繼續選值或移除該組後再完成。', { error: true })
+    const emptyGroup = draft.groups.find(group => !Array.isArray(group.values) || group.values.length === 0)
+    if (emptyGroup) {
+      if (pickDraftState.activeGroupKey !== emptyGroup.key) {
+        if (!(await sendPickDraftOperation({ type: 'set-active', groupKey: emptyGroup.key }))) return
+      }
+      if (!pendingNameOf(emptyGroup).trim()) document.getElementById('group-name')?.focus()
+      else await enterPickForDraftGroup(pickDraftState, activePickGroup())
+      setGroupDraftStatus(`「${pendingNameOf(emptyGroup).trim() || '尚未命名'}」目前沒有值；已定位到此組，請繼續選值或刪除此空組。`, { error: true })
       return
     }
     try {
@@ -3921,8 +4026,15 @@ function bindPickDraftEvents() {
   })
   undo?.addEventListener('click', async () => {
     const inverse = pickDraftUndo
-    if (!inverse) return
+    if (!inverse || (pickDraftUndoRevision !== null && pickDraftState?.revision !== pickDraftUndoRevision)) {
+      pickDraftUndo = null
+      pickDraftUndoRevision = null
+      renderPickDraft(pickDraftState)
+      setGroupDraftStatus('復原已失效，草稿已有後續變更。', { error: true })
+      return
+    }
     pickDraftUndo = null
+    pickDraftUndoRevision = null
     ++pickDraftUndoToken
     renderPickDraft(pickDraftState)
     const response = await sendPickDraftOperation(inverse.operation)
@@ -3937,6 +4049,7 @@ export function setPickDraftContext(draft, { render = true } = {}) {
   pickDraftState = clonePickDraft(draft)
   if (previousSessionId !== pickDraftState?.sessionId) {
     pickDraftUndo = null
+    pickDraftUndoRevision = null
     pickDraftNameRequest = null
     pickDraftNameRequestPending = false
   }
@@ -4058,6 +4171,26 @@ function renderGroupRow(group, activeKey) {
     values.appendChild(item)
   }
   if (values.childElementCount === 0) {
+    const actions = document.createElement('div')
+    actions.setAttribute('data-group-empty-actions', '')
+    const continueButton = document.createElement('button')
+    continueButton.type = 'button'
+    continueButton.textContent = '繼續選值'
+    continueButton.addEventListener('click', async () => {
+      const response = await sendPickDraftOperation({ type: 'set-active', groupKey: group.key })
+      if (!response?.draft) return
+      if (!pendingNameOf(group).trim()) document.getElementById('group-name')?.focus()
+      else await enterPickForDraftGroup(response.draft, response.draft.groups.find(item => item.key === group.key))
+    })
+    const deleteButton = document.createElement('button')
+    deleteButton.type = 'button'
+    deleteButton.textContent = '刪除此空組'
+    deleteButton.addEventListener('click', () => void sendPickDraftOperationWithUndo(
+      { type: 'remove', groupKey: group.key },
+      { operation: { type: 'create-group', group: clonePickDraft(group) } }
+    ))
+    actions.append(continueButton, deleteButton)
+    values.appendChild(actions)
     const empty = document.createElement('div')
     empty.setAttribute('data-group-value-source', '')
     empty.textContent = '空組仍保留；完成前需繼續選值或移除。'
@@ -4091,8 +4224,8 @@ export function renderPickDraft(draft = pickDraftState) {
   if (input && active && !focused) input.value = pendingNameOf(active)
   if (startSelection) startSelection.hidden = !active || !pendingNameOf(active).trim()
   if (finish) finish.hidden = groups.length === 0
-  if (finish) finish.disabled = groups.length === 0 || groups.some(group => !Array.isArray(group.values) || group.values.length === 0)
-  if (undo) undo.hidden = !pickDraftUndo
+  if (finish) finish.disabled = groups.length === 0
+  if (undo) undo.hidden = !pickDraftUndo || (pickDraftUndoRevision !== null && draft.revision !== pickDraftUndoRevision)
   const title = document.getElementById('group-draft-title')
   if (title) title.textContent = groups.length === 0 ? '先建立群組' : `群組與選值（${groups.length}/${MAX_PICK_GROUPS}）`
   const help = document.getElementById('group-draft-help')
@@ -4190,6 +4323,8 @@ export async function renderFromPanelCtx(ctx, { reload = () => globalThis.locati
 
   if (kind === 'batch' && Array.isArray(ctx.items)) {
     await renderBatch(ctx)
+    const returnSelection = document.getElementById('batch-return-selection')
+    if (returnSelection) returnSelection.hidden = !(batchDraftManaged && pickDraftState?.stage === 'settings')
     return { rendered: true }
   }
 
@@ -4245,7 +4380,9 @@ function applyRetarget(payload) {
     key: r.dataset.fieldKey || '',
     name: r.querySelector('input[data-field-name]')?.value ?? '',
     auto: r.querySelector('input[data-field-name]')?._afAutoName ?? null,
-    spec: r._spec || fieldSpecs.get(r.dataset.fieldKey || '') || {}
+    spec: r._spec || fieldSpecs.get(r.dataset.fieldKey || '') || {},
+    source: r._source ? structuredClone(r._source) : undefined,
+    mode: r._mode
   }))
   const prevForm = getFormData()
   const prevAlerts = Array.isArray(prevForm.alerts) ? prevForm.alerts : []

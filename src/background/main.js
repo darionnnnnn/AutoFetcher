@@ -58,6 +58,7 @@ const exitedPickTabs = new Set()
 // AF-22 C2a：選取中的 frame 是短命執行期狀態，不能寫進草稿（frameId 每次載入都會變）。
 // 這份索引只用來讓進出 frame 有一個可核對的來源，避免舊 frame 的延遲回報改到新階段。
 const activePickFrames = new Map()
+const pickParticipantFrames = new Map()
 const groupNamePickRequests = new Map()
 
 function frameDescriptorOf(sender, extra = {}) {
@@ -94,12 +95,80 @@ function forgetPickFrame(tabId) {
   activePickFrames.delete(tabId)
 }
 
+function rememberPickParticipant(tabId, sessionId, sender) {
+  if (!Number.isInteger(tabId) || typeof sessionId !== 'string' || !Number.isInteger(sender?.frameId)) return
+  let state = pickParticipantFrames.get(tabId)
+  if (!state || state.sessionId !== sessionId) state = { sessionId, frames: new Map() }
+  state.frames.set(sender.frameId, {
+    url: sender.frameId === 0 ? '' : (sender.url || ''),
+    ...(typeof sender.documentId === 'string' && sender.documentId ? { documentId: sender.documentId } : {})
+  })
+  pickParticipantFrames.set(tabId, state)
+}
+
+async function drainPickDraft(tabId, draft, timeoutMs, resume = false) {
+  if (!draft || !Number.isInteger(tabId)) return { ok: false, message: '選取草稿不存在，無法同步' }
+  const listed = await listFrames(tabId)
+  const registered = pickParticipantFrames.get(tabId)
+  const targets = new Set()
+  if (registered?.sessionId === draft.sessionId) {
+    for (const [frameId, identity] of registered.frames) {
+      const frame = listed.find(item => item.frameId === frameId)
+      if (!frame || (identity.url && frame.url !== identity.url) ||
+          (identity.documentId && frame.documentId && frame.documentId !== identity.documentId)) {
+        return { ok: false, message: '有參與選取的框架已失聯或文件已變更，請重新進入該框架後重試' }
+      }
+      targets.add(frameId)
+    }
+  }
+  const urls = new Set()
+  for (const group of draft.groups || []) for (const value of group.values || []) {
+    const url = value?.source?.frame?.url
+    if (typeof url === 'string' && url) urls.add(url)
+  }
+  let tabUrl = ''
+  try { tabUrl = (await chrome.tabs.get(tabId))?.url || '' } catch {}
+  if (tabUrl) urls.add(tabUrl)
+  for (const url of urls) {
+    const matches = listed.filter(frame => frame.url === url)
+    if (matches.length !== 1) return { ok: false, message: matches.length ? '找到多個相同網址的框架，無法確認所有選取都已同步' : '有參與選取的框架已失聯，請返回頁面重試' }
+    targets.add(matches[0].frameId)
+  }
+  if (!targets.size) return { ok: false, message: '找不到可同步的選取框架，請返回頁面重試' }
+  const active = frameStateOf(tabId)
+  if (active?.sessionId === draft.sessionId) targets.add(active.frameId)
+  let failure = null
+  for (const frameId of targets) {
+    try {
+      const response = await sendToFrame(tabId, {
+        type: MSG.PICK_DRAIN, sessionId: draft.sessionId, resume,
+        documentGeneration: draft.documentGeneration, routeIdentity: draft.routeIdentity
+      }, frameId, timeoutMs, 'Drain picker queue')
+      if (response?.ok !== true) { failure = response?.message || '有選取尚未同步，請重試'; break }
+    } catch {
+      failure = '有參與選取的框架沒有回覆同步確認，請返回該框架重試'
+      break
+    }
+  }
+  if (failure && !resume) {
+    await Promise.all([...targets].map(frameId => sendToFrame(tabId, {
+      type: MSG.PICK_DRAIN, sessionId: draft.sessionId, resume: true,
+      documentGeneration: draft.documentGeneration, routeIdentity: draft.routeIdentity
+    }, frameId, timeoutMs, 'Resume picker after failed drain').catch(() => null)))
+    return { ok: false, message: failure }
+  }
+  if (failure) return { ok: false, message: failure }
+  return { ok: true }
+}
+
 function pickIdentityOf(msg = {}) {
   const activeGroupKey = msg.activeGroupKey ?? msg.groupKey
   return {
     ...(msg.sessionId !== undefined ? { sessionId: msg.sessionId } : {}),
     ...(msg.groupKey !== undefined ? { groupKey: msg.groupKey } : {}),
-    ...(activeGroupKey !== undefined ? { activeGroupKey } : {})
+    ...(activeGroupKey !== undefined ? { activeGroupKey } : {}),
+    ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
+    ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {})
   }
 }
 
@@ -569,6 +638,9 @@ async function appendPickedToDraft(msg, sender, payload = msg) {
   if (!draft.groups.some(group => group.key === groupKey)) {
     return { ok: false, error: 'group_not_found', retryable: true, message: '目前作用中的選取組已不存在，請重新選取' }
   }
+  if (!draftRouteMatchesTab(draft.routeIdentity, sender?.tab?.url)) {
+    return { ok: false, error: 'stale_route', retryable: true, message: '目前頁面路徑已變更，請重新確認來源後再選取' }
+  }
   if (!draftIdentityMatches(msg, draft)) {
     return { ok: false, error: 'stale_document', retryable: true, message: '頁面已變更，請重新整理後再選取' }
   }
@@ -611,6 +683,34 @@ async function appendPickedToDraft(msg, sender, payload = msg) {
           sessionId: draft.sessionId,
           tabId,
           operation: { type: 'remove', groupKey, valueKey: existing.key }
+        }, operationSender)
+        if (!result?.ok || !result.draft) return result || { ok: false, error: 'draft_write_failed', retryable: true }
+        latest = result.draft
+      }
+    }
+    // Context-menu exclude/include edits replace the selector atomically. Keep
+    // the original value key/source so ACK retries and source identity remain stable.
+    if (Array.isArray(payload?.replacePicks)) {
+      for (const [index, item] of payload.replacePicks.entries()) {
+        const pick = item?.pick
+        const value = draftValueOf(payload, pick, sender, msg, index)
+        const group = latest.groups.find(entry => entry.key === groupKey)
+        const existing = group?.values.find(entry => sameSpec(entry, value))
+        if (!existing) continue
+        const replacement = {
+          ...value,
+          key: existing.key,
+          source: structuredClone(existing.source),
+          locator: structuredClone(existing.locator || value.locator)
+        }
+        const operationId = `${operationBase}:replace:${index}`
+        const result = await handlePickDraftOperation({
+          type: MSG.PICK_DRAFT_OPERATION,
+          operationId,
+          expectedRevision: latest.revision,
+          sessionId: draft.sessionId,
+          tabId,
+          operation: { type: 'replace-value', groupKey, valueKey: existing.key, value: replacement }
         }, operationSender)
         if (!result?.ok || !result.draft) return result || { ok: false, error: 'draft_write_failed', retryable: true }
         latest = result.draft
@@ -761,6 +861,13 @@ function draftIdentityMatches(message, draft) {
     if (message?.[field] !== undefined && stableValue(message[field]) !== stableValue(draft?.[field])) return false
   }
   return true
+}
+
+function draftRouteMatchesTab(routeIdentity, tabUrl) {
+  const expectedUrl = routeIdentity && typeof routeIdentity === 'object' && typeof routeIdentity.url === 'string'
+    ? routeIdentity.url
+    : ''
+  return !expectedUrl || expectedUrl === tabUrl
 }
 
 function stableValue(value) {
@@ -963,9 +1070,50 @@ export async function handleMessage(msg, sender, runOpts = {}) {
     // 的 session 鎖內完成。這條路與舊 PICKED／repick 路徑分開，保留舊單任務相容性。
     if (msg.type === MSG.PICK_DRAFT_BEGIN) return await beginPickDraft(msg, sender)
     if (msg.type === MSG.PICK_DRAFT_READ) return await readPickDraftMessage(msg, sender)
-    if (msg.type === MSG.PICK_DRAFT_OPERATION) return await handlePickDraftOperation(msg, sender)
+    if (msg.type === MSG.PICK_DRAFT_OPERATION) {
+      const operation = msg.operation || msg
+      if (operation.type === 'set-active' || operation.op === 'set-active') {
+        const tabId = msg.tabId ?? sender?.tab?.id
+        const draft = await getPickDraft(tabId, { sessionId: msg.sessionId })
+        if (!draft || draft.sessionId !== msg.sessionId) return { ok: false, error: 'stale_session', message: '選取階段已變更，請重新整理後重試' }
+        const drained = await drainPickDraft(tabId, draft, contentMs)
+        if (!drained.ok) return { ok: false, error: 'drain_failed', retryable: true, message: drained.message }
+        const latest = await getPickDraft(tabId, { sessionId: draft.sessionId })
+        if (!latest || latest.sessionId !== draft.sessionId) return { ok: false, error: 'stale_session', message: '選取階段已變更，請重新整理後重試' }
+        try {
+          const result = await handlePickDraftOperation({ ...msg, expectedRevision: latest.revision }, sender)
+          if (!result?.ok) await drainPickDraft(tabId, latest, contentMs, true)
+          return result
+        } catch (error) {
+          await drainPickDraft(tabId, latest, contentMs, true)
+          throw error
+        }
+      }
+      return await handlePickDraftOperation(msg, sender)
+    }
     if (msg.type === MSG.PICK_DRAFT_COMPLETE) {
-      const completed = await completePickDraft(msg, sender)
+      const tabId = msg.tabId ?? sender?.tab?.id
+      const before = await getPickDraft(tabId, { sessionId: msg.sessionId })
+      if (!before || before.sessionId !== msg.sessionId) return { ok: false, error: 'stale_session', message: '選取階段已變更，請重新整理後重試' }
+      if (!before.groups?.length || before.groups.some(group => !Array.isArray(group.values) || group.values.length === 0)) {
+        return { ok: false, synchronized: false, error: 'empty_group', message: '每個群組完成前都必須至少有一個值' }
+      }
+      const drained = await drainPickDraft(tabId, before, contentMs)
+      if (!drained.ok) return { ok: false, error: 'drain_failed', retryable: true, message: drained.message }
+      const latest = await getPickDraft(tabId, { sessionId: before.sessionId })
+      if (!latest || latest.sessionId !== before.sessionId) return { ok: false, error: 'stale_session', message: '選取階段已變更，請重新整理後重試' }
+      if (!latest.groups?.length || latest.groups.some(group => !Array.isArray(group.values) || group.values.length === 0)) {
+        await drainPickDraft(tabId, latest, contentMs, true)
+        return { ok: false, synchronized: false, error: 'empty_group', message: '每個群組完成前都必須至少有一個值' }
+      }
+      let completed
+      try {
+        completed = await completePickDraft({ ...msg, expectedRevision: latest.revision }, sender)
+      } catch (error) {
+        await drainPickDraft(tabId, latest, contentMs, true)
+        throw error
+      }
+      if (!completed?.ok) await drainPickDraft(tabId, latest, contentMs, true)
       if (completed?.ok && completed.snapshot) {
         const groups = Array.isArray(completed.snapshot.groups) ? completed.snapshot.groups : []
         if (groups.length === 0 || groups.some(group => !Array.isArray(group?.values) || group.values.length === 0)) {
@@ -1009,7 +1157,13 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       return completed
     }
     if (msg.type === MSG.PICK_DRAFT_ABANDON || msg.type === MSG.PICK_DRAFT_FINALIZE) {
-      return await abandonPickDraft(msg, sender)
+      const result = await abandonPickDraft(msg, sender)
+      if (result?.ok) {
+        const tabId = msg.tabId ?? sender?.tab?.id
+        pickParticipantFrames.delete(tabId)
+        forgetPickFrame(tabId)
+      }
+      return result
     }
     if (msg.type === MSG.PICK_DRAFT_PAUSE) {
       const tabId = Number.isInteger(sender?.tab?.id) ? sender.tab.id : msg.tabId
@@ -1033,35 +1187,46 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       if (!task) {
         return { ok: false, outcome: 'failed', error: '找不到任務' }
       }
+      const multi = task.mode === 'multi' || task.spec?.mode === 'multi'
+      if (multi && (!Array.isArray(task.fields) || task.fields.length === 0)) {
+        return { ok: false, outcome: 'failed', status: 'error', error: '多來源任務沒有可執行欄位', values: [] }
+      }
+      const hasDeclaredFields = Array.isArray(task.fields) && task.fields.length > 0
+      const executionId = globalThis.crypto?.randomUUID?.() || `manual-${Date.now()}-${Math.random().toString(36).slice(2)}`
       const record = await runTask(task, {
         slot: slotOf(Date.now()),
         ...runOpts,
-        reason: 'manual'
+        reason: 'manual',
+        ...(hasDeclaredFields ? { executionId } : {})
       })
       if (!record) {
         return { ok: true, outcome: 'failed', status: 'error', error: '沒有結果' }
       }
       // 多值任務要逐值回報，只回第一筆使用者看不出另外幾個值怎麼了
       let values
-      if (Array.isArray(task.fields) && task.fields.length > 0 && typeof record.slot === 'string') {
-        // 同一分鐘按兩次會有兩組紀錄，每個值只留最新的那一筆
-        const latestById = new Map()
+      if (hasDeclaredFields && typeof record.slot === 'string') {
+        const recordsById = new Map()
         for (const r of await getRecordsByDate(record.slot.slice(0, 10))) {
-          if (r.slot !== record.slot || parentIdOf(r.taskId) !== task.id) continue
-          const prev = latestById.get(r.taskId)
-          if (!prev || String(r.capturedAt) >= String(prev.capturedAt)) latestById.set(r.taskId, r)
+          if (r.slot !== record.slot || r.executionId !== executionId || parentIdOf(r.taskId) !== task.id) continue
+          recordsById.set(r.taskId, r)
         }
-        const sameSlot = [...latestById.values()]
-        if (sameSlot.length > 0) {
-          const idx = buildSeriesIndex([task])
-          values = sameSlot.map(r => ({
+        const idx = buildSeriesIndex([task])
+        values = task.fields.map(field => {
+          const r = recordsById.get(seriesIdOf(task.id, field.key))
+          return r ? ({
             // 按鈕就在那個任務旁邊，用值名就夠，不必每個都重複任務名
             name: idx.byId[r.taskId]?.shortName || nameOf(idx, r.taskId),
             ok: isSuccess(r),
             value: isSuccess(r) ? r.value : undefined,
             error: isSuccess(r) ? undefined : (r.error || statusTextOf(r.status))
-          }))
-        }
+          }) : ({ name: field.name || field.key, ok: false, error: '本次沒有結果' })
+        })
+        const successes = values.filter(value => value.ok).length
+        // 新 multi 協定公開整批完成度；舊 block 呼叫端沿用父紀錄的成功語意。
+        const outcome = multi
+          ? (successes === values.length ? 'done' : successes > 0 ? 'partial' : 'failed')
+          : (isSuccess(record) ? 'done' : 'failed')
+        return { ok: true, outcome, status: record.status, values }
       }
 
       if (isSuccess(record)) {
@@ -1119,6 +1284,11 @@ export async function handleMessage(msg, sender, runOpts = {}) {
     if (msg.type === MSG.PICKED) {
       const pickedTabId = sender?.tab?.id
       const activeFrame = Number.isInteger(pickedTabId) ? frameStateOf(pickedTabId) : null
+      const participant = Number.isInteger(pickedTabId) ? pickParticipantFrames.get(pickedTabId) : null
+      const knownParticipant = participant?.sessionId === msg.sessionId ? participant.frames.get(sender?.frameId ?? 0) : null
+      if (knownParticipant?.documentId && sender?.documentId && knownParticipant.documentId !== sender.documentId) {
+        return { ok: false, error: 'stale_document', retryable: true, message: '這個框架的文件已重新載入，請重新進入後再選取' }
+      }
       // 進入下一個 frame 後，舊文件晚到的完成回報不可覆蓋新階段。
       // 沒有 C2a session 欄位的舊單任務仍沿用既有相容路徑。
       if (activeFrame && msg.sessionId !== undefined) {
@@ -1157,6 +1327,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       if (msg.purpose === 'task' && msg.sessionId !== undefined &&
           (msg.groupKey !== undefined || msg.activeGroupKey !== undefined)) {
         const draftResult = await appendPickedToDraft(msg, sender)
+        if (draftResult?.ok === true) rememberPickParticipant(sender?.tab?.id, msg.sessionId, sender)
         if (draftResult) return draftResult
       }
 
@@ -1364,6 +1535,12 @@ export async function handleMessage(msg, sender, runOpts = {}) {
 
     if (msg.type === MSG.ENTER_PICK) {
       if (msg.tabId) {
+        if (msg.sessionId !== undefined && msg.routeIdentity !== undefined) {
+          const currentTab = await chrome.tabs.get(msg.tabId).catch(() => null)
+          if (!draftRouteMatchesTab(msg.routeIdentity, currentTab?.url)) {
+            return { ok: false, error: 'stale_route', retryable: true, message: '目前頁面路徑已變更，請重新確認選取來源' }
+          }
+        }
         groupNamePickRequests.delete(msg.tabId)
         let frameId = msg.frameId ?? null
         let frameCandidates = []
@@ -1582,6 +1759,7 @@ export async function closePanelFor(tabId, opts = {}) {
   await clearPanelCtx(tabId)
   if (opts.keepMarks) {
     forgetPickFrame(tabId)
+    pickParticipantFrames.delete(tabId)
     exitedPickTabs.delete(tabId)
     if (opts.clearDraft) {
       try { await clearPickDraftForTab(tabId) } catch (err) {
@@ -1592,6 +1770,7 @@ export async function closePanelFor(tabId, opts = {}) {
   }
   if (!pending && exitedPickTabs.has(tabId)) {
     forgetPickFrame(tabId)
+    pickParticipantFrames.delete(tabId)
     if (opts.clearDraft) {
       try { await clearPickDraftForTab(tabId) } catch (err) {
         try { await diag.log('pick_draft_clear_failed', { tabId, message: String(err?.message || err) }) } catch {}
@@ -1615,6 +1794,7 @@ export async function closePanelFor(tabId, opts = {}) {
   }
   exitedPickTabs.add(tabId)
   forgetPickFrame(tabId)
+  pickParticipantFrames.delete(tabId)
   if (opts.clearDraft) {
     try { await clearPickDraftForTab(tabId) } catch (err) {
       try { await diag.log('pick_draft_clear_failed', { tabId, message: String(err?.message || err) }) } catch {}

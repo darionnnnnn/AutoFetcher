@@ -27,6 +27,7 @@ test('D1b 同頁跨表／元素留在作用群組，第二組可同表加值，�
   resetChromeMock()
   const chromeMock = installChromeMock()
   chromeMock.__setScriptResponder(() => [{ frameId: 0, result: 'https://a.test/prices' }])
+  chromeMock.__setTabResponder((_tabId, message) => message.type === 'PICK_DRAIN' ? { ok: true } : undefined)
   const messages = await import('../src/shared/messages.js?t=' + Math.random())
   const bg = await import('../src/background/main.js?t=' + Math.random())
   const draftApi = await import('../src/shared/pick-draft.js?t=' + Math.random())
