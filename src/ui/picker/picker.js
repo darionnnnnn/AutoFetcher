@@ -1250,6 +1250,7 @@ export function render(ctx) {
     multiControlBaseline = multiControlStateOf()
     updateSetupSummary()
   }
+  updateSourceStateWarning()
 }
 
 // 欄位離開焦點就地驗證（錯誤字在欄位正下方、aria-describedby 指向它），不必等按儲存
@@ -2053,6 +2054,7 @@ function updateFieldListState() {
 
   updateAlertRowsFields()
   updateBlockSection()
+  updateSourceStateWarning()
 }
 
 // 「用「列 · 欄」命名」用的文字：與 fieldWhereText 同形，但純數值標題不進名稱
@@ -2310,6 +2312,7 @@ function createFieldRow({ key, name, spec, source, mode, stateActions }) {
     stateButton.addEventListener('click', () => {
       row._stateActions = validPreActionsOf(preActionsFromForm())
       updateStateLabel()
+      updateSourceStateWarning()
       scheduleDraftSave?.()
     })
     row.appendChild(stateButton)
@@ -4935,6 +4938,37 @@ function reconcileBatchItemsWithDraft(items, draft) {
   })
 }
 
+export function sourceStateTransitionWarningOf(items) {
+  let previousHasActions = false
+  for (const item of Array.isArray(items) ? items : []) {
+    if (Array.isArray(item?.fields)) {
+      // Batch rows are separate tasks; their page state never carries across rows.
+      let groupHasActions = false
+      for (const field of item.fields) {
+        const hasActions = Array.isArray(field?.stateActions) && field.stateActions.length > 0
+        if (groupHasActions && !hasActions) return true
+        groupHasActions = hasActions
+      }
+      continue
+    }
+    const fields = [item]
+    for (const field of fields) {
+      const hasActions = Array.isArray(field?.stateActions) && field.stateActions.length > 0
+      if (previousHasActions && !hasActions) return true
+      previousHasActions = hasActions
+    }
+  }
+  return false
+}
+
+function updateSourceStateWarning() {
+  const warning = document.getElementById('source-state-warning')
+  const fields = batchItems || Array.from(document.querySelectorAll('#field-list [data-field-row]'), row => ({
+    stateActions: row._stateActions || []
+  }))
+  if (warning) warning.hidden = !sourceStateTransitionWarningOf(fields)
+}
+
 function batchRows() {
   return Array.from(document.querySelectorAll('#batch-list [data-batch-item]'))
 }
@@ -4989,6 +5023,7 @@ function renderBatchList(savedNames) {
   if (aggLabel) {
     aggLabel.hidden = !batchItems.some(it => Array.isArray(it.picks) && it.picks.some(p => p?.block))
   }
+  updateSourceStateWarning()
 }
 
 function batchWhereText(item) {
@@ -5041,11 +5076,13 @@ function createBatchRow(item, name, auto) {
           batchItems = reconcileBatchItemsWithDraft(batchItems, response.draft)
           field.stateActions = structuredClone(actions)
           updateStateText()
+          updateSourceStateWarning()
           return
         }
       }
       field.stateActions = structuredClone(actions)
       updateStateText()
+      updateSourceStateWarning()
     })
     row.appendChild(stateButton)
   }
@@ -5121,6 +5158,7 @@ function removeBatchItems(keys) {
     if (drop.has(row.getAttribute('data-batch-key'))) row.remove()
   }
   batchItems = batchItems.filter(it => !drop.has(it.key))
+  updateSourceStateWarning()
   if (batchItems.length === 0) {
     // 清單清空＝取消，與取消鈕同一條收尾
     finishPanelSession(tabId)

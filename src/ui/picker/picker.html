@@ -493,6 +493,9 @@
   </section>
   <form id="picker-form" onsubmit="return false;">
     <div class="settings-body">
+      <div id="source-state-warning" class="banner is-info" role="status" aria-live="polite" hidden>
+        前一個值的狀態動作會留在頁面上；後續值若沒有狀態動作，會沿用目前頁籤或篩選。若該值要回到初始狀態，請明確加入切換或還原動作。此提醒不會阻止儲存。
+      </div>
       <fieldset id="batch-section" hidden>
         <legend>要建立的任務</legend>
         <button type="button" id="batch-return-selection" hidden>返回選取</button>
@@ -558,7 +561,7 @@
       </fieldset>
       <details id="preaction-section">
         <summary><span data-preaction-ask></span> <span id="preaction-count" class="chip" hidden></span></summary>
-        <div class="preaction-desc">抓取前依序執行，例如先關掉彈窗、或等圖表載入完成。多值設定可在各值旁按「狀態動作」套用目前這串動作，只在抓該值前執行。<br>
+        <div class="preaction-desc">抓取前依序執行，例如先關掉彈窗、或等圖表載入完成。多值設定可在各值旁按「狀態動作」套用目前這串動作，只在抓該值前執行。沒有狀態動作的值會沿用前一個值留下的頁面狀態，不會自動重載或還原。<br>
           要抓「滑鼠移過去才出現的選單」，用「移到元素上」→「等元素出現」→「點擊元素」三步。
           <strong>純用 CSS <code>:hover</code> 展開的選單無法用這個方式打開</strong>（程式送出的滑鼠事件不是真的游標）；
           這種站台通常選單項目本來就在頁面裡，把「等元素出現」的「要看得見」取消再直接點它即可。</div>
