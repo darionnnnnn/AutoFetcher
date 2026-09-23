@@ -3,6 +3,12 @@
 
 export const TASK_FIELD_MODES = Object.freeze(['number', 'text', 'block'])
 
+// AF-22 R15: use the same per-task budget as the resumable picker draft.
+export const MAX_MULTI_FIELDS = 100
+export const MAX_MULTI_STRING_LENGTH = 4096
+export const MAX_MULTI_TASK_BYTES = 512 * 1024
+export const MAX_MULTI_DEPTH = 8
+
 const MODE_SET = new Set(TASK_FIELD_MODES)
 
 export function isPlainObject(value) {
@@ -188,6 +194,26 @@ function validateSingleSpec(spec) {
   }
 }
 
+function validateBoundedJson(value, path = '$', depth = 0, seen = new WeakSet()) {
+  if (typeof value === 'string') {
+    if (value.length > MAX_MULTI_STRING_LENGTH) invalid(`${path} 字串超過 ${MAX_MULTI_STRING_LENGTH} 字元上限`)
+    return
+  }
+  if (value === null || typeof value !== 'object') return
+  if (depth >= MAX_MULTI_DEPTH) invalid(`${path} 巢狀深度超過上限`)
+  if (seen.has(value)) invalid(`${path} 不得包含遞迴結構`)
+  seen.add(value)
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => validateBoundedJson(item, `${path}[${index}]`, depth + 1, seen))
+  } else {
+    for (const [key, item] of Object.entries(value)) {
+      if (key.length > MAX_MULTI_STRING_LENGTH) invalid(`${path} 欄位名稱超過字串上限`)
+      validateBoundedJson(item, `${path}.${key}`, depth + 1, seen)
+    }
+  }
+  seen.delete(value)
+}
+
 /**
  * 驗證 AF-22 multi 的深層契約。舊格式由 storage 的既有驗證路徑處理。
  * @param {object} task
@@ -202,10 +228,23 @@ export function validateMultiTask(task) {
   if (!Array.isArray(task.fields) || task.fields.length === 0) {
     invalid('task.fields 必須為非空陣列')
   }
+  if (task.fields.length > MAX_MULTI_FIELDS || task.spec.fields.length > MAX_MULTI_FIELDS) {
+    invalid(`每個 multi 任務最多 ${MAX_MULTI_FIELDS} 個值`)
+  }
+  validateBoundedJson(task)
+  let bytes
+  try {
+    const encoded = JSON.stringify(task)
+    bytes = typeof TextEncoder === 'function' ? new TextEncoder().encode(encoded).byteLength : encoded.length
+  } catch {
+    invalid('任務必須可序列化')
+  }
+  if (bytes > MAX_MULTI_TASK_BYTES) invalid(`multi 任務大小超過 ${MAX_MULTI_TASK_BYTES} bytes 上限`)
 
   const taskKeys = new Set()
   for (const field of task.fields) {
     validateKey(field?.key, 'task.fields key')
+    if (field?.name !== undefined && field.name !== null && typeof field.name !== 'string') invalid('task.fields name 必須是字串')
     if (taskKeys.has(field.key)) invalid(`task.fields key 重複：${field.key}`)
     taskKeys.add(field.key)
   }

@@ -11,12 +11,13 @@ import {
   REMOVE_SESSION_VALUE
 } from './storage.js'
 import { withLock, lockNameOf } from './lock.js'
+import { MAX_MULTI_FIELDS, MAX_MULTI_STRING_LENGTH, MAX_MULTI_TASK_BYTES } from './task-source.js'
 
 export const PICK_DRAFT_VERSION = 1
 export const MAX_PICK_DRAFT_GROUPS = 20
-export const MAX_PICK_DRAFT_VALUES = 100
-export const MAX_DRAFT_STRING_LENGTH = 4096
-export const MAX_PICK_DRAFT_BYTES = 512 * 1024
+export const MAX_PICK_DRAFT_VALUES = MAX_MULTI_FIELDS
+export const MAX_DRAFT_STRING_LENGTH = MAX_MULTI_STRING_LENGTH
+export const MAX_PICK_DRAFT_BYTES = MAX_MULTI_TASK_BYTES
 export const MAX_PICK_DRAFT_DEPTH = 8
 
 // 相容的別名，讓消費端不必複製這些界限。
