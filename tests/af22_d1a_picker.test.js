@@ -131,6 +131,42 @@ test('D1b same panel context rehydrates a hidden tab-bound group draft without c
   assert.equal(doc.querySelector('[data-group-value]')?.dataset.valueKey, 'round-two-value')
 })
 
+test('D1b tab rehydration redirects the already-bound Finish button to the current draft controller', async () => {
+  const { chromeMock, picker, doc } = await fresh()
+  const first = draft({
+    sessionId: 'first-round-session', tabId: 17,
+    groups: [{ key: 'first-group', name: '第一輪', values: [{ key: 'first-value', name: '舊值' }] }],
+    activeGroupKey: 'first-group', stage: 'selecting', revision: 21
+  })
+  picker.renderPickDraft(first)
+
+  let completed = null
+  const second = draft({
+    sessionId: 'second-round-session', tabId: 18,
+    groups: [{ key: 'second-group', name: '第二輪', values: [{ key: 'second-value', name: '新值' }] }],
+    activeGroupKey: 'second-group', stage: 'selecting', revision: 4
+  })
+  chromeMock.__setRuntimeResponder(async message => {
+    if (message.type === 'RESOLVE_PANEL_TAB') return { tabId: 18 }
+    if (message.type === 'PICK_DRAFT_READ') return { ok: true, draft: structuredClone(second) }
+    if (message.type === 'PICK_DRAFT_COMPLETE') {
+      completed = message
+      return { ok: true, synchronized: true, draft: { ...second, stage: 'settings' } }
+    }
+    return undefined
+  })
+  // Model a retained side-panel DOM with a newer tab-bound module rehydrating it.
+  const restoredPicker = await import('../src/ui/picker/picker.js?t=' + Math.random())
+  restoredPicker.renderPickDraft(second)
+  await doc.getElementById('group-finish').click()
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  assert.equal(completed?.sessionId, 'second-round-session')
+  assert.equal(completed?.tabId, 18)
+  assert.equal(completed?.expectedRevision, 4)
+  assert.equal(completed?.documentGeneration, second.documentGeneration)
+})
+
 test('D1a 現有一次建立多個任務入口會先 begin 草稿，側欄可見第一個群組入口', async () => {
   const { chromeMock, doc } = await fresh({ liveBatch: true })
   assert.equal(chromeMock.runtime.id, 'autofetcher-test')

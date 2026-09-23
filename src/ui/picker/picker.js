@@ -4004,6 +4004,80 @@ function groupValueLabel(value) {
   return `${name}（識別：${key}）`
 }
 
+async function finishPickDraft() {
+  if (!pickDraftState) return
+  if (panelBootSequence > 0 && Number.isInteger(panelTabId)) {
+    const activeTabId = await resolvePanelTab()
+    if (!Number.isInteger(activeTabId)) {
+      if (panelWindowId !== null) {
+        setGroupDraftStatus('無法確認目前分頁；請重新開啟選取面板後再完成。', { error: true })
+        return
+      }
+    } else {
+      let currentDraft = null
+      try {
+        const response = await chrome.runtime.sendMessage({ type: MSG.PICK_DRAFT_READ, tabId: activeTabId })
+        currentDraft = response?.draft || null
+      } catch {}
+      if (!currentDraft || currentDraft.tabId !== activeTabId) {
+        setGroupDraftStatus('目前分頁沒有可完成的選取草稿；請重新選取。', { error: true })
+        return
+      }
+      const rows = Array.from(document.querySelectorAll('[data-group-row]'))
+      const currentGroups = Array.isArray(currentDraft.groups) ? currentDraft.groups : []
+      const renderedMatches = rows.length === currentGroups.length && currentGroups.every((group, index) => {
+        const row = rows[index]
+        const valueKeys = Array.from(row?.querySelectorAll('[data-group-value]') || [], value => value.dataset.valueKey)
+        const currentValueKeys = Array.isArray(group.values) ? group.values.map(value => value.key) : []
+        return row?.dataset.groupKey === group.key &&
+          row?.dataset.active === String(group.key === currentDraft.activeGroupKey) &&
+          JSON.stringify(valueKeys) === JSON.stringify(currentValueKeys)
+      })
+      if (!renderedMatches) {
+        setPickDraftContext(currentDraft)
+        setGroupDraftStatus('目前分頁的選取內容已更新；請確認後再次完成。', { error: true })
+        return
+      }
+      panelTabId = activeTabId
+      setPickDraftContext(currentDraft, { render: false })
+    }
+  }
+  // 最後一字可能仍在 debounce 或前一個 ACK queue；完成屏障一定要站在最新 revision 上。
+  if (!(await flushPickGroupRename())) return
+  try { await pickDraftOperationQueue } catch { return }
+  const draft = pickDraftState
+  if (!draft) return
+  const emptyGroup = draft.groups.find(group => !Array.isArray(group.values) || group.values.length === 0)
+  if (emptyGroup) {
+    if (pickDraftState.activeGroupKey !== emptyGroup.key) {
+      if (!(await sendPickDraftOperation({ type: 'set-active', groupKey: emptyGroup.key }))) return
+    }
+    if (!pendingNameOf(emptyGroup).trim()) document.getElementById('group-name')?.focus()
+    else await enterPickForDraftGroup(pickDraftState, activePickGroup())
+    setGroupDraftStatus(`「${pendingNameOf(emptyGroup).trim() || '尚未命名'}」目前沒有值；已定位到此組，請繼續選值或刪除此空組。`, { error: true })
+    return
+  }
+  try {
+    const response = await chrome.runtime.sendMessage({ type: MSG.PICK_DRAFT_COMPLETE, ...pickDraftIdentity(draft), expectedRevision: draft.revision })
+    if (response?.ok !== true || response.synchronized !== true) throw new Error(response?.message || '草稿尚未同步')
+    if (response.draft) setPickDraftContext(response.draft, { render: false })
+    if (response.context) {
+      // background 已把同一份 snapshot 寫成設定頁 ctx；立即切畫面，
+      // 避免只留下「等待設定畫面」而要靠 session 事件才能進表單。
+      await renderFromPanelCtx(response.panelContext || {
+        kind: 'new',
+        ctx: response.context,
+        draft: { name: activePickGroup()?.name || '', ...(response.snapshot?.form || {}) }
+      })
+    } else {
+      setGroupDraftStatus('選取已同步，正在等待設定畫面。')
+    }
+  } catch (error) {
+    if (/revision|同步|conflict/i.test(error?.message || '')) await refreshPickDraftAfterConflict()
+    setGroupDraftStatus(error?.message || '選取尚未同步，請稍候再完成。', { error: true })
+  }
+}
+
 function bindPickDraftEvents() {
   const start = document.getElementById('group-start-first')
   if (!start || start.dataset.bound === 'true') return
@@ -4126,43 +4200,7 @@ function bindPickDraftEvents() {
   }
   confirm?.addEventListener('click', () => { void beginSelection() })
   startSelection?.addEventListener('click', () => { void beginSelection() })
-  finish?.addEventListener('click', async () => {
-    if (!pickDraftState) return
-    // 最後一字可能仍在 debounce 或前一個 ACK queue；完成屏障一定要站在最新 revision 上。
-    if (!(await flushPickGroupRename())) return
-    try { await pickDraftOperationQueue } catch { return }
-    const draft = pickDraftState
-    if (!draft) return
-    const emptyGroup = draft.groups.find(group => !Array.isArray(group.values) || group.values.length === 0)
-    if (emptyGroup) {
-      if (pickDraftState.activeGroupKey !== emptyGroup.key) {
-        if (!(await sendPickDraftOperation({ type: 'set-active', groupKey: emptyGroup.key }))) return
-      }
-      if (!pendingNameOf(emptyGroup).trim()) document.getElementById('group-name')?.focus()
-      else await enterPickForDraftGroup(pickDraftState, activePickGroup())
-      setGroupDraftStatus(`「${pendingNameOf(emptyGroup).trim() || '尚未命名'}」目前沒有值；已定位到此組，請繼續選值或刪除此空組。`, { error: true })
-      return
-    }
-    try {
-      const response = await chrome.runtime.sendMessage({ type: MSG.PICK_DRAFT_COMPLETE, ...pickDraftIdentity(draft), expectedRevision: draft.revision })
-      if (response?.ok !== true || response.synchronized !== true) throw new Error(response?.message || '草稿尚未同步')
-      if (response.draft) setPickDraftContext(response.draft, { render: false })
-      if (response.context) {
-        // background 已把同一份 snapshot 寫成設定頁 ctx；立即切畫面，
-        // 避免只留下「等待設定畫面」而要靠 session 事件才能進表單。
-        await renderFromPanelCtx(response.panelContext || {
-          kind: 'new',
-          ctx: response.context,
-          draft: { name: activePickGroup()?.name || '', ...(response.snapshot?.form || {}) }
-        })
-      } else {
-        setGroupDraftStatus('選取已同步，正在等待設定畫面。')
-      }
-    } catch (error) {
-      if (/revision|同步|conflict/i.test(error?.message || '')) await refreshPickDraftAfterConflict()
-      setGroupDraftStatus(error?.message || '選取尚未同步，請稍候再完成。', { error: true })
-    }
-  })
+  finish?.addEventListener('click', () => { void document.__af22PickDraftFinish?.() })
   abandon?.addEventListener('click', async () => {
     const draft = pickDraftState
     if (!draft) return
@@ -4354,6 +4392,10 @@ function renderGroupRow(group, activeKey) {
 export function renderPickDraft(draft = pickDraftState) {
   if (!draft) { hidePickDraftView(); return }
   setPickDraftContext(draft, { render: false })
+  // A panel can keep its document while a tab-bound module/context is replaced.
+  // Event listeners are installed once per DOM, so point the button at the latest
+  // draft controller every time that DOM is rehydrated.
+  document.__af22PickDraftFinish = finishPickDraft
   showPickDraftView()
   bindPickDraftEvents()
   const groups = Array.isArray(draft.groups) ? draft.groups : []
