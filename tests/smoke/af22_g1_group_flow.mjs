@@ -23,7 +23,7 @@ const mainFixture = framePort => `<!doctype html><meta charset="utf-8"><title>AF
 <h1>Fixture for group flow</h1><span id="group-name-text">Second Group Picked Name</span>
 <table id="nested"><tbody><tr><td>product</td><td><table><tbody><tr><td>First price</td><td id="price-a">101</td></tr></tbody></table></td></tr></tbody></table>
 <table role="table" aria-label="CSS table"><div role="row"><span role="cell">Second price</span><span role="cell" id="price-b">202</span></div></table>
-<div id="scattered">Scattered amount <strong id="price-c">303</strong></div>
+<div id="scattered">Scattered amount <strong id="price-c">303</strong> <strong id="price-d">404</strong></div>
 <iframe title="cross-origin fixture" src="http://127.0.0.1:${framePort}/frame"></iframe>`
 const frameFixture = '<!doctype html><meta charset="utf-8"><div id="frame-price" style="margin:30px;padding:20px">404</div>'
 const listen = server => new Promise((resolveListen, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => resolveListen(server.address().port)) })
@@ -180,6 +180,7 @@ try {
     throw error
   }
   ck('first group created and manually named')
+  console.log('[diagnostic] first group canonical name', await picker.evaluate(async id => (await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id })).draft?.groups?.map(group => ({ key: group.key, name: group.name })), tabId))
   await clickTarget(target, '#price-a')
   await clickTarget(target, '#price-b')
   await new Promise(resolveWait => setTimeout(resolveWait, 1200))
@@ -192,7 +193,7 @@ try {
       return { groupValues: group?.values?.map(value => ({ key: value.key, name: value.name, source: value.source, locator: value.locator, frame: value.frame })), activeGroupKey: draft?.activeGroupKey, stage: draft?.stage, status: document.querySelector('#group-draft-status')?.textContent }
     }, tabId)
     const selected = await target.evaluate(() => [...document.querySelectorAll('[data-af-picked]')].map(node => ({ text: node.textContent?.trim(), tag: node.tagName, id: node.id })))
-    console.log('[checkpoint detail] two-source selection', { visiblePickedMarkers: picked1, selected, state })
+    console.log('[checkpoint detail] two-source selection', { visiblePickedMarkers: picked1, selected, state: JSON.parse(JSON.stringify(state)) })
     if ((state.groupValues?.length || 0) < 2) throw new Error(`first group expected two canonical values; saw ${state.groupValues?.length || 0}`)
   }
   ck('first group selected two same-page sources')
@@ -227,31 +228,35 @@ try {
   }
   await picker.waitForSelector('#group-name-editor:not([hidden])')
   await clickPanel(picker, '#group-name-from-page')
-  try { await waitOverlay(target) } catch (error) {
-    console.log('[checkpoint detail] second group page-name request', await picker.evaluate(async id => ({ name: document.querySelector('#group-name')?.value, status: document.querySelector('#group-draft-status')?.textContent, draft: await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id }) }), tabId))
-    throw error
-  }
+  await picker.waitForFunction(() => document.querySelector('#group-draft-status')?.textContent.includes('點要用作名稱'), { timeout: 8000 })
   await clickTarget(target, '#group-name-text')
-  await clickSelector(target, '[data-af-done]')
   await picker.waitForFunction(() => document.querySelector('#group-name')?.value === 'Second Group Picked Name', { timeout: 10000 })
   ck('second group created and named from page text')
   await clickPanel(picker, '#group-name-confirm')
+  await picker.waitForFunction(() => document.querySelectorAll('[data-group-row]')[1]?.querySelector('[data-group-name]')?.textContent === 'Second Group Picked Name', { timeout: 10000 })
+  console.log('[diagnostic] names after confirming group two', await picker.evaluate(async id => (await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id })).draft?.groups?.map(group => ({ key: group.key, name: group.name })), tabId))
   await waitOverlay(target)
   await clickTarget(target, '#price-c')
   await clickSelector(target, '[data-af-done]')
-  await picker.waitForFunction(() => document.querySelectorAll('[data-group-row]').length === 2, { timeout: 12000 })
+  await picker.waitForFunction(() => document.querySelectorAll('[data-group-row]')[1]?.querySelectorAll('[data-group-value]').length === 1, { timeout: 12000 })
+  console.log('[diagnostic] names after group two value', await picker.evaluate(async id => (await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id })).draft?.groups?.map(group => ({ key: group.key, name: group.name })), tabId))
   ck('second group selected a value')
 
   const firstGroup = await picker.$('[data-group-row]:first-child button')
   if (!firstGroup) throw new Error('first group controls missing')
-  const groupButtons = await picker.$$('[data-group-row]:first-child button')
-  const switchBtn = groupButtons.find(async b => (await b.evaluate(el => el.textContent)).includes('切換'))
   // Query visible button labels explicitly; DOM order is stable, selectors
   // avoid depending on implementation-specific private state.
   const firstSwitch = await picker.$('[data-group-row]:first-child button:not([disabled])')
   if (firstSwitch) await firstSwitch.click()
-  await picker.waitForFunction(() => document.querySelector('[data-group-row]:first-child [data-active="true"]'), { timeout: 5000 })
+  await picker.waitForFunction(() => document.querySelector('[data-group-row]:first-child')?.dataset.active === 'true', { timeout: 5000 })
+  console.log('[diagnostic] names after switching group one', await picker.evaluate(async id => (await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id })).draft?.groups?.map(group => ({ key: group.key, name: group.name })), tabId))
   ck('switched back to first group for edit')
+
+  await waitOverlay(target)
+  await clickTarget(target, '#price-d')
+  await clickSelector(target, '[data-af-done]')
+  await picker.waitForFunction(() => document.querySelector('[data-group-row]:first-child')?.querySelectorAll('[data-group-value]').length >= 3, { timeout: 12000 })
+  ck('first group edited with another value after switching back')
 
   // Keep this first G1 pass bounded and make the later-chain boundary explicit.
   // The UI changes under R18 may alter finish/settings behavior; fail at the
@@ -259,8 +264,79 @@ try {
   await clickPanel(picker, '#group-finish')
   await picker.waitForSelector('#batch-section:not([hidden])', { timeout: 15000 })
   ck('group finish opened settings')
-  console.log('[gap] partial dry run, save/first run, reopen/reselect/history-key checkpoints not yet exercised by this bounded script revision')
-  console.log(JSON.stringify({ browser: CHROME, tabId, framePicked, groups: await picker.$$eval('[data-group-row]', rows => rows.length), status: 'PARTIAL_G1' }, null, 2))
+  console.log('[diagnostic] canonical names at settings entry', await picker.evaluate(async id => {
+    const key = `panel:${id}`
+    const ctx = (await chrome.storage.session.get(key))[key]
+    const read = await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id })
+    return { groups: read?.draft?.groups?.map(group => ({ key: group.key, name: group.name })), items: ctx?.items?.map(item => ({ key: item.key, nameHint: item.nameHint })), batchNames: ctx?.draft?.batchNames }
+  }, tabId))
+  const suggestedNames = await picker.evaluate(() => [...document.querySelectorAll('#batch-list [data-batch-name]')].map(input => input.value))
+  console.log('[checkpoint detail] task-name suggestions from named groups', suggestedNames)
+  if (JSON.stringify(suggestedNames) !== JSON.stringify(['Manual First Group', 'Second Group Picked Name'])) {
+    throw new Error(`named groups did not prefill their own task names: ${JSON.stringify(suggestedNames)}`)
+  }
+  await target.evaluate(() => document.querySelector('#price-d')?.remove())
+  await clickPanel(picker, '#test-now')
+  try {
+    await picker.waitForFunction(() => {
+      const results = [...document.querySelectorAll('#batch-list [data-batch-result]')].map(el => el.textContent.trim())
+      return results.length >= 2 && results.every(text => text && text !== '—')
+    }, { timeout: 45000 })
+  } catch (error) {
+    console.log('[diagnostic] partial dry run state', await picker.evaluate(() => ({
+      results: [...document.querySelectorAll('#batch-list [data-batch-result]')].map(el => el.textContent),
+      names: [...document.querySelectorAll('#batch-list [data-batch-name]')].map(el => el.value),
+      testText: document.querySelector('#test-now')?.textContent,
+      testDisabled: document.querySelector('#test-now')?.disabled,
+      saveAriaDisabled: document.querySelector('#save')?.getAttribute('aria-disabled'),
+      errors: document.querySelector('#errors')?.textContent
+    })))
+    throw error
+  }
+  const partialResults = await picker.evaluate(() => [...document.querySelectorAll('#batch-list [data-batch-result]')].map(el => el.textContent.trim()))
+  if (!partialResults.some(text => /失敗|找不到|錯誤|missing|error/i.test(text)) || !partialResults.some(text => !/失敗|找不到|錯誤|missing|error/i.test(text))) {
+    throw new Error(`partial dry run did not produce both a success and failure: ${JSON.stringify(partialResults)}`)
+  }
+  ck('partial dry run reports independent success and failure')
+
+  await target.evaluate(() => {
+    const el = document.createElement('strong'); el.id = 'price-d'; el.textContent = '404'; document.querySelector('#scattered').append(el)
+  })
+  await clickPanel(picker, '#test-now')
+  await picker.waitForFunction(() => {
+    const results = [...document.querySelectorAll('#batch-list [data-batch-result]')].map(el => el.textContent.trim())
+    return results.length >= 2 && results.every(text => text && text !== '—')
+  }, { timeout: 45000 })
+  const fullResults = await picker.evaluate(() => [...document.querySelectorAll('#batch-list [data-batch-result]')].map(el => el.textContent.trim()))
+  ck(`full dry run completed (${fullResults.length} results)`)
+
+  await clickPanel(picker, '#save')
+  try {
+    await picker.waitForFunction(() => {
+      const text = document.querySelector('#saved-feedback')?.textContent || ''
+      return text && !/正在|儲存中|處理中/.test(text)
+    }, { timeout: 30000 })
+  } catch (error) {
+    console.log('[diagnostic] save remained in editor', await picker.evaluate(() => ({
+      errors: document.querySelector('#errors')?.textContent,
+      saveGuard: document.querySelector('#save-missing')?.textContent,
+      saveText: document.querySelector('#save')?.textContent,
+      saveDisabled: document.querySelector('#save')?.disabled,
+      feedback: document.querySelector('#saved-feedback')?.textContent,
+      batch: [...document.querySelectorAll('#batch-list [data-batch-item]')].map(row => ({ name: row.querySelector('[data-batch-name]')?.value, result: row.querySelector('[data-batch-result]')?.textContent, taskSaveState: row.dataset.taskSaveState }))
+    })))
+    throw error
+  }
+  const persisted = await report.evaluate(async id => {
+    const tasks = (await chrome.storage.local.get('tasks')).tasks || []
+    return tasks.filter(task => task.id).map(task => ({ id: task.id, name: task.name, fields: task.fields?.map(field => ({ key: field.key, name: field.name })) }))
+  }, tabId)
+  if (!persisted.some(task => task.name === 'Manual First Group') || !persisted.some(task => task.name === 'Second Group Picked Name')) {
+    throw new Error(`save did not persist both group tasks: ${JSON.stringify(persisted)}`)
+  }
+  ck('save and first run persisted both named tasks')
+  console.log('[gap] reopen edit/reselect/history-key checkpoint remains for a separate pass')
+  console.log(JSON.stringify({ browser: CHROME, tabId, framePicked, groups: await picker.evaluate(() => document.querySelectorAll('[data-group-row]').length), partialResults, fullResults, savedTasks: persisted, status: 'PARTIAL_G1' }, null, 2))
 } catch (error) {
   console.error(`FAIL G1 checkpoint: ${error?.stack || error}`)
   process.exitCode = 1

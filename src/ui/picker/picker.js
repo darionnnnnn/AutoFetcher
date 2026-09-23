@@ -3961,7 +3961,9 @@ async function flushPickGroupRename() {
   if (timer) clearTimeout(timer)
   pickDraftNameTimers.delete(key)
   const input = document.getElementById('group-name')
-  const value = input ? input.value : pendingNameOf(group)
+  // The single editor is reused across groups. A synthetic/programmatic group
+  // switch may leave focus on it, so never apply its value to a different key.
+  const value = input?.dataset.groupKey === key ? input.value : pendingNameOf(group)
   pickDraftPendingNames.set(key, value)
   if (value.trim() === (group.name || '').trim()) return true
   return Boolean(await sendPickDraftOperation({ type: 'rename', groupKey: key, name: value.trim() }))
@@ -4250,6 +4252,7 @@ function renderGroupRow(group, activeKey) {
   select.textContent = group.key === activeKey ? '目前' : '切換'
   select.disabled = group.key === activeKey
   select.addEventListener('click', async () => {
+    if (!(await flushPickGroupRename())) return
     const response = await sendPickDraftOperation({ type: 'set-active', groupKey: group.key })
     if (response?.draft) await enterPickForDraftGroup(response.draft, response.draft.groups.find(item => item.key === group.key))
   })
@@ -4362,10 +4365,12 @@ export function renderPickDraft(draft = pickDraftState) {
   if (add) { add.hidden = groups.length === 0; add.disabled = groups.length >= MAX_PICK_GROUPS }
   const active = activePickGroup()
   const input = document.getElementById('group-name')
-  const focused = input && document.activeElement === input
+  const groupChanged = Boolean(input && active && input.dataset.groupKey !== active.key)
+  const focused = input && document.activeElement === input && !groupChanged
   const selection = focused ? { start: input.selectionStart, end: input.selectionEnd } : null
   if (editor) editor.hidden = !active
   if (input && active && !focused) input.value = pendingNameOf(active)
+  if (input && active) input.dataset.groupKey = active.key
   if (startSelection) startSelection.hidden = !active || !pendingNameOf(active).trim()
   if (finish) finish.hidden = groups.length === 0
   if (finish) finish.disabled = groups.length === 0
@@ -4933,7 +4938,9 @@ function renderBatchList(savedNames) {
     if (name === null) {
       // 與單任務同一份命名規則；位置下拉先照這一項重設，才算得出同樣的名稱
       applyPositionDefaults(item)
-      const base = defaultTaskName(item)
+      const base = typeof item.nameHint === 'string' && item.nameHint.trim()
+        ? item.nameHint.trim()
+        : defaultTaskName(item)
       name = base
       for (let n = 2; base && used.has(name); n++) name = `${base} (${n})`
       if (name) used.add(name)
@@ -5030,6 +5037,43 @@ function batchNamesFromDom() {
     if (input && input.value !== input._afAutoName) out[row.getAttribute('data-batch-key')] = input.value
   }
   return out
+}
+
+function snapshotBatchRowUi() {
+  const focused = document.activeElement?.closest?.('[data-batch-item]')
+  const focusedKey = focused?.getAttribute('data-batch-key') || null
+  const input = focused?.querySelector('input[data-batch-name]')
+  return {
+    rows: batchRows().map(row => ({
+      key: row.getAttribute('data-batch-key'),
+      name: row.querySelector('input[data-batch-name]')?.value || '',
+      result: row.querySelector('[data-batch-result]')?.textContent || '—'
+    })),
+    focusedKey,
+    selectionStart: input?.selectionStart ?? null,
+    selectionEnd: input?.selectionEnd ?? null
+  }
+}
+
+function restoreBatchRowUi(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.rows)) return
+  const byKey = new Map(snapshot.rows.map(row => [row.key, row]))
+  for (const row of batchRows()) {
+    const saved = byKey.get(row.getAttribute('data-batch-key'))
+    if (!saved) continue
+    const input = row.querySelector('input[data-batch-name]')
+    if (input) input.value = saved.name
+    const result = row.querySelector('[data-batch-result]')
+    if (result) result.textContent = saved.result
+  }
+  if (!snapshot.focusedKey) return
+  const focusedRow = batchRows().find(row => row.getAttribute('data-batch-key') === snapshot.focusedKey)
+  const input = focusedRow?.querySelector('input[data-batch-name]')
+  if (!input) return
+  input.focus()
+  if (snapshot.selectionStart !== null && snapshot.selectionEnd !== null) {
+    try { input.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd) } catch {}
+  }
 }
 
 function removeBatchItems(keys) {
@@ -5434,11 +5478,18 @@ async function handleBatchTest() {
   batchTesting = true
   if (saveBtn) saveBtn.setAttribute('aria-disabled', 'true')
   const shared = snapshotShared()
+  const rowUi = snapshotBatchRowUi()
+  const setResult = (key, text) => {
+    const saved = rowUi.rows.find(item => item.key === key)
+    if (saved) saved.result = text
+    const current = batchRows().find(row => row.getAttribute('data-batch-key') === key)
+    const result = current?.querySelector('[data-batch-result]')
+    if (result) result.textContent = text
+  }
   const entries = batchEntries()
   try {
     for (let i = 0; i < entries.length; i++) {
       const { row, item, name } = entries[i]
-      const resultEl = row.querySelector('[data-batch-result]')
       try {
         const values = collectBatchValues(item, name, shared)
         // 收集會把畫面套回批次文字，進度要在它之後寫
@@ -5449,7 +5500,7 @@ async function handleBatchTest() {
         try {
           res = await chrome.runtime.sendMessage({ type: MSG.TEST_TASK, task, tabId: item.tabId })
         } catch {
-          if (resultEl) resultEl.textContent = '抓取被中斷，請再試一次'
+          setResult(item.key, '抓取被中斷，請再試一次')
           continue
         }
         if (res && res.ok) {
@@ -5464,12 +5515,12 @@ async function handleBatchTest() {
             const val = res.value !== undefined ? String(res.value) : (res.raw ?? '')
             text = `${val}${blockCountsText(res)}`
           }
-          if (resultEl) resultEl.textContent = text
-        } else if (resultEl) {
-          resultEl.textContent = `失敗：${res?.message || statusTextOf(res?.error) || '抓取失敗'}`
+          setResult(item.key, text)
+        } else {
+          setResult(item.key, `失敗：${res?.message || statusTextOf(res?.error) || '抓取失敗'}`)
         }
       } catch (e) {
-        if (resultEl) resultEl.textContent = `失敗：${e?.message || e}`
+        setResult(item.key, `失敗：${e?.message || e}`)
       }
     }
   } finally {
@@ -5485,6 +5536,7 @@ async function handleBatchTest() {
     if (document.getElementById('errors')?.textContent === BATCH_TESTING_TEXT) showErrorText('')
     // 試抓途中被擋下來的重畫：補畫一次（只延後、不丟）
     await flushPendingPanelCtx()
+    restoreBatchRowUi(rowUi)
   }
 }
 

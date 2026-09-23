@@ -84,6 +84,37 @@ test('F1b 兩組多來源完成 snapshot 進 batch，實際保存兩個 multi ta
   picker.setPickDraftContext(completed.draft, { render: false })
   await picker.renderFromPanelCtx(savedCtx)
   assert.equal(dom.window.document.querySelectorAll('#batch-list [data-batch-item]').length, 2)
+  const batchNames = [...dom.window.document.querySelectorAll('#batch-list [data-batch-name]')]
+  assert.deepEqual(batchNames.map(input => input.value), ['價格組', '名稱組'])
+  const focusedGroupTwo = structuredClone(completed.draft)
+  focusedGroupTwo.activeGroupKey = 'g2'
+  picker.renderPickDraft(focusedGroupTwo)
+  const groupNameInput = dom.window.document.querySelector('#group-name')
+  groupNameInput.focus()
+  assert.equal(groupNameInput.dataset.groupKey, 'g2')
+  assert.equal(groupNameInput.value, '名稱組')
+  const groupOneSwitch = dom.window.document.querySelector('[data-group-row][data-group-key="g1"] button')
+  groupOneSwitch.click()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(groupNameInput.dataset.groupKey, 'g1')
+  assert.equal(groupNameInput.value, '價格組')
+  picker.setPickDraftContext(completed.draft, { render: false })
+  await picker.renderFromPanelCtx(savedCtx)
+  const settingsNames = [...dom.window.document.querySelectorAll('#batch-list [data-batch-name]')]
+  assert.deepEqual(settingsNames.map(input => input.value), ['價格組', '名稱組'])
+  settingsNames[1].value = '名稱組自訂'
+  settingsNames[1].dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+  settingsNames[1].focus()
+  settingsNames[1].setSelectionRange(1, 3)
+  await picker.handleTestNow()
+  assert.deepEqual([...dom.window.document.querySelectorAll('#batch-list [data-batch-name]')].map(input => input.value), ['價格組', '名稱組自訂'])
+  assert.equal(dom.window.document.activeElement?.getAttribute('data-batch-name'), '')
+  assert.equal(dom.window.document.activeElement?.selectionStart, 1)
+  assert.equal(dom.window.document.activeElement?.selectionEnd, 3)
+  assert.ok([...dom.window.document.querySelectorAll('#batch-list [data-batch-result]')].every(result => result.textContent !== '—'))
+  const restoredName = dom.window.document.querySelectorAll('#batch-list [data-batch-name]')[1]
+  restoredName.value = '名稱組'
+  restoredName.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
 
   // 模擬面板 reload：協定草稿保留 revision，但畫面應恢復 batch settings，
   // 且不可重新建立一份選值草稿。
