@@ -3737,6 +3737,7 @@ function setBusy(id, label) {
 // 唯一穩的是 windowId（#14），而且要在**轉為可見時**才解析（#13）。
 let panelTabId = null
 let panelWindowId = null
+let panelBootSequence = 0
 let draftTimer = null
 // 上一次真的畫過的 ctx 簽章：草稿寫回 session 會觸發 onChanged，
 // 面板會再收到同一份 ctx（只多了 draft）——這時不能重畫，使用者正在打字
@@ -4426,7 +4427,33 @@ export async function renderFromPanelCtx(ctx, { reload = () => globalThis.locati
   // 批次的 items 與 bulk 的 taskIds 同口徑：漏了它，第二輪批次選取會被當成沒變，
   // 畫面不更新、「全部儲存」存的是舊目標（AF-21 體檢 C P1）
   const sig = ctx ? JSON.stringify({ kind: ctx.kind, ctx: ctx.ctx, taskId: ctx.taskId, retarget: ctx.retarget, batch: ctx.batch, taskIds: ctx.taskIds, items: ctx.items, batchRun: ctx.batchRun, first: ctx.first, pickDraft: ctx.pickDraft }) : 'null'
-  if (sig === lastPanelSig) return { rendered: false }
+  if (ctx?.pickDraft) {
+    const draftTabId = ctx.pickDraft.tabId
+    const contextTabId = ctx.tabId ?? ctx.ctx?.tabId
+    if ((Number.isInteger(contextTabId) && Number.isInteger(draftTabId) && contextTabId !== draftTabId) ||
+        (Number.isInteger(panelTabId) && Number.isInteger(draftTabId) && panelTabId !== draftTabId)) {
+      return { rendered: false, stale: true }
+    }
+  }
+  if (sig === lastPanelSig) {
+    if (!ctx?.pickDraft) return { rendered: false }
+    const section = document.getElementById('group-draft-section')
+    const rows = Array.from(document.querySelectorAll('[data-group-row]'))
+    const groups = Array.isArray(ctx.pickDraft.groups) ? ctx.pickDraft.groups : []
+    const matches = !section?.hidden && rows.length === groups.length && groups.every((group, index) => {
+      const row = rows[index]
+      return row?.dataset.groupKey === group.key &&
+        row?.dataset.active === String(group.key === ctx.pickDraft.activeGroupKey) &&
+        row.querySelectorAll('[data-group-value]').length === (Array.isArray(group.values) ? group.values.length : 0)
+    })
+    if (matches) return { rendered: false }
+    if (batchBusy()) {
+      pendingPanelCtx = { ctx, opts: { reload } }
+      return { rendered: false, deferred: true }
+    }
+    renderPickDraft(ctx.pickDraft)
+    return { rendered: true, rehydrated: true }
+  }
   // 批次「全部試抓」「全部儲存」進行中：兩條流程都在同一份表單上逐項 render，
   // 這時重畫會把清單整份換掉、結果寫進孤兒節點。只延後、不丟：結束後補畫一次（AF-21 體檢 C P3）
   if (batchBusy()) {
@@ -4735,16 +4762,19 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
     // 開它的人會在網址上寫明「你服務的是哪個分頁」
     const forcedTab = params.has('tabId') ? Number(params.get('tabId')) : null
     const boot = async () => {
+      const sequence = ++panelBootSequence
       const tabId = Number.isFinite(forcedTab) && forcedTab !== null ? forcedTab : await resolvePanelTab()
-      if (tabId === null) return
+      if (tabId === null || sequence !== panelBootSequence) return
       const changed = tabId !== panelTabId
       panelTabId = tabId
       let ctx = await getPanelCtx(tabId)
+      if (sequence !== panelBootSequence) return
       let protocolDraft = null
       try {
         const response = await chrome.runtime.sendMessage({ type: MSG.PICK_DRAFT_READ, tabId })
         protocolDraft = response?.draft || null
       } catch {}
+      if (sequence !== panelBootSequence) return
       // 完成屏障已把選取階段推進 settings；批次設定重載時留在既有
       // batch items，不得因 session 仍保留而自動回到選值畫面。
       if (protocolDraft && (ctx?.kind === 'batch' || ctx?.kind === 'saved') &&
@@ -4767,6 +4797,11 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
       if (!protocolDraft && ctx?.batch === true && ctx.kind !== 'batch' && ctx.kind !== 'saved') {
         protocolDraft = await beginPickDraftFromBatchEntry(ctx, tabId)
       }
+      if (sequence !== panelBootSequence) return
+      if (forcedTab === null) {
+        const activeTabId = await resolvePanelTab()
+        if (sequence !== panelBootSequence || activeTabId !== tabId) return
+      }
       // 舊 ctx 仍保留目標／批次形狀；表單內容以安全協定草稿為準。
       // 沒有 ctx 時也先建立可恢復的空目標畫面，使用者仍可回頁面重新選目標。
       const merged = protocolDraft
@@ -4774,6 +4809,8 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
             ? { ...ctx, pickDraft: protocolDraft, draft: { ...(ctx.draft || {}), ...(protocolDraft.form || {}) } }
             : { kind: 'pick-draft', pickDraft: protocolDraft, ctx: { tabId }, draft: protocolDraft.form || {} })
         : ctx
+      const draftTabId = merged?.pickDraft?.tabId
+      if (Number.isInteger(draftTabId) && draftTabId !== tabId) return
       if (changed || merged) await renderFromPanelCtx(merged)
       if (merged?.kind === 'saved') await resumeSavedFirstRuns(merged)
     }

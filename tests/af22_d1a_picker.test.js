@@ -97,6 +97,40 @@ test('D1a 初始側欄先顯示新增第一個群組，不偷進入選值', asyn
   assert.equal(doc.getElementById('group-finish').hidden, true)
 })
 
+test('D1b same panel context rehydrates a hidden tab-bound group draft without changing its values', async () => {
+  const { chromeMock, picker, doc } = await fresh()
+  const value = draft({
+    groups: [{ key: 'round-two', name: 'Second Round Only', values: [
+      { key: 'round-two-value', name: '來源 C', source: { locator: { css: '#price-c' } } }
+    ] }],
+    activeGroupKey: 'round-two', stage: 'selecting'
+  })
+  picker.setPickDraftContext(value, { render: false })
+  const ctx = { kind: 'pick-draft', tabId: value.tabId, pickDraft: structuredClone(value) }
+  await picker.renderFromPanelCtx(ctx)
+  const section = doc.getElementById('group-draft-section')
+  assert.equal(section.hidden, false)
+  assert.equal(doc.querySelector('[data-group-row]')?.dataset.groupKey, 'round-two')
+  assert.equal(doc.querySelector('[data-group-value]')?.dataset.valueKey, 'round-two-value')
+
+  // Simulate the stale screen left by another tab's panel context render.
+  section.hidden = true
+  const restored = await picker.renderFromPanelCtx(ctx)
+  assert.deepEqual(restored, { rendered: true, rehydrated: true })
+  assert.equal(section.hidden, false)
+  assert.equal(doc.querySelector('[data-group-row]')?.dataset.active, 'true')
+  assert.equal(doc.querySelector('[data-group-value]')?.dataset.valueKey, 'round-two-value')
+  assert.deepEqual(value.groups[0].values, ctx.pickDraft.groups[0].values)
+  assert.equal(chromeMock.__calls.some(call => call.args[0]?.type === 'PICK_DRAFT_COMPLETE'), false,
+    'rehydration does not complete or rewrite the draft')
+
+  const wrongTab = await picker.renderFromPanelCtx({
+    ...ctx, tabId: value.tabId + 1
+  })
+  assert.deepEqual(wrongTab, { rendered: false, stale: true }, 'a different panel tab cannot rehydrate this draft')
+  assert.equal(doc.querySelector('[data-group-value]')?.dataset.valueKey, 'round-two-value')
+})
+
 test('D1a 現有一次建立多個任務入口會先 begin 草稿，側欄可見第一個群組入口', async () => {
   const { chromeMock, doc } = await fresh({ liveBatch: true })
   assert.equal(chromeMock.runtime.id, 'autofetcher-test')
