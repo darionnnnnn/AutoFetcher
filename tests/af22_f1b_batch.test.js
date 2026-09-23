@@ -47,9 +47,13 @@ test('F1b 兩組多來源完成 snapshot 進 batch，實際保存兩個 multi ta
   }
 
   let runTaskCalls = 0
+  let panelBootGate = null
   chromeMock.__setRuntimeResponder(async message => {
     if (message.type === 'PICK_DRAFT_OPERATION') return bg.handleMessage(message, sender)
-    if (message.type === 'RESOLVE_PANEL_TAB') return { ok: true, tabId: tab.id }
+    if (message.type === 'RESOLVE_PANEL_TAB') {
+      if (panelBootGate) await panelBootGate
+      return { ok: true, tabId: tab.id }
+    }
     if (message.type === 'PICK_DRAFT_READ') {
       const draft = await (await import('../src/shared/pick-draft.js?f1b-read=' + Math.random())).getPickDraft(tab.id)
       return { ok: true, draft }
@@ -77,6 +81,7 @@ test('F1b 兩組多來源完成 snapshot 進 batch，實際保存兩個 multi ta
   assert.equal(savedCtx.items[1].fields[1].source.frame.url, 'https://c.test/embed')
 
   const dom = new JSDOM(html)
+  Object.defineProperty(dom.window.document, 'visibilityState', { configurable: true, value: 'hidden' })
   globalThis.window = dom.window
   globalThis.document = dom.window.document
   globalThis.Event = dom.window.Event
@@ -111,7 +116,8 @@ test('F1b 兩組多來源完成 snapshot 進 batch，實際保存兩個 multi ta
   assert.equal(dom.window.document.activeElement?.getAttribute('data-batch-name'), '')
   assert.equal(dom.window.document.activeElement?.selectionStart, 1)
   assert.equal(dom.window.document.activeElement?.selectionEnd, 3)
-  assert.ok([...dom.window.document.querySelectorAll('#batch-list [data-batch-result]')].every(result => result.textContent !== '—'))
+  assert.ok([...dom.window.document.querySelectorAll('#batch-list [data-batch-result]')].every(result => result.textContent !== '—'),
+    `batch test results should render; ready=${dom.window.document.body.dataset.afPickerReady}, notice=${dom.window.document.getElementById('panel-notice').textContent}, results=${JSON.stringify([...dom.window.document.querySelectorAll('#batch-list [data-batch-result]')].map(result => result.textContent))}`)
   const restoredName = dom.window.document.querySelectorAll('#batch-list [data-batch-name]')[1]
   restoredName.value = '名稱組'
   restoredName.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
@@ -123,9 +129,22 @@ test('F1b 兩組多來源完成 snapshot 進 batch，實際保存兩個 multi ta
   globalThis.window = reloadDom.window
   globalThis.document = reloadDom.window.document
   globalThis.Event = reloadDom.window.Event
+  let releasePanelBoot
+  panelBootGate = new Promise(resolve => { releasePanelBoot = resolve })
   const beforeBegin = chromeMock.__calls.filter(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICK_DRAFT_BEGIN').length
   const reloadedPicker = await import('../src/ui/picker/picker.js?f1b-reload=' + Math.random())
-  await new Promise(resolve => setTimeout(resolve, 150))
+  assert.equal(reloadDom.window.document.body.dataset.afPickerReady, 'false')
+  await reloadedPicker.handleSave()
+  assert.match(reloadDom.window.document.getElementById('panel-notice').textContent, /正在確認目前分頁與草稿/)
+  assert.equal((await storage.getTasks()).length, 0, 'Save during tab/context boot must not create a task')
+  assert.equal(runTaskCalls, 0, 'early Save must not start first-run work')
+  releasePanelBoot()
+  panelBootGate = null
+  const readyDeadline = Date.now() + 3000
+  while (reloadDom.window.document.body.dataset.afPickerReady !== 'true' && Date.now() < readyDeadline) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  assert.equal(reloadDom.window.document.body.dataset.afPickerReady, 'true', 'boot publishes readiness after binding the canonical batch context')
   assert.equal(reloadDom.window.document.querySelector('#group-draft-section').hidden, true)
   assert.equal(reloadDom.window.document.querySelectorAll('#batch-list [data-batch-item]').length, 2)
   assert.equal(chromeMock.__calls.filter(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICK_DRAFT_BEGIN').length, beforeBegin)
@@ -213,6 +232,7 @@ test('F1b taskId checkpoint 訊息失敗時 handleBatchSave 可見中止且不�
     return bg.handleMessage(message, sender)
   })
   const dom = new JSDOM(html)
+  Object.defineProperty(dom.window.document, 'visibilityState', { configurable: true, value: 'hidden' })
   globalThis.window = dom.window
   globalThis.document = dom.window.document
   globalThis.Event = dom.window.Event

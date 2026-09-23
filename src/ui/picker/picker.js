@@ -29,7 +29,28 @@ let batchViewOn = false
 // 產生的 batch ctx 才要求 task/first-run checkpoint。
 let batchDraftManaged = false
 let batchDraftSessionId = null
+// Side-panel boot resolves the active tab, session context, and protocol draft
+// asynchronously. Do not let an early Save use the previous tab's UI model.
+let panelBootRequired = false
+let panelBootReady = false
 const SAVED_FIRST_RUN_GUARD = '__afSavedFirstRunRecoveryKeys'
+
+function setPanelBootReady(ready) {
+  panelBootReady = ready === true
+  if (typeof document !== 'undefined' && document.body) {
+    document.body.dataset.afPickerReady = panelBootReady ? 'true' : 'false'
+  }
+}
+
+function blockActionUntilPanelReady() {
+  if (!panelBootRequired || panelBootReady) return false
+  const notice = document.getElementById('panel-notice')
+  if (notice) {
+    notice.hidden = false
+    notice.textContent = '正在確認目前分頁與草稿，請稍候再儲存或試抓。'
+  }
+  return true
+}
 
 function savedFirstRunGuard() {
   if (!(globalThis[SAVED_FIRST_RUN_GUARD] instanceof Set)) globalThis[SAVED_FIRST_RUN_GUARD] = new Set()
@@ -2921,6 +2942,7 @@ async function writePickerDefaults(patch) {
 }
 
 export async function handleSave() {
+  if (blockActionUntilPanelReady()) return
   if (batchItems) return handleBatchSave()
   if (bulkTaskIds) return handleBulkSave()
 
@@ -3598,6 +3620,7 @@ function scrollPreviewIntoView() {
 }
 
 export async function handleTestNow() {
+  if (blockActionUntilPanelReady()) return
   if (batchItems) return handleBatchTest()
   const previewEl = document.getElementById('preview')
   // 引導句只給「還沒試抓」：按下去之後不論結果都換成這一次的內容
@@ -4807,6 +4830,8 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
     // 開它的人會在網址上寫明「你服務的是哪個分頁」
     const forcedTab = params.has('tabId') ? Number(params.get('tabId')) : null
     const boot = async () => {
+      panelBootRequired = true
+      setPanelBootReady(false)
       const sequence = ++panelBootSequence
       const tabId = Number.isFinite(forcedTab) && forcedTab !== null ? forcedTab : await resolvePanelTab()
       if (tabId === null || sequence !== panelBootSequence) return
@@ -4856,8 +4881,11 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
         : ctx
       const draftTabId = merged?.pickDraft?.tabId
       if (Number.isInteger(draftTabId) && draftTabId !== tabId) return
-      if (changed || merged) await renderFromPanelCtx(merged)
+      const rendered = (changed || merged) ? await renderFromPanelCtx(merged) : { rendered: false }
       if (merged?.kind === 'saved') await resumeSavedFirstRuns(merged)
+      if (sequence === panelBootSequence && !rendered?.reloading && !rendered?.deferred && !rendered?.stale) {
+        setPanelBootReady(true)
+      }
     }
     // 載入當下就解析會拿到切換前的舊分頁；轉為可見時再解析才正確，
     // 而且每次轉為可見都重解析一次（自癒）
@@ -4866,7 +4894,11 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
     })
     if (document.visibilityState === 'visible') boot()
     // ctx 變了（例如使用者在頁面上選好了目標）就重畫
-    subscribe(() => { boot() }, { area: 'session' })
+    subscribe(() => {
+      // A hidden side panel can receive session updates while its target tab is
+      // being prepared. Keep it from racing a visible panel's tab binding.
+      if (document.visibilityState === 'visible') boot()
+    }, { area: 'session' })
     document.addEventListener('af:pick-group-name-result', event => { consumeGroupNameResult(event.detail) })
     chrome.runtime.onMessage?.addListener((message) => {
       if (message?.type === PICK_GROUP_NAME_RESULT) return consumeGroupNameResult(message)
