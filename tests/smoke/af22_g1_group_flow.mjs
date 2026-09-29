@@ -18,18 +18,23 @@ const bounded = async (label, fn, ms = 12000) => {
     return await Promise.race([Promise.resolve().then(fn), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`timeout: ${label}`)), left) })])
   } finally { clearTimeout(timer) }
 }
-const mainFixture = framePort => `<!doctype html><meta charset="utf-8"><title>AF22 G1 fixture</title>
+const mainFixture = (framePort, mainPort) => `<!doctype html><meta charset="utf-8"><title>AF22 G1 fixture</title>
 <style>body{font:18px sans-serif}table{border-collapse:collapse;margin:24px}td,th{border:1px solid;padding:18px}#scattered{margin:50px;padding:24px;border:1px solid}</style>
 <h1>Fixture for group flow</h1><span id="group-name-text">Second Group Picked Name</span>
 <table id="nested"><tbody><tr><td>product</td><td><table><tbody><tr><td>First price</td><td id="price-a">101</td></tr></tbody></table></td></tr></tbody></table>
 <div role="table" aria-label="CSS table"><div role="row"><span role="cell">Second price</span><span role="cell" id="price-b">202</span></div></div>
 <div id="scattered">Scattered amount <strong id="price-c">303</strong> <strong id="price-d">404</strong></div>
-<iframe title="cross-origin fixture" src="http://127.0.0.1:${framePort}/frame" style="width:500px;height:280px;border:0"></iframe>`
+<iframe title="cross-origin fixture" src="http://127.0.0.1:${framePort}/frame" style="width:500px;height:280px;border:0"></iframe>
+<iframe title="same-origin fixture" src="http://127.0.0.1:${mainPort}/same-frame" style="width:500px;height:520px;border:0"></iframe>`
 const frameFixture = '<!doctype html><meta charset="utf-8"><div id="frame-price" style="margin:30px;padding:20px">404</div>'
+const sameFrameFixture = mainPort => `<!doctype html><meta charset="utf-8"><div id="same-price" style="margin:30px;padding:20px">606</div>
+<iframe title="nested fixture" src="http://127.0.0.1:${mainPort}/nested-frame" style="width:500px;height:350px;border:0"></iframe>`
+const nestedFrameFixture = '<!doctype html><meta charset="utf-8"><div id="nested-price" style="margin:120px 20px;padding:20px">707</div>'
 const listen = server => new Promise((resolveListen, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => resolveListen(server.address().port)) })
 const clickSelector = async (page, selector) => {
   const el = await page.$(selector)
   if (!el) throw new Error(`missing ${selector}`)
+  await el.evaluate(element => element.scrollIntoView({ block: 'center' }))
   const box = await el.boundingBox()
   if (!box) throw new Error(`no visible bounds for ${selector}`)
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
@@ -56,7 +61,12 @@ const clickFrameTarget = async (page, frame, selector) => {
   if (!box) throw new Error(`cross-origin frame element has no bounds: ${selector}`)
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
 }
-const mainServer = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); res.end(mainFixture(framePort)) })
+const mainServer = http.createServer((req, res) => {
+  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+  res.end(req.url === '/same-frame' ? sameFrameFixture(mainPort)
+    : req.url === '/nested-frame' ? nestedFrameFixture
+      : mainFixture(framePort, mainPort))
+})
 const frameServer = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); res.end(frameFixture) })
 let framePort, mainPort, browser, profile
 try {
@@ -233,20 +243,17 @@ try {
   }
   ck('same-page values retain distinct canonical source identities')
 
-  // The frame is deliberately cross-origin (different port); record a gap if
-  // content injection/overlay cannot safely reach it in the current build.
+  // The frame is deliberately cross-origin (different port). The first click
+  // hits the parent document's iframe proxy and enters the child picker; only
+  // then can the child overlay exist.
   let framePicked = false
   let frameCommitted = false
-  let crossOriginFrame = null
-  try {
-    crossOriginFrame = target.frames().find(f => f.url().includes(`:${framePort}/frame`))
-    if (crossOriginFrame) {
-      await crossOriginFrame.waitForSelector('[data-af-overlay] [data-af-done]', { timeout: 5000 })
-      await clickFrameTarget(target, crossOriginFrame, '#frame-price')
-      framePicked = true
-    }
-  } catch (error) { console.log(`[gap] cross-origin frame pick unavailable: ${error.message}`) }
-  ck(framePicked ? 'cross-origin frame navigation initiated' : 'cross-origin frame capability not reached')
+  const crossOriginFrame = target.frames().find(f => f.url().includes(`:${framePort}/frame`))
+  if (!crossOriginFrame) throw new Error('cross-origin fixture frame is missing')
+  await clickFrameTarget(target, crossOriginFrame, '#frame-price')
+  await crossOriginFrame.waitForSelector('[data-af-overlay] [data-af-done]', { timeout: 10000 })
+  framePicked = true
+  ck('cross-origin frame navigation initiated')
 
   if (framePicked) {
     await clickFrameTarget(target, crossOriginFrame, '#frame-price')
@@ -272,6 +279,40 @@ try {
     await clickFrameTarget(target, crossOriginFrame, '[data-af-done]')
     ck('cross-origin frame selection finished')
   }
+  await clickPanel(picker, '#group-start-selection')
+  await picker.waitForFunction(() => document.querySelector('#group-draft-status')?.textContent.includes('目前選入'), { timeout: 10000 })
+  await waitOverlay(target)
+  const sameOriginFrame = target.frames().find(f => f.url() === `http://127.0.0.1:${mainPort}/same-frame`)
+  if (!sameOriginFrame) throw new Error('same-origin fixture frame is missing')
+  await target.$eval('iframe[title="same-origin fixture"]', iframe => iframe.scrollIntoView({ block: 'center' }))
+  await clickFrameTarget(target, sameOriginFrame, '#same-price')
+  await sameOriginFrame.waitForSelector('[data-af-overlay] [data-af-done]', { timeout: 10000 })
+  await clickFrameTarget(target, sameOriginFrame, '#same-price')
+  await picker.waitForFunction(async () => {
+    const tabId = (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id
+    const draft = (await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId }))?.draft
+    const group = draft?.groups?.find(item => item.key === draft.activeGroupKey)
+    return group?.values?.some(value => value.source?.frame?.url?.endsWith('/same-frame'))
+  }, { timeout: 10000 })
+  ck('same-origin frame value was acknowledged in the active group')
+  const nestedFrame = target.frames().find(f => f.url() === `http://127.0.0.1:${mainPort}/nested-frame`)
+  if (!nestedFrame) throw new Error('nested fixture frame is missing')
+  await sameOriginFrame.$eval('iframe[title="nested fixture"]', iframe => iframe.scrollIntoView({ block: 'center' }))
+  // The parent frame's picker toolbar overlaps the nested value's center;
+  // enter through an uncovered part of the iframe proxy, then pick its value.
+  const nestedBox = await (await sameOriginFrame.$('iframe[title="nested fixture"]')).boundingBox()
+  await target.mouse.move(nestedBox.x + 80, nestedBox.y + 50)
+  await target.mouse.click(nestedBox.x + 80, nestedBox.y + 50)
+  await nestedFrame.waitForSelector('[data-af-overlay] [data-af-done]', { timeout: 10000 })
+  await clickFrameTarget(target, nestedFrame, '#nested-price')
+  await picker.waitForFunction(async () => {
+    const tabId = (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id
+    const draft = (await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId }))?.draft
+    const group = draft?.groups?.find(item => item.key === draft.activeGroupKey)
+    return group?.values?.some(value => value.source?.frame?.url?.endsWith('/nested-frame'))
+  }, { timeout: 10000 })
+  ck('nested frame value was acknowledged in the active group')
+  await clickFrameTarget(target, nestedFrame, '[data-af-done]')
   if (await target.$('[data-af-done]')) await clickSelector(target, '[data-af-done]')
   await picker.waitForFunction(() => document.querySelectorAll('[data-group-row]').length === 1, { timeout: 15000 })
   await clickPanel(picker, '#group-add')
@@ -828,7 +869,7 @@ try {
   }
   ck('second round saved only its source/key while preserving first-round tasks/history')
 
-  if (framePicked && !frameCommitted) throw new Error('cross-origin frame click was not committed to the canonical draft')
+  if (!frameCommitted) throw new Error('cross-origin frame click was not committed to the canonical draft')
   console.log(JSON.stringify({ browser: CHROME, tabId, framePicked, frameCommitted, groups: await picker.evaluate(() => document.querySelectorAll('[data-group-row]').length), partialResults, fullResults, savedTasks: persisted, repairedFieldKey: fieldKey, retainedSeriesRecords: afterRepair.records.length, secondRoundSessionId: freshDraft.sessionId, secondRoundTaskId: secondTask.id, secondRoundDryRun: secondDryRun, status: 'G1_SECOND_ROUND_VERIFIED' }, null, 2))
 } catch (error) {
   console.error(`FAIL G1 checkpoint: ${error?.stack || error}`)
