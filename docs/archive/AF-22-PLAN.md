@@ -443,7 +443,7 @@ D01 額外的可行性邊界：現有動作為 click／hover／wait／waitFor，
 
 ## 結案後逐項核對補正（2026-09-23）
 
-以下補正保留上方歷史交接與當時驗收記錄；這些項目是結案後針對規格宣稱再核對發現的缺口。本輪文件已同步實作行為。基線定向測試 77/77 通過；修正後主代理全套 `npm test` 3199/3199 通過，A1 Chrome for Testing 煙霧通過。最新 Chrome for Testing G1 第二輪以 `G1_SECOND_ROUND_VERIFIED` 通過端到端流程；跨網域 iframe overlay 在環境中不可用，該子能力仍明確未驗證。主代理獨立重跑亦以 `G1_SECOND_ROUND_VERIFIED` 通過。
+以下補正保留上方歷史交接與當時驗收記錄；這些項目是結案後針對規格宣稱再核對發現的缺口。本輪文件已同步實作行為。基線定向測試 77/77 通過；修正後主代理全套 `npm test` 3199/3199 通過，A1 Chrome for Testing 煙霧通過。當時 G1 第二輪以 `G1_SECOND_ROUND_VERIFIED` 通過端到端流程，但跨網域 iframe 因煙霧測試錯誤地先等待子框架 overlay、未先點父頁代理層而漏驗。2026-09-29 改為真實點擊代理層後，跨網域、同網域與巢狀 iframe 的值皆在同一群組的 canonical 草稿確認；完整 G1 第二輪再以 `G1_SECOND_ROUND_VERIFIED` 通過。
 
 - **F1 共用前置動作草稿**：原完成記錄未涵蓋面板文件重載後完整還原共用前置動作列。實作已補 `snapshotForm`／`restoreDraft` 保存與恢復完整列，並在進入頁面選取前等待草稿保存；保存失敗會停止並提示。文件修正：SPEC §2 批次表單草稿說明。定向測試：`z7`／`o7`／`q3` 30/30、`a4`+`b3` 25/25、`af22_c2b_drain` 22/22；其後主代理 `npm test` 3199/3199 通過。
 - **PICKED 回覆競態**：Picker 的前置動作 message listener 原先對其他 `PICKED` 非同步回傳 `Promise<undefined>`，可能搶先被 content 當作 ACK，早於 background 持久化群組草稿。現由 listener 只接收 `purpose:'preaction'` 並對其他訊息同步回 `false`；前置動作更新完成後再保存表單草稿。SPEC §2 已補回覆通道契約；修正後主代理全套 `npm test` 3199/3199 通過，A1 CfT smoke 通過。
@@ -453,4 +453,4 @@ D01 額外的可行性邊界：現有動作為 click／hover／wait／waitFor，
 ## 終檢輪（2026-09-23）
 
 - `r22` 以無衝突 merge commit 併入 `dev`；合併後主代理重跑 `npm test`，**3185/3185 通過**、失敗 0。
-- 實作前後的獨立程式／文件終檢、真實瀏覽器 A1／G1、六類突變還原、舊版相容與容量量測已逐項記於上方。結案後補正的定向測試 77/77 通過；其後 listener ACK race 修正後主代理 `npm test` 3199/3199 通過，A1 Chrome for Testing 煙霧通過。G1 第二輪 CfT 煙霧以 `G1_SECOND_ROUND_VERIFIED` 通過端到端流程，涵蓋完成屏障、共用設定、儲存、首次抓取、編輯與歷史；測試環境無法提供跨網域 iframe overlay，該子能力明確未驗證。主代理獨立重跑亦以 `G1_SECOND_ROUND_VERIFIED` 通過。實際使用者資料備份屬發布前操作，不在隔離驗收中代做。
+- 實作前後的獨立程式／文件終檢、真實瀏覽器 A1／G1、六類突變還原、舊版相容與容量量測已逐項記於上方。結案後補正的定向測試 77/77 通過；其後 listener ACK race 修正後主代理 `npm test` 3199/3199 通過，A1 Chrome for Testing 煙霧通過。G1 第二輪 CfT 煙霧以 `G1_SECOND_ROUND_VERIFIED` 通過端到端流程，涵蓋完成屏障、共用設定、儲存、首次抓取、編輯與歷史。2026-09-29 更正先前「跨網域 iframe overlay 不可用」的結論：原因是測試點擊順序錯誤；修正後實測跨網域、同網域、巢狀 iframe 均可入同組草稿。實際使用者資料備份屬發布前操作，不在隔離驗收中代做。
