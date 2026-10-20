@@ -224,9 +224,8 @@ test('3 立即抓取結果：subscribe 重畫後仍在；該任務下一筆紀�
 test('4 #view=tasks&task=t2 → 任務頁顯示、t2 高亮、焦點在該列按鈕', async () => {
   const { st, rp, doc } = await fresh()
   await st.saveTasks([task('t1'), task('t2'), task('t3')])
-  rp.initFromHash('#view=tasks&task=t2')
+  await rp.loadAndRenderPage('#view=tasks&task=t2')
   assert.equal(rp.getState().view, 'tasks')
-  await rp.showTab(rp.getState().view)
   assert.equal(doc.getElementById('panel-tasks').hidden, false)
   const row = rowOf(doc, 't2')
   assert.ok(row.classList.contains('task-highlight'))
