@@ -107,6 +107,12 @@ test('R18 cancelled, wrong-tab, wrong-field, and post-worker-restart grants do n
   }, { ...wrongTab.sender, tab: { id: wrongTab.response.tabId + 100, url: 'https://a.test/prices' } })
   assert.equal(rejected.error, 'stale_field_repair')
   assert.deepEqual(await f.storage.getTask('repair-task'), original)
+  const duplicate = await f.bg.handleMessage({
+    type: f.messages.MSG.BEGIN_FIELD_REPAIR, taskId: 'repair-task', fieldKey: 'f1', repairMode: 'repair'
+  }, extensionSender)
+  assert.equal(duplicate.error, 'field_repair_active', 'a wrong sender cannot create a second session while the valid grant remains active')
+  const released = await picked(f, wrongTab, { cancelled: true, picks: [] })
+  assert.equal(released.cancelled, true)
 
   const stale = await begin(f)
   const restarted = await import('../src/background/main.js?r18-worker-restart=' + Math.random())

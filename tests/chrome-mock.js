@@ -125,6 +125,7 @@ function buildChromeMock() {
   const tabsMap = new Map()
 
   const onMessage = createEvent()
+  const tabsOnRemoved = createEvent()
   const sidePanelOnClosed = createEvent()
   const panelOptions = new Map()
   const openPanels = new Set()
@@ -192,6 +193,7 @@ function buildChromeMock() {
     },
 
     tabs: {
+      onRemoved: tabsOnRemoved,
       async create(props = {}) {
         recordCall('tabs.create', [props])
         const tab = {
@@ -227,6 +229,7 @@ function buildChromeMock() {
         const ids = Array.isArray(tabIds) ? tabIds : [tabIds]
         for (const id of ids) {
           tabsMap.delete(id)
+          for (const fn of tabsOnRemoved._listeners) fn(id, { isWindowClosing: false })
         }
       },
       async get(tabId) {
@@ -528,6 +531,9 @@ function buildChromeMock() {
       openPanels.delete(info?.tabId ?? '__global')
       for (const fn of sidePanelOnClosed._listeners) fn(info)
     },
+    __emitTabRemoved(tabId, info = { isWindowClosing: false }) {
+      for (const fn of tabsOnRemoved._listeners) fn(tabId, info)
+    },
     __setRuntimeResponder(fn) {
       runtimeResponder = fn
     },
@@ -555,6 +561,7 @@ function buildChromeMock() {
       localStorage._reset()
       sessionStorage._reset()
       sidePanelOnClosed._reset()
+      tabsOnRemoved._reset()
       panelOptions.clear()
       openPanels.clear()
       panelOpenShouldThrow = false

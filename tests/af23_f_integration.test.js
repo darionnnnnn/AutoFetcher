@@ -247,6 +247,68 @@ test('AC-F2 a new BEGIN recovers the same pending journal without opening a seco
   assert.equal((await f.storage.getFieldRepairOperation(operation.id)).status, 'complete')
 })
 
+test('AC-A4 pending replacement cleanup recovers by either old or new field key before field validation', async t => {
+  for (const requestedKey of ['price', 'field-recovered']) {
+    await t.test(`BEGIN by ${requestedKey}`, async subtest => {
+      const f = await setup(subtest)
+      const operationId = `af23-replace-cleanup-${requestedKey}`
+      const nextSpec = { block: { axis: 'col', index: 4, aggregate: 'last' } }
+      const source = { locator: locator('#new-metric') }
+      const task = await f.storage.getTask(f.task.id)
+      const archived = { key: 'price', name: '價格', mode: 'number', source: task.spec.fields[0].source,
+        spec: task.spec.fields[0].spec, alerts: [], repairOperationId: operationId }
+      const updated = structuredClone(task)
+      updated.fields[0] = { ...updated.fields[0], key: 'field-recovered', name: '新價格' }
+      updated.spec.fields[0] = { ...updated.spec.fields[0], key: 'field-recovered', name: '新價格',
+        source, spec: nextSpec }
+      updated.archivedFields = [archived]
+      await f.storage.saveTask(updated)
+      await f.storage.beginFieldRepairOperation({
+        id: operationId, taskId: task.id, fieldKey: 'price', newFieldKey: 'field-recovered',
+        repairMode: 'replace', status: 'cleanup', createdAt: Date.now(), source, nextSpec,
+        name: '新價格', oldSeriesId: `${task.id}#price`, selectedMode: 'number', archivedField: archived,
+        cleanup: { layout: true, lastValues: true, alarms: true }, auth: { tabId: 991, frameId: 0 }
+      })
+      const tabsBefore = f.chrome.__calls.filter(call => call.api === 'tabs.create').length
+      const result = await f.background.handleMessage({
+        type: 'BEGIN_FIELD_REPAIR', taskId: task.id, fieldKey: requestedKey, repairMode: 'replace'
+      }, extensionSender)
+      assert.equal(result?.ok, true)
+      assert.equal(result?.recovered, true)
+      assert.equal(result?.operationId, operationId)
+      assert.equal(result?.fieldKey, 'field-recovered')
+      assert.equal(f.chrome.__calls.filter(call => call.api === 'tabs.create').length, tabsBefore)
+      assert.equal((await f.storage.getFieldRepairOperation(operationId)).status, 'complete')
+    })
+  }
+})
+
+test('AC-A4 concurrent BEGIN calls share one source tab and a closed grant can be started again', async t => {
+  const f = await setup(t)
+  f.chrome.__setScriptResponder(successFrames())
+  f.chrome.__setTabResponder((_tabId, message) => message.type === 'ENTER_PICK' ? { ok: true } : { ok: true })
+  const begin = () => f.background.handleMessage({
+    type: 'BEGIN_FIELD_REPAIR', taskId: f.task.id, fieldKey: 'price', repairMode: 'repair'
+  }, extensionSender)
+  const [first, concurrent] = await Promise.all([begin(), begin()])
+  assert.equal(first.ok, true)
+  assert.equal(concurrent.sessionId, first.sessionId)
+  assert.equal(f.chrome.__calls.filter(call => call.api === 'tabs.create').length, 1,
+    'BEGIN acquires its task/field reservation synchronously before the first await')
+  const active = await begin()
+  assert.equal(active.error, 'field_repair_active', 'a live grant prevents another repair tab')
+  const modeConflict = await f.background.handleMessage({
+    type: 'BEGIN_FIELD_REPAIR', taskId: f.task.id, fieldKey: 'price', repairMode: 'replace'
+  }, extensionSender)
+  assert.equal(modeConflict.error, 'field_repair_active', 'a competing repair mode cannot reuse or bypass the reservation')
+
+  await f.chrome.tabs.remove(first.tabId)
+  const retried = await begin()
+  assert.equal(retried.ok, true, 'removing the source tab releases its unsubmitted worker grant')
+  assert.notEqual(retried.sessionId, first.sessionId)
+  assert.equal(f.chrome.__calls.filter(call => call.api === 'tabs.create').length, 2)
+})
+
 test('AC-F4 auto fetch diagnostics redact credential, URL token, hidden-page, and exception sentinels', async t => {
   const querySecret = 'AF23_QUERY_SENTINEL'
   const passwordSecret = 'AF23_PASSWORD_SENTINEL'

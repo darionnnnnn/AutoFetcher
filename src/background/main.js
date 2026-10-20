@@ -67,6 +67,7 @@ const groupNamePickRequests = new Map()
 // Per-field repair grants are deliberately worker-memory only: a worker restart
 // invalidates every outstanding grant, so a stale page cannot replay a repair.
 const fieldRepairSessions = new Map()
+const fieldRepairBeginInFlight = new Map()
 
 function stableRepairValue(value) {
   if (Array.isArray(value)) return `[${value.map(stableRepairValue).join(',')}]`
@@ -96,21 +97,31 @@ function fieldRepairSnapshot(field, entry) {
   })
 }
 
-async function beginFieldRepair(msg) {
+function beginFieldRepair(msg) {
+  if (typeof msg?.taskId !== 'string' || typeof msg?.fieldKey !== 'string' ||
+      !['repair', 'replace'].includes(msg.repairMode)) return Promise.resolve({ ok: false, error: 'invalid_repair' })
+  const key = JSON.stringify([msg.taskId, msg.fieldKey])
+  const existing = fieldRepairBeginInFlight.get(key)
+  if (existing) {
+    if (existing.repairMode === msg.repairMode) return existing.promise
+    return existing.promise.then(result => ({ ok: false, error: 'field_repair_active',
+      operationId: result?.sessionId, sessionId: result?.sessionId,
+      message: '這個值已有另一種重選模式正在開啟；請先完成或取消該頁面' }))
+  }
+  const reservation = { repairMode: msg.repairMode, promise: null }
+  const running = beginFieldRepairOnce(msg).finally(() => {
+    if (fieldRepairBeginInFlight.get(key) === reservation) fieldRepairBeginInFlight.delete(key)
+  })
+  reservation.promise = running
+  fieldRepairBeginInFlight.set(key, reservation)
+  return running
+}
+
+async function beginFieldRepairOnce(msg) {
   if (typeof msg.taskId !== 'string' || typeof msg.fieldKey !== 'string' ||
       !['repair', 'replace'].includes(msg.repairMode)) return { ok: false, error: 'invalid_repair' }
-  const task = await getTask(msg.taskId)
-  const fields = Array.isArray(task?.fields) ? task.fields : []
-  const field = fields.find(item => item?.key === msg.fieldKey)
-  const specs = Array.isArray(task?.spec?.fields) ? task.spec.fields : []
-  const fieldSpec = specs.find(item => item?.key === msg.fieldKey)
-  const source = field?.source || fieldSpec?.source || task?.source
-  const locator = source?.locator || task?.locator
-  if (!task || !field || !fieldSpec || !locator || task.mode !== 'multi') {
-    return { ok: false, error: 'field_not_found', message: '找不到這個多值任務欄位，請重新載入設定' }
-  }
   const pending = (await listPendingFieldRepairOperations()).find(operation =>
-    operation.taskId === task.id && operation.fieldKey === field.key)
+    operation.taskId === msg.taskId && (operation.fieldKey === msg.fieldKey || operation.newFieldKey === msg.fieldKey))
   if (pending) {
     if (fieldRepairInFlight.has(pending.id)) {
       const result = { ok: false, error: 'field_repair_pending',
@@ -129,6 +140,20 @@ async function beginFieldRepair(msg) {
       message: result?.message || '上一筆重選尚未完成；請再次確認同一操作',
       operationId: pending.id, sessionId: pending.id, state: pending.status }
   }
+  const task = await getTask(msg.taskId)
+  const fields = Array.isArray(task?.fields) ? task.fields : []
+  const field = fields.find(item => item?.key === msg.fieldKey)
+  const specs = Array.isArray(task?.spec?.fields) ? task.spec.fields : []
+  const fieldSpec = specs.find(item => item?.key === msg.fieldKey)
+  const source = field?.source || fieldSpec?.source || task?.source
+  const locator = source?.locator || task?.locator
+  if (!task || !field || !fieldSpec || !locator || task.mode !== 'multi') {
+    return { ok: false, error: 'field_not_found', message: '找不到這個多值任務欄位，請重新載入設定' }
+  }
+  const active = [...fieldRepairSessions.values()].find(session =>
+    session.taskId === task.id && session.fieldKey === field.key)
+  if (active) return { ok: false, error: 'field_repair_active', operationId: active.sessionId,
+    sessionId: active.sessionId, message: '這個值已有重選頁面開啟；請先完成或取消該頁面' }
   const sessionId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
   let tabId = null
   let keepTab = false
@@ -395,7 +420,8 @@ async function applyFieldRepair(msg, sender) {
     return await applyFieldRepairNow(msg, sender)
   } finally {
     if (fieldRepairSessions.get(sessionId) === grant && grant.submissionState === 'committing') {
-      grant.submissionState = 'active'
+      if (grant.tabClosed) fieldRepairSessions.delete(sessionId)
+      else grant.submissionState = 'active'
     }
   }
 }
@@ -2485,7 +2511,14 @@ chrome.contextMenus.onClicked.addListener(handleContextMenu)
 if (chrome.sidePanel?.onClosed?.addListener) {
   chrome.sidePanel.onClosed.addListener((info) => { closePanelFor(info?.tabId) })
 }
-chrome.tabs?.onRemoved?.addListener?.((tabId) => { closePanelFor(tabId, { keepMarks: true, clearDraft: true }) })
+chrome.tabs?.onRemoved?.addListener?.((tabId) => {
+  for (const [sessionId, grant] of fieldRepairSessions) {
+    if (grant.tabId !== tabId) continue
+    if (grant.submissionState === 'committing' || grant.submissionState === 'persisted') grant.tabClosed = true
+    else fieldRepairSessions.delete(sessionId)
+  }
+  closePanelFor(tabId, { keepMarks: true, clearDraft: true })
+})
 
 // worker 每次啟動（不只瀏覽器啟動）：上一個 worker 留下的抓取分頁與排隊中／執行中的排程槽。
 // storage 是空的時候兩者都只讀不寫
