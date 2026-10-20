@@ -204,6 +204,78 @@ function isMultiExecutionTask(task) {
 const EXECUTION_INVALIDATIONS_KEY = 'executionInvalidations'
 const MAX_EXECUTION_INVALIDATIONS = 100
 const MAX_EXECUTION_INVALIDATION_BYTES = 64 * 1024
+const FIELD_REPAIR_OPERATIONS_KEY = 'fieldRepairOperations'
+const MAX_FIELD_REPAIR_OPERATIONS = 50
+const MAX_FIELD_REPAIR_OPERATION_BYTES = 64 * 1024
+const FIELD_REPAIR_OPERATION_TTL_MS = 7 * 24 * 60 * 60 * 1000
+
+function liveFieldRepairOperations(rows, now = Date.now()) {
+  return asArray(rows).filter(operation => operation && typeof operation.id === 'string' &&
+    (operation.status !== 'complete' || now - Number(operation.updatedAt || operation.createdAt || 0) < FIELD_REPAIR_OPERATION_TTL_MS) &&
+    (operation.status === 'complete' || now - Number(operation.createdAt || 0) < FIELD_REPAIR_OPERATION_TTL_MS))
+}
+
+/**
+ * Minimal bounded journal for single-field repair/replacement. The operation is
+ * recorded before the task key changes, so worker recovery can recognize the
+ * fixed replacement key and finish idempotent cleanup after an interruption.
+ */
+export async function getFieldRepairOperation(id) {
+  if (typeof id !== 'string' || !id) return null
+  const stored = await chrome.storage.local.get(FIELD_REPAIR_OPERATIONS_KEY)
+  return liveFieldRepairOperations(stored?.[FIELD_REPAIR_OPERATIONS_KEY])
+    .find(operation => operation.id === id) || null
+}
+
+export async function beginFieldRepairOperation(operation) {
+  if (!operation || typeof operation.id !== 'string' || !operation.id ||
+      typeof operation.taskId !== 'string' || typeof operation.fieldKey !== 'string') {
+    throw new Error('invalid field repair operation')
+  }
+  let saved
+  await mutateKey(FIELD_REPAIR_OPERATIONS_KEY, current => {
+    const rows = liveFieldRepairOperations(current)
+    const existing = rows.find(item => item.id === operation.id)
+    if (existing) { saved = existing; return undefined }
+    const next = [...rows, structuredClone(operation)]
+    while (next.length > MAX_FIELD_REPAIR_OPERATIONS ||
+      new TextEncoder().encode(JSON.stringify(next)).length > MAX_FIELD_REPAIR_OPERATION_BYTES) {
+      const index = next.findIndex(item => item.status === 'complete')
+      if (index < 0) throw new Error('field repair operation journal is full')
+      next.splice(index, 1)
+    }
+    saved = structuredClone(operation)
+    return next
+  })
+  return saved
+}
+
+export async function updateFieldRepairOperation(id, mutator) {
+  if (typeof id !== 'string' || !id || typeof mutator !== 'function') return null
+  let updated = null
+  await mutateKey(FIELD_REPAIR_OPERATIONS_KEY, current => {
+    const rows = liveFieldRepairOperations(current)
+    const index = rows.findIndex(item => item.id === id)
+    if (index < 0) return undefined
+    const nextOperation = mutator(structuredClone(rows[index]))
+    if (!nextOperation) return undefined
+    if (nextOperation.id !== id) throw new Error('field repair operation id cannot change')
+    nextOperation.updatedAt = Date.now()
+    rows[index] = nextOperation
+    if (new TextEncoder().encode(JSON.stringify(rows)).length > MAX_FIELD_REPAIR_OPERATION_BYTES) {
+      throw new Error('field repair operation journal is full')
+    }
+    updated = structuredClone(nextOperation)
+    return rows
+  })
+  return updated
+}
+
+export async function listPendingFieldRepairOperations() {
+  const stored = await chrome.storage.local.get(FIELD_REPAIR_OPERATIONS_KEY)
+  return liveFieldRepairOperations(stored?.[FIELD_REPAIR_OPERATIONS_KEY])
+    .filter(operation => operation.status !== 'complete')
+}
 
 function executionSpecChanged(before, after) {
   if (!isMultiExecutionTask(before)) return false

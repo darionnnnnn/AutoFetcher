@@ -170,6 +170,34 @@ test('AC-A6 scalar same-value repair preserves strategy, multiplier, precision a
   dom.window.close()
 })
 
+test('AC-A6 cell repair keeps explicit positions and inner path while replacing coordinates', async t => {
+  const f = await setup(t)
+  await f.storage.updateTasks(['af23-repair'], task => {
+    task.spec.fields[0].spec = { cell: {
+      row: { index: 0, header: '舊列', pos: 'first' },
+      col: { index: 1, header: '舊欄', pos: 'last-1' },
+      inner: [{ tag: 'span', index: 1 }]
+    } }
+    task.fields[0].stateActions = [{ type: 'click', locator: { css: '#expand' } }]
+    task.spec.fields[0].stateActions = structuredClone(task.fields[0].stateActions)
+    return task
+  })
+  const grant = await begin(f)
+  const result = await picked(f, grant, {
+    picks: [{ cell: {
+      row: { index: 4, header: '新列' }, col: { index: 2, header: '新欄' }
+    } }]
+  })
+  assert.equal(result.ok, true)
+  const after = await f.storage.getTask('af23-repair')
+  assert.deepEqual(after.spec.fields[0].spec.cell, {
+    row: { index: 4, header: '新列', pos: 'first' },
+    col: { index: 2, header: '新欄', pos: 'last-1' },
+    inner: [{ tag: 'span', index: 1 }]
+  })
+  assert.deepEqual(after.fields[0].stateActions, [{ type: 'click', locator: { css: '#expand' } }])
+})
+
 test('AC-A3 replace starts with the selected metric parameters instead of inheriting old extraction semantics', async t => {
   const f = await setup(t)
   await f.storage.updateTasks(['af23-repair'], task => {
@@ -195,4 +223,150 @@ test('AC-A3 replace starts with the selected metric parameters instead of inheri
   assert.equal(replacement.spec.type, undefined)
   assert.equal(replacement.mode, 'text')
   assert.equal(after.fields.find(field => field.key === replacement.key).mode, 'text')
+})
+
+test('AC-A3 task 寫入前中斷可由已記錄操作恢復；重送不會建立第二個 key', async t => {
+  const f = await setup(t)
+  const grant = await begin(f, 'replace')
+  const before = await f.storage.getTask('af23-repair')
+  const realSet = f.chrome.storage.local.set.bind(f.chrome.storage.local)
+  let failTaskWrite = true
+  f.chrome.storage.local.set = async items => {
+    if (failTaskWrite && Object.hasOwn(items, 'tasks')) {
+      failTaskWrite = false
+      throw new Error('injected task write failure')
+    }
+    return realSet(items)
+  }
+  const failed = await picked(f, grant)
+  assert.equal(failed.ok, false)
+  assert.equal(failed.error, 'field_repair_pending')
+  assert.deepEqual(await f.storage.getTask('af23-repair'), before, 'task 寫入失敗時正式任務未改變')
+  const operationId = grant.enter.repairSessionId
+  assert.equal((await f.storage.getFieldRepairOperation(operationId)).status, 'prepared')
+
+  const restarted = await import('../src/background/main.js?af23-worker=' + Math.random())
+  assert.equal(await restarted.recoverFieldRepairOperations(), 1)
+  const recovered = await f.storage.getTask('af23-repair')
+  const activeFields = recovered.fields.filter(field => field.key !== 'f2')
+  assert.equal(activeFields.length, 1)
+  const recoveredKey = activeFields[0].key
+  assert.ok(recoveredKey.startsWith('field-'))
+  assert.equal((await f.storage.getFieldRepairOperation(operationId)).status, 'complete')
+
+  const replay = await picked(f, grant)
+  assert.equal(replay.ok, true)
+  assert.equal(replay.newFieldKey, recoveredKey)
+  assert.equal((await f.storage.getTask('af23-repair')).fields.filter(field => field.key !== 'f2').length, 1)
+})
+
+test('AC-A3 bounded operation receipt does not copy URL query secrets', async t => {
+  const f = await setup(t)
+  f.chrome.__setScriptResponder(() => [{ frameId: 0, result: 'https://a.test/prices?token=AF23_SECRET_SENTINEL' }])
+  await f.storage.updateTasks(['af23-repair'], task => {
+    task.spec.fields[0].source.frame = { url: 'https://a.test/prices?token=AF23_SECRET_SENTINEL' }
+    return task
+  })
+  const grant = await begin(f)
+  grant.sender.url = 'https://a.test/prices?token=AF23_SECRET_SENTINEL'
+  const result = await picked(f, grant)
+  assert.equal(result.ok, true)
+  const stored = await f.chrome.storage.local.get('fieldRepairOperations')
+  const receiptText = JSON.stringify(stored.fieldRepairOperations)
+  assert.equal(receiptText.includes('AF23_SECRET_SENTINEL'), false)
+  assert.equal(JSON.stringify(result).includes('AF23_SECRET_SENTINEL'), false)
+})
+
+test('AC-A4 task 已替換但版面清理中斷，重啟只補清理且不再換 key', async t => {
+  const f = await setup(t)
+  const layout = await import('../src/shared/layout-store.js?af23=' + Math.random())
+  const dashboard = await layout.addDashboard('測試版面')
+  const oldSeries = 'af23-repair#f1'
+  await layout.addCard(dashboard.id, { type: 'number', source: [{ taskId: oldSeries }] })
+  await f.storage.setLastValues({ [oldSeries]: { value: 12, capturedAt: new Date().toISOString() } })
+  const grant = await begin(f, 'replace')
+  const operationId = grant.enter.repairSessionId
+  const realSet = f.chrome.storage.local.set.bind(f.chrome.storage.local)
+  let failLayoutWrite = true
+  f.chrome.storage.local.set = async items => {
+    if (failLayoutWrite && Object.hasOwn(items, 'layout')) {
+      failLayoutWrite = false
+      throw new Error('injected layout write failure')
+    }
+    return realSet(items)
+  }
+  const failed = await picked(f, grant)
+  assert.equal(failed.ok, false)
+  assert.equal(failed.error, 'field_repair_cleanup_pending')
+  const committed = await f.storage.getTask('af23-repair')
+  const newKey = committed.fields.find(field => field.key !== 'f2').key
+  assert.ok(newKey.startsWith('field-'), 'task key was committed before cleanup failed')
+  assert.equal((await f.storage.getFieldRepairOperation(operationId)).status, 'cleanup')
+
+  f.chrome.storage.local.set = realSet
+  const restarted = await import('../src/background/main.js?af23-worker=' + Math.random())
+  assert.equal(await restarted.recoverFieldRepairOperations(), 1)
+  assert.equal(await restarted.recoverFieldRepairOperations(), 0, '第二次恢復沒有待處理操作')
+  const after = await f.storage.getTask('af23-repair')
+  assert.equal(after.fields.filter(field => field.key !== 'f2').length, 1)
+  assert.equal(after.fields.find(field => field.key !== 'f2').key, newKey)
+  assert.equal((await f.storage.getLastValues())[oldSeries], undefined)
+  const currentLayout = await layout.getLayout()
+  assert.equal(currentLayout.dashboards.find(item => item.id === dashboard.id).cards.length, 0)
+  assert.deepEqual((await f.storage.getFieldRepairOperation(operationId)).cleanup,
+    { layout: true, lastValues: true, alarms: true })
+})
+
+test('AC-A4 lastValues 清理失敗後會略過已完成版面清理並完成恢復', async t => {
+  const f = await setup(t)
+  const layout = await import('../src/shared/layout-store.js?af23=' + Math.random())
+  const dashboard = await layout.addDashboard('測試版面')
+  await layout.addCard(dashboard.id, { type: 'number', source: [{ taskId: 'af23-repair#f1' }] })
+  await f.storage.setLastValues({ 'af23-repair#f1': { value: 12 } })
+  const grant = await begin(f, 'replace')
+  const operationId = grant.enter.repairSessionId
+  const realSet = f.chrome.storage.local.set.bind(f.chrome.storage.local)
+  let fail = true
+  f.chrome.storage.local.set = async items => {
+    if (fail && Object.hasOwn(items, 'lastValues')) { fail = false; throw new Error('injected lastValues failure') }
+    return realSet(items)
+  }
+  const response = await picked(f, grant)
+  assert.equal(response.ok, false)
+  assert.equal(response.error, 'field_repair_cleanup_pending')
+  const partial = await f.storage.getFieldRepairOperation(operationId)
+  assert.equal(partial.cleanup.layout, true)
+  assert.equal(partial.cleanup.lastValues, false)
+  f.chrome.storage.local.set = realSet
+  const restarted = await import('../src/background/main.js?af23-worker=' + Math.random())
+  await restarted.recoverFieldRepairOperations()
+  await restarted.recoverFieldRepairOperations()
+  assert.deepEqual((await f.storage.getFieldRepairOperation(operationId)).cleanup,
+    { layout: true, lastValues: true, alarms: true })
+  assert.equal((await f.storage.getTask('af23-repair')).fields.filter(field => field.key !== 'f2').length, 1)
+})
+
+test('AC-A4 alarm 重建失敗後恢復不重做欄位替換', async t => {
+  const f = await setup(t)
+  const grant = await begin(f, 'replace')
+  const operationId = grant.enter.repairSessionId
+  const realCreate = f.chrome.alarms.create.bind(f.chrome.alarms)
+  let fail = true
+  f.chrome.alarms.create = async (...args) => {
+    if (fail) { fail = false; throw new Error('injected alarm failure') }
+    return realCreate(...args)
+  }
+  const response = await picked(f, grant)
+  assert.equal(response.ok, false)
+  assert.equal(response.error, 'field_repair_cleanup_pending')
+  const partial = await f.storage.getFieldRepairOperation(operationId)
+  assert.deepEqual(partial.cleanup, { layout: true, lastValues: true, alarms: false })
+  const committedKey = (await f.storage.getTask('af23-repair')).fields.find(field => field.key !== 'f2').key
+  const restarted = await import('../src/background/main.js?af23-worker=' + Math.random())
+  await restarted.recoverFieldRepairOperations()
+  await restarted.recoverFieldRepairOperations()
+  const after = await f.storage.getTask('af23-repair')
+  assert.equal(after.fields.find(field => field.key !== 'f2').key, committedKey)
+  assert.equal(after.fields.filter(field => field.key !== 'f2').length, 1)
+  assert.equal((await f.storage.getFieldRepairOperation(operationId)).status, 'complete')
 })

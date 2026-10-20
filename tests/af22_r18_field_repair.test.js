@@ -80,7 +80,9 @@ test('R18 same-value repair updates only the authorized field and preserves key/
     skip: { head: 1, blank: true }, exclude: [{ index: 4 }], pos: 'first', inner: [{ tag: 'span', index: 1 }]
   })
   const replay = await picked(f, grant)
-  assert.equal(replay.error, 'stale_field_repair', 'grant is one-shot')
+  assert.deepEqual(replay, result, '同一授權的重送對帳既有成功結果')
+  assert.equal((await f.storage.getTask('repair-task')).fields.filter(field => field.key === 'f1').length, 1,
+    '重送不建立第二個欄位')
 })
 
 test('R18 cancelled, wrong-tab, wrong-field, and post-worker-restart grants do not mutate a task', async t => {
