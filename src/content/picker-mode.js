@@ -154,17 +154,125 @@ const draftSourceSessions = new Map()
 
 function sourceTableOf(target) {
   if (!target || target.nodeType !== 1) return null
-  return target.matches?.('table') ? target : target.closest?.('table') || null
+  return isTableMode(target) ? target : tableOf(target)
 }
 
-function sourceElementOf(target, pick) {
+function sourceElementOf(target, pick, table = sourceTableOf(target)) {
   const cell = pick?.cell
-  if (!cell || !isTableMode(target)) return target
+  if (!cell || !table || !isTableMode(table)) return target
   const rowIndex = cell.row?.index
   const colIndex = cell.col?.index
   if (!Number.isInteger(rowIndex) || !Number.isInteger(colIndex)) return target
-  const row = resolveDataRows(target)[rowIndex]
+  const row = resolveDataRows(table)[rowIndex]
   return row ? targetAtGrid(row, colIndex, cell.inner) || target : target
+}
+
+function resolvedSourceCell(table, rows, colIndex, inner) {
+  if (!Number.isInteger(colIndex)) return null
+  return rows.map(row => ({ row, target: targetAtGrid(row, colIndex, inner) }))
+    .filter(item => item.target)
+}
+
+function sourceColumnIndex(table, locator) {
+  const headers = columnHeaders(table)
+  const rowWidth = resolveDataRows(table).reduce((max, row) => Math.max(max,
+    getRowCells(row).reduce((sum, cell) => sum + (Number(cell?.colSpan) || 1), 0)), 0)
+  const result = locateByHeader(headers, locator, Math.max(headers.length, rowWidth), 'col')
+  return result.ok && Number.isInteger(result.index) ? result.index : null
+}
+
+function sourceColumnStillMatches(rows, index, cells, inner) {
+  if (!Number.isInteger(index) || !cells?.length) return false
+  const currentRows = new Set(rows)
+  const stillRendered = cells.filter(item => item.row?.isConnected && currentRows.has(item.row))
+  if (!stillRendered.length) return false
+  return stillRendered.every(item => targetAtGrid(item.row, index, inner) === item.target)
+}
+
+function sourceRowIndex(table, rows, locator) {
+  const headers = rows.map(row => rowHeader(row))
+  const result = locateByHeader(headers, locator, rows.length, 'row')
+  return result.ok && Number.isInteger(result.index) ? result.index : null
+}
+
+function sourceAnchorOf(target, pick, table) {
+  if (!table || !isTableMode(table)) return null
+  const rows = resolveDataRows(table)
+  if (pick?.cell) {
+    const cell = pick.cell
+    const rowLocator = cell.row || {}
+    const colLocator = cell.col || {}
+    const rowIndex = sourceRowIndex(table, rows, rowLocator)
+    const colIndex = sourceColumnIndex(table, colLocator)
+    return {
+      kind: 'cell', table, rowLocator: structuredClone(rowLocator), colLocator: structuredClone(colLocator),
+      row: Number.isInteger(rowIndex) ? rows[rowIndex] : null,
+      target: Number.isInteger(rowIndex) && Number.isInteger(colIndex)
+        ? targetAtGrid(rows[rowIndex], colIndex, cell.inner) : null,
+      inner: structuredClone(cell.inner || []),
+      columnCells: Number.isInteger(colIndex) ? resolvedSourceCell(table, rows, colIndex, cell.inner) : []
+    }
+  }
+  if (pick?.block?.axis === 'row') {
+    const block = pick.block
+    const locator = { index: block.index, header: block.headerText, ...(block.pos ? { pos: block.pos } : {}) }
+    const index = sourceRowIndex(table, rows, locator)
+    return { kind: 'row', table, locator, row: Number.isInteger(index) ? rows[index] : null }
+  }
+  if (pick?.block?.axis === 'col') {
+    const block = pick.block
+    const locator = { index: block.index, header: block.headerText, ...(block.pos ? { pos: block.pos } : {}) }
+    const index = sourceColumnIndex(table, locator)
+    return { kind: 'column', table, locator, inner: structuredClone(block.inner || []),
+      cells: Number.isInteger(index) ? resolvedSourceCell(table, rows, index, block.inner) : [] }
+  }
+  return null
+}
+
+function sourceAnchorStillMatches(anchor) {
+  if (!anchor) return true
+  const table = anchor.table
+  flushTableMutations()
+  if (!table?.isConnected) return false
+  const rows = resolveDataRows(table)
+  if (anchor.kind === 'cell') {
+    const rowIndex = sourceRowIndex(table, rows, anchor.rowLocator)
+    const colIndex = sourceColumnIndex(table, anchor.colLocator)
+    if (!Number.isInteger(rowIndex) || !Number.isInteger(colIndex)) return false
+    if (!anchor.rowLocator.pos && rows[rowIndex] !== anchor.row) return false
+    if (anchor.colLocator.pos) return true
+    if (anchor.rowLocator.pos) return sourceColumnStillMatches(rows, colIndex, anchor.columnCells, anchor.inner)
+    return targetAtGrid(rows[rowIndex], colIndex, anchor.inner) === anchor.target
+  }
+  if (anchor.kind === 'row') {
+    if (anchor.locator.pos) return true
+    const index = sourceRowIndex(table, rows, anchor.locator)
+    return Number.isInteger(index) && rows[index] === anchor.row
+  }
+  if (anchor.kind === 'column') {
+    const index = sourceColumnIndex(table, anchor.locator)
+    return sourceColumnStillMatches(rows, index, anchor.cells, anchor.inner)
+  }
+  return false
+}
+
+function sourceAnchorForSpec(anchor, spec) {
+  if (!anchor || !spec) return anchor
+  anchor = { ...anchor, cells: anchor.cells?.map(item => ({ ...item })) }
+  if (anchor.kind === 'cell' && spec.cell) {
+    anchor.rowLocator = structuredClone(spec.cell.row || {})
+    anchor.colLocator = structuredClone(spec.cell.col || {})
+    anchor.inner = structuredClone(spec.cell.inner || [])
+  } else if (anchor.kind === 'row' && spec.block?.axis === 'row') {
+    anchor.locator = { index: spec.block.index, header: spec.block.headerText,
+      ...(spec.block.pos ? { pos: spec.block.pos } : {}) }
+    anchor.inner = structuredClone(spec.block.inner || [])
+  } else if (anchor.kind === 'column' && spec.block?.axis === 'col') {
+    anchor.locator = { index: spec.block.index, header: spec.block.headerText,
+      ...(spec.block.pos ? { pos: spec.block.pos } : {}) }
+    anchor.inner = structuredClone(spec.block.inner || [])
+  }
+  return anchor
 }
 
 function recordDraftSource(identity, key, target, pick, remove) {
@@ -179,12 +287,14 @@ function recordDraftSource(identity, key, target, pick, remove) {
     return
   }
   if (!groups) { groups = new Map(); records.set(key, groups) }
-  const sourceElement = sourceElementOf(target, pick)
+  const table = sourceTableOf(target)
+  const sourceElement = sourceElementOf(target, pick, table)
   groups.set(identity.groupKey, {
     groupKey: identity.groupKey,
-    valueLabel: (target?.textContent || getPickName(pick) || '已選值').trim().slice(0, 80),
+    valueLabel: (sourceElement?.textContent || getPickName(pick) || '已選值').trim().slice(0, 80),
     target: sourceElement,
-    table: sourceTableOf(target)
+    table,
+    anchor: sourceAnchorOf(target, pick, table)
   })
 }
 
@@ -208,7 +318,8 @@ function validateDraftSources(sessionId, expectedSources = []) {
       const label = (value.preview || value.previewValue || value.name || '已選值').toString().trim().slice(0, 80)
       return { ok: false, error: 'stale_source', message: `${groupLabel}的「${label}」來源未經目前文件核對，請重新選取` }
     }
-    if (!record.target?.isConnected || (record.table && (!record.table.isConnected || sourceTableOf(record.target) !== record.table))) {
+    if (!record.target?.isConnected || (record.table && (!record.table.isConnected || sourceTableOf(record.target) !== record.table)) ||
+        !sourceAnchorStillMatches(sourceAnchorForSpec(record.anchor, spec))) {
       return {
         ok: false,
         error: 'stale_source',
