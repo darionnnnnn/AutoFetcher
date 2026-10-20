@@ -99,6 +99,10 @@ function fieldRepairSnapshot(task, field, entry) {
   })
 }
 
+function fieldRepairTaskContextSnapshot(task) {
+  return stableRepairValue({ taskUrl: task?.url, preActions: task?.preActions })
+}
+
 function beginFieldRepair(msg) {
   if (typeof msg?.taskId !== 'string' || typeof msg?.fieldKey !== 'string' ||
       !['repair', 'replace'].includes(msg.repairMode)) return Promise.resolve({ ok: false, error: 'invalid_repair' })
@@ -184,7 +188,8 @@ async function beginFieldRepairOnce(msg) {
       sessionId, taskId: task.id, fieldKey: field.key, repairMode: msg.repairMode,
       tabId, frameId: loc.frameId, frameUrl,
       documentGeneration, routeIdentity,
-      fieldSnapshot: fieldRepairSnapshot(task, field, fieldSpec)
+      fieldSnapshot: fieldRepairSnapshot(task, field, fieldSpec),
+      taskContextSnapshot: fieldRepairTaskContextSnapshot(task)
     })
     const entered = await sendToFrame(tabId, {
       type: MSG.ENTER_PICK, purpose: 'repick', taskId: task.id, locator,
@@ -250,6 +255,8 @@ function fieldAndEntryOf(task, key) {
 }
 
 function operationAlreadyApplied(task, operation) {
+  if (!operation.taskContextSnapshot ||
+      fieldRepairTaskContextSnapshot(task) !== operation.taskContextSnapshot) return null
   if (operation.repairMode === 'replace') {
     const active = fieldAndEntryOf(task, operation.newFieldKey)
     const archived = (task?.archivedFields || []).find(item => item?.repairOperationId === operation.id)
@@ -504,6 +511,7 @@ async function applyFieldRepairNow(msg, sender) {
   const operation = {
     id: sessionId, taskId: grant.taskId, fieldKey: grant.fieldKey, repairMode: grant.repairMode,
     status: 'prepared', createdAt: Date.now(), fieldSnapshot: grant.fieldSnapshot,
+    taskContextSnapshot: grant.taskContextSnapshot,
     source, nextSpec, selectedMode: ['number', 'text'].includes(selectedMode) ? selectedMode : (field.mode || pick.mode || 'number'),
     auth: { tabId: grant.tabId, frameId: grant.frameId, frameUrl: repairFrameUrl(grant.frameUrl), documentGeneration: grant.documentGeneration },
     cleanup: { layout: false, lastValues: false, alarms: false }

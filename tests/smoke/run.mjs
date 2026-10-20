@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { findBrowser, ROOT } from './browser-path.mjs'
 
-export const SUITES = ["load.mjs","af23_release.mjs","af23_flows.mjs","af23_sources.mjs","af23_edit_flow.mjs","af23_d_route_flow.mjs","af23_journeys.mjs","af23_privacy.mjs","af23_d4_picker_lifecycle.mjs","af23_c3_c4_c6_browser.mjs","af23_preview_repair_seams.mjs","af23_prune_undo.mjs","af23_t06_inflight_scheduler.mjs"]
+export const SUITES = ["load.mjs","af23_release.mjs","af23_flows.mjs","af23_sources.mjs","af23_edit_flow.mjs","af23_d_route_flow.mjs","af23_journeys.mjs","af23_privacy.mjs","af23_d4_picker_lifecycle.mjs","af23_c3_c4_c6_browser.mjs","af23_preview_repair_seams.mjs","af23_prune_undo.mjs","af23_t06_inflight_scheduler.mjs","af23_c6_pending_browser.mjs"]
 
 export function runSmoke({ browserPath = findBrowser(), run = spawnSync, suites = SUITES } = {}) {
   const env = { ...process.env, BROWSER_PATH: browserPath }

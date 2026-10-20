@@ -296,11 +296,21 @@ function executionSpecChanged(before, after) {
 
 async function invalidationOf(before, after) {
   if (!executionSpecChanged(before, after)) return null
+  const pendingCommits = []
+  const runState = await getRunState()
+  const prefix = `${before.id}@`
+  for (const [key, entry] of Object.entries(runState)) {
+    if (!key.startsWith(prefix) || entry?.state !== 'running') continue
+    const slot = key.slice(prefix.length)
+    if (!slot || await getRunStatus(before.id, slot)) continue
+    pendingCommits.push({ slot, commitId: key })
+  }
   return {
     taskId: before.id,
     executionFingerprint: await executionFingerprintOf(before),
     seriesKeys: changedExecutionSeriesOf(before, after),
-    clearHealth: true
+    clearHealth: true,
+    ...(pendingCommits.length > 0 ? { pendingCommits } : {})
   }
 }
 
@@ -367,6 +377,33 @@ async function clearInvalidatedExecutionState(changes) {
   })
 }
 
+// Remove only the incomplete scheduled commits observed by the durable marker.
+// Completed ledger slots and manual executionId records are not invalidation
+// cleanup targets (task deletion still performs its own full history purge).
+async function clearInvalidatedExecutionRecords(changes) {
+  for (const change of changes || []) {
+    if (typeof change?.taskId !== 'string' || typeof change?.executionFingerprint !== 'string') continue
+    for (const commit of Array.isArray(change.pendingCommits) ? change.pendingCommits : []) {
+      if (typeof commit?.slot !== 'string' || typeof commit?.commitId !== 'string') continue
+      // A run may finish between marker creation and the task mutation. Its
+      // completed ledger is authoritative and its history must remain intact.
+      if (await getRunStatus(change.taskId, commit.slot)) continue
+      const date = commit.slot.slice(0, 10)
+      for (const key of dayRecordKeys(date).filter(isRecordKey)) {
+        await mutateKey(key, current => {
+          const rows = asArray(current)
+          const kept = rows.filter(record => !(
+            parentIdOf(record?.taskId) === change.taskId && record?.slot === commit.slot &&
+            record?.commitId === commit.commitId && record?.executionFingerprint === change.executionFingerprint
+          ))
+          if (kept.length === rows.length) return undefined
+          return kept.length === 0 ? REMOVE : kept
+        })
+      }
+    }
+  }
+}
+
 // Recovery is deliberately off the fetch path. A marker written before a task
 // mutation is harmless if that mutation never committed; replay only cleans
 // after the task disappeared or its execution identity changed.
@@ -380,6 +417,7 @@ async function replayExecutionInvalidationsForMarker(marker) {
     if (!stillOld) eligible.push(change)
   }
   await clearInvalidatedExecutionState(eligible)
+  await clearInvalidatedExecutionRecords(eligible)
   await removeExecutionInvalidation(marker.id)
 }
 
@@ -872,6 +910,23 @@ export async function appendRecords(date, records) {
   for (const [hh, group] of groupByHour(records)) {
     await mutateKey(hourRecordKey(date, hh), (current) => [...asArray(current), ...group])
   }
+}
+
+// Append a scheduled execution's records only while its source fingerprint is
+// still current. The check runs under each rec2 key lock immediately before write.
+export async function appendRecordsForExecution(date, records, taskId, executionFingerprint) {
+  if (!ISO_DATE_RE.test(String(date)) || !Array.isArray(records) || records.length === 0 ||
+      typeof taskId !== 'string' || typeof executionFingerprint !== 'string') return false
+  for (const [hh, group] of groupByHour(records)) {
+    let allowed = false
+    await mutateKey(hourRecordKey(date, hh), async current => {
+      allowed = await currentTaskMatchesExecution(taskId, executionFingerprint)
+      if (!allowed) return undefined
+      return [...asArray(current), ...group]
+    })
+    if (!allowed) return false
+  }
+  return true
 }
 
 // 追加紀錄至指定日期的小時鍵（rec2:<date>:<HH>）

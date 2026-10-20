@@ -223,7 +223,9 @@ test('AC-F2 a new BEGIN recovers the same pending journal without opening a seco
   const operation = {
     id: 'af23-pending-repair', taskId: task.id, fieldKey: 'price', repairMode: 'repair',
     status: 'prepared', createdAt: Date.now(),
+    taskContextSnapshot: stable({ taskUrl: task.url, preActions: task.preActions }),
     fieldSnapshot: stable({
+      taskUrl: task.url, preActions: task.preActions,
       key: field.key, mode: field.mode, fieldSource: field.source, entrySource: entry.source,
       spec: entry.spec, fieldStateActions: field.stateActions, entryStateActions: entry.stateActions
     }),
@@ -252,7 +254,8 @@ test('AC-F2 a new BEGIN recovers the same pending journal without opening a seco
   const recoveredField = recoveredTask.fields.find(item => item.key === 'price')
   const recoveredEntry = recoveredTask.spec.fields.find(item => item.key === 'price')
   const startupOperation = { ...operation, id: 'af23-startup-recovery',
-    fieldSnapshot: stable({ key: recoveredField.key, mode: recoveredField.mode,
+    fieldSnapshot: stable({ taskUrl: recoveredTask.url, preActions: recoveredTask.preActions,
+      key: recoveredField.key, mode: recoveredField.mode,
       fieldSource: recoveredField.source, entrySource: recoveredEntry.source, spec: recoveredEntry.spec,
       fieldStateActions: recoveredField.stateActions, entryStateActions: recoveredEntry.stateActions }),
     source: { locator: locator('#startup-recovered') }, auth: { ...operation.auth, tabId: 992 } }
@@ -282,6 +285,7 @@ test('AC-A4 pending replacement cleanup recovers by either old or new field key 
       await f.storage.beginFieldRepairOperation({
         id: operationId, taskId: task.id, fieldKey: 'price', newFieldKey: 'field-recovered',
         repairMode: 'replace', status: 'cleanup', createdAt: Date.now(), source, nextSpec,
+        taskContextSnapshot: stable({ taskUrl: task.url, preActions: task.preActions }),
         name: '新價格', oldSeriesId: `${task.id}#price`, selectedMode: 'number', archivedField: archived,
         cleanup: { layout: true, lastValues: true, alarms: true }, auth: { tabId: 991, frameId: 0 }
       })

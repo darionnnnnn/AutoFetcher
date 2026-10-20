@@ -576,4 +576,7 @@ ACK／結果對帳、持久化修復紀錄、來源漂移防護、原子卡片�
 - C4：修復DONE讀回期間新試抓不能阻止持久來源同步；失效舊預覽並保留未存名稱/排程。舊版deferred回歸可顯示A，新版拒絕A且更新B。
 - D2/D3：摘要圖表也核對generation/view/range；晚到成功與拒絕不影響新路由。成功後refresh失敗保留表格/摘要/月曆，重試更新；主代理9/9通過。
 - F3：主代理視覺檢查發現欄位名稱被壓縮、修復動作橫向溢出；沿既有CSS加wrap與可讀輸入寬度。四種360/1280px×100/200%以及兩輪鍵盤實機通過，新增欄位名/修復/替換按鈕可達與零水平捲動斷言。使用ui-ux-pro-max技能HTML/CSS參考；本機無可用Python，未執行技能資料搜尋。
-- F2紀錄append窗口與C6 pending實際再次確認操作正在補驗；完成前不結案、不沿用舊封裝hash代表最後版本。
+- F2：在 rec2 鎖內重驗 execution fingerprint，來源修改時以既有 durable invalidation marker 清除觀察到的未完成排程 commit；完成舊 slot 與 manual 歷史保留。主代理發現測試 API 參數錯位造成假綠，已修正並加來源未變可成功 append 的 control。A5/F2/恢復整合共48/48通過。
+- A5 no-op：已套用結果的捷徑也驗 task URL/preActions，避免新舊來源相同時跳過衝突檢查；prepared/cleanup synthetic fixture 同步新的 journal 契約。
+- C6：主代理實際瀏覽器重演 layout cleanup 一次失敗，從畫面點「再次確認同一操作」成功；只一個新 key/一筆封存，舊 layout 引用移除。新增 smoke 納入常規 runner。
+- F3 剩餘缺口：Luna只讀覆核發現欄位錯誤節點缺 aria-live，正在補最小語意與精確斷言。最後封裝待此修正驗收後重建。

@@ -711,6 +711,48 @@ test('AC-A4 task 已替換但版面清理中斷，重啟只補清理且不再換
     { layout: true, lastValues: true, alarms: true })
 })
 
+test('AC-A5 already-applied no-op repair 仍核對共享任務來源語意', async t => {
+  for (const [label, mutate] of [
+    ['url', task => { task.url = 'https://b.test/prices' }],
+    ['preActions', task => { task.preActions = [{ type: 'click', selector: '#login' }] }]
+  ]) {
+    await t.test(label, async subtest => {
+      const f = await setup(subtest)
+      const task = await f.storage.getTask('af23-repair')
+      task.spec.fields[0].source = { locator: { css: '#old-1' } }
+      task.spec.fields[0].spec = { mode: 'number' }
+      await f.storage.saveTask(task)
+      const grant = await begin(f)
+      const realSet = f.chrome.storage.local.set.bind(f.chrome.storage.local)
+      let changed = false
+      f.chrome.storage.local.set = async items => {
+        const result = await realSet(items)
+        if (!changed && Object.hasOwn(items, 'fieldRepairOperations')) {
+          changed = true
+          await f.storage.updateTasks(['af23-repair'], current => {
+            mutate(current)
+            return current
+          })
+        }
+        return result
+      }
+      const response = await picked(f, grant, {
+        locator: { css: '#old-1' },
+        picks: [{ locator: { css: '#old-1' } }], pickModes: ['number']
+      })
+      f.chrome.storage.local.set = realSet
+      assert.equal(changed, true, 'the shared task context changes after the operation is journaled')
+      assert.equal(response.ok, false, 'matching source/spec must not bypass shared-context validation')
+      assert.equal(response.error, 'stale_field_repair')
+      const after = await f.storage.getTask('af23-repair')
+      assert.equal(after.spec.fields[0].source.locator.css, '#old-1', 'no-op repair does not overwrite task data')
+      const receipt = await f.storage.getFieldRepairOperation(grant.enter.repairSessionId)
+      assert.equal(receipt.status, 'complete')
+      assert.equal(receipt.result.error, 'stale_field_repair')
+    })
+  }
+})
+
 test('AC-A4 lastValues 清理失敗後會略過已完成版面清理並完成恢復', async t => {
   const f = await setup(t)
   const layout = await import('../src/shared/layout-store.js?af23=' + Math.random())

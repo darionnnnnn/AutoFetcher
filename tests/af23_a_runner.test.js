@@ -7,7 +7,7 @@ import { findBrowser } from './smoke/browser-path.mjs'
 import { runSmoke, SUITES } from './smoke/run.mjs'
 
 test('AC-A1 runner 包含核心與完整群組流程，子程序失敗不得假綠', () => {
-  assert.deepEqual(SUITES, ["load.mjs","af23_release.mjs","af23_flows.mjs","af23_sources.mjs","af23_edit_flow.mjs","af23_d_route_flow.mjs","af23_journeys.mjs","af23_privacy.mjs","af23_d4_picker_lifecycle.mjs","af23_c3_c4_c6_browser.mjs","af23_preview_repair_seams.mjs","af23_prune_undo.mjs","af23_t06_inflight_scheduler.mjs"])
+  assert.deepEqual(SUITES, ["load.mjs","af23_release.mjs","af23_flows.mjs","af23_sources.mjs","af23_edit_flow.mjs","af23_d_route_flow.mjs","af23_journeys.mjs","af23_privacy.mjs","af23_d4_picker_lifecycle.mjs","af23_c3_c4_c6_browser.mjs","af23_preview_repair_seams.mjs","af23_prune_undo.mjs","af23_t06_inflight_scheduler.mjs","af23_c6_pending_browser.mjs"])
   const seen = []
   const status = runSmoke({ browserPath: '/fixture/browser', run: (exe, args, options) => {
     seen.push(args[0])
