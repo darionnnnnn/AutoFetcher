@@ -5288,7 +5288,7 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
     }
     const onPageHide = () => {
       document.removeEventListener('visibilitychange', onVisibilityChange)
-      document.removeEventListener('pagehide', onPageHide)
+      window.removeEventListener('pagehide', onPageHide)
       chrome.tabs.onActivated?.removeListener?.(onTabActivated)
       unsubscribePanelSession()
     }
@@ -5307,7 +5307,7 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
     if (forcedTab === null && globalThis.chrome?.sidePanel) {
       chrome.tabs.onActivated?.addListener?.(onTabActivated)
     }
-    document.addEventListener('pagehide', onPageHide, { once: true })
+    window.addEventListener('pagehide', onPageHide, { once: true })
     document.addEventListener('af:pick-group-name-result', event => { consumeGroupNameResult(event.detail) })
     chrome.runtime.onMessage?.addListener((message) => {
       if (message?.type === PICK_GROUP_NAME_RESULT) return consumeGroupNameResult(message)

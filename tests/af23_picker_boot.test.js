@@ -25,7 +25,7 @@ async function setup(t, search = '') {
   globalThis.document = dom.window.document
   const picker = await import('../src/ui/picker/picker.js?af23-boot=' + Math.random())
   t.after(() => {
-    dom.window.document.dispatchEvent(new dom.window.PageTransitionEvent('pagehide'))
+    dom.window.dispatchEvent(new dom.window.PageTransitionEvent('pagehide'))
     dom.window.close()
     resetChromeMock()
   })
@@ -59,7 +59,7 @@ test('sidepanel 在沒有 visibilitychange 時依同視窗 active tab 重跑 boo
   await tick()
   assert.deepEqual(draftReads, [11, 22], 'activation reloads the new tab protocol draft')
   assert.equal(f.dom.window.document.getElementById('panel-notice').textContent, 'tab-twenty-two')
-  f.dom.window.document.dispatchEvent(new f.dom.window.PageTransitionEvent('pagehide'))
+  f.dom.window.dispatchEvent(new f.dom.window.PageTransitionEvent('pagehide'))
   assert.equal(f.activated.size, 0, 'page teardown removes the activation listener')
 })
 
