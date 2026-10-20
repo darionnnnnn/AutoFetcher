@@ -4122,7 +4122,8 @@ export async function handleTestNow() {
     if (previewEl) previewEl.textContent = '—'
     setPreviewState('error')
   } finally {
-    busy()
+    // 若使用者已切到另一個任務，舊請求不能重設新表單的按鈕狀態。
+    if (requestId === previewGeneration) busy()
     try { scrollPreviewIntoView() } catch {}
   }
 }
@@ -4993,6 +4994,16 @@ export async function renderFromPanelCtx(ctx, { reload = () => globalThis.locati
       applyRetarget(ctx.ctx)
       return { rendered: true }
     }
+    // 新的選取 context 是新任務草稿：清掉上一個 context 的未存表單值與 busy 控制狀態。
+    // 相同 context 已在上方直接返回，所以這不會抹掉正在編輯的草稿；retarget 也走保留設定的專用路徑。
+    form?.reset?.()
+    const name = document.getElementById('name')
+    if (name) {
+      name.value = ''
+      delete name._afAutoName
+    }
+    const testNow = document.getElementById('test-now')
+    if (testNow) testNow.disabled = false
     render(ctx.ctx)
     await renderDashboardSection(ctx.ctx?.task)
     await applyPickerDefaults(ctx.ctx?.task)

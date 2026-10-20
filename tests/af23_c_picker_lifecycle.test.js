@@ -11,10 +11,11 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 const FAST = { pollMs: 1, loadTimeoutMs: 200, checkTimeoutMs: 30, fillTimeoutMs: 30,
   extractTimeoutMs: 200, frameTimeoutMs: 30, messageTimeoutMs: 200, extraDelayMs: 0 }
 
-async function mountPicker(t, search = '') {
+async function mountPicker(t, search = '', prepareChrome = null) {
   resetChromeMock()
   const chrome = installChromeMock()
   chrome.runtime.id = 'af23-picker-test'
+  const extra = prepareChrome?.(chrome)
   globalThis.navigator = { onLine: true }
   const storage = await import('../src/shared/storage.js?af23-lifecycle=' + Math.random())
   await storage.init()
@@ -27,7 +28,7 @@ async function mountPicker(t, search = '') {
     dom.window.close()
     resetChromeMock()
   })
-  return { chrome, storage, background, dom, picker, doc: dom.window.document }
+  return { chrome, storage, background, dom, picker, doc: dom.window.document, extra }
 }
 
 function previewTask(id, count = 1) {
@@ -159,4 +160,106 @@ test('AC-C6:partial 綁定正確失敗欄位，實際 pending operation 可用�
     '#repaired-value-2')
   assert.equal(row._source.locator.css, '#repaired-value-2', 'same-operation 回應核對後才更新正確欄位')
   assert.match(row.textContent, /來源已立即儲存/)
+})
+
+test('AC-D4:同一文件連續十輪 create/edit/leave 不累積狀態、listener 或 debounce timer', async t => {
+  const f = await mountPicker(t, '', chrome => {
+    const activated = new Set()
+    chrome.tabs.onActivated = {
+      addListener: listener => activated.add(listener),
+      removeListener: listener => activated.delete(listener),
+      _listeners: activated
+    }
+    return activated
+  })
+  Object.defineProperty(f.doc, 'visibilityState', { configurable: true, value: 'visible' })
+  const task = previewTask('d4-lifecycle-task')
+  await f.storage.saveTask(task)
+  f.chrome.__setRuntimeResponder(message => {
+    if (message.type === 'RESOLVE_PANEL_TAB') return { ok: true, tabId: 77 }
+    if (message.type === 'PICK_DRAFT_READ') return { ok: true, draft: null }
+    return { ok: true }
+  })
+  f.dom.window.document.dispatchEvent(new f.dom.window.Event('visibilitychange'))
+  await sleep(10)
+
+  let runtimeListenerCount = null
+  const activationListenerCount = f.extra.size
+  const realSetTimeout = globalThis.setTimeout
+  const realClearTimeout = globalThis.clearTimeout
+  const activeTimers = new Set()
+  globalThis.setTimeout = (callback, delay, ...args) => {
+    let timer
+    timer = realSetTimeout(() => {
+      activeTimers.delete(timer)
+      callback(...args)
+    }, delay)
+    activeTimers.add(timer)
+    return timer
+  }
+  globalThis.clearTimeout = timer => {
+    activeTimers.delete(timer)
+    return realClearTimeout(timer)
+  }
+  t.after(() => {
+    globalThis.setTimeout = realSetTimeout
+    globalThis.clearTimeout = realClearTimeout
+  })
+
+  const leave = ({ establishListeners = false, skipRuntimeCheck = false } = {}) => {
+    f.doc.getElementById('cancel').click()
+    assert.equal(activeTimers.size, 0, '離開表單會同步清除該輪尚未執行的草稿 debounce')
+    if (establishListeners) runtimeListenerCount = f.chrome.runtime.onMessage._listeners.size
+    else if (!skipRuntimeCheck) assert.equal(f.chrome.runtime.onMessage._listeners.size, runtimeListenerCount,
+        '狀態切換不重複註冊 runtime listener')
+    assert.equal(f.extra.size, activationListenerCount,
+      '同一文件只保留一個 activation listener')
+  }
+
+  for (let cycle = 1; cycle <= 10; cycle++) {
+    const testNow = f.doc.getElementById('test-now')
+    testNow.textContent = '抓取中…'
+    testNow.disabled = true
+    f.doc.getElementById('preview').textContent = '前一任務的預覽'
+    const createResult = await f.picker.renderFromPanelCtx({ kind: 'new', ctx: {
+      nameHint: `新建 ${cycle}`, url: task.url, mode: 'number', locator: locator(`#create-${cycle}`), preview: `create-${cycle}`
+    } })
+    assert.equal(createResult.rendered, true)
+    assert.equal(f.doc.getElementById('name').value, `新建 ${cycle}`,
+      '新 context 使用自己的預設名稱，不沿用上一輪手動名稱')
+    assert.equal(f.doc.getElementById('preview').textContent, `create-${cycle}`,
+      '新 context 顯示自己的預覽，不沿用上一輪結果')
+    assert.equal(testNow.disabled, false, '新 context 不沿用上一輪抓取 busy 狀態')
+    assert.equal(testNow.textContent, '試抓', '新 context 重設抓取按鈕文字')
+    assert.equal(f.doc.querySelectorAll('#field-list [data-field-row]').length, 0,
+      'create form 不帶入上一輪 edit 的欄位')
+    f.doc.getElementById('name').value = `建立 ${cycle}`
+    f.doc.getElementById('name').dispatchEvent(new f.dom.window.Event('input', { bubbles: true }))
+    f.doc.getElementById('preview').textContent = `未儲存預覽 ${cycle}`
+    const sameContext = await f.picker.renderFromPanelCtx({ kind: 'new', ctx: {
+      nameHint: `新建 ${cycle}`, url: task.url, mode: 'number', locator: locator(`#create-${cycle}`), preview: `create-${cycle}`
+    } })
+    assert.equal(sameContext.rendered, false, '同一 context 不重畫表單')
+    assert.equal(f.doc.getElementById('name').value, `建立 ${cycle}`,
+      '同一 context 保留尚未儲存的名稱草稿')
+    assert.equal(f.doc.getElementById('preview').textContent, `未儲存預覽 ${cycle}`,
+      '同一 context 保留尚未儲存的預覽狀態')
+    assert.equal(activeTimers.size, 1, '同一輪輸入只有一個 debounce timer')
+    leave({ skipRuntimeCheck: cycle === 1 })
+
+    const editResult = await f.picker.renderFromPanelCtx({ kind: 'edit', taskId: task.id })
+    assert.equal(editResult.rendered, true)
+    const fieldRow = f.doc.querySelector('#field-list [data-field-row]')
+    assert.equal(fieldRow.dataset.fieldKey, 'field-1', 'edit form 只顯示此 task 的欄位')
+    assert.equal(fieldRow.querySelector('[data-field-result]').textContent, '—',
+      '上一輪試抓結果不污染重新進入的 edit form')
+    f.doc.getElementById('name').value = `編輯 ${cycle}`
+    f.doc.getElementById('name').dispatchEvent(new f.dom.window.Event('input', { bubbles: true }))
+    assert.equal(activeTimers.size, 1, 'edit 輸入同樣只保留一個 debounce timer')
+    leave({ establishListeners: cycle === 1 })
+
+    const waitResult = await f.picker.renderFromPanelCtx({ kind: 'waiting', purpose: 'task' })
+    assert.equal(waitResult.rendered, true)
+    assert.equal(f.doc.getElementById('picker-form').hidden, true, '離開 edit 後回到乾淨等待態')
+  }
 })
