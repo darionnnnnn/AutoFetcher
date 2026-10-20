@@ -546,7 +546,7 @@
 
 ## 4. 頁面與生命週期：待整合確認
 
-- [ ] **T13 按需渲染與過期查詢（D1/D2）**：核對設定頁零隱藏歷史／月曆渲染，以及舊查詢晚回的瀏覽器證據；已有讀取計數與整合案例可沿用。驗收：設定頁不讀歷史、不畫隱藏歷史；A 晚回不能改 B 的 DOM/loading/error，返回上一頁仍正確。
+- [x] **T13** — 已完成：既有D1/D2受控整合涵蓋新舊查詢與零讀取；追加late-A rejection窄測1/1通過，B表格/摘要/錯誤維持。主代理CfT只重跑cache情境，確認設定頁歷史讀取0、隱藏history rows/calendar tables均0、背景新增後回歷史更新；實際back/forward由D路由兩輪證據覆蓋。
 - [x] **T14** — 已完成：主代理獨立CfT執行tests/smoke/af23_d4_picker_lifecycle.mjs，同一文件十輪context切換、表單輸入與實際Cancel通過；name/mode/save/test/cancel listener維持1/2/1/1/1。同context保留未存內容、新context重設name/preview/busy。context由正式renderFromPanelCtx驅動；不冒稱十輪完整端到端建立流程，F1另驗。
 
 ## 5. 效能：量測尚未全部完成

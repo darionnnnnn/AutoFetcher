@@ -124,6 +124,46 @@ test('其他頁面期間新增紀錄會失效歷史快取，返回歷史時讀�
   assert.ok(recordReadCount(chrome) > 0, '返回時必須重讀失效範圍')
 })
 
+test('較新的歷史查詢完成後，較舊查詢的晚到錯誤不得覆寫畫面', async () => {
+  const { chrome, storage, win, doc, report } = await mount()
+  await storage.appendRecord('2026-10-20', { taskId: 't1', capturedAt: '2026-10-20T08:00:00.000Z', slot: '2026-10-20T08:00:00', value: 'A-only', raw: 'A-only', status: 'ok' })
+  await storage.appendRecord('2026-10-21', { taskId: 't1', capturedAt: '2026-10-21T08:00:00.000Z', slot: '2026-10-21T08:00:00', value: 'B-only', raw: 'B-only', status: 'ok' })
+  await delay(140)
+
+  const realGet = chrome.storage.local.get.bind(chrome.storage.local)
+  let held = false
+  let entered
+  const enteredPromise = new Promise(resolve => { entered = resolve })
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  chrome.storage.local.get = async (keys, ...rest) => {
+    if (!held && Array.isArray(keys) && keys.includes('rec2:2026-10-20:00')) {
+      held = true
+      entered()
+      await gate
+      throw new Error('late query A failure')
+    }
+    return realGet(keys, ...rest)
+  }
+
+  win.location.hash = '#view=history&from=2026-10-20&to=2026-10-20'
+  const oldLoad = report.loadAndRenderPage(win.location.hash, { force: true })
+  await enteredPromise
+  win.location.hash = '#view=history&from=2026-10-21&to=2026-10-21'
+  await report.loadAndRenderPage(win.location.hash, { force: true })
+  assert.match(doc.querySelector('#record-table tbody')?.textContent || '', /B-only/)
+  const latestSummary = doc.querySelector('#summary tbody')?.textContent || ''
+  assert.ok(latestSummary, 'latest query has a rendered summary')
+
+  release()
+  await oldLoad
+  await delay(80)
+  assert.match(doc.querySelector('#record-table tbody')?.textContent || '', /B-only/)
+  assert.equal(doc.querySelector('#summary tbody')?.textContent || '', latestSummary, '舊請求不可改寫最新摘要')
+  assert.doesNotMatch(doc.querySelector('#record-table tbody')?.textContent || '', /A-only/)
+  assert.equal(doc.getElementById('history-load-error'), null, '舊請求的錯誤不可蓋掉最新查詢狀態')
+})
+
 test('比較日資料變更會刷新比較表，清除比較日會清掉舊列', async () => {
   const { storage, win, doc, report } = await mount('#view=history&from=2026-10-13&to=2026-10-13&compareTo=2026-10-12')
   await storage.appendRecord('2026-10-13', { taskId: 't1', capturedAt: '2026-10-13T08:00:00.000Z', slot: '2026-10-13T08:00:00', value: 'primary-value', raw: 'primary-value', status: 'ok' })
