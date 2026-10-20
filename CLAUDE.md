@@ -325,3 +325,9 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **AF-22 多來源任務的來源正規化與驗證只有 `shared/task-source.js`**：舊單值／舊 block 與新 `mode:'multi'` 都由 `normalizeTaskSources` 轉為每值一個 `source + spec`;field key 是序列身分，source locator/frame 是目標身分的一部分，勿在消費端各自猜舊形狀。multi 的正式紀錄按 `taskId#fieldKey` 寫子序列，排程帳本與 health 用父 task id（SPEC §7）。
 - **AF-22 的 `stateActions` 屬於單一 field**：任務層 `preActions` 是共用前置動作草稿；某值旁的「來源狀態動作」複製當下共用動作到該 field，之後只在處理該來源前執行。修改值的來源／規格／狀態動作會使在途結果失效；擴充快照與編輯匯入驗證時要保留此欄位。
 - **單值修復／替換授權只在 `background/main.js`**：一次性 grant 綁定 task、field、tab、frame、document generation 與 repair mode；不可接受頁面任意指定 key。修復保留 field key，替換新建 key 並移除原告警，對應資料變更仍走 storage 的任務更新入口。
+- **修復與替換必須等待持久化 ACK**：Picker 不可在提交後先退出選取模式；明確拒絕要留下原因並保留草稿，結果不確定時以同一 operation id 重試。背景以持久 journal 恢復同一操作，不能產生第二次替換；來源快照包含 task URL／共用 preActions；已套用結果的恢復捷徑也必須核對，不能只因新舊值相同就繞過。修復／替換保留舊歷史；使用者明確確認刪任務仍依 `deleteTasks` 既有契約刪除該任務歷史。
+- **編輯試抓維持 dryRun 邊界**：使用 `runTask(..., { dryRun: true })` 的實際來源定位流程，不寫紀錄、帳本、`lastValues`、health，不停用站台或發告警；編輯任務可直接試抓，不能以隱藏按鈕當成副作用防護。
+- **Report 卡片寫入需鎖內重算並驗證來源**：抽屜、拖入／拖出與 status 的 `options.taskIds` 都以 layout 鎖內最新卡片為基礎，並在同一更新裡檢查任務／序列仍有效；live 任務讀取失敗不能當空集合寫入。復原／重做不可讓背景 prune 掉的來源復活，多卡操作不可用舊快照互相覆蓋。
+- **Report 只載入目前頁面需要的資料**：設定頁初始不得讀歷史（包含 storage stats）；容量統計由使用者操作觸發。storage 變更先使對應範圍快取失效，即使當前在隱藏歷史之外；過期 generation 不得更新新頁面的 loading、錯誤或 DOM。用 browser benchmark 報告效能時保留 seed、樣本數、原始 JSON 與瀏覽器環境，不把 fixture 結果說成使用者環境保證。
+
+- **非同步 UI 步驟要保留擁有者身分**：Undo/Redo 等待期間新增操作或切換頁面，不能以 pop 移走另一個步驟；按原步驟 identity 與 revision 處理。新增或改動共享 API 時，競態測試先驗正常 control，避免參數錯位導致永遠拒絕的假綠。

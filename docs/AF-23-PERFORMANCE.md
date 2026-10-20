@@ -31,7 +31,7 @@ UI harness 為 [`tests/smoke/af23_perf_pick_ui.mjs`](../tests/smoke/af23_perf_pi
 
 1000 列 × 10 欄 fixture、seed 0，在可見且聚焦的真實 Chromium 頁面完成 20 次 hover：p50 29.86 ms、p95 31.57 ms、max 34.21 ms，20/20 正確。環境 fingerprint 記錄瀏覽器、fixture、source 路徑與可見／聚焦狀態，但沒有 source-content hash，不能視為內容指紋。
 
-另有一次獨立診斷：mouse move 12.18 ms、事件 capture 到 bubble 約 0.9 ms，最長觀察到的 renderer RunTask 為 4.84 ms。這是單次診斷，不併入 hover 20 筆分布；目前沒有證據將早先 RAF timeout 歸因於 content renderer 長任務。原始檔名：`work/perf-pick-hover.json`、`work/perf-pick-hover-samples.jsonl`；單次診斷在 `work/repair/work/hover-diagnostic.json` 及 trace 檔。
+另有一次獨立診斷：mouse move 12.18 ms、事件 capture 到 bubble 約 0.9 ms，最長觀察到的 renderer RunTask 為 4.84 ms。這是單次診斷，不併入 hover 20 筆分布；目前沒有證據將早先 RAF timeout 歸因於 content renderer 長任務。判定依據為 `evidence/af23/perf-pick-hover.json`；JSONL 及單次診斷只作本機過程紀錄，不計入 gate。
 
 ## Scheduler 容量矩陣（E1）
 
@@ -46,11 +46,11 @@ UI harness 為 [`tests/smoke/af23_perf_pick_ui.mjs`](../tests/smoke/af23_perf_pi
 
 保留的 85 筆組成為前三場景的 60 筆暖樣本，加上「1 站 × 1 任務 × 100 值」的 5 筆冷與 20 筆暖樣本。原報告另有前三場景舊的 15 筆冷樣本；它們仍留在歷史報告，但最終 100 筆組合以新測且具 source fingerprint 的 15 筆取代，不重複計入。
 
-這 85 筆原始列與舊報告沒有記錄執行當下的 source hash，不能宣稱與新 15 筆或 UI 最終版同 hash。主代理另比對 `cd835c1..QAHEAD`：對這些 scheduler fixture 有關的 backend、storage、content main 與 extract 範圍，差異只有 `shared/extract.js` 的 8 行 canonical-cell 處理；這些 scheduler fixture 使用 scalar spec，不會走該 cell 分支。因此主代理判定舊 85 筆可沿用為本矩陣資料，但 source hash 仍是未知，不能升格為同一 build 的證據。
+這 85 筆原始列與舊報告沒有記錄執行當下的 source hash，不能宣稱與新 15 筆或 UI 最終版同 hash。主代理在體檢前比對 `cd835c1..6ae96cc` 的 background、storage、content main 與 extract：對這些 scheduler fixture 有關的 backend、storage、content main 與 extract 範圍，差異只有 `shared/extract.js` 的 8 行 canonical-cell 處理；這些 scheduler fixture 使用 scalar spec，不會走該 cell 分支。因此主代理判定舊 85 筆可沿用為本矩陣資料，但 source hash 仍是未知，不能升格為同一 build 的證據。
 
 每個 task 的執行 deadline 為 150,000 ms。`RUN_TASK` 沒有精確 enqueue/dequeue 時間戳；分開的單樣本診斷有頁面完成時間與依前一個 response 推估的 per-origin queue wait，不能稱為精確排隊時間。此次沒有修改 scheduler，因此 E3 的跨站並行上限、公平性與新排程設計驗收標示為 **N/A**，不解讀成新設計通過。量測也不支持「新並行策略帶來效能改善」的結論。
 
-E1 scheduler harness：[`tests/smoke/af23_perf_schedule.mjs`](../tests/smoke/af23_perf_schedule.mjs)。原始檔名：`work/perf-schedule-cold-retest.json`、`work/perf-schedule-samples.jsonl`、`work/perf-schedule.json`、`work/perf-schedule-diagnostic.json`。
+E1 scheduler harness：[`tests/smoke/af23_perf_schedule.mjs`](../tests/smoke/af23_perf_schedule.mjs)。判定依據為 `evidence/af23/perf-schedule-cold-retest.json` 與 `evidence/af23/perf-schedule.json`；JSONL 與單次診斷不是額外樣本。
 
 ## 報表 1k / 10k / 100k（E1；E2 未觸發）
 
@@ -62,7 +62,7 @@ E1 scheduler harness：[`tests/smoke/af23_perf_schedule.mjs`](../tests/smoke/af2
 | 10,000 | 80.1 / 84.6 ms | 13.5 / 13.5 ms | 14.6 / 98.0 ms | 110.37 ms | 4 / 3086 | 0 |
 | 100,000 | 372.3 / 384.3 ms | 31.13 / 48.4 ms | 14.5 / 130.6 ms | 487.1 ms | 4 / 9286 | 0 |
 
-10k 暖篩選與切頁結果 p95 都低於 300 ms；所有按鈕回饋 p95 都低於 100 ms。100k 收到新紀錄的 487.1 ms 是非同步結果完成時間，不是按鈕回饋門檻。歷史啟用與完整 report sample 亦記錄在原始報告中；此表不把不同操作的完成時間互相代替。報告原始檔名：`work/perf-report.json`。
+10k 暖篩選與切頁結果 p95 都低於 300 ms；所有按鈕回饋 p95 都低於 100 ms。100k 收到新紀錄的 487.1 ms 是非同步結果完成時間，不是按鈕回饋門檻。歷史啟用與完整 report sample 亦記錄在原始報告中；此表不把不同操作的完成時間互相代替。報告原始檔名：`evidence/af23/perf-report.json`。
 
 此報表沒有證據顯示超出既有設計限制的可歸因瓶頸，因此 E2 不對 report 增加額外優化。E3 只針對 scheduler 變更，與這份報表無關。
 
@@ -74,3 +74,12 @@ E1 scheduler harness：[`tests/smoke/af23_perf_schedule.mjs`](../tests/smoke/af2
 - Queue wait 無精確 API 時戳；150 秒是每個 task 的執行 deadline，不是 queue deadline，也不證明排隊不計入 deadline。
 - E3 沒有調度變更，故 N/A；沒有宣稱新的 scheduler concurrency/fairness 行為通過。
 - 最終採用的六份原始 JSON 收錄於 `docs/evidence/af23/`；JSONL 是相同樣本的過程紀錄，非最終判定依據。Picker feedback gate 可離線重算，不需要重跑瀏覽器。
+
+## 體檢後沿用判定（2026-10-21）
+
+最後體檢修改了來源衝突核對、修復恢復、排程寫入一致性、Undo/Redo、摘要圖表過期回覆及欄位錯誤／窄窗排版。這些修改已另跑功能回歸；沒有將既有量測重新標為最終 build 的實測。
+
+- Picker 容量 fixture 的群組建立／完成／保存路徑未改；C4 修改的是既有任務修復核對分支，field-row CSS 是既有任務欄位列，新的 aria-live 是錯誤分支。沿用原 UI 樣本，不補造最後 source hash。
+- Scheduler 容量腳本走 manual RUN_TASK；F2 新增檢查只在 scheduled dedupe append 分支，沒有改該 manual 量測路徑或 queue policy。journal 清理在初始化，原計時／I/O 重設之後的工作不受該啟動清理影響。
+- Report e81b3dd 的基準已含本輪按頁讀取改善；體檢前 report 功能檔與該量測版本一致。最後新增的是 summary chart 點擊 guard 與 Undo history，非 matrix 的篩選、路由或新紀錄刷新路徑。無必要重跑三個資料量全矩陣。
+- 因上述限定，可沿用為本輪條件判定；不表示多個量測版本具有同一內容 hash。來源缺失的歷史 fingerprint 保持缺失，未以目前檔案補填。
