@@ -222,7 +222,7 @@ test('Picker 立即測試：背景回狀態代碼時顯示白話', async () => {
   c.__setRuntimeResponder(() => ({ ok: false, error: 'interrupted' }))
   pk.render({ locator: LOCATOR, preview: '1', previewValue: 1, url: 'https://a.test/p', tabId: 7 })
   await pk.handleTestNow()
-  assert.equal(doc.getElementById('errors').textContent, '被瀏覽器中斷')
+  assert.equal(doc.getElementById('errors').textContent, '被瀏覽器中斷 請確認目前來源與設定後再試。')
 })
 
 // ---- 設定頁自檢 ----

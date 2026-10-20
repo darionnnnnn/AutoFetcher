@@ -85,12 +85,13 @@ test('B-1 失敗時錯誤只顯示一次', async () => {
   const { c, pk, doc } = await freshPicker()
   pk.render({ tabId: 3, locator: { css: '#v' } })
   fillForm(doc)
-  c.__setRuntimeResponder(() => ({ ok: false, error: '找不到目標所在的框架' }))
+  // 背景回傳穩定錯誤代碼與獨立訊息；Picker 要保留原因並附上可執行的修復方向。
+  c.__setRuntimeResponder(() => ({ ok: false, error: 'frame_not_found', message: '找不到目標所在的框架' }))
   await pk.handleTestNow()
   const body = doc.body.textContent
   const hits = body.split('找不到目標所在的框架').length - 1
   assert.equal(hits, 1, `錯誤訊息只能出現一次，實得 ${hits} 次`)
-  assert.equal(doc.getElementById('errors').textContent, '找不到目標所在的框架')
+  assert.equal(doc.getElementById('errors').textContent, '找不到目標所在的框架 請回來源頁重新選取目標，或補上必要的前置動作後再試。')
   assert.equal(doc.getElementById('preview').textContent, '—')
 })
 
