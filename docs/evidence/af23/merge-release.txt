@@ -1,0 +1,916 @@
+[debug] side panel open result { opened: 'true' }
+[debug] picker target type page chrome-extension://hadbpglpnkmdeepmbepcokognohmdpjk/ui/picker/picker.html
+[debug] initial picker contract {
+  bound: 'true',
+  ctx: {
+    'panel:1087745065': {
+      batch: true,
+      kind: 'new',
+      pickDraft: [Object],
+      pickSessionId: 'picker-1087745065-1792536055310-1r2dc4pu7nx',
+      tabId: 1087745065,
+      url: 'http://127.0.0.1:58638/'
+    }
+  },
+  draft: {
+    protocolVersion: 1,
+    ok: true,
+    draft: {
+      sessionId: 'picker-1087745065-1792536055310-1r2dc4pu7nx',
+      version: 1,
+      revision: 0,
+      tabId: 1087745065,
+      documentGeneration: [Object],
+      routeIdentity: [Object],
+      groups: [],
+      activeGroupKey: null,
+      stage: 'empty',
+      form: {},
+      preActions: [],
+      saveStates: {}
+    },
+    revision: 0
+  }
+}
+[checkpoint] new pick draft opened for target tab
+[checkpoint detail] first group state {
+  groups: 1,
+  editorHidden: false,
+  status: '請輸入名稱，或從頁面取名稱；確認後才會開始選值。',
+  activeGroupKey: 'group-6a3e0a53-aa44-44ad-be03-de160a1d6903',
+  sessionId: 'picker-1087745065-1792536055310-1r2dc4pu7nx',
+  documentGeneration: { pickerLoad: 1792536055310 },
+  routeIdentity: { url: 'http://127.0.0.1:58638/' },
+  stage: 'empty'
+}
+[checkpoint] first group created and manually named
+[checkpoint detail] two-source selection {
+  visiblePickedMarkers: 1,
+  selected: [ { text: '202', tag: 'SPAN', id: 'price-b' } ],
+  state: {
+    groupValues: [ [Object], [Object] ],
+    activeGroupKey: 'group-6a3e0a53-aa44-44ad-be03-de160a1d6903',
+    stage: 'empty',
+    status: '目前選入「Manual First Group」；點頁面值加入這一組。'
+  }
+}
+[checkpoint] first group selected two same-page sources
+[checkpoint] same-page values retain distinct canonical source identities
+[checkpoint] cross-origin frame navigation initiated
+[checkpoint detail] canonical cross-origin values [
+  {
+    "key": "pick-8d7b0f71",
+    "source": {
+      "locator": {
+        "anchor": null,
+        "css": "",
+        "path": "html:nth-of-type(1) > body:nth-of-type(1) > table:nth-of-type(1) > tbody:nth-of-type(1) > tr:nth-of-type(1) > td:nth-of-type(2) > table:nth-of-type(1)",
+        "xpath": "/html[1]/body[1]/table[1]/tbody[1]/tr[1]/td[2]/table[1]"
+      }
+    },
+    "frameUrl": ""
+  },
+  {
+    "key": "pick-c65876e4",
+    "source": {
+      "locator": {
+        "anchor": {
+          "hops": 1,
+          "text": "productFirst price101"
+        },
+        "css": "",
+        "path": "html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1)",
+        "xpath": "/html[1]/body[1]/div[1]"
+      }
+    },
+    "frameUrl": ""
+  },
+  {
+    "key": "pick-7317e7f9",
+    "source": {
+      "frame": {
+        "url": "http://127.0.0.1:58637/frame"
+      },
+      "locator": {
+        "anchor": null,
+        "css": "#frame-price",
+        "path": "html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1)",
+        "xpath": "/html[1]/body[1]/div[1]"
+      }
+    },
+    "frameUrl": "http://127.0.0.1:58637/frame"
+  }
+]
+[checkpoint] cross-origin frame click was acknowledged before Done
+[checkpoint] cross-origin frame selection finished
+[checkpoint] same-origin frame value was acknowledged in the active group
+[checkpoint] nested frame value was acknowledged in the active group
+[checkpoint detail] after second group creation {
+  revision: 10,
+  stage: 'empty',
+  activeGroupKey: 'group-076c1ba0-f464-466e-809f-aa9f32784a67',
+  groups: [
+    {
+      key: 'group-6a3e0a53-aa44-44ad-be03-de160a1d6903',
+      name: 'Manual First Group',
+      values: 5
+    },
+    {
+      key: 'group-076c1ba0-f464-466e-809f-aa9f32784a67',
+      name: '',
+      values: 0
+    }
+  ],
+  status: '請輸入名稱，或從頁面取名稱；確認後才會開始選值。'
+}
+[checkpoint] second group created and named from page text
+[diagnostic] names after confirming group two [
+  {
+    key: 'group-6a3e0a53-aa44-44ad-be03-de160a1d6903',
+    name: 'Manual First Group'
+  },
+  {
+    key: 'group-076c1ba0-f464-466e-809f-aa9f32784a67',
+    name: 'Second Group Picked Name'
+  }
+]
+[diagnostic] names after group two value [
+  {
+    key: 'group-6a3e0a53-aa44-44ad-be03-de160a1d6903',
+    name: 'Manual First Group'
+  },
+  {
+    key: 'group-076c1ba0-f464-466e-809f-aa9f32784a67',
+    name: 'Second Group Picked Name'
+  }
+]
+[checkpoint] second group selected a value
+[diagnostic] names after switching group one [
+  {
+    key: 'group-6a3e0a53-aa44-44ad-be03-de160a1d6903',
+    name: 'Manual First Group'
+  },
+  {
+    key: 'group-076c1ba0-f464-466e-809f-aa9f32784a67',
+    name: 'Second Group Picked Name'
+  }
+]
+[checkpoint] switched back to first group for edit
+[checkpoint] first group edited with another value after switching back
+[checkpoint] group finish opened settings
+[diagnostic] canonical names at settings entry {
+  groups: [
+    {
+      key: 'group-6a3e0a53-aa44-44ad-be03-de160a1d6903',
+      name: 'Manual First Group'
+    },
+    {
+      key: 'group-076c1ba0-f464-466e-809f-aa9f32784a67',
+      name: 'Second Group Picked Name'
+    }
+  ],
+  items: [
+    {
+      key: 'group-6a3e0a53-aa44-44ad-be03-de160a1d6903',
+      nameHint: 'Manual First Group'
+    },
+    {
+      key: 'group-076c1ba0-f464-466e-809f-aa9f32784a67',
+      nameHint: 'Second Group Picked Name'
+    }
+  ],
+  batchNames: {
+    'group-076c1ba0-f464-466e-809f-aa9f32784a67': 'Second Group Picked Name',
+    'group-6a3e0a53-aa44-44ad-be03-de160a1d6903': 'Manual First Group'
+  }
+}
+[checkpoint detail] task-name suggestions from named groups [ 'Manual First Group', 'Second Group Picked Name' ]
+[checkpoint] partial dry run reports independent success and failure
+[checkpoint] full dry run completed (2 results)
+[checkpoint] save and first run persisted both named tasks
+[checkpoint] first-run history exists under taskId#fieldKey
+[diagnostic] edit route/context {
+  "reportCurrentTab": 1087745066,
+  "activeTabs": [
+    {
+      "id": 1087745066,
+      "url": "chrome-extension://hadbpglpnkmdeepmbepcokognohmdpjk/ui/report/report.html#view=tasks&from=2026-10-21&to=2026-10-21&page=1"
+    }
+  ],
+  "panelContexts": {
+    "panel:1087745065": {
+      "batch": true,
+      "batchRun": [
+        {
+          "firstRunResult": {
+            "ok": true,
+            "text": "第一筆：值 1: 101、值 2: 202、值 3: 404、值 4: 606、值 5: 707、值 6: 404"
+          },
+          "firstRunState": "done",
+          "key": "group-6a3e0a53-aa44-44ad-be03-de160a1d6903",
+          "name": "Manual First Group",
+          "taskCheckpoint": {
+            "taskFingerprint": "{\"fields\":[{\"key\":\"pick-8d7b0f71\",\"name\":\"值 1\"},{\"key\":\"pick-c65876e4\",\"name\":\"值 2\"},{\"key\":\"pick-7317e7f9\",\"name\":\"值 3\"},{\"key\":\"pick-d00b5e4a\",\"name\":\"值 4\"},{\"key\":\"pick-0892112e\",\"name\":\"值 5\"},{\"key\":\"pick-b0d7bd9e\",\"name\":\"值 6\"}],\"locator\":{\"anchor\":null,\"css\":\"\",\"path\":\"html:nth-of-type(1) > body:nth-of-type(1) > table:nth-of-type(1) > tbody:nth-of-type(1) > tr:nth-of-type(1) > td:nth-of-type(2) > table:nth-of-type(1)\",\"xpath\":\"/html[1]/body[1]/table[1]/tbody[1]/tr[1]/td[2]/table[1]\"},\"mode\":\"multi\",\"name\":\"Manual First Group\",\"schedule\":{\"times\":[\"09:30\"],\"type\":\"daily\",\"weekdays\":[0,1,2,3,4,5,6]},\"spec\":{\"fields\":[{\"key\":\"pick-8d7b0f71\",\"mode\":\"number\",\"name\":\"值 1\",\"source\":{\"locator\":{\"anchor\":null,\"css\":\"\",\"path\":\"html:nth-of-type(1) > body:nth-of-type(1) > table:nth-of-type(1) > tbody:nth-of-type(1) > tr:nth-of-type(1) > td:nth-of-type(2) > table:nth-of-type(1)\",\"xpath\":\"/html[1]/body[1]/table[1]/tbody[1]/tr[1]/td[2]/table[1]\"}},\"spec\":{\"cell\":{\"col\":{\"header\":\"\",\"index\":1},\"row\":{\"header\":\"First price\",\"index\":0}}}},{\"key\":\"pick-c65876e4\",\"mode\":\"number\",\"name\":\"值 2\",\"source\":{\"locator\":{\"anchor\":{\"hops\":1,\"text\":\"productFirst price101\"},\"css\":\"\",\"path\":\"html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1)\",\"xpath\":\"/html[1]/body[1]/div[1]\"}},\"spec\":{\"cell\":{\"col\":{\"header\":\"\",\"index\":1},\"row\":{\"header\":\"Second price\",\"index\":0}}}},{\"key\":\"pick-7317e7f9\",\"mode\":\"number\",\"name\":\"值 3\",\"source\":{\"frame\":{\"url\":\"http://127.0.0.1:58637/frame\"},\"locator\":{\"anchor\":null,\"css\":\"#frame-price\",\"path\":\"html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1)\",\"xpath\":\"/html[1]/body[1]/div[1]\"}},\"spec\":{\"mode\":\"number\"}},{\"key\":\"pick-d00b5e4a\",\"mode\":\"number\",\"name\":\"值 4\",\"source\":{\"frame\":{\"url\":\"http://127.0.0.1:58638/same-frame\"},\"locator\":{\"anchor\":null,\"css\":\"#same-price\",\"path\":\"html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1)\",\"xpath\":\"/html[1]/body[1]/div[1]\"}},\"spec\":{\"mode\":\"number\"}},{\"key\":\"pick-0892112e\",\"mode\":\"number\",\"name\":\"值 5\",\"source\":{\"frame\":{\"url\":\"http://127.0.0.1:58638/nested-frame\"},\"locator\":{\"anchor\":null,\"css\":\"#nested-price\",\"path\":\"html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1)\",\"xpath\":\"/html[1]/body[1]/div[1]\"}},\"spec\":{\"mode\":\"number\"}},{\"key\":\"pick-b0d7bd9e\",\"mode\":\"number\",\"name\":\"值 6\",\"source\":{\"locator\":{\"anchor\":{\"hops\":1,\"text\":\"303\"},\"css\":\"#price-d\",\"path\":\"html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(2) > strong:nth-of-type(2)\",\"xpath\":\"/html[1]/body[1]/div[2]/strong[2]\"}},\"spec\":{\"mode\":\"number\"}}],\"mode\":\"multi\",\"strategy\":\"auto\"},\"url\":\"http://127.0.0.1:58638/\"}",
+            "taskId": "eb4d0f39-c69b-4699-808e-659ddaf61d55",
+            "taskName": "Manual First Group",
+            "taskUrl": "http://127.0.0.1:58638/"
+          },
+          "taskId": "eb4d0f39-c69b-4699-808e-659ddaf61d55",
+          "taskSaveState": "done"
+        },
+        {
+          "firstRunResult": {
+            "ok": true,
+            "text": "第一筆：值 1: 303"
+          },
+          "firstRunState": "done",
+          "key": "group-076c1ba0-f464-466e-809f-aa9f32784a67",
+          "name": "Second Group Picked Name",
+          "taskCheckpoint": {
+            "taskFingerprint": "{\"fields\":[{\"key\":\"pick-f0640098\",\"name\":\"值 1\"}],\"locator\":{\"anchor\":null,\"css\":\"#price-c\",\"path\":\"html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(2) > strong:nth-of-type(1)\",\"xpath\":\"/html[1]/body[1]/div[2]/strong[1]\"},\"mode\":\"multi\",\"name\":\"Second Group Picked Name\",\"schedule\":{\"times\":[\"09:30\"],\"type\":\"daily\",\"weekdays\":[0,1,2,3,4,5,6]},\"spec\":{\"fields\":[{\"key\":\"pick-f0640098\",\"mode\":\"number\",\"name\":\"值 1\",\"source\":{\"locator\":{\"anchor\":null,\"css\":\"#price-c\",\"path\":\"html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(2) > strong:nth-of-type(1)\",\"xpath\":\"/html[1]/body[1]/div[2]/strong[1]\"}},\"spec\":{\"mode\":\"number\"}}],\"mode\":\"multi\",\"strategy\":\"auto\"},\"url\":\"http://127.0.0.1:58638/\"}",
+            "taskId": "4252a4f0-a22a-4f76-a456-dafdc189eca6",
+            "taskName": "Second Group Picked Name",
+            "taskUrl": "http://127.0.0.1:58638/"
+          },
+          "taskId": "4252a4f0-a22a-4f76-a456-dafdc189eca6",
+          "taskSaveState": "done"
+        }
+      ],
+      "first": {
+        "state": "ok",
+        "text": "第一筆：2 個任務都抓到了（Manual First Group：值 1: 101、值 2: 202、值 3: 404、值 4: 606、值 5: 707、值 6: 404；Second Group Picked Name：值 1: 303）"
+      },
+      "kind": "saved",
+      "pickSessionId": "picker-1087745065-1792536055310-1r2dc4pu7nx",
+      "pin": {
+        "aggregate": "sum",
+        "cardTypes": [
+          "number",
+          "line"
+        ],
+        "dashboardId": "00000000-0000-4000-8000-000000000001",
+        "everyMinutes": 15,
+        "scheduleType": "daily",
+        "times": [
+          "09:30"
+        ],
+        "weekdays": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "windowFrom": "",
+        "windowTo": ""
+      },
+      "pinned": false,
+      "text": "已儲存 2 個任務。下次抓取：09:30"
+    },
+    "panel:1087745066": {
+      "kind": "edit",
+      "taskId": "eb4d0f39-c69b-4699-808e-659ddaf61d55"
+    }
+  }
+}
+[diagnostic] picker after task edit click {
+  "windowId": 1087745051,
+  "resolvedActiveTab": {
+    "ok": true,
+    "tabId": 1087745066
+  },
+  "page": "chrome-extension://hadbpglpnkmdeepmbepcokognohmdpjk/ui/picker/picker.html",
+  "rows": 6,
+  "batchHidden": true,
+  "groupHidden": true,
+  "title": "新增或編輯任務",
+  "panelContexts": {
+    "panel:1087745065": {
+      "batch": true,
+      "batchRun": [
+        {
+          "firstRunResult": {
+            "ok": true,
+            "text": "第一筆：值 1: 101、值 2: 202、值 3: 404、值 4: 606、值 5: 707、值 6: 404"
+          },
+          "firstRunState": "done",
+          "key": "group-6a3e0a53-aa44-44ad-be03-de160a1d6903",
+          "name": "Manual First Group",
+          "taskCheckpoint": {
+            "taskFingerprint": "{\"fields\":[{\"key\":\"pick-8d7b0f71\",\"name\":\"值 1\"},{\"key\":\"pick-c65876e4\",\"name\":\"值 2\"},{\"key\":\"pick-7317e7f9\",\"name\":\"值 3\"},{\"key\":\"pick-d00b5e4a\",\"name\":\"值 4\"},{\"key\":\"pick-0892112e\",\"name\":\"值 5\"},{\"key\":\"pick-b0d7bd9e\",\"name\":\"值 6\"}],\"locator\":{\"anchor\":null,\"css\":\"\",\"path\":\"html:nth-of-type(1) > body:nth-of-type(1) > table:nth-of-type(1) > tbody:nth-of-type(1) > tr:nth-of-type(1) > td:nth-of-type(2) > table:nth-of-type(1)\",\"xpath\":\"/html[1]/body[1]/table[1]/tbody[1]/tr[1]/td[2]/table[1]\"},\"mode\":\"multi\",\"name\":\"Manual First Group\",\"schedule\":{\"times\":[\"09:30\"],\"type\":\"daily\",\"weekdays\":[0,1,2,3,4,5,6]},\"spec\":{\"fields\":[{\"key\":\"pick-8d7b0f71\",\"mode\":\"number\",\"name\":\"值 1\",\"source\":{\"locator\":{\"anchor\":null,\"css\":\"\",\"path\":\"html:nth-of-type(1) > body:nth-of-type(1) > table:nth-of-type(1) > tbody:nth-of-type(1) > tr:nth-of-type(1) > td:nth-of-type(2) > table:nth-of-type(1)\",\"xpath\":\"/html[1]/body[1]/table[1]/tbody[1]/tr[1]/td[2]/table[1]\"}},\"spec\":{\"cell\":{\"col\":{\"header\":\"\",\"index\":1},\"row\":{\"header\":\"First price\",\"index\":0}}}},{\"key\":\"pick-c65876e4\",\"mode\":\"number\",\"name\":\"值 2\",\"source\":{\"locator\":{\"anchor\":{\"hops\":1,\"text\":\"productFirst price101\"},\"css\":\"\",\"path\":\"html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1)\",\"xpath\":\"/html[1]/body[1]/div[1]\"}},\"spec\":{\"cell\":{\"col\":{\"header\":\"\",\"index\":1},\"row\":{\"header\":\"Second price\",\"index\":0}}}},{\"key\":\"pick-7317e7f9\",\"mode\":\"number\",\"name\":\"值 3\",\"source\":{\"frame\":{\"url\":\"http://127.0.0.1:58637/frame\"},\"locator\":{\"anchor\":null,\"css\":\"#frame-price\",\"path\":\"html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1)\",\"xpath\":\"/html[1]/body[1]/div[1]\"}},\"spec\":{\"mode\":\"number\"}},{\"key\":\"pick-d00b5e4a\",\"mode\":\"number\",\"name\":\"值 4\",\"source\":{\"frame\":{\"url\":\"http://127.0.0.1:58638/same-frame\"},\"locator\":{\"anchor\":null,\"css\":\"#same-price\",\"path\":\"html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1)\",\"xpath\":\"/html[1]/body[1]/div[1]\"}},\"spec\":{\"mode\":\"number\"}},{\"key\":\"pick-0892112e\",\"mode\":\"number\",\"name\":\"值 5\",\"source\":{\"frame\":{\"url\":\"http://127.0.0.1:58638/nested-frame\"},\"locator\":{\"anchor\":null,\"css\":\"#nested-price\",\"path\":\"html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1)\",\"xpath\":\"/html[1]/body[1]/div[1]\"}},\"spec\":{\"mode\":\"number\"}},{\"key\":\"pick-b0d7bd9e\",\"mode\":\"number\",\"name\":\"值 6\",\"source\":{\"locator\":{\"anchor\":{\"hops\":1,\"text\":\"303\"},\"css\":\"#price-d\",\"path\":\"html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(2) > strong:nth-of-type(2)\",\"xpath\":\"/html[1]/body[1]/div[2]/strong[2]\"}},\"spec\":{\"mode\":\"number\"}}],\"mode\":\"multi\",\"strategy\":\"auto\"},\"url\":\"http://127.0.0.1:58638/\"}",
+            "taskId": "eb4d0f39-c69b-4699-808e-659ddaf61d55",
+            "taskName": "Manual First Group",
+            "taskUrl": "http://127.0.0.1:58638/"
+          },
+          "taskId": "eb4d0f39-c69b-4699-808e-659ddaf61d55",
+          "taskSaveState": "done"
+        },
+        {
+          "firstRunResult": {
+            "ok": true,
+            "text": "第一筆：值 1: 303"
+          },
+          "firstRunState": "done",
+          "key": "group-076c1ba0-f464-466e-809f-aa9f32784a67",
+          "name": "Second Group Picked Name",
+          "taskCheckpoint": {
+            "taskFingerprint": "{\"fields\":[{\"key\":\"pick-f0640098\",\"name\":\"值 1\"}],\"locator\":{\"anchor\":null,\"css\":\"#price-c\",\"path\":\"html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(2) > strong:nth-of-type(1)\",\"xpath\":\"/html[1]/body[1]/div[2]/strong[1]\"},\"mode\":\"multi\",\"name\":\"Second Group Picked Name\",\"schedule\":{\"times\":[\"09:30\"],\"type\":\"daily\",\"weekdays\":[0,1,2,3,4,5,6]},\"spec\":{\"fields\":[{\"key\":\"pick-f0640098\",\"mode\":\"number\",\"name\":\"值 1\",\"source\":{\"locator\":{\"anchor\":null,\"css\":\"#price-c\",\"path\":\"html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(2) > strong:nth-of-type(1)\",\"xpath\":\"/html[1]/body[1]/div[2]/strong[1]\"}},\"spec\":{\"mode\":\"number\"}}],\"mode\":\"multi\",\"strategy\":\"auto\"},\"url\":\"http://127.0.0.1:58638/\"}",
+            "taskId": "4252a4f0-a22a-4f76-a456-dafdc189eca6",
+            "taskName": "Second Group Picked Name",
+            "taskUrl": "http://127.0.0.1:58638/"
+          },
+          "taskId": "4252a4f0-a22a-4f76-a456-dafdc189eca6",
+          "taskSaveState": "done"
+        }
+      ],
+      "first": {
+        "state": "ok",
+        "text": "第一筆：2 個任務都抓到了（Manual First Group：值 1: 101、值 2: 202、值 3: 404、值 4: 606、值 5: 707、值 6: 404；Second Group Picked Name：值 1: 303）"
+      },
+      "kind": "saved",
+      "pickSessionId": "picker-1087745065-1792536055310-1r2dc4pu7nx",
+      "pin": {
+        "aggregate": "sum",
+        "cardTypes": [
+          "number",
+          "line"
+        ],
+        "dashboardId": "00000000-0000-4000-8000-000000000001",
+        "everyMinutes": 15,
+        "scheduleType": "daily",
+        "times": [
+          "09:30"
+        ],
+        "weekdays": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "windowFrom": "",
+        "windowTo": ""
+      },
+      "pinned": false,
+      "text": "已儲存 2 個任務。下次抓取：09:30"
+    },
+    "panel:1087745066": {
+      "kind": "edit",
+      "taskId": "eb4d0f39-c69b-4699-808e-659ddaf61d55"
+    }
+  }
+}
+[checkpoint] reopened saved multi task for editing
+[pointer-layout-settle] [data-af-done] { x: 317.5390625, y: 532, height: 28, width: 104.8125 }
+[checkpoint] same-metric reselect preserved field key and history
+[pointer-layout-settle] [data-af-done] { x: 438.3828125, y: 532, height: 28, width: 120 }
+[checkpoint] different metric created new key field-bc45d076-7384-45d4-a9b7-240df7c9814f and retained old history
+[debug] rebound picker target page chrome-extension://hadbpglpnkmdeepmbepcokognohmdpjk/ui/picker/picker.html
+[checkpoint] new tab rejects restoration under the prior page identity
+[diagnostic] wrong-session cross-tab restore {
+  response: {
+    protocolVersion: 1,
+    ok: false,
+    error: 'conflict',
+    message: '選取草稿已過期或身分不符：sessionId 不符'
+  },
+  groups: []
+}
+[checkpoint] second round starts empty, with no prior sources/frame/tasks, and rejects wrong-session writes
+[checkpoint] second round selected and canonically persisted its own source
+[checkpoint] tab switch restored the right draft; wrong-tab completion was rejected
+[diagnostic] second-round finish transition {
+  "before": {
+    "draft": {
+      "sessionId": "picker-1087745075-1792536085378-lbhdbvhktz",
+      "tabId": 1087745075,
+      "stage": "empty",
+      "revision": 4,
+      "activeGroupKey": "group-9d390836-f6ac-4daa-8c50-52749d855ab1",
+      "groupCount": 1,
+      "valueCount": 1
+    },
+    "context": {
+      "kind": "new",
+      "tabId": 1087745075,
+      "pickSessionId": "picker-1087745075-1792536085378-lbhdbvhktz",
+      "draftSessionId": "picker-1087745075-1792536085378-lbhdbvhktz"
+    },
+    "activeTab": 1087745075,
+    "sectionHidden": false,
+    "finishHidden": false,
+    "finishDisabled": false
+  },
+  "after": {
+    "draft": {
+      "sessionId": "picker-1087745075-1792536085378-lbhdbvhktz",
+      "tabId": 1087745075,
+      "stage": "settings",
+      "revision": 5,
+      "activeGroupKey": "group-9d390836-f6ac-4daa-8c50-52749d855ab1",
+      "groupCount": 1,
+      "valueCount": 1
+    },
+    "context": {
+      "kind": "batch",
+      "pickSessionId": "picker-1087745075-1792536085378-lbhdbvhktz"
+    },
+    "activeTab": 1087745075,
+    "sectionHidden": true,
+    "batchHidden": false,
+    "finishHidden": false,
+    "finishDisabled": false,
+    "status": "正在同步選取…",
+    "errors": "",
+    "completeTrace": [
+      {
+        "request": {
+          "type": "PICK_DRAFT_COMPLETE",
+          "sessionId": "picker-1087745075-1792536085378-lbhdbvhktz",
+          "tabId": 1087745075,
+          "documentGeneration": {
+            "pickerLoad": 1792536085378
+          },
+          "routeIdentity": {
+            "url": "http://127.0.0.1:58638/second-round"
+          },
+          "expectedRevision": 4
+        },
+        "response": {
+          "protocolVersion": 1,
+          "ok": true,
+          "synchronized": true,
+          "frozen": true,
+          "sessionId": "picker-1087745075-1792536085378-lbhdbvhktz",
+          "tabId": 1087745075,
+          "revision": 4,
+          "ackRevision": 4,
+          "snapshot": {
+            "sessionId": "picker-1087745075-1792536085378-lbhdbvhktz",
+            "version": 1,
+            "revision": 4,
+            "tabId": 1087745075,
+            "documentGeneration": {
+              "pickerLoad": 1792536085378
+            },
+            "routeIdentity": {
+              "url": "http://127.0.0.1:58638/second-round"
+            },
+            "groups": [
+              {
+                "key": "group-9d390836-f6ac-4daa-8c50-52749d855ab1",
+                "name": "Second Round Only",
+                "values": [
+                  {
+                    "key": "pick-f0640098",
+                    "source": {
+                      "locator": {
+                        "anchor": null,
+                        "css": "#price-c",
+                        "path": "html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(2) > strong:nth-of-type(1)",
+                        "xpath": "/html[1]/body[1]/div[2]/strong[1]"
+                      }
+                    },
+                    "spec": {
+                      "mode": "number"
+                    },
+                    "mode": "number",
+                    "preview": "303",
+                    "previewValue": 303,
+                    "locator": {
+                      "anchor": null,
+                      "css": "#price-c",
+                      "path": "html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(2) > strong:nth-of-type(1)",
+                      "xpath": "/html[1]/body[1]/div[2]/strong[1]"
+                    }
+                  }
+                ]
+              }
+            ],
+            "activeGroupKey": "group-9d390836-f6ac-4daa-8c50-52749d855ab1",
+            "stage": "empty",
+            "form": {},
+            "preActions": [],
+            "saveStates": {},
+            "operationId": "content-pick:picker-1087745075-1792536085378-lbhdbvhktz:group-9d390836-f6ac-4daa-8c50-52749d855ab1:e4e7a73a-4049-4537-bdaa-feca2f83750f:0",
+            "appliedOperationIds": [
+              "picker-create-group-1792536085504-fz69e3j2126",
+              "picker-set-active-1792536085506-byi4xcp8qzo",
+              "picker-rename-1792536085656-o4lsh7bznth",
+              "content-pick:picker-1087745075-1792536085378-lbhdbvhktz:group-9d390836-f6ac-4daa-8c50-52749d855ab1:e4e7a73a-4049-4537-bdaa-feca2f83750f:0"
+            ],
+            "updatedAt": 1792536085723
+          },
+          "draft": {
+            "sessionId": "picker-1087745075-1792536085378-lbhdbvhktz",
+            "version": 1,
+            "revision": 5,
+            "tabId": 1087745075,
+            "documentGeneration": {
+              "pickerLoad": 1792536085378
+            },
+            "routeIdentity": {
+              "url": "http://127.0.0.1:58638/second-round"
+            },
+            "groups": [
+              {
+                "key": "group-9d390836-f6ac-4daa-8c50-52749d855ab1",
+                "name": "Second Round Only",
+                "values": [
+                  {
+                    "key": "pick-f0640098",
+                    "source": {
+                      "locator": {
+                        "anchor": null,
+                        "css": "#price-c",
+                        "path": "html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(2) > strong:nth-of-type(1)",
+                        "xpath": "/html[1]/body[1]/div[2]/strong[1]"
+                      }
+                    },
+                    "spec": {
+                      "mode": "number"
+                    },
+                    "mode": "number",
+                    "preview": "303",
+                    "previewValue": 303,
+                    "locator": {
+                      "anchor": null,
+                      "css": "#price-c",
+                      "path": "html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(2) > strong:nth-of-type(1)",
+                      "xpath": "/html[1]/body[1]/div[2]/strong[1]"
+                    }
+                  }
+                ]
+              }
+            ],
+            "activeGroupKey": "group-9d390836-f6ac-4daa-8c50-52749d855ab1",
+            "stage": "settings",
+            "form": {},
+            "preActions": [],
+            "saveStates": {},
+            "operationId": "content-pick:picker-1087745075-1792536085378-lbhdbvhktz:group-9d390836-f6ac-4daa-8c50-52749d855ab1:e4e7a73a-4049-4537-bdaa-feca2f83750f:0",
+            "appliedOperationIds": [
+              "picker-create-group-1792536085504-fz69e3j2126",
+              "picker-set-active-1792536085506-byi4xcp8qzo",
+              "picker-rename-1792536085656-o4lsh7bznth",
+              "content-pick:picker-1087745075-1792536085378-lbhdbvhktz:group-9d390836-f6ac-4daa-8c50-52749d855ab1:e4e7a73a-4049-4537-bdaa-feca2f83750f:0"
+            ],
+            "paused": false,
+            "updatedAt": 1792536085723
+          },
+          "context": {
+            "tabId": 1087745075,
+            "url": "http://127.0.0.1:58638/second-round",
+            "nameHint": "Second Round Only",
+            "locator": {
+              "anchor": null,
+              "css": "#price-c",
+              "path": "html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(2) > strong:nth-of-type(1)",
+              "xpath": "/html[1]/body[1]/div[2]/strong[1]"
+            },
+            "picks": [
+              {
+                "mode": "number"
+              }
+            ],
+            "valueSources": [
+              {
+                "locator": {
+                  "anchor": null,
+                  "css": "#price-c",
+                  "path": "html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(2) > strong:nth-of-type(1)",
+                  "xpath": "/html[1]/body[1]/div[2]/strong[1]"
+                }
+              }
+            ],
+            "fields": [
+              {
+                "key": "pick-f0640098",
+                "name": "值 1",
+                "mode": "number",
+                "source": {
+                  "locator": {
+                    "anchor": null,
+                    "css": "#price-c",
+                    "path": "html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(2) > strong:nth-of-type(1)",
+                    "xpath": "/html[1]/body[1]/div[2]/strong[1]"
+                  }
+                },
+                "spec": {
+                  "mode": "number"
+                }
+              }
+            ]
+          },
+          "panelContext": {
+            "kind": "batch",
+            "batch": true,
+            "items": [
+              {
+                "key": "group-9d390836-f6ac-4daa-8c50-52749d855ab1",
+                "nameHint": "Second Round Only",
+                "tabId": 1087745075,
+                "url": "http://127.0.0.1:58638/second-round",
+                "locator": {
+                  "anchor": null,
+                  "css": "#price-c",
+                  "path": "html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(2) > strong:nth-of-type(1)",
+                  "xpath": "/html[1]/body[1]/div[2]/strong[1]"
+                },
+                "picks": [
+                  {
+                    "mode": "number"
+                  }
+                ],
+                "valueSources": [
+                  {
+                    "locator": {
+                      "anchor": null,
+                      "css": "#price-c",
+                      "path": "html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(2) > strong:nth-of-type(1)",
+                      "xpath": "/html[1]/body[1]/div[2]/strong[1]"
+                    }
+                  }
+                ],
+                "fields": [
+                  {
+                    "key": "pick-f0640098",
+                    "name": "值 1",
+                    "mode": "number",
+                    "source": {
+                      "locator": {
+                        "anchor": null,
+                        "css": "#price-c",
+                        "path": "html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(2) > strong:nth-of-type(1)",
+                        "xpath": "/html[1]/body[1]/div[2]/strong[1]"
+                      }
+                    },
+                    "spec": {
+                      "mode": "number"
+                    }
+                  }
+                ],
+                "taskSaveState": "pending",
+                "firstRunState": "pending",
+                "saveState": "pending"
+              }
+            ],
+            "draft": {
+              "batchNames": {
+                "group-9d390836-f6ac-4daa-8c50-52749d855ab1": "Second Round Only"
+              }
+            },
+            "pickSessionId": "picker-1087745075-1792536085378-lbhdbvhktz",
+            "pickGroupKey": null
+          }
+        }
+      }
+    ]
+  }
+}
+[checkpoint] second round dry run used its own name and value
+[checkpoint] second round saved only its source/key while preserving first-round tasks/history
+{
+  "browser": "<repository>/.browsers/chrome/mac_arm-152.0.7977.82/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+  "tabId": 1087745065,
+  "framePicked": true,
+  "frameCommitted": true,
+  "groups": 1,
+  "partialResults": [
+    "值 1: 101\n值 2: 202\n值 3: 404\n值 4: 606\n值 5: 707\n值 6: 失敗：找不到元素",
+    "值 1: 303"
+  ],
+  "fullResults": [
+    "值 1: 101\n值 2: 202\n值 3: 404\n值 4: 606\n值 5: 707\n值 6: 404",
+    "值 1: 505"
+  ],
+  "savedTasks": [
+    {
+      "id": "upgrade-fixture",
+      "name": "升級保留任務",
+      "mode": "number",
+      "specFields": []
+    },
+    {
+      "id": "post-upgrade-task",
+      "name": "新增任務不得被備份抹除",
+      "mode": "number",
+      "specFields": []
+    },
+    {
+      "id": "schema3-fixture",
+      "name": "schema3 import",
+      "mode": "number",
+      "specFields": []
+    },
+    {
+      "id": "eb4d0f39-c69b-4699-808e-659ddaf61d55",
+      "name": "Manual First Group",
+      "mode": "multi",
+      "fields": [
+        {
+          "key": "pick-8d7b0f71",
+          "name": "值 1"
+        },
+        {
+          "key": "pick-c65876e4",
+          "name": "值 2"
+        },
+        {
+          "key": "pick-7317e7f9",
+          "name": "值 3"
+        },
+        {
+          "key": "pick-d00b5e4a",
+          "name": "值 4"
+        },
+        {
+          "key": "pick-0892112e",
+          "name": "值 5"
+        },
+        {
+          "key": "pick-b0d7bd9e",
+          "name": "值 6"
+        }
+      ],
+      "specFields": [
+        {
+          "key": "pick-8d7b0f71",
+          "mode": "number",
+          "name": "值 1",
+          "source": {
+            "locator": {
+              "anchor": null,
+              "css": "",
+              "path": "html:nth-of-type(1) > body:nth-of-type(1) > table:nth-of-type(1) > tbody:nth-of-type(1) > tr:nth-of-type(1) > td:nth-of-type(2) > table:nth-of-type(1)",
+              "xpath": "/html[1]/body[1]/table[1]/tbody[1]/tr[1]/td[2]/table[1]"
+            }
+          },
+          "spec": {
+            "cell": {
+              "col": {
+                "header": "",
+                "index": 1
+              },
+              "row": {
+                "header": "First price",
+                "index": 0
+              }
+            }
+          }
+        },
+        {
+          "key": "pick-c65876e4",
+          "mode": "number",
+          "name": "值 2",
+          "source": {
+            "locator": {
+              "anchor": {
+                "hops": 1,
+                "text": "productFirst price101"
+              },
+              "css": "",
+              "path": "html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1)",
+              "xpath": "/html[1]/body[1]/div[1]"
+            }
+          },
+          "spec": {
+            "cell": {
+              "col": {
+                "header": "",
+                "index": 1
+              },
+              "row": {
+                "header": "Second price",
+                "index": 0
+              }
+            }
+          }
+        },
+        {
+          "key": "pick-7317e7f9",
+          "mode": "number",
+          "name": "值 3",
+          "source": {
+            "frame": {
+              "url": "http://127.0.0.1:58637/frame"
+            },
+            "locator": {
+              "anchor": null,
+              "css": "#frame-price",
+              "path": "html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1)",
+              "xpath": "/html[1]/body[1]/div[1]"
+            }
+          },
+          "spec": {
+            "mode": "number"
+          }
+        },
+        {
+          "key": "pick-d00b5e4a",
+          "mode": "number",
+          "name": "值 4",
+          "source": {
+            "frame": {
+              "url": "http://127.0.0.1:58638/same-frame"
+            },
+            "locator": {
+              "anchor": null,
+              "css": "#same-price",
+              "path": "html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1)",
+              "xpath": "/html[1]/body[1]/div[1]"
+            }
+          },
+          "spec": {
+            "mode": "number"
+          }
+        },
+        {
+          "key": "pick-0892112e",
+          "mode": "number",
+          "name": "值 5",
+          "source": {
+            "frame": {
+              "url": "http://127.0.0.1:58638/nested-frame"
+            },
+            "locator": {
+              "anchor": null,
+              "css": "#nested-price",
+              "path": "html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1)",
+              "xpath": "/html[1]/body[1]/div[1]"
+            }
+          },
+          "spec": {
+            "mode": "number"
+          }
+        },
+        {
+          "key": "pick-b0d7bd9e",
+          "mode": "number",
+          "name": "值 6",
+          "source": {
+            "locator": {
+              "anchor": {
+                "hops": 1,
+                "text": "303"
+              },
+              "css": "#price-d",
+              "path": "html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(2) > strong:nth-of-type(2)",
+              "xpath": "/html[1]/body[1]/div[2]/strong[2]"
+            }
+          },
+          "spec": {
+            "mode": "number"
+          }
+        }
+      ]
+    },
+    {
+      "id": "4252a4f0-a22a-4f76-a456-dafdc189eca6",
+      "name": "Second Group Picked Name",
+      "mode": "multi",
+      "fields": [
+        {
+          "key": "pick-f0640098",
+          "name": "值 1"
+        }
+      ],
+      "specFields": [
+        {
+          "key": "pick-f0640098",
+          "mode": "number",
+          "name": "值 1",
+          "source": {
+            "locator": {
+              "anchor": null,
+              "css": "#price-c",
+              "path": "html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(2) > strong:nth-of-type(1)",
+              "xpath": "/html[1]/body[1]/div[2]/strong[1]"
+            }
+          },
+          "spec": {
+            "mode": "number"
+          }
+        }
+      ]
+    }
+  ],
+  "repairedFieldKey": "pick-8d7b0f71",
+  "retainedSeriesRecords": 1,
+  "secondRoundSessionId": "picker-1087745075-1792536085378-lbhdbvhktz",
+  "secondRoundTaskId": "716c5381-90ac-4dcf-9e5d-524e38051c9e",
+  "secondRoundDryRun": {
+    "names": [
+      "Second Round Only"
+    ],
+    "results": [
+      "值 1: 303"
+    ]
+  },
+  "status": "G1_SECOND_ROUND_VERIFIED"
+}
+{"test":"AC-F5/F6","base":"75ed288ee99bce93bb70c10f7c7ef577dc587c9d","version":"0.22.0","sameExtensionId":true,"upgradedCreateRepairCore":true,"records":1,"settingsRoundtrip":true,"fileCount":89,"status":"passed"}

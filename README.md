@@ -64,14 +64,14 @@ npm test          # 跑目前測試集(測試數隨版本變動)
 ./run_smoke.sh    # 真實瀏覽器端到端(需 Chrome for Testing)
 ```
 
-可用 `npm run package -- /path/to/new-delivery-directory` 從 `src/` 產生新交付目錄及 SHA-256 清單；已存在目錄會拒絕覆寫。升級前分別匯出設定與歷史，沿用原安裝位置更新並重新載入。完整驗收見 [AF-23 規劃](docs/AF-23-PLAN.md) 與 [驗收索引](docs/AF-23-ACCEPTANCE.md)。
+可用 `npm run package -- /path/to/new-delivery-directory` 從 `src/` 產生新交付目錄及 SHA-256 清單；已存在目錄會拒絕覆寫。升級前分別匯出設定與歷史，沿用原安裝位置更新並重新載入。完整驗收見 [AF-23 規劃](docs/archive/AF-23-PLAN.md) 與 [驗收索引](docs/archive/AF-23-ACCEPTANCE.md)。
 
 ## 升級注意(0.22.0)
 
 - multi 值修復／替換會等待持久化 ACK；回覆不確定時可重送同一操作。修復與替換保留舊歷史，使用者明確確認刪除任務仍會依既有行為連同歷史刪除。
 - 編輯既有任務可直接試抓；試抓不寫正式紀錄、帳本、lastValues、health，也不改變登入停用或告警狀態。Picker 來源若在選取中改變會阻止提交並保留草稿。
 - 報表卡片更新、抽屜套用、拖曳與復原／重做以最新 layout 原子寫入，避免復活已修剪來源。設定頁初始不讀歷史，切頁按需載入；儀表板篩選重用相同日期範圍的資料。
-- 報表 CfT fixture 量測（seed 23012026，1k／10k／100k 筆）正確率均為 100%，設定頁歷史讀取為 0；100k 冷開啟中位數 372.3ms，暖篩選 p95 48.4ms、頁籤切換 p95 130.6ms。這是本機 Chrome for Testing 152.0.7977.82 的結果，不是其他設備的效能保證；原始資料與來源版本限制見 [效能證據](docs/AF-23-PERFORMANCE.md)。
+- 固定場景的效能數據、原始樣本與版本限制集中於 [效能證據](docs/archive/AF-23-PERFORMANCE.md)，不代表所有設備的效能保證。
 
 一般 Chrome 152 起已封鎖命令列載入擴充功能,煙霧測試改用 Chrome for Testing:
 

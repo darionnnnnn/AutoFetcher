@@ -116,6 +116,99 @@ test('AC-F2 source change while append waits for rec2 lock blocks the append and
   t.after(() => resetChromeMock())
 })
 
+test('AC-F2 replay waits for an in-flight ledger commit before deciding to delete its history', async t => {
+  const f = await fresh()
+  const original = task()
+  const slot = '2026-10-18T09:05'
+  await f.storage.saveTask(original)
+  installExtracts(f.chrome)
+  const fingerprint = await f.fetcher.executionFingerprintOf(original)
+  const commitId = `${original.id}@${slot}`
+  await f.storage.updateRunState(state => ({ ...state,
+    [`${original.id}@${slot}`]: { state: 'running', at: Date.now() }
+  }))
+  await f.storage.appendRecords(slot.slice(0, 10), [
+    { taskId: `${original.id}#price`, slot, commitId, executionFingerprint: fingerprint,
+      capturedAt: '2026-10-18T01:00:00.000Z', value: 12, status: 'ok' },
+    { taskId: `${original.id}#label`, slot, commitId, executionFingerprint: fingerprint,
+      capturedAt: '2026-10-18T01:00:00.000Z', value: 'Price', status: 'ok' }
+  ])
+
+  // Pause the ledger's durable write only after setRunStatusForExecution has
+  // checked the old task fingerprint and acquired the runs:<date> lock.
+  const realSet = f.chrome.storage.local.set.bind(f.chrome.storage.local)
+  const realGet = f.chrome.storage.local.get.bind(f.chrome.storage.local)
+  let releaseLedgerWrite
+  let ledgerWriteReached
+  const ledgerHeld = new Promise(resolve => { releaseLedgerWrite = resolve })
+  const ledgerReady = new Promise(resolve => { ledgerWriteReached = resolve })
+  let held = false
+  let sourceMarker
+  let taskChangedObserved = false
+  let replayReadLedger
+  const replayRead = new Promise(resolve => { replayReadLedger = resolve })
+  let replayClearingState
+  const replayStateCleared = new Promise(resolve => { replayClearingState = resolve })
+  f.chrome.storage.local.set = async items => {
+    const key = Object.keys(items)[0]
+    if (key === 'executionInvalidations' && !sourceMarker && items[key]?.length > 0) {
+      sourceMarker = structuredClone(items[key][0])
+    }
+    if (!held && key === `runs:${slot.slice(0, 10)}`) {
+      held = true
+      ledgerWriteReached()
+      await ledgerHeld
+    }
+    return realSet(items)
+  }
+  f.chrome.storage.local.get = async keys => {
+    const result = await realGet(keys)
+    if (keys === 'tasks' && result?.tasks?.some(item =>
+      item?.id === original.id && item?.spec?.fields?.[0]?.source?.locator?.css === '#new-price')) {
+      taskChangedObserved = true
+    }
+    if (taskChangedObserved && keys === `runs:${slot.slice(0, 10)}`) replayReadLedger()
+    if (taskChangedObserved && keys === 'health') replayClearingState()
+    return result
+  }
+
+  const ledgerWrite = f.storage.setRunStatusForExecution(original.id, slot, 'ok', fingerprint)
+  await ledgerReady
+  const changed = structuredClone(original)
+  changed.spec.fields[0].source.locator.css = '#new-price'
+  const mutation = f.storage.saveTask(changed)
+  await waitForTask(f.chrome, current => current?.spec?.fields?.[0]?.source?.locator?.css === '#new-price')
+  assert.ok(sourceMarker, 'source change wrote its replay marker')
+  assert.deepEqual(sourceMarker.changes[0].pendingCommits,
+    [{ slot, commitId }], 'marker records the running slot whose ledger is being committed')
+
+  await replayStateCleared
+  const interleave = await Promise.race([
+    replayRead.then(() => 'replay-read-ledger'),
+    new Promise(resolve => setImmediate(() => resolve('still-waiting-for-ledger-lock')))
+  ])
+
+  releaseLedgerWrite()
+  let ledgerAccepted
+  try {
+    ledgerAccepted = await ledgerWrite
+    await mutation
+  } finally {
+    f.chrome.storage.local.set = realSet
+    f.chrome.storage.local.get = realGet
+    releaseLedgerWrite()
+  }
+  assert.equal(interleave, 'still-waiting-for-ledger-lock',
+    'replay cannot decide to delete history until the earlier ledger writer releases runs lock')
+  assert.equal(ledgerAccepted, true, 'the run whose old-source check preceded mutation completes its ledger write')
+  assert.equal(await f.storage.getRunStatus(original.id, slot), 'ok')
+  const remaining = (await f.storage.getRecordsByDate(slot.slice(0, 10))).filter(record => record.slot === slot)
+  assert.equal(remaining.length, 2, 'replay sees the completed ledger under its key lock and preserves every field history')
+  assert.deepEqual((await f.chrome.storage.local.get('executionInvalidations')).executionInvalidations, [],
+    'marker is removed after the guarded replay completes')
+  t.after(() => resetChromeMock())
+})
+
 test('AC-F2 source change after rec2 check but before set is replay-cleaned; cleanup can resume twice', async t => {
   const f = await fresh()
   const original = task()

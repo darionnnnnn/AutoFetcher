@@ -385,10 +385,18 @@ async function clearInvalidatedExecutionRecords(changes) {
     if (typeof change?.taskId !== 'string' || typeof change?.executionFingerprint !== 'string') continue
     for (const commit of Array.isArray(change.pendingCommits) ? change.pendingCommits : []) {
       if (typeof commit?.slot !== 'string' || typeof commit?.commitId !== 'string') continue
-      // A run may finish between marker creation and the task mutation. Its
-      // completed ledger is authoritative and its history must remain intact.
-      if (await getRunStatus(change.taskId, commit.slot)) continue
       const date = commit.slot.slice(0, 10)
+      // Serialize the ledger decision with setRunStatusForExecution. A writer
+      // that already checked the old task must finish before this barrier reads
+      // its status; a later writer will check the now-changed task and reject.
+      // Release this key before touching rec2 below; storage locks are not nested.
+      let completed = false
+      await mutateKey(runsKey(date), current => {
+        completed = Boolean(asObject(asObject(current)[change.taskId])[commit.slot])
+        return undefined
+      })
+      // A completed ledger is authoritative and its history must remain intact.
+      if (completed) continue
       for (const key of dayRecordKeys(date).filter(isRecordKey)) {
         await mutateKey(key, current => {
           const rows = asArray(current)

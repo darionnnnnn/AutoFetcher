@@ -1,6 +1,6 @@
 # AF-23 效能證據
 
-本文件記錄 AF-23 E1 量測與 E2 條件優化的可核對結果。所有時間來自本機 Chrome for Testing 真實瀏覽器與隔離的本機 fixture；不是 jsdom 時間。E1 UI 與 scheduler 使用 Chrome for Testing 152.0.7977.82、macOS arm64。量測腳本、原始 JSON/JSONL 產物及檔名列於各節；本輪採用的原始 JSON 已去除本機路徑並收錄於 [`evidence/af23/`](evidence/af23/)。
+本文件記錄 AF-23 E1 量測與 E2 條件優化的可核對結果。所有時間來自本機 Chrome for Testing 真實瀏覽器與隔離的本機 fixture；不是 jsdom 時間。E1 UI 與 scheduler 使用 Chrome for Testing 152.0.7977.82、macOS arm64。量測腳本、原始 JSON/JSONL 產物及檔名列於各節；本輪採用的原始 JSON 已去除本機路徑並收錄於 [`evidence/af23/`](../evidence/af23/)。
 
 E1 的門檻依 AF-23 PLAN：picker 本地按鈕回饋 p95 ≤ 100 ms；10,000 筆報表暖篩選與切頁結果 p95 ≤ 300 ms。E2 要求瓶頸指標改善至少 20%，未涉入操作退化不得超過 `max(基線 p95 × 20%, 30 ms)`。以下同時分開呈現「首個可見回饋」與「操作完成結果」，避免把快回饋誤報成整段工作完成。
 
@@ -25,7 +25,7 @@ E1 的門檻依 AF-23 PLAN：picker 本地按鈕回饋 p95 ≤ 100 ms；10,000 �
 
 E2 的最小變更是讓完成動作在提取尚未完成時立即顯示明確 busy 狀態。完整完成時間沒有同幅度縮短：20 組 / 100 值的完成結果 p95 仍為 482.1 ms。未涉入操作符合回退限制：群組切換最大退化為 1.2 ms；儲存最大退化為 0.7 ms（其餘兩組分別為 +0.4 ms、+0.1 ms）。各值均不超過對應的 `max(基線 p95 × 20%, 30 ms)`；20 組的切換改善 18.1 ms。I/O 與 listener 計數記錄在原始樣本中，正確性均通過。
 
-UI harness 為 [`tests/smoke/af23_perf_pick_ui.mjs`](../tests/smoke/af23_perf_pick_ui.mjs)。純離線回饋門檻檢查器為 [`tests/smoke/af23_perf_ui_feedback_gate.mjs`](../tests/smoke/af23_perf_ui_feedback_gate.mjs)，命令為 `node tests/smoke/af23_perf_ui_feedback_gate.mjs docs/evidence/af23/perf-pick-ui-final.json`。它讀取既有報告，不開瀏覽器、不重跑 60 個樣本；本輪執行結果為三種草稿都 PASS，回饋 p95 分別為 16.6、16.4、28.2 ms，且每個樣本都具備可見 busy 或完成狀態。原始報告檔名：`docs/evidence/af23/perf-pick-ui-final.json`；基線：`docs/evidence/af23/perf-pick-ui-baseline-qa-old.json`。
+UI harness 為 [`tests/smoke/af23_perf_pick_ui.mjs`](../../tests/smoke/af23_perf_pick_ui.mjs)。純離線回饋門檻檢查器為 [`tests/smoke/af23_perf_ui_feedback_gate.mjs`](../../tests/smoke/af23_perf_ui_feedback_gate.mjs)，命令為 `node tests/smoke/af23_perf_ui_feedback_gate.mjs docs/evidence/af23/perf-pick-ui-final.json`。它讀取既有報告，不開瀏覽器、不重跑 60 個樣本；本輪執行結果為三種草稿都 PASS，回饋 p95 分別為 16.6、16.4、28.2 ms，且每個樣本都具備可見 busy 或完成狀態。原始報告檔名：`docs/evidence/af23/perf-pick-ui-final.json`；基線：`docs/evidence/af23/perf-pick-ui-baseline-qa-old.json`。
 
 ## Picker hover（E1）
 
@@ -50,7 +50,7 @@ UI harness 為 [`tests/smoke/af23_perf_pick_ui.mjs`](../tests/smoke/af23_perf_pi
 
 每個 task 的執行 deadline 為 150,000 ms。`RUN_TASK` 沒有精確 enqueue/dequeue 時間戳；分開的單樣本診斷有頁面完成時間與依前一個 response 推估的 per-origin queue wait，不能稱為精確排隊時間。此次沒有修改 scheduler，因此 E3 的跨站並行上限、公平性與新排程設計驗收標示為 **N/A**，不解讀成新設計通過。量測也不支持「新並行策略帶來效能改善」的結論。
 
-E1 scheduler harness：[`tests/smoke/af23_perf_schedule.mjs`](../tests/smoke/af23_perf_schedule.mjs)。判定依據為 `evidence/af23/perf-schedule-cold-retest.json` 與 `evidence/af23/perf-schedule.json`；JSONL 與單次診斷不是額外樣本。
+E1 scheduler harness：[`tests/smoke/af23_perf_schedule.mjs`](../../tests/smoke/af23_perf_schedule.mjs)。判定依據為 `evidence/af23/perf-schedule-cold-retest.json` 與 `evidence/af23/perf-schedule.json`；JSONL 與單次診斷不是額外樣本。
 
 ## 報表 1k / 10k / 100k（E1；E2 未觸發）
 
@@ -83,3 +83,5 @@ E1 scheduler harness：[`tests/smoke/af23_perf_schedule.mjs`](../tests/smoke/af2
 - Scheduler 容量腳本走 manual RUN_TASK；F2 新增檢查只在 scheduled dedupe append 分支，沒有改該 manual 量測路徑或 queue policy。journal 清理在初始化，原計時／I/O 重設之後的工作不受該啟動清理影響。
 - Report e81b3dd 的基準已含本輪按頁讀取改善；體檢前 report 功能檔與該量測版本一致。最後新增的是 summary chart 點擊 guard 與 Undo history，非 matrix 的篩選、路由或新紀錄刷新路徑。無必要重跑三個資料量全矩陣。
 - 因上述限定，可沿用為本輪條件判定；不表示多個量測版本具有同一內容 hash。來源缺失的歷史 fingerprint 保持缺失，未以目前檔案補填。
+
+合併前新增的runs只讀屏障僅處理來源變更後的未完成排程清理，不改Picker容量、manual RUN_TASK或Report效能fixture路徑；以F2受控競態與T06功能驗收補驗，不重跑效能矩陣。

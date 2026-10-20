@@ -121,6 +121,16 @@ test('F1b 兩組多來源完成 snapshot 進 batch，實際保存兩個 multi ta
   const restoredName = dom.window.document.querySelectorAll('#batch-list [data-batch-name]')[1]
   restoredName.value = '名稱組'
   restoredName.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+  // 必須讓這份文件自己的 300ms 草稿寫完，再模擬 reload 換掉 global document。
+  // 否則舊 Picker timer 會在下一案例用新 document 呼叫 snapshotForm()，把新分頁 ctx 寫壞。
+  const draftDeadline = Date.now() + 3000
+  let persistedPanel = await storage.getPanelCtx(tab.id)
+  while (!(persistedPanel?.draft?.weekdays?.length === 7 && persistedPanel?.draft?.batchNames?.g2 === '名稱組') && Date.now() < draftDeadline) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+    persistedPanel = await storage.getPanelCtx(tab.id)
+  }
+  assert.equal(persistedPanel?.draft?.weekdays?.length, 7, 'the current document schedule is persisted before swapping global DOM')
+  assert.equal(persistedPanel?.draft?.batchNames?.g2, '名稱組', 'the restored group name is persisted before swapping global DOM')
 
   // 模擬面板 reload：協定草稿保留 revision，但畫面應恢復 batch settings，
   // 且不可重新建立一份選值草稿。
@@ -164,7 +174,11 @@ test('F1b 兩組多來源完成 snapshot 進 batch，實際保存兩個 multi ta
   globalThis.Event = savedReloadDom.window.Event
   const savedBeforeBegin = chromeMock.__calls.filter(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICK_DRAFT_BEGIN').length
   await import('../src/ui/picker/picker.js?f1b-saved-reload=' + Math.random())
-  await new Promise(resolve => setTimeout(resolve, 100))
+  const savedReadyDeadline = Date.now() + 3000
+  while (savedReloadDom.window.document.body.dataset.afPickerReady !== 'true' && Date.now() < savedReadyDeadline) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  assert.equal(savedReloadDom.window.document.body.dataset.afPickerReady, 'true', 'saved reload boot finishes before the next test replaces global DOM')
   assert.equal(savedReloadDom.window.document.querySelector('#group-draft-section').hidden, true)
   assert.equal(savedReloadDom.window.document.querySelector('#saved-feedback').hidden, false)
   assert.equal(chromeMock.__calls.filter(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICK_DRAFT_BEGIN').length, savedBeforeBegin)
@@ -174,6 +188,9 @@ test('F1b 兩組多來源完成 snapshot 進 batch，實際保存兩個 multi ta
     { key: 'g1', task: 'done', first: 'done', taskId: tasks[0].id },
     { key: 'g2', task: 'done', first: 'done', taskId: tasks[1].id }
   ])
+  reloadDom.window.dispatchEvent(new reloadDom.window.Event('pagehide'))
+  savedReloadDom.window.dispatchEvent(new savedReloadDom.window.Event('pagehide'))
+  dom.window.dispatchEvent(new dom.window.Event('pagehide'))
 })
 
 test('F1b 完成屏障拒絕含空組的 snapshot，不進設定或批次儲存', async () => {
@@ -239,6 +256,7 @@ test('F1b taskId checkpoint 訊息失敗時 handleBatchSave 可見中止且不�
   const picker = await import('../src/ui/picker/picker.js?f1b-checkpoint-picker=' + Math.random())
   picker.setPickDraftContext(completed.draft, { render: false })
   await picker.renderFromPanelCtx(await storage.getPanelCtx(tab.id))
+  assert.deepEqual([...dom.window.document.querySelectorAll('#weekdays input[type="checkbox"]:checked')].map(input => input.value).sort(), ['0', '1', '2', '3', '4', '5', '6'], 'batch panel applies the built-in schedule before the checkpoint scenario')
   await picker.handleSave()
 
   assert.equal((await storage.getTasks()).length, 0)
@@ -297,4 +315,5 @@ test('F1b 第2組保存 checkpoint 中斷時第1組仍首抓一次，重試不�
   assert.equal(tasks[0].name, '第一組')
   assert.equal(runTaskCalls, 1)
   assert.equal(chromeMock.__calls.filter(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'REBUILD_ALARMS').length, 1)
+  dom.window.dispatchEvent(new dom.window.Event('pagehide'))
 })

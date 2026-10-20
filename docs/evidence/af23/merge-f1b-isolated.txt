@@ -1,0 +1,30 @@
+TAP version 13
+# Subtest: F1b 兩組多來源完成 snapshot 進 batch，實際保存兩個 multi task 並各自首抓
+ok 1 - F1b 兩組多來源完成 snapshot 進 batch，實際保存兩個 multi task 並各自首抓
+  ---
+  duration_ms: 558.201542
+  ...
+# Subtest: F1b 完成屏障拒絕含空組的 snapshot，不進設定或批次儲存
+ok 2 - F1b 完成屏障拒絕含空組的 snapshot，不進設定或批次儲存
+  ---
+  duration_ms: 3.737041
+  ...
+# Subtest: F1b taskId checkpoint 訊息失敗時 handleBatchSave 可見中止且不寫 task
+ok 3 - F1b taskId checkpoint 訊息失敗時 handleBatchSave 可見中止且不寫 task
+  ---
+  duration_ms: 37.984625
+  ...
+# Subtest: F1b 第2組保存 checkpoint 中斷時第1組仍首抓一次，重試不重建第1組
+ok 4 - F1b 第2組保存 checkpoint 中斷時第1組仍首抓一次，重試不重建第1組
+  ---
+  duration_ms: 54.26625
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4691.646791
