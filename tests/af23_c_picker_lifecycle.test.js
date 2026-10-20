@@ -80,3 +80,83 @@ test('AC-C1:未儲存的欄位 stateActions 從實際 picker 表單進 TEST_TASK
   assert.deepEqual((await f.storage.getTask(task.id)).spec.fields[0].stateActions, undefined,
     'preview executes the edit without saving it')
 })
+
+test('AC-C6:partial 綁定正確失敗欄位，實際 pending operation 可用同一 session 核對恢復', async t => {
+  const f = await mountPicker(t)
+  const task = previewTask('partial-repair-reconcile', 2)
+  await f.storage.saveTask(task)
+  f.picker.render({ task, url: task.url })
+  const extracted = []
+  f.chrome.__setScriptResponder(() => [{ frameId: 0, result: task.url }])
+  f.chrome.__setTabResponder((_tabId, message) => {
+    if (message.type === 'EXTRACT') {
+      extracted.push(structuredClone(message))
+      return message.locator?.css === '#value-1'
+        ? { ok: true, value: 42, raw: '42', status: 'ok', strategyUsed: 'auto', layer: 'css' }
+        : { ok: false, error: 'not_found', message: '第二值找不到' }
+    }
+    return { ok: true }
+  })
+  const sender = { url: 'chrome-extension://af23-picker-test/ui/picker/picker.html' }
+  f.chrome.__setRuntimeResponder(message => f.background.handleMessage(message, sender, FAST))
+  await f.picker.handleTestNow()
+
+  const rows = [...f.doc.querySelectorAll('#field-list [data-field-row]')]
+  assert.equal(rows[0].dataset.fieldKey, 'field-1')
+  assert.equal(rows[0].querySelector('[data-field-result]').textContent, '42')
+  assert.equal(rows[1].dataset.fieldKey, 'field-2')
+  assert.equal(rows[1].querySelector('[data-field-result]').textContent, '—')
+  assert.match(rows[1].querySelector('[data-field-result]').title, /第二值找不到/)
+  assert.match(f.doc.getElementById('preview').textContent, /成功 1 個、失敗 1 個/)
+  assert.deepEqual(extracted.map(message => message.locator.css), ['#value-1', '#value-2'])
+
+  rows[1].querySelector('[data-field-repair]').click()
+  await sleep(10)
+  const enterCall = f.chrome.__calls.filter(call => call.api === 'tabs.sendMessage')
+    .map(call => call.args).reverse().find(([, message]) => message?.type === 'ENTER_PICK')
+  assert.ok(enterCall, '失敗值的修復入口實際打開來源選取')
+  const [repairTabId, enter] = enterCall
+  assert.equal(enter.repairFieldKey, 'field-2', '修復入口精確指向失敗的 field key')
+
+  const realSet = f.chrome.storage.local.set.bind(f.chrome.storage.local)
+  let rejectNextTaskWrite = true
+  f.chrome.storage.local.set = async items => {
+    if (rejectNextTaskWrite && Object.hasOwn(items, 'tasks')) {
+      rejectNextTaskWrite = false
+      throw new Error('injected uncertain repair commit')
+    }
+    return realSet(items)
+  }
+  const picked = await f.background.handleMessage({
+    type: 'PICKED', purpose: 'repick', taskId: task.id,
+    repairSessionId: enter.repairSessionId, repairFieldKey: 'field-2', repairMode: 'repair',
+    documentGeneration: enter.documentGeneration,
+    locator: locator('#repaired-value-2'), picks: [{ mode: 'number', locator: locator('#repaired-value-2') }],
+    pickModes: ['number']
+  }, { tab: { id: repairTabId }, frameId: 0, url: task.url })
+  f.chrome.storage.local.set = realSet
+  assert.equal(picked.error, 'field_repair_pending', '寫入不確定時背景保留可對帳的 operation receipt')
+  const row = rows[1]
+  const pickerMessageListener = [...f.chrome.runtime.onMessage._listeners].at(-1)
+  pickerMessageListener({
+    type: 'FIELD_REPAIR_PENDING', state: 'pending', operationId: enter.repairSessionId,
+    sessionId: enter.repairSessionId, taskId: task.id, fieldKey: 'field-2', repairMode: 'repair',
+    message: '結果尚未確認，請核對同一操作。'
+  })
+  f.chrome.__emitTabRemoved(repairTabId)
+  assert.equal(row._source.locator.css, '#value-2', 'pending receipt 不先套用未核對來源')
+  assert.equal(row.querySelector('[data-field-repair]').disabled, true)
+
+  const createsBeforeReconcile = f.chrome.__calls.filter(call => call.api === 'tabs.create').length
+  row.querySelector('[data-action="resume-field-repair"]').click()
+  await sleep(20)
+  assert.equal(f.chrome.__calls.filter(call => call.api === 'tabs.create').length, createsBeforeReconcile,
+    '再次確認讀取原 journal，不另開 tab 或建立新 session')
+  const operation = await f.storage.getFieldRepairOperation(enter.repairSessionId)
+  assert.equal(operation.status, 'complete')
+  assert.equal(operation.result.ok, true)
+  assert.equal((await f.storage.getTask(task.id)).spec.fields.find(field => field.key === 'field-2').source.locator.css,
+    '#repaired-value-2')
+  assert.equal(row._source.locator.css, '#repaired-value-2', 'same-operation 回應核對後才更新正確欄位')
+  assert.match(row.textContent, /來源已立即儲存/)
+})
