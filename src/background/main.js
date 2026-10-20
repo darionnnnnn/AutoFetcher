@@ -332,22 +332,55 @@ async function runFieldRepairForMessage(operation) {
   }
 }
 
-export async function recoverFieldRepairOperations() {
-  const pending = await listPendingFieldRepairOperations()
-  for (const operation of pending) {
-    try { await runFieldRepairOperation(operation) } catch (error) {
-      diag.error('field_repair_recovery_failed', { taskId: operation.taskId, repairMode: operation.repairMode, message: error?.message })
+let fieldRepairRecoveryPromise = null
+export function recoverFieldRepairOperations() {
+  if (fieldRepairRecoveryPromise) return fieldRepairRecoveryPromise
+  fieldRepairRecoveryPromise = (async () => {
+    const pending = await listPendingFieldRepairOperations()
+    for (const operation of pending) {
+      try { await runFieldRepairOperation(operation) } catch (error) {
+        diag.error('field_repair_recovery_failed', { taskId: operation.taskId, repairMode: operation.repairMode, message: error?.message })
+      }
     }
-  }
-  return pending.length
+    return pending.length
+  })().finally(() => { fieldRepairRecoveryPromise = null })
+  return fieldRepairRecoveryPromise
 }
 
 async function applyFieldRepair(msg, sender) {
+  const sessionId = typeof msg?.repairSessionId === 'string' ? msg.repairSessionId : ''
+  const grant = fieldRepairSessions.get(sessionId)
+  const isSubmission = grant && msg?.cancelled !== true &&
+    grant.taskId === msg.taskId && grant.fieldKey === msg.repairFieldKey && grant.repairMode === msg.repairMode &&
+    grant.tabId === sender?.tab?.id && grant.frameId === (sender?.frameId ?? 0) &&
+    grant.documentGeneration === msg.documentGeneration && sameOriginPath(sender?.url, grant.frameUrl) &&
+    Array.isArray(msg.picks) && msg.picks.length === 1
+  if (!isSubmission) return await applyFieldRepairNow(msg, sender)
+  if (grant.submissionState === 'committing' || grant.submissionState === 'persisted') {
+    return { ok: false, error: 'field_repair_submitting', message: '重選結果正在儲存，請等候確認' }
+  }
+  // Reserve synchronously before applyFieldRepairNow reaches its first await;
+  // cancellation arriving during task reads or receipt persistence cannot lie
+  // that the operation was cancelled while it is still able to commit.
+  grant.submissionState = 'committing'
+  try {
+    return await applyFieldRepairNow(msg, sender)
+  } finally {
+    if (fieldRepairSessions.get(sessionId) === grant && grant.submissionState === 'committing') {
+      grant.submissionState = 'active'
+    }
+  }
+}
+
+async function applyFieldRepairNow(msg, sender) {
   const sessionId = typeof msg.repairSessionId === 'string' ? msg.repairSessionId : ''
   const grant = fieldRepairSessions.get(sessionId)
   const tabId = sender?.tab?.id
   const frameId = sender?.frameId ?? 0
   if (msg.cancelled === true && grant && operationMatchesSender({ ...grant, auth: grant }, msg, sender)) {
+    if (grant.submissionState === 'committing' || grant.submissionState === 'persisted') {
+      return { ok: false, error: 'field_repair_submitting', message: '重選結果正在儲存，尚不能確認取消；請等候結果' }
+    }
     fieldRepairSessions.delete(sessionId)
     try { await chrome.tabs.remove(grant.tabId) } catch {}
     return { ok: true, cancelled: true }
@@ -2429,3 +2462,6 @@ chrome.tabs?.onRemoved?.addListener?.((tabId) => { closePanelFor(tabId, { keepMa
 // storage 是空的時候兩者都只讀不寫
 cleanOrphanFetchTabs().catch((err) => diag.log('startup_error', `cleanOrphanFetchTabs：${String(err?.message || err)}`).catch(() => {}))
 recoverRunState().catch((err) => diag.log('startup_error', `recoverRunState：${String(err?.message || err)}`).catch(() => {}))
+export const fieldRepairWorkerRecovery = initStorage()
+  .then(() => recoverFieldRepairOperations())
+  .catch(err => diag.log('startup_error', `recoverFieldRepairOperations：${String(err?.message || err)}`).catch(() => {}))

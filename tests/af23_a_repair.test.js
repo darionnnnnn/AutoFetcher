@@ -246,7 +246,7 @@ test('AC-A3 task 寫入前中斷可由已記錄操作恢復；重送不會建立
   assert.equal((await f.storage.getFieldRepairOperation(operationId)).status, 'prepared')
 
   const restarted = await import('../src/background/main.js?af23-worker=' + Math.random())
-  assert.equal(await restarted.recoverFieldRepairOperations(), 1)
+  await restarted.fieldRepairWorkerRecovery
   const recovered = await f.storage.getTask('af23-repair')
   const activeFields = recovered.fields.filter(field => field.key !== 'f2')
   assert.equal(activeFields.length, 1)
@@ -257,6 +257,55 @@ test('AC-A3 task 寫入前中斷可由已記錄操作恢復；重送不會建立
   const replay = await picked(f, grant)
   assert.equal(replay.ok, true)
   assert.equal(replay.newFieldKey, recoveredKey)
+  assert.equal((await f.storage.getTask('af23-repair')).fields.filter(field => field.key !== 'f2').length, 1)
+})
+
+test('AC-A4 worker entry recovers pending operation on ordinary worker reload', async t => {
+  const f = await setup(t)
+  const grant = await begin(f, 'replace')
+  const realSet = f.chrome.storage.local.set.bind(f.chrome.storage.local)
+  let failTaskWrite = true
+  f.chrome.storage.local.set = async items => {
+    if (failTaskWrite && Object.hasOwn(items, 'tasks')) { failTaskWrite = false; throw new Error('task write interrupted') }
+    return realSet(items)
+  }
+  const pending = await picked(f, grant)
+  assert.equal(pending.error, 'field_repair_pending')
+  f.chrome.storage.local.set = realSet
+  const reloaded = await import('../src/background/main.js?af23-ordinary-worker=' + Math.random())
+  await reloaded.fieldRepairWorkerRecovery
+  const task = await f.storage.getTask('af23-repair')
+  assert.equal(task.fields.filter(field => field.key !== 'f2').length, 1)
+  assert.equal((await f.storage.getFieldRepairOperation(grant.enter.repairSessionId)).status, 'complete')
+})
+
+test('AC-A4 cancel cannot report success while submitted repair is waiting on storage', async t => {
+  const f = await setup(t)
+  const grant = await begin(f, 'replace')
+  const realGet = f.chrome.storage.local.get.bind(f.chrome.storage.local)
+  let releaseRead
+  let readStarted
+  const started = new Promise(resolve => { readStarted = resolve })
+  const blocked = new Promise(resolve => { releaseRead = resolve })
+  f.chrome.storage.local.get = async keys => {
+    if (keys === 'tasks') {
+      readStarted()
+      await blocked
+    }
+    return realGet(keys)
+  }
+  const submission = picked(f, grant)
+  await started
+  const cancel = await f.bg.handleMessage({
+    type: f.messages.MSG.PICKED, purpose: 'repick', taskId: 'af23-repair', cancelled: true,
+    repairSessionId: grant.enter.repairSessionId, repairFieldKey: 'f1', repairMode: 'replace',
+    documentGeneration: grant.enter.documentGeneration
+  }, grant.sender)
+  assert.equal(cancel.ok, false)
+  assert.equal(cancel.error, 'field_repair_submitting')
+  releaseRead()
+  const result = await submission
+  assert.equal(result.ok, true)
   assert.equal((await f.storage.getTask('af23-repair')).fields.filter(field => field.key !== 'f2').length, 1)
 })
 
