@@ -800,9 +800,15 @@ async function applyDraft() {
   const cid = currentCardId
   const base = structuredClone(baseline || {})
   let tasks = []
-  try { tasks = await getTasks() } catch {}
+  const needsLiveCheck = Array.isArray(patch.source) || Array.isArray(patch.options?.taskIds)
+  if (needsLiveCheck) {
+    try { tasks = await getTasks() } catch (err) {
+      showDrawerError(`無法確認來源是否仍有效，草稿還留在這裡：${err?.message || err || '未知原因'}`)
+      return false
+    }
+  }
   const idx = buildSeriesIndex(tasks)
-  const isLive = (id) => typeof id === 'string' && (Boolean(idx.byId[id]) || Boolean(idx.parents[id]))
+  const isLive = (id) => !needsLiveCheck || (typeof id === 'string' && (Boolean(idx.byId[id]) || Boolean(idx.parents[id])))
   if (Object.keys(patch).length > 0) {
     try {
       const conflicts = []
@@ -816,12 +822,28 @@ async function applyDraft() {
         if (Array.isArray(patch.source)) {
           const before = Array.isArray(base.source) ? base.source : []
           const desired = patch.source.filter(s => typeof s?.taskId === 'string' && isLive(s.taskId))
-          const baselineIds = new Set(before.map(s => s?.taskId))
-          const desiredIds = new Set(desired.map(s => s?.taskId))
+          const beforeById = new Map(before.map(s => [s?.taskId, s]))
+          const desiredById = new Map(desired.map(s => [s?.taskId, s]))
+          const baselineIds = new Set(beforeById.keys())
+          const desiredIds = new Set(desiredById.keys())
           const current = Array.isArray(latest.source) ? latest.source : []
-          // 沿用最新版未被使用者動過的來源；移除序列依草稿意圖刪除，新增來源須仍有效。
-          const concurrent = current.filter(s => !baselineIds.has(s?.taskId) && isLive(s?.taskId))
-          merged.source = [...desired, ...concurrent.filter(s => !desiredIds.has(s?.taskId))]
+          const currentById = new Map(current.filter(s => isLive(s?.taskId)).map(s => [s.taskId, s]))
+          const next = []
+          for (const wanted of desired) {
+            const id = wanted.taskId
+            const saved = currentById.get(id)
+            if (baselineIds.has(id)) {
+              // baseline 中的來源若已被其他操作移除，就不能因草稿仍勾選而復活。
+              if (!saved) continue
+              next.push(JSON.stringify(wanted) === JSON.stringify(beforeById.get(id)) ? saved : wanted)
+            } else {
+              next.push(wanted)
+            }
+          }
+          for (const saved of current) {
+            if (!baselineIds.has(saved?.taskId) && !desiredIds.has(saved?.taskId) && isLive(saved?.taskId)) next.push(saved)
+          }
+          merged.source = next
         }
         if (patch.options && typeof patch.options === 'object') {
           const before = base.options || {}
@@ -833,8 +855,11 @@ async function applyDraft() {
               const wanted = desired.taskIds.filter(isLive)
               const beforeIds = new Set(Array.isArray(before.taskIds) ? before.taskIds : [])
               const latestIds = Array.isArray(options.taskIds) ? options.taskIds : []
-              const concurrent = latestIds.filter(id => !beforeIds.has(id) && isLive(id))
-              options.taskIds = [...wanted, ...concurrent.filter(id => !wanted.includes(id))]
+              const wantedIds = new Set(wanted)
+              options.taskIds = [
+                ...wanted.filter(id => !beforeIds.has(id) || latestIds.includes(id)),
+                ...latestIds.filter(id => !beforeIds.has(id) && !wantedIds.has(id) && isLive(id))
+              ]
             } else if (Object.hasOwn(desired, key)) {
               if (JSON.stringify(options[key]) !== JSON.stringify(before[key]) && JSON.stringify(options[key]) !== JSON.stringify(desired[key])) {
                 conflicts.push(`options.${key}`)

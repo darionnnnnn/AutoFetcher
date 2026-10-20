@@ -817,6 +817,21 @@ function registerCardDropTarget(cardEl, card, ctx) {
     },
     async onDrop(payload, pos) {
       if (!payload || !payload.taskId) return
+      const droppedIds = Array.isArray(payload.seriesIds) && payload.seriesIds.length > 0
+        ? payload.seriesIds
+        : [payload.taskId]
+      let currentTasks
+      try {
+        currentTasks = await getTasks()
+      } catch {
+        showToast('無法確認來源是否仍有效，請稍後再試')
+        return
+      }
+      const currentIndex = buildSeriesIndex(currentTasks)
+      if (droppedIds.some(id => !currentIndex.byId[id] && !currentIndex.parents[id])) {
+        showToast('來源已不存在，請重新整理後再拖曳')
+        return
+      }
 
       let index
       if (card.type === 'table' && card.options?.mode === 'pivot') {

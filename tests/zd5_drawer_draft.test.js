@@ -471,6 +471,38 @@ test('抽屜開著時從另一張卡拖出移除把手照舊立即寫入', async
 
 // ---- 驗收 4：紀錄變動重畫時，編輯中的卡仍顯示草稿預覽 ----
 
+test('AF-23 抽屜套用保留最新 prune，不復活 baseline 來源或狀態任務', async () => {
+  const { ls, db, doc, win } = await fresh()
+  const { did, ids } = await seed(ls, [
+    CARD('line', { source: [{ taskId: 't1' }, { taskId: 't2' }] }),
+    CARD('status', { source: [], options: { taskIds: ['t1', 't2'] } })
+  ])
+  await ensureBrowsing(db, doc)
+  await db.renderDashboard(did)
+
+  await openViaGear(doc, ids[0])
+  const t3Source = doc.querySelector('#drawer-sources input[value="t3"]')
+  assert.ok(t3Source)
+  t3Source.checked = true
+  fire(win, t3Source, 'change')
+  await settle()
+  await ls.updateCard(did, ids[0], { source: [{ taskId: 't2' }] })
+  doc.getElementById('drawer-apply').click()
+  await settle()
+  assert.deepEqual((await cardOf(ls, did, ids[0])).source.map(s => s.taskId), ['t2', 't3'])
+
+  await openViaGear(doc, ids[1])
+  const t3Status = doc.querySelector('#drawer-status-tasks input[value="t3"]')
+  assert.ok(t3Status)
+  t3Status.checked = true
+  fire(win, t3Status, 'change')
+  await settle()
+  await ls.updateCard(did, ids[1], latest => ({ options: { ...latest.options, taskIds: ['t2'] } }))
+  doc.getElementById('drawer-apply').click()
+  await settle()
+  assert.deepEqual((await cardOf(ls, did, ids[1])).options.taskIds, ['t2', 't3'])
+})
+
 test('抽屜開著時整個儀表板重畫，那張卡仍顯示草稿預覽', async () => {
   const { ls, st, db, doc, win } = await fresh()
   const { did, ids } = await seed(ls, [CARD('line'), CARD('line', { x: 6, source: [{ taskId: 't3', aggregation: 'raw' }] })])
