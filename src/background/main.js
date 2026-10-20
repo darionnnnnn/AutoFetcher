@@ -109,6 +109,26 @@ async function beginFieldRepair(msg) {
   if (!task || !field || !fieldSpec || !locator || task.mode !== 'multi') {
     return { ok: false, error: 'field_not_found', message: '找不到這個多值任務欄位，請重新載入設定' }
   }
+  const pending = (await listPendingFieldRepairOperations()).find(operation =>
+    operation.taskId === task.id && operation.fieldKey === field.key)
+  if (pending) {
+    if (fieldRepairInFlight.has(pending.id)) {
+      const result = { ok: false, error: 'field_repair_pending',
+        message: '上一筆重選仍在儲存；再次確認同一操作後才能開始新的重選' }
+      await notifyFieldRepairPending(pending, result)
+      return { ...result, operationId: pending.id, sessionId: pending.id, state: pending.status }
+    }
+    const result = await runFieldRepairForMessage(pending)
+    if (result?.ok === true) {
+      await notifyFieldRepairDone(pending, result)
+      try { await chrome.tabs.remove(pending.auth?.tabId) } catch {}
+      return { ...result, recovered: true, operationId: pending.id, sessionId: pending.id }
+    }
+    await notifyFieldRepairPending(pending, result)
+    return { ok: false, error: 'field_repair_pending',
+      message: result?.message || '上一筆重選尚未完成；請再次確認同一操作',
+      operationId: pending.id, sessionId: pending.id, state: pending.status }
+  }
   const sessionId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
   let tabId = null
   let keepTab = false

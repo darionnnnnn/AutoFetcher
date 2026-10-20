@@ -12,6 +12,13 @@ const URL = 'https://af23-f2.test/prices?access_token=AF23_QUERY_SENTINEL'
 const extensionSender = { url: 'chrome-extension://autofetcher/ui/picker/picker.html' }
 const locator = css => ({ css, path: '', anchor: null, xpath: '' })
 
+function stable(value) {
+  if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`
+  if (value && typeof value === 'object') return `{${Object.keys(value).sort()
+    .map(key => `${JSON.stringify(key)}:${stable(value[key])}`).join(',')}}`
+  return JSON.stringify(value)
+}
+
 function makeTask(over = {}) {
   return {
     id: 'af23-f2', name: 'F2 repair race', url: URL, mode: 'multi', enabled: true,
@@ -206,6 +213,38 @@ test('AC-F2 precheck alarm still warns and TEST_TASK remains a dry run after rep
   assert.deepEqual(await f.storage.getAlertLog(), before.alerts)
   assert.deepEqual(await f.chrome.alarms.getAll(), before.alarms)
   assert.deepEqual(Object.fromEntries(Object.entries(await f.chrome.storage.local.get(null)).filter(([key]) => key.startsWith('runs:'))), before.runs)
+})
+
+test('AC-F2 a new BEGIN recovers the same pending journal without opening a second repair tab', async t => {
+  const f = await setup(t)
+  const task = await f.storage.getTask(f.task.id)
+  const field = task.fields.find(item => item.key === 'price')
+  const entry = task.spec.fields.find(item => item.key === 'price')
+  const operation = {
+    id: 'af23-pending-repair', taskId: task.id, fieldKey: 'price', repairMode: 'repair',
+    status: 'prepared', createdAt: Date.now(),
+    fieldSnapshot: stable({
+      key: field.key, mode: field.mode, fieldSource: field.source, entrySource: entry.source,
+      spec: entry.spec, fieldStateActions: field.stateActions, entryStateActions: entry.stateActions
+    }),
+    source: { locator: locator('#recovered') },
+    nextSpec: { block: { axis: 'col', index: 5, headerText: '價格', aggregate: 'last', skip: { head: 1 } } },
+    selectedMode: 'number', auth: { tabId: 991, frameId: 0, frameUrl: 'https://af23-f2.test/prices' },
+    cleanup: { layout: false, lastValues: false, alarms: false }
+  }
+  await f.storage.beginFieldRepairOperation(operation)
+  const tabsBefore = f.chrome.__calls.filter(call => call.api === 'tabs.create').length
+  const result = await f.background.handleMessage({
+    type: 'BEGIN_FIELD_REPAIR', taskId: task.id, fieldKey: 'price', repairMode: 'replace'
+  }, extensionSender)
+  assert.equal(result?.ok, true)
+  assert.equal(result?.recovered, true)
+  assert.equal(result?.operationId, operation.id)
+  assert.equal(result?.sessionId, operation.id)
+  assert.equal(f.chrome.__calls.filter(call => call.api === 'tabs.create').length, tabsBefore,
+    'recovering a pending operation never opens a second source tab')
+  assert.equal((await f.storage.getTask(task.id)).spec.fields.find(item => item.key === 'price').source.locator.css, '#recovered')
+  assert.equal((await f.storage.getFieldRepairOperation(operation.id)).status, 'complete')
 })
 
 test('AC-F4 auto fetch diagnostics redact credential, URL token, hidden-page, and exception sentinels', async t => {
