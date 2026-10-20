@@ -4211,8 +4211,14 @@ function showPickDraftView() {
   if (waiting) waiting.hidden = true
   const form = document.getElementById('picker-form') || document.querySelector('.settings-body')
   if (form) form.hidden = true
-  const footer = document.querySelector('.settings-footer') || document.querySelector('.action-bar')
+  const footer = pickerActionBar()
   if (footer) footer.hidden = true
+}
+
+function pickerActionBar() {
+  return document.querySelector('.settings-footer') ||
+    document.querySelector('.action-bar') ||
+    document.getElementById('picker-actions')
 }
 
 function operationIdOf(type) { return `picker-${type}-${Date.now()}-${Math.random().toString(36).slice(2)}` }
@@ -4902,7 +4908,7 @@ export async function renderFromPanelCtx(ctx, { reload = () => globalThis.locati
   if (waiting) waiting.hidden = kind !== 'waiting'
   // 等待態時把表單藏起來：面板一開就看到一整頁空欄位，使用者不知道自己該做什麼
   if (form) form.hidden = kind === 'waiting'
-  const footer = document.querySelector('.settings-footer') || document.getElementById('picker-actions')
+  const footer = pickerActionBar()
   if (footer) footer.hidden = kind === 'waiting'
   if (ctx?.pickDraft) {
     renderPickDraft(ctx.pickDraft)

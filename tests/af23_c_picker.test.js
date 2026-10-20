@@ -116,6 +116,42 @@ test('AC-D4:render 100 次只保留一個修復 listener；舊任務訊息不改
   assert.equal(row._source.locator.css, '#new')
 })
 
+test('F1:完成群組後實際 Picker footer 恢復，試抓與儲存按鈕可見', async () => {
+  const { picker, doc } = await fresh()
+  const draft = {
+    version: 1, revision: 1, tabId: 7, sessionId: 'session-f1', documentGeneration: 'generation-f1',
+    routeIdentity: { url: 'https://preview.test/page' }, activeGroupKey: 'group-f1', stage: 'settings', form: {},
+    groups: [{
+      key: 'group-f1', name: '電表讀數', values: [{
+        key: 'value-f1', name: '讀數', mode: 'number',
+        source: { locator: locator('#value') }, spec: { strategy: 'auto' }
+      }]
+    }]
+  }
+  picker.renderPickDraft(draft)
+  const footer = doc.querySelector('footer.action-bar')
+  const form = doc.getElementById('picker-form')
+  assert.equal(footer.hidden, true, '選取草稿畫面會隱藏正式操作列')
+  assert.equal(form.hidden, true)
+
+  await picker.renderFromPanelCtx({
+    kind: 'batch', items: [{
+      key: 'batch-f1', nameHint: '電表讀數', url: 'https://preview.test/page', locator: locator('#value'),
+      fields: [{ key: 'value-f1', name: '讀數', mode: 'number', source: { locator: locator('#value') }, spec: { strategy: 'auto' } }]
+    }]
+  })
+
+  const testNow = doc.getElementById('test-now')
+  const save = doc.getElementById('save')
+  assert.equal(doc.getElementById('batch-section').hidden, false, '完成後切到批次設定畫面')
+  assert.equal(form.hidden, false, '批次設定表單恢復顯示')
+  assert.equal(footer.hidden, false, '實際 HTML 的 .action-bar 恢復顯示')
+  assert.equal(testNow.hidden, false)
+  assert.equal(save.hidden, false)
+  assert.equal(testNow.closest('footer'), footer, '測試覆蓋按鈕的真實 HTML 隱藏祖先')
+  assert.equal(testNow.closest('#picker-form').hidden, false)
+})
+
 test('AC-C3:忙碌狀態隨重畫與切換任務正確解除', async () => {
   const { c, picker, storage, doc } = await fresh()
   await storage.saveTask(repairTask('task-rerender'))
