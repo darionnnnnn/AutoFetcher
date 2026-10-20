@@ -1,11 +1,12 @@
 {
   "name": "autofetcher",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "node --no-experimental-global-navigator --test tests/*.test.js",
-    "smoke": "node tests/smoke/load.mjs"
+    "smoke": "node tests/smoke/run.mjs",
+    "package": "node scripts/package.mjs"
   },
   "devDependencies": {
     "jsdom": "^25.0.1",
