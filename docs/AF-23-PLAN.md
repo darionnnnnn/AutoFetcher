@@ -540,7 +540,7 @@
 - [x] **T07** — 已完成：CfT 真實來源 Done 在訊息邊界暫停；pending 文字可見且正式來源未變。另一個真實編輯文件經storage更新來源/名稱後才釋放A；舊提交遭拒絕，選取頁保留可取消，新來源與名稱不被覆蓋。tests/smoke/af23_preview_repair_seams.mjs 三個案例通過；故障注入僅在測試的Chrome訊息邊界。
 - [x] **T08** — 已完成：CfT query編輯 legacy block 精確預覽123、一值multi精確預覽「值: 42」，兩者正式tasks與歷史日期不變；既有側板/G1及多值編輯證據共同覆蓋入口矩陣。tests/smoke/af23_preview_repair_seams.mjs 通過，不另乘上重複的全入口矩陣。
 - [x] **T09** — 已完成：修補預覽 request ownership，來源變更讓舊A失效時釋放busy並要求重試；新的B不被A晚到覆蓋。CfT 同欄位連點/Enter十次維持一個session/自有頁，未存名稱排程保留，取消可重開；A/B及修復後舊預覽案例通過。48項相關窄測與tests/smoke/af23_c3_c4_c6_browser.mjs主代理獨立通過。
-- [ ] **T10 錯誤旁下一步（C6）**：補找不到目標、登入失敗提示旁動作的實際入口驗證；partial／pending 已有整合證據。驗收：動作帶到正確欄位、來源或登入設定，不只顯示錯誤文字。
+- [x] **T10** — 已完成：CfT 找不到目標後錯誤旁重新選取會開啟正確欄位來源；登入失敗旁站台設定會開啟該來源origin；partial顯示1成功/1失敗及正確修復入口。tests/smoke/af23_c3_c4_c6_browser.mjs 四案例主代理獨立通過，pending與取消另由T07驗證。
 - [x] **T11** — 已完成比較：CfT 同fixture的單值路徑兩版均6 clicks／1輸入／2往返；兩組共同前綴逐步完全一致（12 clicks／2輸入／3往返）。75ed288 操作列隱藏而無法繼續，保留BLOCKED基準證據；新版再試抓及儲存後成功得101／202（14 clicks／2輸入／4往返）。不以兩次單值替代兩組，不比較無法完成的全流程耗時；沒有新增共同前綴步驟。證據 docs/evidence/af23/af23-c5-baseline-{baseline-groups,qa}.json，主代理獨立核對實際trace。
 - [x] **T12** — 已完成：CfT 隔離資料兩輪串行 journeys 通過；每輪單值建立／試抓／儲存／首筆42，以及 partial→漂移拒絕→取消重啟→同值修復→精確預覽123→真實拖曳→正式歷史123。舊歷史99保留，兩輪各13次repair流程click。證據由 tests/smoke/af23_journeys.mjs 產生 work/af23-journeys.json；必要操作比較另見T11。
 
