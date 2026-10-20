@@ -190,6 +190,86 @@ test('立即測試:交給背景執行並顯示結果,不寫入 storage', async (
   assert.equal((await st.getTasks()).length, 0, '測試不得建立任務')
 })
 
+test('編輯中的試抓採用未儲存表單並交給專用抓取頁', async () => {
+  const { c, pk, doc } = await fresh()
+  c.__setRuntimeResponder(() => ({ ok: true, value: 73, raw: '73', status: 'ok', strategyUsed: 'auto' }))
+  pk.render({
+    task: { id: 'existing', name: '原名', url: 'https://a.test/old', mode: 'number', enabled: true,
+      locator: LOCATOR, spec: { strategy: 'auto' }, schedule: { type: 'daily', times: ['09:00'], weekdays: [1, 2, 3, 4, 5] } },
+    locator: LOCATOR, url: 'https://a.test/old', tabId: 7
+  })
+  doc.getElementById('name').value = '未儲存名稱'
+  doc.getElementById('url').value = 'https://a.test/unsaved'
+  await pk.handleTestNow()
+  const sent = c.__calls.map(call => call.args?.[0]).find(message => message?.type === 'TEST_TASK')
+  assert.ok(sent)
+  assert.equal(sent.task.name, '未儲存名稱')
+  assert.equal(sent.task.url, 'https://a.test/unsaved')
+  assert.equal(sent.tabId, undefined, '編輯試抓不得抓目前使用者分頁')
+  assert.equal(sent.task.foreground, false, '編輯試抓使用專用背景抓取頁')
+  assert.match(doc.getElementById('preview').textContent, /73/)
+  assert.match(doc.getElementById('test-note').textContent, /專用抓取頁/)
+})
+
+test('來源草稿在試抓途中變更時，舊結果不覆蓋目前表單並提示重新試抓', async () => {
+  const { c, pk, doc } = await fresh()
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  c.__setRuntimeResponder(async message => {
+    if (message?.type !== 'TEST_TASK') return undefined
+    await gate
+    return { ok: true, value: 73, raw: '73', status: 'ok', strategyUsed: 'auto' }
+  })
+  pk.render({ locator: LOCATOR, url: 'https://a.test/old' })
+  doc.getElementById('name').value = '試抓值'
+  const pending = pk.handleTestNow()
+  await new Promise(resolve => setTimeout(resolve, 10))
+  doc.getElementById('url').value = 'https://a.test/new-source'
+  release()
+  await pending
+  assert.doesNotMatch(doc.getElementById('preview').textContent, /73/)
+  assert.match(doc.getElementById('test-note').textContent, /來源或設定已變更/)
+  assert.match(doc.getElementById('errors').textContent, /請重新試抓/)
+})
+
+test('部分成功顯示成功與失敗數，逐值標出失敗並提示修復後重試', async () => {
+  const { c, pk, doc } = await fresh()
+  c.__setRuntimeResponder(() => ({
+    ok: true,
+    fields: {
+      first: { ok: true, value: 12, raw: '12' },
+      second: { ok: false, error: 'not_found', message: '找不到第二個來源' }
+    }
+  }))
+  const fields = [
+    { key: 'first', name: '第一值', mode: 'number', source: { locator: { css: '#first' } }, spec: { strategy: 'auto' } },
+    { key: 'second', name: '第二值', mode: 'number', source: { locator: { css: '#second' } }, spec: { strategy: 'auto' } }
+  ]
+  pk.render({ fields, locator: LOCATOR, url: 'https://a.test/p' })
+  doc.getElementById('name').value = '多值任務'
+  await pk.handleTestNow()
+  assert.match(doc.getElementById('preview').textContent, /成功 1 個、失敗 1 個/)
+  assert.match(doc.getElementById('test-note').textContent, /成功 1 個、失敗 1 個.*修復或重新選取失敗值/)
+  const rows = [...doc.querySelectorAll('#field-list [data-field-row]')]
+  assert.equal(rows[0].querySelector('[data-field-result]').textContent, '12')
+  assert.equal(rows[1].querySelector('[data-field-result]').dataset.state, 'error')
+})
+
+test('登入失敗回饋包含可執行的設定重試下一步', async () => {
+  const { c, pk, doc } = await fresh()
+  c.__setRuntimeResponder(() => ({ ok: false, error: 'login_failed', message: '站台仍在登入頁' }))
+  pk.render({ locator: LOCATOR, url: 'https://a.test/p' })
+  doc.getElementById('name').value = '登入後資料'
+  await pk.handleTestNow()
+  assert.match(doc.getElementById('errors').textContent, /開啟站台登入設定/)
+  const action = doc.querySelector('#test-note [data-action="open-site-login-settings"]')
+  assert.ok(action)
+  action.click()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const opened = c.__calls.find(call => call.api === 'tabs.create')
+  assert.match(opened.args[0].url, /ui\/site\/site\.html\?origin=https%3A%2F%2Fa\.test/)
+})
+
 test('立即測試:抓不到時顯示原因', async () => {
   const { c, pk, doc } = await fresh()
   c.__setRuntimeResponder(() => ({ ok: false, error: 'not_found' }))
