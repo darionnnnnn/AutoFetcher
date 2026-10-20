@@ -503,6 +503,44 @@ test('AF-23 抽屜套用保留最新 prune，不復活 baseline 來源或狀態�
   assert.deepEqual((await cardOf(ls, did, ids[1])).options.taskIds, ['t2', 't3'])
 })
 
+test('AF-23 抽屜來源檢查在 layout 鎖內等待時，刪除完成後 prune 仍是最後寫入者', async () => {
+  const { c, st, ls, db, doc, win } = await fresh()
+  const { did, ids } = await seed(ls, [CARD('line', { source: [{ taskId: 't1' }] })])
+  await ensureBrowsing(db, doc)
+  await db.renderDashboard(did)
+  await openViaGear(doc, ids[0])
+  const t3 = doc.querySelector('#drawer-sources input[value="t3"]')
+  t3.checked = true
+  fire(win, t3, 'change')
+  await settle()
+
+  const realGet = c.storage.local.get.bind(c.storage.local)
+  let entered
+  const enteredPromise = new Promise(resolve => { entered = resolve })
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  let held = false
+  c.storage.local.get = async (keys, ...rest) => {
+    const result = await realGet(keys, ...rest)
+    if (!held && keys === 'tasks') {
+      held = true
+      entered()
+      await gate
+    }
+    return result
+  }
+
+  doc.getElementById('drawer-apply').click()
+  await enteredPromise
+  const deletion = st.deleteTask('t3')
+  for (let i = 0; i < 50 && (await st.getTasks()).some(task => task.id === 't3'); i++) await settle(5)
+  assert.equal((await st.getTasks()).some(task => task.id === 't3'), false, 'tasks 鍵先刪除')
+  release()
+  await deletion
+  await settle()
+  assert.deepEqual((await cardOf(ls, did, ids[0])).source.map(source => source.taskId), ['t1'])
+})
+
 test('抽屜開著時整個儀表板重畫，那張卡仍顯示草稿預覽', async () => {
   const { ls, st, db, doc, win } = await fresh()
   const { did, ids } = await seed(ls, [CARD('line'), CARD('line', { x: 6, source: [{ taskId: 't3', aggregation: 'raw' }] })])

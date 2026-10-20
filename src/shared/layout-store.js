@@ -136,9 +136,9 @@ const unchanged = (value) => ({ [UNCHANGED]: true, value })
  */
 async function editLayout(edit) {
   let result
-  await updateLayout((raw) => {
+  await updateLayout(async (raw) => {
     const layout = normalizeLayout(raw)
-    result = edit(layout)
+    result = await edit(layout)
     if (result && result[UNCHANGED]) return undefined
     return stripTransient(layout)
   })
@@ -283,7 +283,7 @@ function sameSourceTaskIds(sourceA, sourceB) {
  * 新增卡片至指定儀表板，自動配置 id、夾住寬高並尋找不重疊空位
  */
 export async function addCard(dashId, card) {
-  return editLayout((layout) => {
+  return editLayout(async (layout) => {
     const dash = layout.dashboards.find(d => d.id === dashId)
     if (!dash) return unchanged(null)
 
@@ -329,14 +329,14 @@ export async function addCard(dashId, card) {
  */
 export async function updateCard(dashId, cardId, patch) {
   if (!patch || (typeof patch !== 'object' && typeof patch !== 'function')) return false
-  return editLayout((layout) => {
+  return editLayout(async (layout) => {
     const dash = layout.dashboards.find(d => d.id === dashId)
     if (!dash) return unchanged(false)
     const card = dash.cards.find(c => c.id === cardId)
     if (!card) return unchanged(false)
 
     // 函式形式在鎖內以最新版卡片計算操作意圖；舊的 object patch 介面仍可用。
-    const next = typeof patch === 'function' ? patch(structuredClone(card)) : patch
+    const next = typeof patch === 'function' ? await patch(structuredClone(card)) : patch
     if (!next || typeof next !== 'object') return unchanged(false)
     Object.assign(card, next, { id: cardId })
     return true

@@ -799,20 +799,22 @@ async function applyDraft() {
   const did = currentDashId
   const cid = currentCardId
   const base = structuredClone(baseline || {})
-  let tasks = []
   const needsLiveCheck = Array.isArray(patch.source) || Array.isArray(patch.options?.taskIds)
-  if (needsLiveCheck) {
-    try { tasks = await getTasks() } catch (err) {
-      showDrawerError(`無法確認來源是否仍有效，草稿還留在這裡：${err?.message || err || '未知原因'}`)
-      return false
-    }
-  }
-  const idx = buildSeriesIndex(tasks)
-  const isLive = (id) => !needsLiveCheck || (typeof id === 'string' && (Boolean(idx.byId[id]) || Boolean(idx.parents[id])))
   if (Object.keys(patch).length > 0) {
     try {
       const conflicts = []
-      const result = await updateCard(did, cid, (latest) => {
+      let liveCheckError = null
+      const result = await updateCard(did, cid, async (latest) => {
+        let isLive = () => true
+        if (needsLiveCheck) {
+          try {
+            const idx = buildSeriesIndex(await getTasks())
+            isLive = (id) => typeof id === 'string' && (Boolean(idx.byId[id]) || Boolean(idx.parents[id]))
+          } catch (err) {
+            liveCheckError = err
+            return null
+          }
+        }
         const merged = { ...patch }
         for (const key of ['title', 'type']) {
           if (Object.hasOwn(patch, key) && JSON.stringify(latest[key]) !== JSON.stringify(base[key]) && JSON.stringify(latest[key]) !== JSON.stringify(patch[key])) {
@@ -880,7 +882,9 @@ async function applyDraft() {
         return merged
       })
       if (!result) {
-        showDrawerError(conflicts.length
+        showDrawerError(liveCheckError
+          ? `無法確認來源是否仍有效，草稿還留在這裡：${liveCheckError?.message || liveCheckError || '未知原因'}`
+          : conflicts.length
           ? `套用衝突：${conflicts.join('、')} 已在其他頁變更，草稿仍留在這裡。請調整後再套用。`
           : '卡片已不存在，草稿仍留在這裡。請複製需要的設定後關閉抽屜。')
         return false
