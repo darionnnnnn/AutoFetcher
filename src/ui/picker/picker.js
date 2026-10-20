@@ -4198,6 +4198,7 @@ let pickDraftUndo = null
 let pickDraftUndoRevision = null
 let pickDraftUndoToken = 0
 let pickDraftKeyHandlerBound = false
+let pickDraftFinishPending = false
 
 function clonePickDraft(value) {
   if (value === undefined || value === null) return value
@@ -4446,7 +4447,28 @@ function groupValueLabel(value) {
   return `${name}（識別：${key}）`
 }
 
+function syncPickDraftFinishButton() {
+  const finish = document.getElementById('group-finish')
+  if (!finish) return
+  finish.textContent = pickDraftFinishPending ? '正在完成…' : '完成選取'
+  finish.disabled = pickDraftFinishPending || !Array.isArray(pickDraftState?.groups) || pickDraftState.groups.length === 0
+}
+
 async function finishPickDraft() {
+  if (pickDraftFinishPending) return
+  // Give immediate local feedback before any tab lookup, rename flush, or background ACK.
+  pickDraftFinishPending = true
+  syncPickDraftFinishButton()
+  setGroupDraftStatus('正在同步選取…')
+  try {
+    await finishPickDraftOperation()
+  } finally {
+    pickDraftFinishPending = false
+    syncPickDraftFinishButton()
+  }
+}
+
+async function finishPickDraftOperation() {
   if (!pickDraftState) return
   if (panelBootSequence > 0 && Number.isInteger(panelTabId)) {
     const activeTabId = await resolvePanelTab()
@@ -4861,7 +4883,7 @@ export function renderPickDraft(draft = pickDraftState) {
   if (input && active) input.dataset.groupKey = active.key
   if (startSelection) startSelection.hidden = !active || !pendingNameOf(active).trim()
   if (finish) finish.hidden = groups.length === 0
-  if (finish) finish.disabled = groups.length === 0
+  if (finish) syncPickDraftFinishButton()
   if (undo) undo.hidden = !pickDraftUndo || (pickDraftUndoRevision !== null && draft.revision !== pickDraftUndoRevision)
   const title = document.getElementById('group-draft-title')
   if (title) title.textContent = groups.length === 0 ? '先建立群組' : `群組與選值（${groups.length}/${MAX_PICK_GROUPS}）`
