@@ -407,7 +407,7 @@ async function loadHistoryView(generation) {
       routeCurrentState()
     }
   }
-  if (state.compareTo) await renderCompare(state.compareTo, generation)
+  await renderCompare(state.compareTo, generation)
 }
 
 export async function renderFilters(knownTasks = null, generation = loadGeneration) {
@@ -747,6 +747,10 @@ export async function refreshCurrentView(change) {
   const currentView = state.view || 'dashboard'
   const keys = change?.keys instanceof Set ? change.keys : null
   const dates = change?.dates instanceof Set ? change.dates : new Set()
+  if (keys && [...keys].some(key => key.startsWith('rec:') || key.startsWith('rec2:'))) {
+    // 變更可以發生在設定／任務頁；先失效快取，但只在可見歷史頁載入資料。
+    invalidateRangeCache(dates)
+  }
   let structural = !keys
   let status = false
   let records = false
@@ -783,8 +787,17 @@ export async function refreshCurrentView(change) {
   if (!structural && !status) {
     if (!records) return
     const monthRange = calendarMonthRange()
+    const compareAffected = currentView === 'history' && state.compareTo
+      && datesIntersect(dates, state.compareTo, state.compareTo)
     if (!datesIntersect(dates, state.from, state.to)
-      && !(currentView === 'history' && datesIntersect(dates, monthRange.from, monthRange.to))) return
+      && !(currentView === 'history' && datesIntersect(dates, monthRange.from, monthRange.to))
+      && !compareAffected) return
+    if (compareAffected && !datesIntersect(dates, state.from, state.to)
+      && !(currentView === 'history' && datesIntersect(dates, monthRange.from, monthRange.to))) {
+      const generation = ++loadGeneration
+      await renderCompare(state.compareTo, generation)
+      return
+    }
   }
   if (currentView === 'tasks') {
     const generation = ++loadGeneration
@@ -792,10 +805,14 @@ export async function refreshCurrentView(change) {
     return
   }
   const generation = ++loadGeneration
-  if (records) invalidateRangeCache(dates)
   const rangeAffected = !records || datesIntersect(dates, state.from, state.to)
-  if (records && !rangeAffected) {
+  const compareAffected = records && state.compareTo && datesIntersect(dates, state.compareTo, state.compareTo)
+  if (records && !rangeAffected && !compareAffected) {
     await loadCalendarMonth(currentCalYear, currentCalMonth, generation)
+    return
+  }
+  if (records && !rangeAffected && compareAffected) {
+    await renderCompare(state.compareTo, generation)
     return
   }
   await loadHistoryView(generation)
@@ -1368,15 +1385,25 @@ export async function renderCompare(compareDate, generation = loadGeneration) {
     return
   }
 
-  let tasks = []
-  try { tasks = await getTasks() } catch {}
+  let tasks
+  try { tasks = await getTasks() } catch (err) {
+    showHistoryLoadError(err, generation)
+    return
+  }
   if (!isCurrentGeneration(generation) || state.view !== 'history') return
   const sortedTasks = [...tasks].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
   const seriesIndex = buildSeriesIndex(sortedTasks)
   const seriesIds = seriesIndex.historySeriesIds || seriesIndex.seriesIds
 
-  const recordsA = await recordsForRange(state.from, state.to)
-  const recordsB = await getRecordsByDate(compareDate)
+  let recordsA
+  let recordsB
+  try {
+    recordsA = await recordsForRange(state.from, state.to)
+    recordsB = await getRecordsByDate(compareDate)
+  } catch (err) {
+    showHistoryLoadError(err, generation)
+    return
+  }
   if (!isCurrentGeneration(generation) || state.view !== 'history') return
 
   const { rows } = compareDays(recordsA, recordsB, seriesIds)

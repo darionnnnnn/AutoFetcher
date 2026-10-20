@@ -105,3 +105,61 @@ test('設定頁啟動不讀歷史、不渲染隱藏表格或月曆', async () =>
   assert.equal(anyRecordBatchReadCount(chrome), 0, '切回設定不再載入歷史或容量統計')
 })
 
+test('其他頁面期間新增紀錄會失效歷史快取，返回歷史時讀到新資料', async () => {
+  const { chrome, storage, win, doc, report } = await mount('#view=history&from=2026-10-13&to=2026-10-13')
+  await storage.appendRecord('2026-10-13', { taskId: 't1', capturedAt: '2026-10-13T08:00:00.000Z', slot: '2026-10-13T08:00:00', value: 'before-switch', raw: 'before-switch', status: 'ok' })
+  await delay(180)
+  await report.loadAndRenderPage(win.location.hash, { force: true })
+  assert.match(doc.querySelector('#record-table tbody')?.textContent || '', /before-switch/)
+
+  win.location.hash = '#view=settings&from=2026-10-13&to=2026-10-13'
+  await report.loadAndRenderPage(win.location.hash, { force: true })
+  await storage.appendRecord('2026-10-13', { taskId: 't1', capturedAt: '2026-10-13T09:00:00.000Z', slot: '2026-10-13T09:00:00', value: 'while-hidden', raw: 'while-hidden', status: 'ok' })
+  await report.refreshCurrentView({ keys: new Set(['rec2:2026-10-13:09']), dates: new Set(['2026-10-13']) })
+  assert.equal(doc.querySelector('#panel-history')?.hidden, true)
+
+  win.location.hash = '#view=history&from=2026-10-13&to=2026-10-13'
+  await report.loadAndRenderPage(win.location.hash, { force: true })
+  assert.match(doc.querySelector('#record-table tbody')?.textContent || '', /while-hidden/)
+  assert.ok(recordReadCount(chrome) > 0, '返回時必須重讀失效範圍')
+})
+
+test('比較日資料變更會刷新比較表，清除比較日會清掉舊列', async () => {
+  const { storage, win, doc, report } = await mount('#view=history&from=2026-10-13&to=2026-10-13&compareTo=2026-10-12')
+  await storage.appendRecord('2026-10-13', { taskId: 't1', capturedAt: '2026-10-13T08:00:00.000Z', slot: '2026-10-13T08:00:00', value: 'primary-value', raw: 'primary-value', status: 'ok' })
+  await storage.appendRecord('2026-10-12', { taskId: 't1', capturedAt: '2026-10-12T08:00:00.000Z', slot: '2026-10-12T08:00:00', value: 'compare-before', raw: 'compare-before', status: 'ok' })
+  await delay(120)
+  await report.loadAndRenderPage(win.location.hash, { force: true })
+  assert.match(doc.querySelector('#compare-table tbody')?.textContent || '', /compare-before/)
+
+  await storage.appendRecord('2026-10-12', { taskId: 't1', capturedAt: '2026-10-12T09:00:00.000Z', slot: '2026-10-12T09:00:00', value: 'compare-after', raw: 'compare-after', status: 'ok' })
+  await report.refreshCurrentView({ keys: new Set(['rec2:2026-10-12:09']), dates: new Set(['2026-10-12']) })
+  assert.match(doc.querySelector('#compare-table tbody')?.textContent || '', /compare-after/)
+
+  win.location.hash = '#view=history&from=2026-10-13&to=2026-10-13'
+  await report.loadAndRenderPage(win.location.hash, { force: true })
+  assert.equal(doc.querySelector('#compare-table tbody')?.textContent || '', '')
+})
+
+test('比較資料載入錯誤顯示重試，重試成功後更新畫面', async () => {
+  const { chrome, win, doc, report } = await mount()
+  const realGet = chrome.storage.local.get.bind(chrome.storage.local)
+  let shouldFail = true
+  chrome.storage.local.get = async (keys, ...rest) => {
+    if (shouldFail && Array.isArray(keys) && keys.some(key => /^rec2?:/.test(key))) {
+      shouldFail = false
+      throw new Error('controlled read failure')
+    }
+    return realGet(keys, ...rest)
+  }
+
+  win.location.hash = '#view=history&from=2026-10-20&to=2026-10-20&compareTo=2026-10-19'
+  await report.loadAndRenderPage(win.location.hash, { force: true })
+  assert.match(doc.getElementById('history-load-error')?.textContent || '', /controlled read failure/)
+  const retry = doc.querySelector('#history-load-error button')
+  assert.ok(retry)
+  retry.click()
+  await delay(100)
+  assert.equal(doc.getElementById('history-load-error'), null)
+})
+

@@ -56,6 +56,7 @@ async function renderStorageStats() {
     statsBox.append(message, retry)
     return
   }
+  statsBox.replaceChildren()
   const items = [
     `儲存用量：${stats.bytes} 位元組`,
     `紀錄總筆數：${stats.recordCount} 筆`,
