@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { JSDOM } from 'jsdom'
 import { installChromeMock, resetChromeMock } from './chrome-mock.js'
+import { setFieldError } from '../src/ui/save-guard.js'
 
 const PICKER_HTML = readFileSync(new URL('../src/ui/picker/picker.html', import.meta.url), 'utf8')
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
@@ -94,6 +95,7 @@ test('名稱欄 blur 時就地驗證：錯誤字在名稱欄下方、aria-descri
   const errEl = doc.getElementById(describedBy)
   assert.ok(errEl, 'aria-describedby 要指到存在的元素')
   assert.equal(errEl.hidden, false)
+  assert.equal(errEl.getAttribute('aria-live'), 'polite', 'blur 後欄位錯誤會即時以 polite 提示讀出')
   assert.match(errEl.textContent, /名稱/)
   assert.equal(nameEl.nextElementSibling, errEl, '錯誤字就在名稱欄正下方')
   assert.equal(nameEl.getAttribute('aria-invalid'), 'true')
@@ -104,6 +106,21 @@ test('名稱欄 blur 時就地驗證：錯誤字在名稱欄下方、aria-descri
   assert.equal(errEl.hidden, true)
   assert.equal(nameEl.getAttribute('aria-invalid'), null)
   assert.equal(nameEl.getAttribute('aria-describedby'), null)
+})
+
+test('setFieldError 為動態建立的錯誤節點加上 polite live region', async () => {
+  const { doc } = await fresh()
+  const field = doc.createElement('input')
+  field.id = 'dynamic-field'
+  doc.body.appendChild(field)
+
+  setFieldError(field, '欄位格式錯誤')
+
+  const error = doc.getElementById('dynamic-field-error')
+  assert.ok(error)
+  assert.equal(error.getAttribute('aria-live'), 'polite')
+  assert.equal(field.getAttribute('aria-invalid'), 'true')
+  assert.ok(field.getAttribute('aria-describedby').split(/\s+/).includes(error.id))
 })
 
 // ---------------- 存檔後立刻抓第一筆 ----------------

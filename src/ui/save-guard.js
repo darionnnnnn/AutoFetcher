@@ -172,6 +172,7 @@ export function setFieldError(field, text) {
     errEl.className = 'field-error'
     field.after(errEl)
   }
+  errEl.setAttribute('aria-live', 'polite')
   errEl.textContent = msg
   errEl.hidden = false
   field.setAttribute('aria-invalid', 'true')

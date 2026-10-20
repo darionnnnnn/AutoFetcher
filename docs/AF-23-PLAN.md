@@ -421,7 +421,7 @@
 | AC-F5／F | I+B 載入schema3/4固定備份、更新版設定回匯、歷史JSON匯出讀回；列發行檔案與runner輸出 | 設定備份只宣稱還原設定，歷史另驗；id/key/紀錄數值與合法設定一致，不抹新增任務／資料；不回退不支援schema的舊binary。`src`與實際交付載入目錄版本／內容一致；npm test與核心smoke無未解釋失敗；全部mandatory AC有證據，無空集合／略過案例假綠 |
 | AC-F6／F | B 從本次交付目錄載入隔離profile，以基準任務及歷史原地升級；比對manifest與檔案清單 | 交付目錄與核准src檔案hash對上，載入後runtime版本正確、同一擴充功能id與既有資料保留、重跑建立及修復核心流程。實際使用者載入位置尚未核對時只標交付fixture通過，不宣稱使用者安裝已更新；不擅自更換載入路徑 |
 
-### 實作輪的可執行入口（本輪尚未新增腳本）
+### 實作輪的可執行入口（實際腳本與結果見驗收索引）
 
 所有新增案例的測試名稱包含AC代號；若擴充既有測試檔更合理，可保留原檔並在執行紀錄列出對應代號，不同時維護重複案例。
 
@@ -521,13 +521,13 @@
 - AC-F2 契約澄清：原任務刪除介面明示連同歷史刪除（tasks.js）；保留歷史限定修復／替換，維持既有明確刪除的行為。
 - 主代理親自實作範圍：日期測試、runner、G1 點擊／等待、AF23 操作／封裝／升級驗收及交付腳本；由 Luna high 唯讀審查後修補實體命中、既有 sidecar 覆寫與來源子目錄限制。功能程式由 Luna high 分段實作，主代理逐段獨立核對與驗收。
 
-## 14. 未完成項目 TODO（2026-10-20 盤點快照）
+## 14. 20 項執行清單（保留 2026-10-20 盤點編號）
 
-## 1. 已確認問題：修正尚未完成整合驗收
+### 14.1 已確認問題
 
 - [x] **T01** — 已完成：extractValue 共用入口接受 canonical cell/block；保留明確 mode、既有 legacy 及 scalar。`tests/af23_extract_contract.test.js` 與 c2/c5/p1/v1/w1 相關回歸共 105/105 通過；CfT 兩輪 journeys 的預覽及正式歷史精確為 123，合計整合測試為 579，原規格不變。Luna high 獨立審查；主代理實作及驗證。
 
-## 2. 可靠性與資料一致性：待補齊證據
+### 14.2 可靠性與資料一致性
 
 - [x] **T02** — 已完成：新增固定 today=2026-10-20 的截止日前／當日／後一日驗收，分別核對帳本 today-14 與含 today 共14日紀錄的截止規則；countRecordsBeyondRetention、trimOldRecords、trimOldRuns 實際結果一致。`node --no-experimental-global-navigator --test tests/af23_retention_boundary.test.js` 1/1 通過，不依真實今天。
 - [x] **T03** — 已完成：正式 BEGIN_FIELD_REPAIR/PICKED→content EXTRACT→fetcher→storage 歷史整合驗證 scalar 1.234×100=123.4、文字001仍為字串、cell=29.625，原 field key 與三條舊歷史保留。tests/af23_t03_repair_formal_history.test.js 1/1 通過；主代理修正測試URL名稱遮蔽後以預設入口獨立驗證。
@@ -535,7 +535,7 @@
 - [x] **T05** — 已完成：CfT 真實拖曳後於 Tasks 刪除來源、第二報表抽屜修改標題，再於第一頁 Ctrl+Z／Ctrl+Shift+Z；undoDepth 1→0→1，來源不復活，另一頁標題及無關卡片完整保留。tests/smoke/af23_prune_undo.mjs 主代理獨立 PASS。
 - [x] **T06** — 已完成：CfT 真實 alarm 排程在原生 EXTRACT 訊息邊界暫停，分別操作 Picker 修復及 Tasks 確認刪除；釋放後等到 fetcher finally 移除 runState 才對帳。tests/smoke/af23_t06_inflight_scheduler.mjs 主代理獨立2/2通過；過期值不寫歷史/health/lastValues/alerts/notifications，修復留舊歷史、明確刪除只清自己資料。
 
-## 3. 使用者操作：待補齊真實瀏覽器驗收
+### 14.3 使用者操作
 
 - [x] **T07** — 已完成：CfT 真實來源 Done 在訊息邊界暫停；pending 文字可見且正式來源未變。另一個真實編輯文件經storage更新來源/名稱後才釋放A；舊提交遭拒絕，選取頁保留可取消，新來源與名稱不被覆蓋。tests/smoke/af23_preview_repair_seams.mjs 三個案例通過；故障注入僅在測試的Chrome訊息邊界。
 - [x] **T08** — 已完成：CfT query編輯 legacy block 精確預覽123、一值multi精確預覽「值: 42」，兩者正式tasks與歷史日期不變；既有側板/G1及多值編輯證據共同覆蓋入口矩陣。tests/smoke/af23_preview_repair_seams.mjs 通過，不另乘上重複的全入口矩陣。
@@ -544,20 +544,20 @@
 - [x] **T11** — 已完成比較：CfT 同fixture的單值路徑兩版均6 clicks／1輸入／2往返；兩組共同前綴逐步完全一致（12 clicks／2輸入／3往返）。75ed288 操作列隱藏而無法繼續，保留BLOCKED基準證據；新版再試抓及儲存後成功得101／202（14 clicks／2輸入／4往返）。不以兩次單值替代兩組，不比較無法完成的全流程耗時；沒有新增共同前綴步驟。證據 docs/evidence/af23/af23-c5-baseline-{baseline-groups,qa}.json，主代理獨立核對實際trace。
 - [x] **T12** — 已完成：CfT 隔離資料兩輪串行 journeys 通過；每輪單值建立／試抓／儲存／首筆42，以及 partial→漂移拒絕→取消重啟→同值修復→精確預覽123→真實拖曳→正式歷史123。舊歷史99保留，兩輪各13次repair流程click。證據由 tests/smoke/af23_journeys.mjs 產生 work/af23-journeys.json；必要操作比較另見T11。
 
-## 4. 頁面與生命週期：待整合確認
+### 14.4 頁面與生命週期
 
 - [x] **T13** — 已完成：既有D1/D2受控整合涵蓋新舊查詢與零讀取；追加late-A rejection窄測1/1通過，B表格/摘要/錯誤維持。主代理CfT只重跑cache情境，確認設定頁歷史讀取0、隱藏history rows/calendar tables均0、背景新增後回歷史更新；實際back/forward由D路由兩輪證據覆蓋。
 - [x] **T14** — 已完成：主代理獨立CfT執行tests/smoke/af23_d4_picker_lifecycle.mjs，同一文件十輪context切換、表單輸入與實際Cancel通過；name/mode/save/test/cancel listener維持1/2/1/1/1。同context保留未存內容、新context重設name/preview/busy。context由正式renderFromPanelCtx驅動；不冒稱十輪完整端到端建立流程，F1另驗。
 
-## 5. 效能：量測尚未全部完成
+### 14.5 效能
 
 - [x] **T15** — 已完成：真實Picker每組20暖樣本共60筆，首次可見busy/完成回饋p95=16.6/16.4/28.2ms，皆≤100ms，保存正確率100%；root離線重算通過，原始樣本/I-O/source hash收錄docs/evidence/af23。量測確立完成按鈕缺即時回饋，最小busy修正已驗證；容量放大沿用一個真實選取來源，不宣稱100個不同來源。詳AF-23-PERFORMANCE.md。
 - [x] **T16** — 已完成：重測15冷樣本source hash f263823c…；其餘85筆原QA樣本無execution-time hash，明列來源差異與scalar未受canonical-cell修正影響的依據。主代理逐筆核對4組各5冷/20暖共100筆、結果100%正確、最差值及I/O皆保留；完整數據與版本限制見AF-23-PERFORMANCE.md及docs/evidence/af23/perf-schedule*.json。
 - [x] **T17** — 已完成：E1定位完成選取無即時回饋，採既有Picker狀態最小busy guard；首回饋較舊版完成畫面改善66.2/89.0/94.2%，超過20%門檻，完整工作時間另列而不混稱提速；未涉入儲存/切換退化均低於max(20%,30ms)，正確率100%。報表10k篩選13.5ms/切頁98ms已達標，不增架構；調度未改，E3明列條件N/A。
 
-## 6. 最終驗收、文件與交付
+### 14.6 最終驗收、文件與交付
 
-- [x] **T18** — 已完成：最終完整npm test共3297項，3294通過、0失敗、3取消；確認取消來自late-A測試沿用同檔快取，修正專屬日期後該檔5/5通過，未改產品/降低斷言。13套核心npm run smoke全數完成且exit0，含新案例、第二輪、來源矩陣、鍵盤/窄窗、worker恢復與升級。原始全套及針對性重驗輸出收錄docs/evidence/af23/qa-final-*.txt，沒有重跑效能矩陣。
+- [x] **T18** — 已完成：體檢後最終 npm test 3322/3322 通過，0失敗/取消/略過。體檢前13套核心smoke exit0；體檢後補跑受影響flows、pending重試、排程交錯、privacy，全部通過；release結果另見T19。原始輸出收錄evidence/af23/qa-post-review-unit.txt與qa-review-background-browser.txt、qa-post-review-browser.txt。初次3297項有3項快取fixture取消，修正後最終全套已無取消；未降低斷言或重跑效能矩陣。
 - [ ] **T19 最終發行檔與升級（F5/F6）**：以最終程式重新產生 0.22.0 交付物及 SHA-256，完成隔離 profile 原地升級及核心流程。驗收：檔案與 src 相同、runtime 版本正確、同 extension ID、任務／歷史保留。先前升級已通過，但其封裝 hash 不能代表之後修改的程式；不宣稱使用者安裝已更新。
 - [ ] **T20 文件、提交與完整收尾**：更新 PLAN／29 項 AC 證據表、README、SPEC、CLAUDE、BACKLOG；收錄可公開的原始結果與限制；逐段 commit/push 尚未推送的程式、測試及文件。驗收：每項 mandatory AC 有命令、預期／實際、版本與證據；QA 與本輪分支內容一致，遠端 head 確認，沒有未交代的修改。
 
@@ -579,4 +579,5 @@ ACK／結果對帳、持久化修復紀錄、來源漂移防護、原子卡片�
 - F2：在 rec2 鎖內重驗 execution fingerprint，來源修改時以既有 durable invalidation marker 清除觀察到的未完成排程 commit；完成舊 slot 與 manual 歷史保留。主代理發現測試 API 參數錯位造成假綠，已修正並加來源未變可成功 append 的 control。A5/F2/恢復整合共48/48通過。
 - A5 no-op：已套用結果的捷徑也驗 task URL/preActions，避免新舊來源相同時跳過衝突檢查；prepared/cleanup synthetic fixture 同步新的 journal 契約。
 - C6：主代理實際瀏覽器重演 layout cleanup 一次失敗，從畫面點「再次確認同一操作」成功；只一個新 key/一筆封存，舊 layout 引用移除。新增 smoke 納入常規 runner。
-- F3 剩餘缺口：Luna只讀覆核發現欄位錯誤節點缺 aria-live，正在補最小語意與精確斷言。最後封裝待此修正驗收後重建。
+- F3 錯誤提示：Luna只讀覆核發現欄位錯誤節點缺 aria-live，已補預置與動態錯誤的 polite 語意；主代理加實際 visible 等待並核對 aria-describedby。最後四種尺寸/縮放與鍵盤兩輪通過。
+- 體檢後必要回歸：因共享 storage/layout/save-guard 有修改，完整 npm test 重新執行一次，3322/3322 通過，0 fail/cancel/skip；受影響 flows、C6 pending、T06 排程與 privacy 已實機通過。完整效能矩陣與不受影響的來源矩陣未重跑。

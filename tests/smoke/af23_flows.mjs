@@ -165,8 +165,13 @@ try {
       await panel.locator('#name').fill('')
       await panel.keyboard.press('Tab')
       assert.equal(await panel.$eval('#name',e=>e.getAttribute('aria-invalid')),'true')
-      const errors=await panel.evaluate(()=>[...document.querySelectorAll('[role="alert"],.field-error')].filter(e=>e.textContent.trim()).map(e=>e.textContent))
-      assert.ok(errors.length,'field error has visible textual explanation')
+      await panel.waitForSelector('#name-error',{visible:true})
+      const nameError=await panel.$eval('#name-error',e=>({hidden:e.hidden,text:e.textContent.trim(),live:e.getAttribute('aria-live')}))
+      assert.equal(nameError.hidden,false,'name error is visible')
+      assert.match(nameError.text,/名稱/,'name error has visible explanatory text')
+      assert.equal(nameError.live,'polite','name error is a polite live region')
+      assert.ok(await panel.$eval('#name',e=>(e.getAttribute('aria-describedby')||'').split(/\s+/).includes('name-error')),
+        'the invalid name field is explicitly associated with its error text')
       await panel.locator('#name').fill('Fixture repair')
       await panel.keyboard.press('Tab')
       for(const selector of ['#field-list [data-field-name]', '#field-list [data-field-repair]', '#field-list [data-field-replace]', '#test-now','#save','#cancel']) {
