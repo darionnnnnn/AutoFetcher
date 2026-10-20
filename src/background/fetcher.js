@@ -1224,7 +1224,12 @@ export async function runTask(task, opts = {}) {
 
         // 8. 確認登入狀態（若停留在登入頁則執行自動登入）
         checkDeadline()
-        const login = await ensureLoggedIn(tabId, task, { pollMs, loadTimeoutMs, extraDelayMs, deadlineAt })
+        const login = await ensureLoggedIn(tabId, task, {
+          pollMs, loadTimeoutMs, extraDelayMs, deadlineAt,
+          checkTimeoutMs: opts.checkTimeoutMs,
+          fillTimeoutMs: opts.fillTimeoutMs,
+          interactivePreview: opts.interactivePreview === true
+        })
         // 登入流程填了表單、換了頁,入口的載入次數量不到它:自己標記頁面被動過。
         // 本來打算沿用前置動作狀態的(session 剛好在兩個任務之間過期),回任務網址重跑。
         if (login?.attempted === true && acquiredTab) {

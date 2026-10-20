@@ -51,6 +51,7 @@ import {
 } from '../shared/pick-protocol.js'
 import { getPickDraft, updatePickDraft } from '../shared/pick-draft.js'
 import { routeIdentityMatchesUrl, sameRouteIgnoringTracking } from '../shared/route.js'
+import { normalizeTaskSources, validateMultiTask } from '../shared/task-source.js'
 
 // 面板 ctx 可能尚未寫入就收到 pagehide；用短命記號避免無 ctx 時重複清場，
 // 同時讓新一輪開啟能再次廣播 EXIT_PICK。
@@ -1522,10 +1523,32 @@ export async function handleMessage(msg, sender, runOpts = {}) {
 
     if (msg.type === MSG.TEST_TASK) {
       const task = msg.task
-      if (!task || typeof task !== 'object' || !task.url || !task.locator || !task.spec) {
+      if (!task || typeof task !== 'object' || typeof task.url !== 'string' || !task.url.trim() ||
+          !task.spec || typeof task.spec !== 'object' || Array.isArray(task.spec)) {
         return { ok: false, error: '任務設定不完整' }
       }
-      return await runTask(task, { dryRun: true, reason: 'manual', tabId: msg.tabId })
+      try {
+        const isMulti = task.mode === 'multi' || task.spec.mode === 'multi'
+        if (isMulti) {
+          validateMultiTask(task)
+        } else if (!task.locator || typeof task.locator !== 'object' || Array.isArray(task.locator) || Object.keys(task.locator).length === 0) {
+          throw new Error('locator 必須是非空物件')
+        }
+        const sources = normalizeTaskSources(task)
+        if (sources.length === 0 || sources.some(field =>
+          !field.source?.locator || typeof field.source.locator !== 'object' ||
+          Array.isArray(field.source.locator) || Object.keys(field.source.locator).length === 0
+        )) throw new Error('每個值都必須有合法來源定位')
+      } catch (error) {
+        return { ok: false, error: '任務設定不完整', message: String(error?.message || error) }
+      }
+      return await runTask(task, {
+        ...runOpts,
+        dryRun: true,
+        reason: 'manual',
+        tabId: msg.tabId,
+        interactivePreview: true
+      })
     }
 
     if (msg.type === MSG.RUN_TASK) {
