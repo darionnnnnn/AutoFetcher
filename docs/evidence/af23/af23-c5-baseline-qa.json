@@ -1,0 +1,165 @@
+{
+  "label": "qa",
+  "source": {
+    "path": "<workspace>/work/qa/src",
+    "manifestVersion": "0.22.0",
+    "srcSha256": "f263823c58b589a86df417dcdce31f752185dac31c72251c8c3fb6fd2c9ce72f"
+  },
+  "browser": "<repository>/.browsers/chrome/mac_arm-152.0.7977.82/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+  "baselineCommit": null,
+  "flows": [
+    {
+      "flow": "single-value-create-preview-save-first-result",
+      "clicks": 6,
+      "formEdits": 1,
+      "screenTransitions": 2,
+      "elapsedMs": 6930.29,
+      "trace": [
+        {
+          "type": "chromeAction",
+          "action": "open-picker-via-extension-entry",
+          "countedAsOneUserClick": true
+        },
+        {
+          "type": "click",
+          "selector": "#scalar"
+        },
+        {
+          "type": "click",
+          "selector": "[data-af-done]"
+        },
+        {
+          "type": "transition",
+          "to": "picker form"
+        },
+        {
+          "type": "click",
+          "selector": "#name"
+        },
+        {
+          "type": "formEdit",
+          "selector": "#name",
+          "value": "Baseline 單值任務"
+        },
+        {
+          "type": "click",
+          "selector": "#test-now"
+        },
+        {
+          "type": "click",
+          "selector": "#save"
+        },
+        {
+          "type": "transition",
+          "to": "saved first result"
+        }
+      ],
+      "persistedValue": 42,
+      "status": "PASS"
+    },
+    {
+      "flow": "exactly-two-groups-create-preview-save-first-results",
+      "clicks": 14,
+      "formEdits": 2,
+      "screenTransitions": 4,
+      "elapsedMs": 13099.95,
+      "trace": [
+        {
+          "type": "click",
+          "selector": "#open-real-side-panel"
+        },
+        {
+          "type": "click",
+          "selector": "#group-start-first"
+        },
+        {
+          "type": "click",
+          "selector": "#group-name"
+        },
+        {
+          "type": "formEdit",
+          "selector": "#group-name",
+          "value": "第一組"
+        },
+        {
+          "type": "click",
+          "selector": "#group-name-confirm"
+        },
+        {
+          "type": "click",
+          "selector": "#group-a"
+        },
+        {
+          "type": "click",
+          "selector": "[data-af-done]"
+        },
+        {
+          "type": "transition",
+          "to": "group draft"
+        },
+        {
+          "type": "click",
+          "selector": "#group-add"
+        },
+        {
+          "type": "click",
+          "selector": "#group-name"
+        },
+        {
+          "type": "formEdit",
+          "selector": "#group-name",
+          "value": "第二組"
+        },
+        {
+          "type": "click",
+          "selector": "#group-name-confirm"
+        },
+        {
+          "type": "click",
+          "selector": "#group-b"
+        },
+        {
+          "type": "click",
+          "selector": "[data-af-done]"
+        },
+        {
+          "type": "transition",
+          "to": "group draft"
+        },
+        {
+          "type": "click",
+          "selector": "#group-finish"
+        },
+        {
+          "type": "transition",
+          "to": "batch settings"
+        },
+        {
+          "type": "click",
+          "selector": "#test-now"
+        },
+        {
+          "type": "click",
+          "selector": "#save"
+        },
+        {
+          "type": "transition",
+          "to": "saved first results"
+        }
+      ],
+      "groupCount": 2,
+      "persistedResults": [
+        {
+          "name": "第一組",
+          "value": 101
+        },
+        {
+          "name": "第二組",
+          "value": 202
+        }
+      ],
+      "status": "PASS"
+    }
+  ],
+  "status": "PASS"
+}
