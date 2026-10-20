@@ -260,21 +260,56 @@ test('AC-A3 task 寫入前中斷可由已記錄操作恢復；重送不會建立
   assert.equal((await f.storage.getTask('af23-repair')).fields.filter(field => field.key !== 'f2').length, 1)
 })
 
-test('AC-A3 bounded operation receipt does not copy URL query secrets', async t => {
+test('AC-A3 repair preserves the exact iframe source URL in the formal task', async t => {
   const f = await setup(t)
-  f.chrome.__setScriptResponder(() => [{ frameId: 0, result: 'https://a.test/prices?token=AF23_SECRET_SENTINEL' }])
+  f.chrome.__setScriptResponder(() => [{ frameId: 1, result: 'https://a.test/prices?token=AF23_SECRET_SENTINEL' }])
   await f.storage.updateTasks(['af23-repair'], task => {
     task.spec.fields[0].source.frame = { url: 'https://a.test/prices?token=AF23_SECRET_SENTINEL' }
     return task
   })
   const grant = await begin(f)
+  grant.sender.frameId = 1
   grant.sender.url = 'https://a.test/prices?token=AF23_SECRET_SENTINEL'
   const result = await picked(f, grant)
   assert.equal(result.ok, true)
-  const stored = await f.chrome.storage.local.get('fieldRepairOperations')
-  const receiptText = JSON.stringify(stored.fieldRepairOperations)
-  assert.equal(receiptText.includes('AF23_SECRET_SENTINEL'), false)
-  assert.equal(JSON.stringify(result).includes('AF23_SECRET_SENTINEL'), false)
+  const after = await f.storage.getTask('af23-repair')
+  assert.equal(after.spec.fields[0].source.frame.url, 'https://a.test/prices?token=AF23_SECRET_SENTINEL')
+  assert.equal(result.source.frame.url, 'https://a.test/prices?token=AF23_SECRET_SENTINEL')
+})
+
+test('AC-A4 terminal repair result stays immutable and pending replay does not close the source tab', async t => {
+  const f = await setup(t)
+  const grant = await begin(f, 'replace')
+  const realSet = f.chrome.storage.local.set.bind(f.chrome.storage.local)
+  let failTaskWrite = true
+  f.chrome.storage.local.set = async items => {
+    if (failTaskWrite && Object.hasOwn(items, 'tasks')) { failTaskWrite = false; throw new Error('task write barrier') }
+    return realSet(items)
+  }
+  const first = await picked(f, grant)
+  assert.equal(first.error, 'field_repair_pending')
+  const removesBeforeReplay = f.chrome.__calls.filter(call => call.api === 'tabs.remove').length
+  const replay = await picked(f, grant)
+  assert.equal(replay.ok, true)
+  assert.equal(f.chrome.__calls.filter(call => call.api === 'tabs.remove').length, removesBeforeReplay + 1,
+    'the tab is removed only after replay commits successfully')
+
+  const operation = await f.storage.getFieldRepairOperation(grant.enter.repairSessionId)
+  const terminalAt = operation.updatedAt
+  const terminalResult = structuredClone(operation.result)
+  const replayAgain = await picked(f, grant)
+  assert.deepEqual(replayAgain, terminalResult)
+  assert.equal((await f.storage.getFieldRepairOperation(operation.id)).updatedAt, terminalAt,
+    'replaying a completed operation does not mutate its receipt')
+})
+
+test('AC-A4 pending operation older than the completed TTL remains recoverable', async t => {
+  const f = await setup(t)
+  const operation = { id: 'old-pending', taskId: 'af23-repair', fieldKey: 'f1', repairMode: 'repair',
+    status: 'prepared', createdAt: Date.now() - 30 * 24 * 60 * 60 * 1000 }
+  await f.storage.beginFieldRepairOperation(operation)
+  assert.equal((await f.storage.getFieldRepairOperation(operation.id)).status, 'prepared')
+  assert.equal((await f.storage.listPendingFieldRepairOperations()).some(item => item.id === operation.id), true)
 })
 
 test('AC-A4 task 已替換但版面清理中斷，重啟只補清理且不再換 key', async t => {

@@ -211,8 +211,7 @@ const FIELD_REPAIR_OPERATION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 function liveFieldRepairOperations(rows, now = Date.now()) {
   return asArray(rows).filter(operation => operation && typeof operation.id === 'string' &&
-    (operation.status !== 'complete' || now - Number(operation.updatedAt || operation.createdAt || 0) < FIELD_REPAIR_OPERATION_TTL_MS) &&
-    (operation.status === 'complete' || now - Number(operation.createdAt || 0) < FIELD_REPAIR_OPERATION_TTL_MS))
+    (operation.status !== 'complete' || now - Number(operation.updatedAt || operation.createdAt || 0) < FIELD_REPAIR_OPERATION_TTL_MS))
 }
 
 /**

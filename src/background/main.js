@@ -84,19 +84,12 @@ function repairFrameUrl(value) {
   } catch { return '' }
 }
 
-function repairSourceSnapshot(source) {
-  if (!source || typeof source !== 'object') return source
-  const safe = structuredClone(source)
-  if (safe.frame?.url) safe.frame.url = repairFrameUrl(safe.frame.url)
-  return safe
-}
-
 function fieldRepairSnapshot(field, entry) {
   return stableRepairValue({
     key: field?.key,
     mode: field?.mode,
-    fieldSource: repairSourceSnapshot(field?.source),
-    entrySource: repairSourceSnapshot(entry?.source),
+    fieldSource: field?.source,
+    entrySource: entry?.source,
     spec: entry?.spec || (entry?.cell ? { cell: entry.cell } : entry?.block ? { block: entry.block } : {}),
     fieldStateActions: field?.stateActions,
     entryStateActions: entry?.stateActions
@@ -223,10 +216,12 @@ function operationAlreadyApplied(task, operation) {
 }
 
 async function finishFieldRepairOperation(operation) {
+  if (operation?.status === 'complete' && operation.result) return structuredClone(operation.result)
   const task = await getTask(operation.taskId)
   if (!task || task.mode !== 'multi') {
-    return updateFieldRepairOperation(operation.id, current => ({ ...current, status: 'complete',
-      result: { ok: false, error: 'field_not_found', message: '任務已移除，沒有套用重選結果' } }))
+    const result = { ok: false, error: 'field_not_found', message: '任務已移除，沒有套用重選結果' }
+    await updateFieldRepairOperation(operation.id, current => ({ ...current, status: 'complete', result }))
+    return result
   }
 
   let applied = operationAlreadyApplied(task, operation)
@@ -269,7 +264,8 @@ async function finishFieldRepairOperation(operation) {
       const failure = conflict
         ? { ok: false, error: 'stale_field_repair', message: '這個值的來源或狀態動作已變更，請重新開始' }
         : { ok: false, error: 'field_not_found', message: missing ? '這個值已移除或選取類型不同，沒有套用重選結果' : '這個值已移除，沒有套用重選結果' }
-      return updateFieldRepairOperation(operation.id, current => ({ ...current, status: 'complete', result: failure }))
+      await updateFieldRepairOperation(operation.id, current => ({ ...current, status: 'complete', result: failure }))
+      return failure
     }
   }
 
@@ -363,8 +359,12 @@ async function applyFieldRepair(msg, sender) {
       return { ok: false, error: 'stale_field_repair', message: '這次單值重選已失效，請重新開始' }
     }
     const result = await runFieldRepairForMessage(existing)
-    if (existing.status === 'complete' && existing.result) return existing.result
-    try { await chrome.tabs.remove(tabId) } catch {}
+    if (result?.ok === true) {
+      await notifyFieldRepairDone(existing, result)
+      try { await chrome.tabs.remove(tabId) } catch {}
+    } else {
+      await notifyFieldRepairPending(existing, result)
+    }
     return result
   }
   if (grant.taskId !== msg.taskId || grant.fieldKey !== msg.repairFieldKey ||
@@ -392,7 +392,7 @@ async function applyFieldRepair(msg, sender) {
   const locator = msg.locator && typeof msg.locator === 'object' ? structuredClone(msg.locator) : {}
   if (!hasLocator(locator)) return { ok: false, error: 'invalid_repair_pick', message: '這個選取沒有可用的定位規格' }
   const frame = frameDescriptorOf(sender, msg)
-  const source = { locator, ...(frame?.url ? { frame: { url: repairFrameUrl(frame.url) } } : {}) }
+  const source = { locator, ...(frame?.url ? { frame: { url: frame.url } } : {}) }
   const previous = entry?.spec || (entry?.cell ? { cell: entry.cell } : entry?.block ? { block: entry.block } : {})
   if (!field || !entry || task?.mode !== 'multi') return { ok: false, error: 'field_not_found', message: '這個值已移除，沒有套用重選結果' }
   if (fieldRepairSnapshot(field, entry) !== grant.fieldSnapshot) return { ok: false, error: 'stale_field_repair', message: '這個值的來源或狀態動作已變更，請重新開始' }
@@ -417,7 +417,7 @@ async function applyFieldRepair(msg, sender) {
     operation.oldSeriesId = seriesIdOf(grant.taskId, grant.fieldKey)
     operation.archivedField = {
       key: grant.fieldKey, name: field.name || grant.fieldKey, mode: field.mode,
-      source: repairSourceSnapshot(entry.source || field.source || {}), spec: structuredClone(previous),
+      source: structuredClone(entry.source || field.source || {}), spec: structuredClone(previous),
       alerts: structuredClone((task.alerts || []).filter(alert => alert?.field === grant.fieldKey)), archivedAt: new Date().toISOString()
     }
   }
@@ -428,8 +428,25 @@ async function applyFieldRepair(msg, sender) {
   fieldRepairSessions.delete(sessionId)
   const result = await runFieldRepairForMessage(persisted)
   if (result?.ok) try { await chrome.tabs.remove(grant.tabId) } catch {}
-  try { await chrome.runtime.sendMessage({ type: 'FIELD_REPAIR_DONE', ...result }) } catch {}
+  if (result?.ok === true) await notifyFieldRepairDone(persisted, result)
+  else await notifyFieldRepairPending(persisted, result)
   return result
+}
+
+async function notifyFieldRepairDone(operation, result) {
+  try {
+    await chrome.runtime.sendMessage({ type: 'FIELD_REPAIR_DONE', done: true, operationId: operation.id,
+      sessionId: operation.id, taskId: operation.taskId, fieldKey: operation.fieldKey,
+      repairMode: operation.repairMode, ...result })
+  } catch {}
+}
+
+async function notifyFieldRepairPending(operation, result) {
+  try {
+    await chrome.runtime.sendMessage({ type: 'FIELD_REPAIR_PENDING', state: result?.error?.includes('pending') ? 'pending' : 'failed',
+      operationId: operation.id, sessionId: operation.id, taskId: operation.taskId,
+      fieldKey: operation.fieldKey, repairMode: operation.repairMode, message: result?.message || '重選操作尚未完成' })
+  } catch {}
 }
 
 function frameDescriptorOf(sender, extra = {}) {
