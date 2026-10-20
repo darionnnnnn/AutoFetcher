@@ -105,7 +105,7 @@ function beginFieldRepair(msg) {
   if (existing) {
     if (existing.repairMode === msg.repairMode) return existing.promise
     return existing.promise.then(result => ({ ok: false, error: 'field_repair_active',
-      operationId: result?.sessionId, sessionId: result?.sessionId,
+      operationId: result?.sessionId, sessionId: result?.sessionId, tabId: result?.tabId,
       message: '這個值已有另一種重選模式正在開啟；請先完成或取消該頁面' }))
   }
   const reservation = { repairMode: msg.repairMode, promise: null }
@@ -132,7 +132,6 @@ async function beginFieldRepairOnce(msg) {
     const result = await runFieldRepairForMessage(pending)
     if (result?.ok === true) {
       await notifyFieldRepairDone(pending, result)
-      try { await chrome.tabs.remove(pending.auth?.tabId) } catch {}
       return { ...result, recovered: true, operationId: pending.id, sessionId: pending.id }
     }
     await notifyFieldRepairPending(pending, result)
@@ -153,7 +152,8 @@ async function beginFieldRepairOnce(msg) {
   const active = [...fieldRepairSessions.values()].find(session =>
     session.taskId === task.id && session.fieldKey === field.key)
   if (active) return { ok: false, error: 'field_repair_active', operationId: active.sessionId,
-    sessionId: active.sessionId, message: '這個值已有重選頁面開啟；請先完成或取消該頁面' }
+    sessionId: active.sessionId, tabId: active.tabId,
+    message: '這個值已有重選頁面開啟；請先完成或取消該頁面' }
   const sessionId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
   let tabId = null
   let keepTab = false
@@ -387,7 +387,6 @@ export function recoverFieldRepairOperations() {
         const result = await runFieldRepairForMessage(operation)
         if (result?.ok === true) {
           await notifyFieldRepairDone(operation, result)
-          try { await chrome.tabs.remove(operation.auth?.tabId) } catch {}
         } else {
           await notifyFieldRepairPending(operation, result)
         }

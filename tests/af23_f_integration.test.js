@@ -243,8 +243,24 @@ test('AC-F2 a new BEGIN recovers the same pending journal without opening a seco
   assert.equal(result?.sessionId, operation.id)
   assert.equal(f.chrome.__calls.filter(call => call.api === 'tabs.create').length, tabsBefore,
     'recovering a pending operation never opens a second source tab')
+  assert.equal(f.chrome.__calls.some(call => call.api === 'tabs.remove' && call.args[0] === operation.auth.tabId), false,
+    'a recovered receipt cannot close a tab solely because an old worker journal stored its tab id')
   assert.equal((await f.storage.getTask(task.id)).spec.fields.find(item => item.key === 'price').source.locator.css, '#recovered')
   assert.equal((await f.storage.getFieldRepairOperation(operation.id)).status, 'complete')
+
+  const recoveredTask = await f.storage.getTask(task.id)
+  const recoveredField = recoveredTask.fields.find(item => item.key === 'price')
+  const recoveredEntry = recoveredTask.spec.fields.find(item => item.key === 'price')
+  const startupOperation = { ...operation, id: 'af23-startup-recovery',
+    fieldSnapshot: stable({ key: recoveredField.key, mode: recoveredField.mode,
+      fieldSource: recoveredField.source, entrySource: recoveredEntry.source, spec: recoveredEntry.spec,
+      fieldStateActions: recoveredField.stateActions, entryStateActions: recoveredEntry.stateActions }),
+    source: { locator: locator('#startup-recovered') }, auth: { ...operation.auth, tabId: 992 } }
+  startupOperation.nextSpec = { block: { axis: 'col', index: 6, headerText: '價格', aggregate: 'last' } }
+  await f.storage.beginFieldRepairOperation(startupOperation)
+  await f.background.recoverFieldRepairOperations()
+  assert.equal(f.chrome.__calls.some(call => call.api === 'tabs.remove' && call.args[0] === startupOperation.auth.tabId), false,
+    'worker restart recovery leaves unrelated tabs untouched when ids may have been reused')
 })
 
 test('AC-A4 pending replacement cleanup recovers by either old or new field key before field validation', async t => {
@@ -293,14 +309,17 @@ test('AC-A4 concurrent BEGIN calls share one source tab and a closed grant can b
   const [first, concurrent] = await Promise.all([begin(), begin()])
   assert.equal(first.ok, true)
   assert.equal(concurrent.sessionId, first.sessionId)
+  assert.equal(first.tabId, concurrent.tabId)
   assert.equal(f.chrome.__calls.filter(call => call.api === 'tabs.create').length, 1,
     'BEGIN acquires its task/field reservation synchronously before the first await')
   const active = await begin()
   assert.equal(active.error, 'field_repair_active', 'a live grant prevents another repair tab')
+  assert.equal(active.tabId, first.tabId, 'active response exposes the existing repair tab for a return-to-tab control')
   const modeConflict = await f.background.handleMessage({
     type: 'BEGIN_FIELD_REPAIR', taskId: f.task.id, fieldKey: 'price', repairMode: 'replace'
   }, extensionSender)
   assert.equal(modeConflict.error, 'field_repair_active', 'a competing repair mode cannot reuse or bypass the reservation')
+  assert.equal(modeConflict.tabId, first.tabId)
 
   await f.chrome.tabs.remove(first.tabId)
   const retried = await begin()
