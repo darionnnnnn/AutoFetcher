@@ -19,6 +19,7 @@ let currentCtx = null
 let currentBlock = null
 const fieldSpecs = new Map()
 const repairSessionsByField = new Map()
+const recentlyCompletedFieldRepairs = new Map()
 const recentlyRemovedRepairTabs = new Map()
 let fieldRepairListenersBound = false
 let previewGeneration = 0
@@ -1254,17 +1255,47 @@ async function startFieldRepair(row, repairMode) {
   const fieldKey = row?.dataset?.fieldKey
   const identity = fieldRepairIdentity(taskId, fieldKey)
   if (!taskId || !fieldKey || repairSessionsByField.has(identity)) return
-    repairSessionsByField.set(identity, { tabId: null, taskId, fieldKey, repairMode, sessionId: null })
+  const draftAtStart = {
+    source: structuredClone(row._source || {}),
+    spec: structuredClone(row._spec || {})
+  }
+  repairSessionsByField.set(identity, { tabId: null, taskId, fieldKey, repairMode, sessionId: null, draftAtStart })
   updateRepairActionState(row)
   setFieldRowHint(row, '正在開啟來源重選…')
   try {
     const response = await chrome.runtime.sendMessage({
       type: MSG.BEGIN_FIELD_REPAIR, taskId, fieldKey, repairMode
     })
+    if (response?.ok === true && response.recovered === true) {
+      await applyFieldRepairDone({ ...response, type: 'FIELD_REPAIR_DONE', done: true,
+        operationId: response.operationId || response.sessionId, sessionId: response.sessionId || response.operationId })
+      return
+    }
     if (!response?.ok) {
+      if (['field_repair_pending', 'field_repair_cleanup_pending', 'field_repair_active'].includes(response?.error) &&
+          (response.operationId || response.sessionId)) {
+        const sessionId = response.operationId || response.sessionId
+        repairSessionsByField.set(identity, {
+          tabId: Number.isInteger(response.tabId) ? response.tabId : null,
+          taskId, fieldKey, repairMode, sessionId, operationId: sessionId, state: response.state || 'pending', draftAtStart
+        })
+        const currentRow = findFieldRow(taskId, fieldKey)
+        updateRepairActionState(currentRow)
+        if (currentRow) {
+          setFieldRowHint(currentRow, response.message || '結果尚未確認；再次確認會核對同一操作，不會建立第二個值。')
+          addFieldRepairResumeAction(currentRow, Number.isInteger(response.tabId) ? response.tabId : null)
+        }
+        return
+      }
       repairSessionsByField.delete(identity)
       updateCurrentRepairActionState(taskId, fieldKey)
       setFieldRowHint(findFieldRow(taskId, fieldKey), response?.message || (repairMode === 'replace' ? '無法開始更換指標，請重試' : '無法開始來源重選，請重試'))
+      return
+    }
+    if (response.sessionId && recentlyCompletedFieldRepairs.get(identity) === response.sessionId) {
+      recentlyCompletedFieldRepairs.delete(identity)
+      repairSessionsByField.delete(identity)
+      updateCurrentRepairActionState(taskId, fieldKey)
       return
     }
     const removedAt = recentlyRemovedRepairTabs.get(response.tabId)
@@ -1276,7 +1307,7 @@ async function startFieldRepair(row, repairMode) {
       return
     }
     recentlyRemovedRepairTabs.delete(response.tabId)
-    repairSessionsByField.set(identity, { tabId: response.tabId, taskId, fieldKey, repairMode, sessionId: response.sessionId || null })
+    repairSessionsByField.set(identity, { tabId: response.tabId, taskId, fieldKey, repairMode, sessionId: response.sessionId || null, draftAtStart })
     setFieldRowHint(findFieldRow(taskId, fieldKey), '重選頁面已開啟；套用後會立即儲存此來源')
   } catch (error) {
     repairSessionsByField.delete(identity)
@@ -1295,6 +1326,15 @@ function bindFieldRepairListeners() {
     }
     for (const [identity, session] of repairSessionsByField) {
       if (session.tabId !== tabId) continue
+      if (session.operationId || session.state === 'pending') {
+        session.tabId = null
+        const row = findFieldRow(session.taskId, session.fieldKey)
+        if (row) {
+          setFieldRowHint(row, '來源頁已關閉，但操作結果尚未確認；再次確認會核對同一操作。')
+          addFieldRepairResumeAction(row, null)
+        }
+        continue
+      }
       repairSessionsByField.delete(identity)
       updateCurrentRepairActionState(session.taskId, session.fieldKey)
       const row = findFieldRow(session.taskId, session.fieldKey)
@@ -1308,7 +1348,13 @@ function handleFieldRepairDone(message) {
   if (!['FIELD_REPAIR_DONE', 'FIELD_REPAIR_PENDING'].includes(message?.type)) return undefined
   const pendingIdentity = fieldRepairIdentity(message.taskId, message.fieldKey)
   if (message.type === 'FIELD_REPAIR_PENDING') {
-    const session = repairSessionsByField.get(pendingIdentity)
+    let session = repairSessionsByField.get(pendingIdentity)
+    if (!session && message.operationId && message.sessionId) {
+      session = { tabId: null, taskId: message.taskId, fieldKey: message.fieldKey,
+        repairMode: message.repairMode, sessionId: message.sessionId, operationId: message.operationId,
+        state: message.state || 'pending' }
+      repairSessionsByField.set(pendingIdentity, session)
+    }
     if (session && (!session.sessionId || session.sessionId === message.sessionId)) {
       session.sessionId = message.sessionId || session.sessionId
       session.operationId = message.operationId || session.operationId
@@ -1320,12 +1366,14 @@ function handleFieldRepairDone(message) {
       if (state === 'failed') {
         repairSessionsByField.delete(pendingIdentity)
         updateRepairActionState(row)
+      } else {
+        updateRepairActionState(row)
       }
       setFieldRowHint(row, message.message || (state === 'pending'
         ? '結果尚未確認；回來源重選頁繼續完成同一操作，確認前不會重複替換。'
         : '來源重選未套用；可重新開始。'))
-      if (state === 'pending' && session?.tabId !== null && session?.tabId !== undefined) {
-        addFieldRepairResumeAction(row, session.tabId)
+      if (state === 'pending') {
+        addFieldRepairResumeAction(row, session?.tabId ?? null)
       }
     }
     return undefined
@@ -1334,18 +1382,55 @@ function handleFieldRepairDone(message) {
       typeof message.operationId !== 'string' || !message.operationId ||
       typeof message.sessionId !== 'string' || !message.sessionId ||
       message.operationId !== message.sessionId) return undefined
-  const replacing = message.repairMode === 'replace' && typeof message.oldFieldKey === 'string'
+  void applyFieldRepairDone(message)
+  return undefined
+}
+
+function sameRepairValue(left, right) {
+  return JSON.stringify(stableTaskValue(left ?? {})) === JSON.stringify(stableTaskValue(right ?? {}))
+}
+
+async function applyFieldRepairDone(message) {
+  const replacing = message.repairMode === 'replace' && typeof message.oldFieldKey === 'string' &&
+    typeof message.newFieldKey === 'string' && message.newFieldKey === message.fieldKey
   const repairIdentity = fieldRepairIdentity(message.taskId, replacing ? message.oldFieldKey : message.fieldKey)
   const activeSession = repairSessionsByField.get(repairIdentity)
   if (activeSession?.sessionId && activeSession.sessionId !== message.sessionId) return undefined
+  if (!message.source || !message.spec) return undefined
+  const savedTask = await getTask(message.taskId)
+  if (!savedTask || savedTask.mode !== 'multi') return undefined
+  const savedFieldKey = replacing ? message.newFieldKey : message.fieldKey
+  const savedField = savedTask.fields?.find(item => item?.key === savedFieldKey)
+  const persistedEntry = savedTask.spec?.fields?.find(item => item?.key === savedFieldKey)
+  if (!savedField || !persistedEntry ||
+      !sameRepairValue(persistedEntry.source, message.source) ||
+      !sameRepairValue(persistedEntry.spec, message.spec)) return undefined
+  if (replacing && (savedTask.fields?.some(item => item?.key === message.oldFieldKey) ||
+      !savedTask.archivedFields?.some(item => item?.repairOperationId === message.operationId))) return undefined
+
   repairSessionsByField.delete(repairIdentity)
+  recentlyCompletedFieldRepairs.set(repairIdentity, message.sessionId)
+  if (recentlyCompletedFieldRepairs.size > 128) recentlyCompletedFieldRepairs.delete(recentlyCompletedFieldRepairs.keys().next().value)
   if (message.taskId !== currentCtx?.task?.id) return undefined
-  previewGeneration += 1
+
+  const draftKey = activeSession ? (replacing ? message.oldFieldKey : message.fieldKey) : savedFieldKey
   const row = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
-    .find(item => item.dataset.fieldKey === (replacing ? message.oldFieldKey : message.fieldKey))
+    .find(item => item.dataset.fieldKey === draftKey)
   if (!row) return undefined
+  if (activeSession?.draftAtStart &&
+      (!sameRepairValue(row._source, activeSession.draftAtStart.source) ||
+       !sameRepairValue(row._spec, activeSession.draftAtStart.spec))) {
+    repairSessionsByField.delete(repairIdentity)
+    updateRepairActionState(row)
+    setFieldRowHint(row, '來源已儲存，但目前草稿已有變更；請重新載入任務核對後再編輯。')
+    return undefined
+  }
+  if (!activeSession &&
+      (!sameRepairValue(row._source, message.source) || !sameRepairValue(row._spec, message.spec))) return undefined
+
+  previewGeneration += 1
   updateRepairActionState(row)
-  const oldFieldKey = row.dataset.fieldKey
+  const oldFieldKey = replacing ? message.oldFieldKey : row.dataset.fieldKey
   if (replacing) {
     row.dataset.fieldKey = message.fieldKey
     const nameInput = row.querySelector('input[data-field-name]')
@@ -1385,18 +1470,68 @@ function handleFieldRepairDone(message) {
 }
 
 function addFieldRepairResumeAction(row, tabId) {
-  if (!row || row.querySelector('[data-action="resume-field-repair"]')) return
-  const button = document.createElement('button')
+  if (!row) return
+  let button = row.querySelector('[data-action="resume-field-repair"]')
+  if (button) {
+    if (Number.isInteger(tabId)) button.dataset.tabId = String(tabId)
+    else delete button.dataset.tabId
+    button.textContent = Number.isInteger(tabId) ? '返回來源頁核對' : '再次確認同一操作'
+    return
+  }
+  button = document.createElement('button')
   button.type = 'button'
   button.dataset.action = 'resume-field-repair'
-  button.textContent = '返回來源頁核對'
+  if (Number.isInteger(tabId)) button.dataset.tabId = String(tabId)
+  button.textContent = Number.isInteger(tabId) ? '返回來源頁核對' : '再次確認同一操作'
   button.addEventListener('click', async () => {
+    const targetTabId = Number.isInteger(Number(button.dataset.tabId)) ? Number(button.dataset.tabId) : null
+    if (targetTabId !== null) {
+      try {
+        await chrome.tabs.update(targetTabId, { active: true })
+      } catch {
+        setFieldRowHint(row, '來源頁已無法開啟；請再次確認同一操作或重新開始。')
+        const session = repairSessionsByField.get(fieldRepairIdentity(currentCtx?.task?.id, row.dataset.fieldKey))
+        if (session) session.tabId = null
+        delete button.dataset.tabId
+        button.textContent = '再次確認同一操作'
+      }
+      return
+    }
+    const identity = fieldRepairIdentity(currentCtx?.task?.id, row.dataset.fieldKey)
+    const session = repairSessionsByField.get(identity)
+    if (!session) return
+    button.disabled = true
+    setFieldRowHint(row, '正在核對同一重選操作…')
     try {
-      await chrome.tabs.update(tabId, { active: true })
-    } catch {
-      setFieldRowHint(row, '來源頁已無法開啟；請重新開始來源重選。')
-      repairSessionsByField.delete(fieldRepairIdentity(currentCtx?.task?.id, row.dataset.fieldKey))
-      updateRepairActionState(row)
+      const response = await chrome.runtime.sendMessage({
+        type: MSG.BEGIN_FIELD_REPAIR, taskId: session.taskId, fieldKey: session.fieldKey, repairMode: session.repairMode
+      })
+      if (response?.ok === true && response.recovered === true) {
+        await applyFieldRepairDone({ ...response, type: 'FIELD_REPAIR_DONE', done: true,
+          operationId: response.operationId || response.sessionId, sessionId: response.sessionId || response.operationId })
+        button.remove()
+        return
+      }
+      if (response?.ok && Number.isInteger(response.tabId)) {
+        session.tabId = response.tabId
+        session.sessionId = response.sessionId || session.sessionId
+        button.remove()
+        setFieldRowHint(row, '已返回原重選頁；完成後會立即儲存。')
+        await chrome.tabs.update(response.tabId, { active: true })
+      } else if (response?.operationId || response?.sessionId) {
+        session.sessionId = response.operationId || response.sessionId
+        session.operationId = session.sessionId
+        setFieldRowHint(row, response.message || '結果仍待確認；可再次確認同一操作。')
+      } else {
+        repairSessionsByField.delete(identity)
+        updateRepairActionState(row)
+        setFieldRowHint(row, response?.message || '無法確認這次重選；可重新開始。')
+        button.remove()
+      }
+    } catch (error) {
+      setFieldRowHint(row, String(error?.message || '無法確認這次重選；請稍後再試。'))
+    } finally {
+      if (button.isConnected) button.disabled = false
     }
   })
   row.appendChild(button)
