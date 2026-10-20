@@ -23,6 +23,8 @@ const recentlyCompletedFieldRepairs = new Map()
 const recentlyRemovedRepairTabs = new Map()
 let fieldRepairListenersBound = false
 let previewGeneration = 0
+let latestPreviewRequestId = 0
+let activePreviewBusy = null
 // multi 每個值可以有自己的 block 設定；只有使用者真的改動共用 controls
 // 時才把它們套用到所有適用值。render 時記下畫面基準，避免單純重畫／儲存洗掉來源規格。
 let multiControlBaseline = null
@@ -953,6 +955,11 @@ function fillSchedule(schedule) {
 }
 
 export function render(ctx) {
+  // A newly rendered context owns its own preview controls. Release the old
+  // request's button state now; its eventual finally must not touch this view.
+  activePreviewBusy?.release?.()
+  activePreviewBusy = null
+  latestPreviewRequestId = 0
   previewGeneration += 1
   currentCtx = ctx || {}
   multiControlBaseline = null
@@ -3160,8 +3167,19 @@ function previewStillMatches(requestId, taskId, fingerprint) {
   }
 }
 
-function showStalePreview(requestId) {
-  if (requestId !== previewGeneration) return
+function showStalePreview(requestId, contextAtStart, taskId, fingerprint) {
+  // A repair intentionally increments previewGeneration to invalidate the old
+  // response. Keep its warning only while the same task/context is still shown
+  // and its current draft differs from the request snapshot.
+  if (requestId !== latestPreviewRequestId || currentCtx !== contextAtStart ||
+      (currentCtx?.task?.id || null) !== taskId) return
+  try {
+    const currentTask = taskFromForm(getFormData(), currentCtx)
+    if (!currentTask.url && currentCtx?.url) currentTask.url = currentCtx.url
+    if (taskFingerprintOf(currentTask) === fingerprint) return
+  } catch {
+    return
+  }
   const message = '來源或設定已變更，這次結果未套用；請重新試抓確認目前草稿。'
   showErrorText(message)
   const previewEl = document.getElementById('preview')
@@ -3994,7 +4012,10 @@ export async function handleTestNow() {
   // buildTask 內部會呼叫 buildSpec(values) 組出規格
   const task = taskFromForm(values, currentCtx)
   const requestId = ++previewGeneration
+  latestPreviewRequestId = requestId
+  const contextAtStart = currentCtx
   const targetTaskId = currentCtx?.task?.id || null
+  activePreviewBusy = { requestId, context: contextAtStart, taskId: targetTaskId, release: busy }
   const taskFingerprint = taskFingerprintOf(task)
   const editPreview = Boolean(currentCtx?.task)
   if (editPreview) task.foreground = false
@@ -4011,7 +4032,7 @@ export async function handleTestNow() {
       })
     } catch {
       if (!previewStillMatches(requestId, targetTaskId, taskFingerprint)) {
-        showStalePreview(requestId)
+        showStalePreview(requestId, contextAtStart, targetTaskId, taskFingerprint)
         return
       }
       // 訊息通道被拒絕（背景被回收等），與 ok:false 是兩條路，兩條都要有字
@@ -4021,7 +4042,7 @@ export async function handleTestNow() {
       return
     }
     if (!previewStillMatches(requestId, targetTaskId, taskFingerprint)) {
-      showStalePreview(requestId)
+      showStalePreview(requestId, contextAtStart, targetTaskId, taskFingerprint)
       return
     }
     if (res && res.ok) {
@@ -4123,8 +4144,15 @@ export async function handleTestNow() {
     setPreviewState('error')
   } finally {
     // 若使用者已切到另一個任務，舊請求不能重設新表單的按鈕狀態。
-    if (requestId === previewGeneration) busy()
-    try { scrollPreviewIntoView() } catch {}
+    const stillOwnsCurrentContext = currentCtx === contextAtStart &&
+      (currentCtx?.task?.id || null) === targetTaskId && requestId === latestPreviewRequestId
+    if (requestId === previewGeneration || stillOwnsCurrentContext) {
+      busy()
+      if (activePreviewBusy?.requestId === requestId) activePreviewBusy = null
+    }
+    if (requestId === previewGeneration) {
+      try { scrollPreviewIntoView() } catch {}
+    }
   }
 }
 
