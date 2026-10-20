@@ -1382,7 +1382,13 @@ function handleFieldRepairDone(message) {
       typeof message.operationId !== 'string' || !message.operationId ||
       typeof message.sessionId !== 'string' || !message.sessionId ||
       message.operationId !== message.sessionId) return undefined
-  void applyFieldRepairDone(message)
+  void applyFieldRepairDone(message).catch(() => {
+    const identity = fieldRepairIdentity(message.taskId, message.repairMode === 'replace' ? message.oldFieldKey : message.fieldKey)
+    const row = findFieldRow(message.taskId, message.repairMode === 'replace' ? message.oldFieldKey : message.fieldKey)
+    if (row) setFieldRowHint(row, '成功回覆尚未完成本機核對；請再次確認同一操作，系統不會重複替換。')
+    const session = repairSessionsByField.get(identity)
+    if (session) session.state = 'pending'
+  })
   return undefined
 }
 
@@ -1395,6 +1401,8 @@ async function applyFieldRepairDone(message) {
     typeof message.newFieldKey === 'string' && message.newFieldKey === message.fieldKey
   const repairIdentity = fieldRepairIdentity(message.taskId, replacing ? message.oldFieldKey : message.fieldKey)
   const activeSession = repairSessionsByField.get(repairIdentity)
+  const contextAtStart = currentCtx
+  const generationAtStart = previewGeneration
   if (activeSession?.sessionId && activeSession.sessionId !== message.sessionId) return undefined
   if (!message.source || !message.spec) return undefined
   const savedTask = await getTask(message.taskId)
@@ -1408,10 +1416,13 @@ async function applyFieldRepairDone(message) {
   if (replacing && (savedTask.fields?.some(item => item?.key === message.oldFieldKey) ||
       !savedTask.archivedFields?.some(item => item?.repairOperationId === message.operationId))) return undefined
 
+  const latestSession = repairSessionsByField.get(repairIdentity)
+  if ((activeSession && latestSession !== activeSession) || (!activeSession && latestSession)) return undefined
   repairSessionsByField.delete(repairIdentity)
   recentlyCompletedFieldRepairs.set(repairIdentity, message.sessionId)
   if (recentlyCompletedFieldRepairs.size > 128) recentlyCompletedFieldRepairs.delete(recentlyCompletedFieldRepairs.keys().next().value)
   if (message.taskId !== currentCtx?.task?.id) return undefined
+  if (contextAtStart !== currentCtx || generationAtStart !== previewGeneration) return undefined
 
   const draftKey = activeSession ? (replacing ? message.oldFieldKey : message.fieldKey) : savedFieldKey
   const row = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
