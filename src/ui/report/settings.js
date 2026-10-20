@@ -20,13 +20,42 @@ import { statusTextOf, isRed } from '../../shared/record-status.js'
 import { applyTheme, applySavedTheme } from '../theme-apply.js'
 import { icon } from '../icons.js'
 
-// 重新繪製儲存用量區
+function showStorageStatsPrompt() {
+  const statsBox = document.getElementById('storage-stats')
+  if (!statsBox) return
+  statsBox.replaceChildren()
+  const status = document.createElement('p')
+  status.textContent = '尚未計算資料用量。計算時會讀取本機紀錄。'
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.textContent = '計算資料用量'
+  button.onclick = () => renderStorageStats()
+  statsBox.append(status, button)
+}
+
+// 重新繪製儲存用量區；只在使用者明確要求或設定匯入完成後執行。
 async function renderStorageStats() {
   const statsBox = document.getElementById('storage-stats')
   if (!statsBox) return
-  statsBox.textContent = ''
+  statsBox.replaceChildren()
+  const status = document.createElement('p')
+  status.textContent = '正在計算資料用量…'
+  statsBox.appendChild(status)
 
-  const stats = await getStorageStats()
+  let stats
+  try {
+    stats = await getStorageStats()
+  } catch (err) {
+    statsBox.replaceChildren()
+    const message = document.createElement('p')
+    message.textContent = `計算失敗：${err?.message || err || '未知原因'}`
+    const retry = document.createElement('button')
+    retry.type = 'button'
+    retry.textContent = '重試計算'
+    retry.onclick = () => renderStorageStats()
+    statsBox.append(message, retry)
+    return
+  }
   const items = [
     `儲存用量：${stats.bytes} 位元組`,
     `紀錄總筆數：${stats.recordCount} 筆`,
@@ -40,6 +69,11 @@ async function renderStorageStats() {
     p.textContent = text
     statsBox.appendChild(p)
   }
+  const refresh = document.createElement('button')
+  refresh.type = 'button'
+  refresh.textContent = '重新計算資料用量'
+  refresh.onclick = () => renderStorageStats()
+  statsBox.appendChild(refresh)
 }
 
 // 繪製最近診斷紀錄（最多 20 筆最新）
@@ -663,6 +697,7 @@ async function renderSitesList() {
 // 渲染整個設定頁
 export async function renderSettings() {
   setupDefaultExportDates()
+  showStorageStatsPrompt()
 
   let settings = {}
   try {
@@ -677,7 +712,6 @@ export async function renderSettings() {
     renderWatchdog(),
     renderGuards(),
     renderDiag(),
-    renderStorageStats(),
     renderSitesList()
   ])
 

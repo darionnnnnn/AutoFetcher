@@ -122,24 +122,25 @@ test('1 subscribe：不讀參數的舊 handler 照舊被呼叫；opts.keys 模�
 
 // ---------- 驗收 2：歷史頁沒有交集就不動 ----------
 
-test('2 歷史頁：範圍是上週、今天的紀錄變動 → 讀紀錄零次、DOM 同一批；範圍含今天 → 重新篩選', async () => {
+test('2 歷史頁：範圍外但月曆月份內的紀錄只更新月曆；範圍含今天時更新表格', async () => {
   const { c, st, rp, doc } = await fresh()
   await st.appendRecord(daysAgo(7), rec('t1', daysAgo(7), '09', 3))
   rp.initFromHash(`#view=history&from=${daysAgo(8)}&to=${daysAgo(6)}`)
   rp.showTab('history')
   await rp.refreshCurrentView()
   await settle()
-  const panel = doc.getElementById('panel-history')
-  const before = [...panel.querySelectorAll('*')]
-  assert.ok(before.length > 0, '歷史頁要先畫出東西')
+  const table = doc.getElementById('record-table')
+  const before = [...table.querySelectorAll('*')]
+  assert.ok(before.length > 0, '歷史頁要先畫出表格')
   await st.appendRecord(TODAY, rec('t1', TODAY, '09', 5))
   const reads = countRecordReads(c)
   await rp.refreshCurrentView(recChange(TODAY))
   await settle()
-  assert.equal(reads.n, 0, '沒有交集不得讀紀錄')
-  const after = [...panel.querySelectorAll('*')]
+  assert.equal(reads.n, 1, '日期雖不在表格範圍內，仍要重讀當月月曆統計一次')
+  const after = [...table.querySelectorAll('*')]
   assert.equal(after.length, before.length)
-  assert.ok(after.every((el, i) => el === before[i]), 'DOM 節點必須是同一批物件')
+  assert.ok(after.every((el, i) => el === before[i]), '月曆更新不重畫範圍外的歷史表格')
+  assert.ok(doc.querySelector(`#calendar [data-date="${TODAY}"]`)?.classList.contains('has-records'), '月曆標出新紀錄日期')
 
   // 範圍含今天 → 重新篩選
   rp.initFromHash(`#view=history&from=${daysAgo(1)}&to=${TODAY}`)
@@ -148,7 +149,7 @@ test('2 歷史頁：範圍是上週、今天的紀錄變動 → 讀紀錄零次�
   await rp.refreshCurrentView(recChange(TODAY))
   await settle()
   assert.ok(reads2.n >= 1, '有交集要重讀紀錄')
-  assert.ok(panel.textContent.includes('5'), '新紀錄要出現在歷史頁')
+  assert.ok(doc.getElementById('panel-history').textContent.includes('5'), '新紀錄要出現在歷史頁')
 })
 
 test('2 任務頁同樣受交集規則；tasks 變動一律重畫', async () => {

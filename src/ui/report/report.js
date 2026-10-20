@@ -62,11 +62,81 @@ let currentColumns = [...DEFAULT_COLUMNS]
 let lastRecords = []
 let lastColumns = currentColumns
 let allLoadedRecords = []
+let allRawRecords = []
 let currentCalYear = 2026
 let currentCalMonth = 9
 let isCalDragging = false
 let calDragStart = null
 let calDragCurrent = null
+let loadGeneration = 0
+let lastRouteKey = null
+let settingsLoadPromise = null
+let loadedRangeKey = ''
+const rangeCache = new Map()
+
+function isCurrentGeneration(generation) {
+  return generation === loadGeneration
+}
+
+function rangeKey(from, to) {
+  return `${from}\u0000${to}`
+}
+
+async function recordsForRange(from, to) {
+  if (!from || !to) return []
+  const key = rangeKey(from, to)
+  if (!rangeCache.has(key)) {
+    const request = getRecordsInRange(from, to).then(rows => Array.isArray(rows) ? rows : [])
+      .catch(err => {
+        rangeCache.delete(key)
+        throw err
+      })
+    rangeCache.set(key, request)
+    while (rangeCache.size > 12) rangeCache.delete(rangeCache.keys().next().value)
+  }
+  return rangeCache.get(key)
+}
+
+function invalidateRangeCache(dates = new Set()) {
+  if (!(dates instanceof Set) || dates.size === 0) {
+    rangeCache.clear()
+    loadedRangeKey = ''
+    return
+  }
+  for (const key of rangeCache.keys()) {
+    const [from, to] = key.split('\u0000')
+    if (datesIntersect(dates, from, to)) rangeCache.delete(key)
+  }
+  if (datesIntersect(dates, state.from, state.to)) loadedRangeKey = ''
+}
+
+function setHashForCurrentState() {
+  if (typeof window === 'undefined') return false
+  const next = buildHash(state)
+  if (window.location.hash === next) return false
+  window.location.hash = next
+  return true
+}
+
+function routeCurrentState() {
+  if (!setHashForCurrentState()) void loadAndRenderPage(typeof window !== 'undefined' ? window.location.hash : '', { force: true })
+}
+
+async function loadSettingsOnce() {
+  if (!settingsLoadPromise) {
+    settingsLoadPromise = (async () => {
+      try {
+        const settings = await getSettings()
+        applyTheme(settings?.theme)
+        if (Array.isArray(settings?.history?.columns)) currentColumns = settings.history.columns
+        if (settings?.history?.tableMode) currentTableMode = settings.history.tableMode
+      } catch {
+        applyTheme('system')
+      }
+    })()
+  }
+  return settingsLoadPromise
+}
 
 // 格式化單一值：數值使用 toLocaleString，字串維持原樣，null/undefined 顯示破折號
 function formatValue(val) {
@@ -163,6 +233,7 @@ export function setupTableMode() {
   if (!sel) return
   sel.value = currentTableMode || 'list'
   sel.onchange = async () => {
+    const generation = loadGeneration
     const mode = sel.value || 'list'
     currentTableMode = mode
     try {
@@ -175,12 +246,7 @@ export function setupTableMode() {
 
     let tasks = []
     try { tasks = await getTasks() } catch {}
-    let records = allLoadedRecords
-    if (state.from && state.to && (!records || records.length === 0)) {
-      const raw = await getRecordsInRange(state.from, state.to)
-      records = joinTaskNames(raw, tasks)
-      allLoadedRecords = records
-    }
+    if (!isCurrentGeneration(generation) || state.view !== 'history') return
     const filtered = filterRecords(allLoadedRecords, {
       taskIds: state.taskIds,
       statuses: state.statuses,
@@ -224,21 +290,89 @@ async function onFilterChange() {
   state.valueMin = (valMinInput && valMinInput.value !== '') ? Number(valMinInput.value) : null
   state.valueMax = (valMaxInput && valMaxInput.value !== '') ? Number(valMaxInput.value) : null
   state.keyword = kwInput ? kwInput.value.trim() : ''
-
-  if (typeof window !== 'undefined') {
-    window.location.hash = buildHash(state)
-  }
-
-  await applyCurrentFilters()
+  routeCurrentState()
 }
 
-async function applyCurrentFilters() {
+async function applyCurrentFilters(generation = loadGeneration) {
+  if (state.view !== 'history' || !isCurrentGeneration(generation)) return
   let tasks = []
   try { tasks = await getTasks() } catch {}
-  if (state.from && state.to) {
-    const raw = await getRecordsInRange(state.from, state.to)
-    allLoadedRecords = joinTaskNames(raw, tasks)
+  if (!isCurrentGeneration(generation)) return
+  const key = rangeKey(state.from, state.to)
+  if (loadedRangeKey !== key) {
+    try {
+      const raw = await recordsForRange(state.from, state.to)
+      if (!isCurrentGeneration(generation)) return
+      allRawRecords = raw
+      loadedRangeKey = key
+    } catch (err) {
+      if (isCurrentGeneration(generation)) showHistoryLoadError(err, generation)
+      return
+    }
   }
+  allLoadedRecords = joinTaskNames(allRawRecords, tasks)
+  const filtered = filterRecords(allLoadedRecords, {
+    taskIds: state.taskIds,
+    statuses: state.statuses,
+    failedOnly: state.failedOnly,
+    alertOnly: state.alertOnly,
+    valueMin: state.valueMin,
+    valueMax: state.valueMax,
+    keyword: state.keyword
+  })
+  if (!isCurrentGeneration(generation)) return
+  await renderCurrentHistoryTable(filtered, tasks)
+  if (!isCurrentGeneration(generation)) return
+  renderSummary(summarize(filtered))
+}
+
+function showHistoryLoadError(err, generation) {
+  if (!isCurrentGeneration(generation)) return
+  const panel = document.getElementById('panel-history')
+  if (!panel) return
+  let banner = document.getElementById('history-load-error')
+  if (!banner) {
+    banner = document.createElement('div')
+    banner.id = 'history-load-error'
+    banner.className = 'banner is-bad'
+    banner.setAttribute('role', 'alert')
+    panel.insertBefore(banner, panel.firstChild)
+  }
+  banner.textContent = `歷史資料載入失敗，畫面保留上次資料：${err?.message || err || '未知原因'} `
+  const retry = document.createElement('button')
+  retry.type = 'button'
+  retry.textContent = '重試'
+  retry.onclick = () => {
+    const key = rangeKey(state.from, state.to)
+    rangeCache.delete(key)
+    loadedRangeKey = ''
+    void loadAndRenderPage(typeof window !== 'undefined' ? window.location.hash : '', { force: true })
+  }
+  banner.appendChild(retry)
+}
+
+function clearHistoryLoadError() {
+  document.getElementById('history-load-error')?.remove()
+}
+
+async function loadHistoryView(generation) {
+  let tasks = []
+  let raw = []
+  try {
+    tasks = await getTasks()
+    if (!isCurrentGeneration(generation)) return
+    raw = await recordsForRange(state.from, state.to)
+  } catch (err) {
+    showHistoryLoadError(err, generation)
+    return
+  }
+  if (!isCurrentGeneration(generation)) return
+
+  allRawRecords = raw
+  allLoadedRecords = joinTaskNames(raw, tasks)
+  loadedRangeKey = rangeKey(state.from, state.to)
+  await renderFilters(tasks, generation)
+  if (!isCurrentGeneration(generation)) return
   const filtered = filterRecords(allLoadedRecords, {
     taskIds: state.taskIds,
     statuses: state.statuses,
@@ -249,13 +383,36 @@ async function applyCurrentFilters() {
     keyword: state.keyword
   })
   await renderCurrentHistoryTable(filtered, tasks)
+  if (!isCurrentGeneration(generation)) return
   renderSummary(summarize(filtered))
+
+  const baseDate = state.from ? new Date(`${state.from}T00:00:00`) : new Date()
+  const monthRange = quickRange('thisMonth', baseDate.getTime())
+  let monthRecords = raw
+  if (monthRange && (monthRange.from !== state.from || monthRange.to !== state.to)) {
+    try { monthRecords = await recordsForRange(monthRange.from, monthRange.to) } catch (err) {
+      showHistoryLoadError(err, generation)
+      return
+    }
+  }
+  if (!isCurrentGeneration(generation)) return
+  clearHistoryLoadError()
+  renderCalendar(baseDate.getFullYear(), baseDate.getMonth() + 1, buildDateStats(monthRecords, isSuccess))
+
+  const compareInput = document.getElementById('compare-date')
+  if (compareInput) {
+    compareInput.value = state.compareTo || ''
+    compareInput.onchange = () => {
+      state.compareTo = compareInput.value
+      routeCurrentState()
+    }
+  }
+  if (state.compareTo) await renderCompare(state.compareTo, generation)
 }
 
-export async function renderFilters() {
+export async function renderFilters(knownTasks = null, generation = loadGeneration) {
   const container = document.getElementById('filters')
-  if (!container) return
-  container.textContent = ''
+  if (!container || !isCurrentGeneration(generation)) return
 
   if (activeFilterContainer && activeFilterHandler) {
     activeFilterContainer.removeEventListener('change', activeFilterHandler)
@@ -264,8 +421,12 @@ export async function renderFilters() {
   activeFilterHandler = onFilterChange
   container.addEventListener('change', activeFilterHandler)
 
-  let tasks = []
-  try { tasks = await getTasks() } catch {}
+  let tasks = knownTasks
+  if (!Array.isArray(tasks)) {
+    try { tasks = await getTasks() } catch { tasks = [] }
+    if (!isCurrentGeneration(generation)) return
+  }
+  container.textContent = ''
 
   // 1. 任務多選容器 #filter-tasks
   const tasksContainer = document.createElement('div')
@@ -421,15 +582,18 @@ export async function renderFilters() {
   container.appendChild(kwLabel)
 }
 
-export async function loadAndRenderTasks() {
+export async function loadAndRenderTasks(generation = loadGeneration) {
   try {
     const tasks = await getTasks()
+    if (!isCurrentGeneration(generation) || state.view !== 'tasks') return
     let health = {}
     let missed = []
     try {
       health = await getHealthMap()
       missed = await getMissedList()
     } catch {}
+
+    if (!isCurrentGeneration(generation) || state.view !== 'tasks') return
 
     const nextRuns = {}
     try {
@@ -451,9 +615,10 @@ export async function loadAndRenderTasks() {
       }
     } catch {}
 
+    if (!isCurrentGeneration(generation) || state.view !== 'tasks') return
     renderTasks(tasks, health, missed, { nextRuns })
   } catch (err) {
-    console.error('載入任務失敗:', err)
+    if (isCurrentGeneration(generation)) console.error('載入任務失敗:', err)
   }
 }
 
@@ -462,13 +627,16 @@ export async function loadAndRenderTasks() {
  * 使用者選「繼續編輯」就不切頁——抽屜藏在隱藏的 panel 裡、卻還算開著，是最糟的狀態。
  * 需要問的時候回傳 Promise，其餘情況同步完成（既有呼叫端不受影響）
  */
-export function showTab(name) {
+export async function showTab(name) {
   if (name !== 'dashboard' && isDrawerOpen()) {
-    return closeDrawer().then((closed) => {
-      if (closed) return applyTab(name)
-    })
+    const closed = await closeDrawer()
+    if (!closed) return
   }
-  return applyTab(name)
+  state.view = name
+  applyTab(name)
+  const currentHash = typeof window !== 'undefined' ? window.location.hash : ''
+  if (!setHashForCurrentState()) return loadAndRenderPage(currentHash, { force: true })
+  return loadAndRenderPage(typeof window !== 'undefined' ? window.location.hash : '', { force: true })
 }
 
 function applyTab(name) {
@@ -486,22 +654,6 @@ function applyTab(name) {
   // 日期範圍只影響儀表板（卡片的全局區間）與歷史頁；任務頁與設定頁顯示它會讓人以為清單被日期篩過
   const rangeBar = document.getElementById('range-bar')
   if (rangeBar) rangeBar.hidden = !(name === 'dashboard' || name === 'history')
-  if (name === 'dashboard') {
-    getLayout().then(l => {
-      const targetId = state.dash || l?.lastDashboardId || l?.dashboards?.[0]?.id
-      renderDashboard(targetId)
-    }).catch(() => {})
-  }
-  if (name === 'tasks') {
-    const focusId = state.task
-    state.task = null
-    return loadAndRenderTasks().then(() => {
-      if (focusId) focusTaskRow(focusId)
-    })
-  }
-  if (name === 'settings') {
-    renderSettings()
-  }
 }
 
 /**
@@ -510,7 +662,6 @@ function applyTab(name) {
  */
 export function setupTabs() {
   const finish = (tab, focus) => {
-    if (typeof window !== 'undefined') window.location.hash = buildHash(state)
     if (focus) document.getElementById(`tab-${tab}`)?.focus()
   }
   const go = (tab, focus) => {
@@ -518,13 +669,11 @@ export function setupTabs() {
     if (tab !== 'dashboard' && isDrawerOpen()) {
       closeDrawer().then((closed) => {
         if (!closed) return
-        applyTab(tab)
-        finish(tab, focus)
+        void showTab(tab).then(() => finish(tab, focus))
       }).catch(() => {})
       return
     }
-    showTab(tab)
-    finish(tab, focus)
+    void showTab(tab).then(() => finish(tab, focus))
   }
   for (const tab of TABS) {
     const btn = document.getElementById(`tab-${tab}`)
@@ -583,6 +732,12 @@ export function datesIntersect(dates, from, to) {
   return false
 }
 
+function calendarMonthRange(year = currentCalYear, month = currentCalMonth) {
+  const from = `${year}-${String(month).padStart(2, '0')}-01`
+  const lastDay = new Date(year, month, 0).getDate()
+  return { from, to: `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}` }
+}
+
 /**
  * 依 storage 的變動決定要不要重畫、重畫多少（AF-21 批次 6）。
  * 不帶 change（使用者操作後的主動刷新）＝照舊整份重畫。
@@ -607,6 +762,7 @@ export async function refreshCurrentView(change) {
   if (currentView === 'dashboard') {
     try {
       if (structural) {
+        ++loadGeneration
         const l = await getLayout()
         const targetId = state.dash || l?.lastDashboardId || l?.dashboards?.[0]?.id
         await refreshDashboard({ full: true, dashId: targetId })
@@ -618,6 +774,7 @@ export async function refreshCurrentView(change) {
         const range = await dashboardDataRange()
         if (range && !datesIntersect(dates, range.from, range.to)) return
       }
+      ++loadGeneration
       await refreshDashboard({ full: false })
     } catch {}
     return
@@ -625,13 +782,23 @@ export async function refreshCurrentView(change) {
   if (currentView !== 'tasks' && currentView !== 'history') return
   if (!structural && !status) {
     if (!records) return
-    if (!datesIntersect(dates, state.from, state.to)) return
+    const monthRange = calendarMonthRange()
+    if (!datesIntersect(dates, state.from, state.to)
+      && !(currentView === 'history' && datesIntersect(dates, monthRange.from, monthRange.to))) return
   }
   if (currentView === 'tasks') {
-    await loadAndRenderTasks()
+    const generation = ++loadGeneration
+    await loadAndRenderTasks(generation)
     return
   }
-  await applyCurrentFilters()
+  const generation = ++loadGeneration
+  if (records) invalidateRangeCache(dates)
+  const rangeAffected = !records || datesIntersect(dates, state.from, state.to)
+  if (records && !rangeAffected) {
+    await loadCalendarMonth(currentCalYear, currentCalMonth, generation)
+    return
+  }
+  await loadHistoryView(generation)
 }
 
 export function renderTable(records = [], columns = currentColumns, opts = {}) {
@@ -700,8 +867,7 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
       prevBtn.disabled = paged.page <= 1
       prevBtn.onclick = () => {
         state.page = paged.page - 1
-        if (typeof window !== 'undefined') window.location.hash = buildHash(state)
-        renderTable(lastRecords, lastColumns, { paginate: true, page: state.page, pageSize })
+        routeCurrentState()
       }
 
       const textSpan = document.createElement('span')
@@ -715,8 +881,7 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
       nextBtn.disabled = paged.page >= paged.totalPages
       nextBtn.onclick = () => {
         state.page = paged.page + 1
-        if (typeof window !== 'undefined') window.location.hash = buildHash(state)
-        renderTable(lastRecords, lastColumns, { paginate: true, page: state.page, pageSize })
+        routeCurrentState()
       }
 
       pager.appendChild(prevBtn)
@@ -849,28 +1014,9 @@ export function renderTable(records = [], columns = currentColumns, opts = {}) {
         const recDate = record.date || (record.slot ? record.slot.slice(0, 10) : '')
         await deleteRecord(recDate, record.taskId, record.capturedAt)
 
-        if (state.from && state.to) {
-          let tasks = []
-          try { tasks = await getTasks() } catch {}
-          const raw = await getRecordsInRange(state.from, state.to)
-          allLoadedRecords = joinTaskNames(raw, tasks)
-          const filtered = filterRecords(allLoadedRecords, {
-            taskIds: state.taskIds,
-            statuses: state.statuses,
-            failedOnly: state.failedOnly,
-            alertOnly: state.alertOnly,
-            valueMin: state.valueMin,
-            valueMax: state.valueMax,
-            keyword: state.keyword
-          })
-          await renderCurrentHistoryTable(filtered, tasks)
-          renderSummary(summarize(filtered))
-        } else {
-          const idx = lastRecords.findIndex(r => r.taskId === record.taskId && r.capturedAt === record.capturedAt)
-          if (idx !== -1) lastRecords.splice(idx, 1)
-          renderTable(lastRecords, lastColumns, opts)
-          renderSummary(summarize(lastRecords))
-        }
+        invalidateRangeCache(recDate ? new Set([recDate]) : new Set())
+        const generation = ++loadGeneration
+        await loadHistoryView(generation)
       })
       deleteActionRow.appendChild(delBtn)
       box.appendChild(deleteActionRow)
@@ -910,7 +1056,7 @@ export function renderSummary(rows) {
     taskLink.textContent = r.taskName || r.taskId || '—'
     taskLink.addEventListener('click', async () => {
       try {
-        const records = await getRecordsInRange(state.from, state.to)
+        const records = await recordsForRange(state.from, state.to)
         const seriesList = buildSeries(records, [{ taskId: r.taskId }], { from: state.from, to: state.to })
         const chartBox = document.getElementById('summary-chart')
         if (chartBox) {
@@ -943,6 +1089,22 @@ export function renderSummary(rows) {
   container.appendChild(table)
 }
 
+async function loadCalendarMonth(year, month, generation = loadGeneration) {
+  const from = `${year}-${String(month).padStart(2, '0')}-01`
+  const lastDay = new Date(year, month, 0).getDate()
+  const to = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
+  currentCalYear = year
+  currentCalMonth = month
+  try {
+    const records = await recordsForRange(from, to)
+    if (!isCurrentGeneration(generation) || state.view !== 'history'
+      || currentCalYear !== year || currentCalMonth !== month) return
+    renderCalendar(year, month, buildDateStats(records, isSuccess))
+  } catch (err) {
+    showHistoryLoadError(err, generation)
+  }
+}
+
 export function renderCalendar(year, month, statsByDate = {}) {
   currentCalYear = year
   currentCalMonth = month
@@ -963,7 +1125,7 @@ export function renderCalendar(year, month, statsByDate = {}) {
     let y = currentCalYear
     let m = currentCalMonth - 1
     if (m < 1) { m = 12; y -= 1 }
-    renderCalendar(y, m, statsByDate)
+    void loadCalendarMonth(y, m)
   }
 
   const jumpInput = document.createElement('input')
@@ -974,7 +1136,7 @@ export function renderCalendar(year, month, statsByDate = {}) {
   jumpInput.onchange = () => {
     if (jumpInput.value) {
       const [y, m] = jumpInput.value.split('-').map(Number)
-      if (y && m) renderCalendar(y, m, statsByDate)
+      if (y && m) void loadCalendarMonth(y, m)
     }
   }
 
@@ -986,7 +1148,7 @@ export function renderCalendar(year, month, statsByDate = {}) {
     let y = currentCalYear
     let m = currentCalMonth + 1
     if (m > 12) { m = 1; y += 1 }
-    renderCalendar(y, m, statsByDate)
+    void loadCalendarMonth(y, m)
   }
 
   nav.appendChild(prevBtn)
@@ -1031,7 +1193,7 @@ export function renderCalendar(year, month, statsByDate = {}) {
       td.addEventListener('click', () => {
         state.from = day.date
         state.to = day.date
-        if (typeof window !== 'undefined') window.location.hash = buildHash(state)
+        routeCurrentState()
       })
 
       td.addEventListener('pointerdown', () => {
@@ -1054,7 +1216,7 @@ export function renderCalendar(year, month, statsByDate = {}) {
             const norm = normalizeRange(calDragStart, end)
             state.from = norm.from
             state.to = norm.to
-            if (typeof window !== 'undefined') window.location.hash = buildHash(state)
+            routeCurrentState()
           }
           calDragStart = null
           calDragCurrent = null
@@ -1197,28 +1359,34 @@ export function renderPivot(records = [], tasks = []) {
   }
 }
 
-export async function renderCompare(compareDate) {
+export async function renderCompare(compareDate, generation = loadGeneration) {
   const table = document.getElementById('compare-table')
   if (!table) return
+  if (!compareDate) {
+    table.querySelector('thead')?.replaceChildren()
+    table.querySelector('tbody')?.replaceChildren()
+    return
+  }
+
+  let tasks = []
+  try { tasks = await getTasks() } catch {}
+  if (!isCurrentGeneration(generation) || state.view !== 'history') return
+  const sortedTasks = [...tasks].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+  const seriesIndex = buildSeriesIndex(sortedTasks)
+  const seriesIds = seriesIndex.historySeriesIds || seriesIndex.seriesIds
+
+  const recordsA = await recordsForRange(state.from, state.to)
+  const recordsB = await getRecordsByDate(compareDate)
+  if (!isCurrentGeneration(generation) || state.view !== 'history') return
+
+  const { rows } = compareDays(recordsA, recordsB, seriesIds)
+
   let thead = table.querySelector('thead')
   if (!thead) { thead = document.createElement('thead'); table.appendChild(thead) }
   thead.textContent = ''
   let tbody = table.querySelector('tbody')
   if (!tbody) { tbody = document.createElement('tbody'); table.appendChild(tbody) }
   tbody.textContent = ''
-
-  if (!compareDate) return
-
-  let tasks = []
-  try { tasks = await getTasks() } catch {}
-  const sortedTasks = [...tasks].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-  const seriesIndex = buildSeriesIndex(sortedTasks)
-  const seriesIds = seriesIndex.historySeriesIds || seriesIndex.seriesIds
-
-  const recordsA = await getRecordsInRange(state.from, state.to)
-  const recordsB = await getRecordsByDate(compareDate)
-
-  const { rows } = compareDays(recordsA, recordsB, seriesIds)
 
   const headers = ['時間']
   for (const id of seriesIds) {
@@ -1258,8 +1426,8 @@ export function renderRangeBar() {
       if (range) {
         state.from = range.from
         state.to = range.to
-        if (typeof window !== 'undefined') window.location.hash = buildHash(state)
         syncInputs()
+        routeCurrentState()
       }
     }
   }
@@ -1269,8 +1437,8 @@ export function renderRangeBar() {
     if (shifted) {
       state.from = shifted.from
       state.to = shifted.to
-      if (typeof window !== 'undefined') window.location.hash = buildHash(state)
       syncInputs()
+      routeCurrentState()
     }
   }
 
@@ -1305,8 +1473,8 @@ export function renderRangeBar() {
       const normalized = normalizeRange(rawFrom, rawTo)
       state.from = normalized.from
       state.to = normalized.to
-      if (typeof window !== 'undefined') window.location.hash = buildHash(state)
       syncInputs()
+      routeCurrentState()
     }
   }
 
@@ -1314,71 +1482,37 @@ export function renderRangeBar() {
   if (toInput) toInput.onchange = onDateChange
 }
 
-async function loadAndRenderPage() {
-  initFromHash(typeof location !== 'undefined' ? location.hash : '')
-  showTab(state.view || 'dashboard')
+export async function loadAndRenderPage(hash = (typeof window !== 'undefined' ? window.location.hash : ''), { force = false } = {}) {
+  initFromHash(hash)
+  const routeKey = buildHash(state)
+  if (!force && routeKey === lastRouteKey) return
+  lastRouteKey = routeKey
+  const generation = ++loadGeneration
+  applyTab(state.view || 'dashboard')
   renderRangeBar()
-  renderAppStatus()
-
-  let cols = currentColumns
-  try {
-    const settings = await getSettings()
-    applyTheme(settings?.theme)
-    if (settings?.history?.columns) {
-      cols = settings.history.columns
-      currentColumns = cols
-    }
-    if (settings?.history?.tableMode) {
-      currentTableMode = settings.history.tableMode
-    }
-  } catch {
-    applyTheme('system')
-  }
+  void renderAppStatus()
+  await loadSettingsOnce()
+  if (!isCurrentGeneration(generation)) return
   setupTableMode()
-
-  renderColumnConfig(cols)
-
-  let tasks = []
-  try { tasks = await getTasks() } catch {}
-  const rawRecords = await getRecordsInRange(state.from, state.to)
-  const records = joinTaskNames(rawRecords, tasks)
-  allLoadedRecords = records
-
-  await renderFilters()
-
-  const filtered = filterRecords(records, {
-    taskIds: state.taskIds,
-    statuses: state.statuses,
-    failedOnly: state.failedOnly,
-    alertOnly: state.alertOnly,
-    valueMin: state.valueMin,
-    valueMax: state.valueMax,
-    keyword: state.keyword
-  })
-
-  await renderCurrentHistoryTable(filtered, tasks)
-  renderSummary(summarize(filtered))
-
-  const baseDate = state.from ? new Date(state.from) : new Date()
-  const year = baseDate.getFullYear()
-  const month = baseDate.getMonth() + 1
-  const monthRange = quickRange('thisMonth', baseDate.getTime())
-  const monthRecords = monthRange ? await getRecordsInRange(monthRange.from, monthRange.to) : records
-  const statsByDate = buildDateStats(monthRecords, isSuccess)
-  renderCalendar(year, month, statsByDate)
-
-  const compareInput = document.getElementById('compare-date')
-  if (compareInput) {
-    compareInput.value = state.compareTo || ''
-    compareInput.onchange = async () => {
-      state.compareTo = compareInput.value
-      if (typeof window !== 'undefined') window.location.hash = buildHash(state)
-      await renderCompare(state.compareTo)
-    }
+  if (state.view === 'history') {
+    renderColumnConfig(currentColumns)
+    await loadHistoryView(generation)
+  } else if (state.view === 'tasks') {
+    const focusId = state.task
+    state.task = null
+    await loadAndRenderTasks(generation)
+    if (isCurrentGeneration(generation) && focusId) focusTaskRow(focusId)
+  } else if (state.view === 'dashboard') {
+    try {
+      const layout = await getLayout()
+      if (!isCurrentGeneration(generation)) return
+      const targetId = state.dash || layout?.lastDashboardId || layout?.dashboards?.[0]?.id
+      await renderDashboard(targetId)
+    } catch {}
+  } else if (state.view === 'settings') {
+    renderSettings()
   }
-  if (state.compareTo) {
-    await renderCompare(state.compareTo)
-  }
+  return generation
 }
 
 if (typeof document !== 'undefined' && globalThis.chrome?.runtime?.id) {
@@ -1386,7 +1520,7 @@ if (typeof document !== 'undefined' && globalThis.chrome?.runtime?.id) {
   loadAndRenderPage()
   if (typeof window !== 'undefined') {
     window.addEventListener('hashchange', () => {
-      loadAndRenderPage()
+      loadAndRenderPage(window.location.hash)
     })
     setupTabs()
   }
