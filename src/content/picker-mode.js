@@ -3266,7 +3266,6 @@ async function submitFieldRepair(msg, { cancelled = false, retry = false } = {})
   if (!retry && !cancelled && repairSelectionAnchor &&
       !sourceAnchorStillMatches(sourceAnchorForSpec(repairSelectionAnchor, repairAnchorSpecOf(payload.picks?.[0])))) {
     toolbarNotice = '選取來源在送出前已改變；請重新選取目前要抓的值'
-    repairSelectionAnchor = null
     if (panelEl) updatePanel(panelEl, currentTargetEl)
     return
   }
@@ -4886,12 +4885,16 @@ function undoReplace() {
   trimReady = false
   if (!undoSnapshot) return false
   clearPickedMarks(document)
-  selectedList = undoSnapshot.picks.slice()
+  const restored = undoSnapshot
+  selectedList = restored.picks.slice()
   // 快照裡的那一批索引屬於快照當時那張表：還原時目標與 pickedTableEl 要一起回去，
   // 只還原清單的話，接下來就是「舊表的索引配上新表的定位」——AF-7 同型缺陷
-  const backTo = undoSnapshot.tableEl
-  const batchBack = undoSnapshot.batchGroups ? undoSnapshot : null
+  const backTo = restored.tableEl
+  const batchBack = restored.batchGroups ? restored : null
   undoSnapshot = null
+  if (repairSessionId !== undefined) {
+    repairSelectionAnchor = selectedList.length ? (restored.repairAnchor || null) : null
+  }
   limitReached = selectedList.length >= maxPicks
   if (batchBack) {
     batchGroups = batchBack.batchGroups.map(g => g.el ? g : { tableEl: g.tableEl, picks: g.picks.slice() })
@@ -4921,11 +4924,15 @@ function takeUndoSnapshot(picks, tableEl) {
     return {
       picks: (picks || []).slice(),
       tableEl: tableEl || pickedTableEl || null,
+      repairAnchor: repairSelectionAnchor,
       batchGroups: batchGroups.map(g => g.el ? g : { tableEl: g.tableEl, picks: g.picks.slice() }),
       currentGroupIdx
     }
   }
-  return picks && picks.length > 0 ? { picks: picks.slice(), tableEl: tableEl || pickedTableEl || null } : null
+  return picks && picks.length > 0 ? {
+    picks: picks.slice(), tableEl: tableEl || pickedTableEl || null,
+    repairAnchor: repairSelectionAnchor
+  } : null
 }
 
 // 取代目前已選：點一下就是「只選這一個」

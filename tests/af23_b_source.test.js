@@ -197,6 +197,48 @@ test('AC-B1 repair submission checks the selected DOM anchor before sending PICK
   assert.match(document.querySelector('[data-af-panel]').textContent, /重新選取目前要抓的值/)
 })
 
+test('AC-B1 repeated Done cannot clear a stale repair anchor and bypass the guard', async t => {
+  const f = await pickRepair(t, `<table><thead><tr><th>項目</th><th>價格</th></tr></thead><tbody>
+    <tr><th>1</th><td id="selected">123</td></tr><tr><th>2</th><td id="current">200</td></tr>
+    </tbody></table>`, { id: 'selected', sessionId: 'repair-stale-repeat' })
+  const inserted = document.createElement('tr')
+  inserted.innerHTML = '<th>1</th><td>111</td>'
+  f.table.querySelector('tbody').prepend(inserted)
+  const done = document.querySelector('[data-af-done]')
+  const submit = async () => {
+    done.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  await submit()
+  await submit()
+  assert.equal(f.chrome.__calls.some(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICKED'), false,
+    'repeating Done still refuses the stale original row')
+
+  const current = document.getElementById('current')
+  current.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+  current.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  await submit()
+  assert.ok(f.chrome.__calls.some(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICKED'),
+    'a real new selection replaces the stale anchor and can be submitted')
+})
+
+test('AC-B1 repair Undo restores its source anchor with the restored selection', async t => {
+  const f = await pickRepair(t, `<table><thead><tr><th>項目</th><th>價格</th></tr></thead><tbody>
+    <tr><th>1</th><td id="selected">123</td></tr><tr><th>2</th><td>200</td></tr>
+    </tbody></table>`, { id: 'selected', sessionId: 'repair-stale-undo' })
+  document.getElementById('selected').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  await new Promise(resolve => setImmediate(resolve))
+  document.querySelector('[data-af-undo]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  await new Promise(resolve => setImmediate(resolve))
+  const inserted = document.createElement('tr')
+  inserted.innerHTML = '<th>1</th><td>111</td>'
+  f.table.querySelector('tbody').prepend(inserted)
+  document.querySelector('[data-af-done]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.chrome.__calls.some(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICKED'), false,
+    'Undo restores the original DOM anchor, so later source drift is still rejected')
+})
+
 test('AC-B2 repair accepts a live value refresh on the same selected node', async t => {
   const f = await pickRepair(t, `<table><thead><tr><th>項目</th><th>價格</th></tr></thead><tbody>
     <tr><th>A</th><td id="selected">123</td></tr>
