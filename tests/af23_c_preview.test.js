@@ -50,6 +50,21 @@ test('AC-C2 F11:互動試抓登入失敗不改站台失敗計數或啟用狀態'
     enabled: true, failStreak: 2
   }
   await storage.saveSite(ORIGIN, site)
+  const existing = singleTask({ id: 'formal-task', name: '正式任務' })
+  await storage.saveTask(existing)
+  const date = new Date().toISOString().slice(0, 10)
+  await storage.appendRecord(date, { taskId: existing.id, name: existing.name, value: 501, status: 'ok', capturedAt: Date.now() - 1000 })
+  await storage.setRunStatus(existing.id, `${date}T09:00`, { status: 'ok', value: 501 })
+  await storage.setLastValue(existing.id, { value: 501, status: 'ok', capturedAt: Date.now() - 1000 })
+  await storage.updateHealthMap(current => ({ ...current, [existing.id]: { status: 'ok', marker: 'health-formal' } }))
+  await storage.updateAlertLog(current => ({ ...current, [existing.id]: { marker: 'alert-formal' } }))
+  await storage.updateNotifyLog(current => ({ ...current, [ORIGIN]: { marker: 'notify-formal' } }))
+  await c.alarms.create(`task:${existing.id}`, { when: Date.now() + 60000 })
+  const formalSnapshot = async () => ({
+    local: await c.storage.local.get(null),
+    alarms: await c.alarms.getAll()
+  })
+  const before = await formalSnapshot()
   c.__onTabCreated = (tab) => c.__setTabState(tab.id, { url: `${ORIGIN}/login`, status: 'complete' })
   c.__setTabResponder((tabId, message) => {
     if (message.type === 'FILL_LOGIN') {
@@ -67,9 +82,10 @@ test('AC-C2 F11:互動試抓登入失敗不改站台失敗計數或啟用狀態'
   assert.equal((await storage.getSite(ORIGIN)).enabled, true)
   const notices = c.__calls.filter(call => call.api === 'notifications.create')
   assert.equal(notices.length, 0)
-  const tasks = await storage.getTasks()
-  assert.equal(tasks.length, 0)
-  assert.equal((await storage.getRecordsByDate(new Date().toISOString().slice(0, 10))).length, 0)
+  assert.deepEqual(await formalSnapshot(), before,
+    '互動登入失敗不得更動 tasks/sites/records/runs/health/lastValues/alerts/通知紀錄或 alarms')
+  assert.equal((await storage.getTasks()).length, 1)
+  assert.equal((await storage.getRecordsByDate(date)).length, 1)
   assert.ok(!JSON.stringify(await c.storage.local.get(null)).includes('preview-secret'))
 })
 
@@ -111,4 +127,45 @@ test('AC-C1 F12:無頂層 locator 的一值 multi 走 TEST_TASK 並保留 field 
   }
   assert.equal(c.__calls.filter(call => call.api === 'tabs.create').length, tabsBeforeInvalid,
     '空 multi、缺 locator、超額 payload 都必須在建立抓取分頁前拒絕')
+})
+
+test('AC-C2:成功、離線與部分成功試抓不改正式資料或排程', async () => {
+  const { c, storage, bg } = await fresh()
+  const date = new Date().toISOString().slice(0, 10)
+  const formal = singleTask({ id: 'formal-task', name: '正式任務' })
+  await storage.saveTask(formal)
+  await storage.appendRecord(date, { taskId: formal.id, name: formal.name, value: 9, status: 'ok', capturedAt: Date.now() - 1000 })
+  await storage.setRunStatus(formal.id, `${date}T09:00`, { status: 'ok', value: 9 })
+  await storage.setLastValue(formal.id, { value: 9, status: 'ok', capturedAt: Date.now() - 1000 })
+  await storage.updateHealthMap(current => ({ ...current, [formal.id]: { status: 'ok' } }))
+  await storage.updateAlertLog(current => ({ ...current, [formal.id]: { notifiedAt: 123 } }))
+  await storage.updateNotifyLog(current => ({ ...current, [`${ORIGIN}#formal`]: { status: 'error', at: 123 } }))
+  await c.alarms.create(`task:${formal.id}`, { when: Date.now() + 60000 })
+  const snapshot = async () => ({ local: await c.storage.local.get(null), alarms: await c.alarms.getAll() })
+  const before = await snapshot()
+  c.__setTabResponder((_tabId, message) => message.type === 'EXTRACT'
+    ? { ok: true, value: 12, raw: '12', status: 'ok', strategyUsed: 'auto', layer: 'css' }
+    : { ok: true })
+
+  const success = await bg.handleMessage({ type: 'TEST_TASK', task: singleTask() }, { url: 'chrome-extension://autofetcher-test/ui/picker/picker.html' }, FAST)
+  assert.equal(success.ok, true, JSON.stringify(success))
+  assert.deepEqual(await snapshot(), before, '成功試抓只回傳預覽，不得發布正式資料')
+
+  globalThis.navigator.onLine = false
+  const offline = await bg.handleMessage({ type: 'TEST_TASK', task: singleTask() }, { url: 'chrome-extension://autofetcher-test/ui/picker/picker.html' }, FAST)
+  assert.equal(offline.ok, false)
+  globalThis.navigator.onLine = true
+  assert.deepEqual(await snapshot(), before, '離線失敗不得寫入正式資料')
+
+  const partialTask = multiTask()
+  c.__setTabResponder((_tabId, message) => message.type === 'EXTRACT'
+    ? message.locator.css === '#a'
+      ? { ok: true, value: 12, raw: '12', status: 'ok', strategyUsed: 'auto', layer: 'css' }
+      : { ok: false, error: 'not_found', message: '第二值找不到' }
+    : { ok: true })
+  const partial = await bg.handleMessage({ type: 'TEST_TASK', task: partialTask }, { url: 'chrome-extension://autofetcher-test/ui/picker/picker.html' }, FAST)
+  assert.equal(partial.ok, true)
+  assert.equal(partial.fields.a.ok, true)
+  assert.equal(partial.fields.b.ok, false)
+  assert.deepEqual(await snapshot(), before, 'partial 試抓同樣不得發布正式資料或調整 alarms')
 })

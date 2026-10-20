@@ -32,7 +32,7 @@ function repairTask(id = 'task-a') {
 
 function doneMessage(taskId = 'task-a') {
   return {
-    type: 'FIELD_REPAIR_DONE', taskId, fieldKey: 'field-a',
+    type: 'FIELD_REPAIR_DONE', ok: true, done: true, operationId: 'repair-session', sessionId: 'repair-session', taskId, fieldKey: 'field-a',
     source: { locator: locator('#new') }, spec: { strategy: 'auto' }
   }
 }
@@ -97,4 +97,129 @@ test('AC-D4:render 100 次只保留一個修復 listener；舊任務訊息不改
   for (const listener of c.runtime.onMessage._listeners) listener(doneMessage('task-b'))
   assert.equal(sourceWrites, 1, '一則有效訊息只更新一次欄位來源')
   assert.equal(row._source.locator.css, '#new')
+})
+
+test('AC-C3:忙碌狀態隨重畫與切換任務正確解除', async () => {
+  const { c, picker, doc } = await fresh()
+  const removedListeners = new Set()
+  c.tabs.onRemoved = { addListener: listener => removedListeners.add(listener) }
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  c.__setRuntimeResponder(async message => {
+    if (message?.type !== 'BEGIN_FIELD_REPAIR') return undefined
+    await gate
+    return { ok: true, sessionId: 'repair-session-rerender', tabId: 89 }
+  })
+  picker.render({ task: repairTask('task-rerender'), url: 'https://preview.test/page' })
+  doc.querySelector('#field-list [data-field-repair]').click()
+  await sleep(5)
+  picker.render({ task: repairTask('task-rerender'), url: 'https://preview.test/page' })
+  let button = doc.querySelector('#field-list [data-field-repair]')
+  assert.equal(button.disabled, true, '重畫產生的新 row 仍要反映進行中的 session')
+  release()
+  await sleep(5)
+  for (const listener of removedListeners) listener(89)
+  button = doc.querySelector('#field-list [data-field-repair]')
+  assert.equal(button.disabled, false, '關閉 session 分頁要解除目前 row，而非舊 row')
+
+  let releaseOld
+  const oldGate = new Promise(resolve => { releaseOld = resolve })
+  c.__setRuntimeResponder(async message => {
+    if (message?.type !== 'BEGIN_FIELD_REPAIR') return undefined
+    await oldGate
+    return { ok: true, sessionId: 'repair-session-switch', tabId: 90 }
+  })
+  button.click()
+  await sleep(5)
+  picker.render({ task: repairTask('task-other'), url: 'https://preview.test/page' })
+  for (const listener of c.runtime.onMessage._listeners) listener(doneMessage('task-rerender'))
+  picker.render({ task: repairTask('task-rerender'), url: 'https://preview.test/page' })
+  button = doc.querySelector('#field-list [data-field-repair]')
+  assert.equal(button.disabled, false, '切換期間收到的舊任務完成事件要清理 session')
+  releaseOld()
+  await sleep(5)
+})
+
+test('AC-C3:BEGIN ACK 前快速關閉來源分頁不留下永久 busy', async () => {
+  const { c, picker, doc } = await fresh()
+  const removedListeners = new Set()
+  c.tabs.onRemoved = { addListener: listener => removedListeners.add(listener) }
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  c.__setRuntimeResponder(async message => {
+    if (message?.type !== 'BEGIN_FIELD_REPAIR') return undefined
+    await gate
+    return { ok: true, sessionId: 'repair-session-fast-close', tabId: 91 }
+  })
+  picker.render({ task: repairTask('task-fast-close'), url: 'https://preview.test/page' })
+  doc.querySelector('#field-list [data-field-repair]').click()
+  await sleep(5)
+  for (const listener of removedListeners) listener(91)
+  release()
+  await sleep(5)
+  assert.equal(doc.querySelector('#field-list [data-field-repair]').disabled, false)
+  assert.match(doc.querySelector('[data-field-hint]').textContent, /已關閉.*重新開始/)
+})
+
+test('AC-C3:修復啟動失敗顯示原因、恢復按鈕並可重試', async () => {
+  const { c, picker, doc } = await fresh()
+  let starts = 0
+  c.__setRuntimeResponder(message => {
+    if (message?.type !== 'BEGIN_FIELD_REPAIR') return undefined
+    starts += 1
+    return starts === 1
+      ? { ok: false, error: 'tab_create_failed', message: '來源頁開啟失敗' }
+      : { ok: true, sessionId: 'repair-retry', tabId: 93 }
+  })
+  picker.render({ task: repairTask('task-retry'), url: 'https://preview.test/page' })
+  let button = doc.querySelector('#field-list [data-field-repair]')
+  button.click()
+  await sleep(5)
+  button = doc.querySelector('#field-list [data-field-repair]')
+  assert.equal(button.disabled, false)
+  assert.match(doc.querySelector('[data-field-hint]').textContent, /來源頁開啟失敗/)
+  button.click()
+  await sleep(5)
+  assert.equal(starts, 2)
+  assert.equal(doc.querySelector('#field-list [data-field-repair]').disabled, true)
+})
+
+test('A4/C3:pending 不套用來源，保留忙碌並提供同一操作核對入口；done 僅接受成功 ACK', async () => {
+  const { c, picker, doc } = await fresh()
+  picker.render({ task: repairTask('task-pending'), url: 'https://preview.test/page' })
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  c.__setRuntimeResponder(async message => {
+    if (message?.type !== 'BEGIN_FIELD_REPAIR') return undefined
+    await gate
+    return { ok: true, sessionId: 'repair-op-1', tabId: 92 }
+  })
+  doc.querySelector('#field-list [data-field-repair]').click()
+  await sleep(5)
+  release()
+  await sleep(5)
+  const row = doc.querySelector('#field-list [data-field-row]')
+  const before = row._source.locator.css
+  for (const listener of c.runtime.onMessage._listeners) listener({
+    type: 'FIELD_REPAIR_PENDING', state: 'pending', operationId: 'repair-op-1', sessionId: 'repair-op-1',
+    taskId: 'task-pending', fieldKey: 'field-a', repairMode: 'repair', message: '結果尚未確認，請返回來源頁完成同一操作。'
+  })
+  assert.equal(row._source.locator.css, before, 'pending 不得被當成成功來源套用')
+  assert.equal(row.querySelector('[data-field-repair]').disabled, true, 'pending 期間保留同欄位鎖')
+  const resume = row.querySelector('[data-action="resume-field-repair"]')
+  assert.ok(resume, 'pending 提供可操作的核對入口')
+  resume.click()
+  await sleep(0)
+  assert.deepEqual(c.__calls.find(call => call.api === 'tabs.update').args, [92, { active: true }])
+  for (const listener of c.runtime.onMessage._listeners) listener({
+    type: 'FIELD_REPAIR_DONE', ok: false, done: false, taskId: 'task-pending', fieldKey: 'field-a',
+    source: { locator: locator('#must-not-apply') }, spec: { strategy: 'regex' }
+  })
+  assert.equal(row._source.locator.css, before, '沒有成功完成旗標時不可套用回傳定位')
+  for (const listener of c.runtime.onMessage._listeners) listener({
+    type: 'FIELD_REPAIR_PENDING', state: 'failed', operationId: 'repair-op-1', sessionId: 'repair-op-1',
+    taskId: 'task-pending', fieldKey: 'field-a', message: '來源重選未套用，請重試。'
+  })
+  assert.equal(row.querySelector('[data-field-repair]').disabled, false, '明確失敗後恢復重試')
+  assert.match(row.textContent, /未套用，請重試/)
 })

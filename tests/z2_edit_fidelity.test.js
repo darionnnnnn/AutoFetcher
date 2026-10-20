@@ -330,7 +330,7 @@ test('D-4 編輯既有任務時隱藏「回頁面重選目標」', async () => {
   await pk.renderFromPanelCtx({ kind: 'edit', taskId: 't1' })
   assert.equal(doc.getElementById('repick-target').hidden, true,
     '面板開在報表分頁旁，重選會存成新任務；一律走任務頁的「重選」')
-  assert.equal(doc.getElementById('test-now').hidden, true)
+  assert.equal(doc.getElementById('test-now').hidden, false, '編輯可試抓未儲存表單；只有重選目標仍隱藏')
 })
 
 test('D-4 新建任務時「回頁面重選目標」照常可用', async () => {
