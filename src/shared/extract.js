@@ -665,7 +665,13 @@ export function extractValue(el, spec = {}) {
     return { ok: false, error: 'not_found' }
   }
 
-  const opts = spec || {}
+  let opts = spec || {}
+  // multi 的單值規格沿用選取協定的 {cell}/{block}；在擷取邊界轉成
+  // 既有表格規格，避免把整張表的文字當成一個數字。不修改保存的規格。
+  if (!Array.isArray(opts.fields) && (opts.mode === undefined || opts.mode === 'block')) {
+    if (opts.cell) opts = { ...opts, mode: 'block', block: { cell: opts.cell } }
+    else if (opts.block && opts.mode === undefined) opts = { ...opts, mode: 'block' }
+  }
 
   // 區塊（block）模式：解析表格並聚合指定欄或列，不走數值策略鏈
   if (opts.mode === 'block') {
