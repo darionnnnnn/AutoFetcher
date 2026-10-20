@@ -77,11 +77,13 @@ export async function pushHistory(snapshot) {
     const layout = await getLayout()
     snapshot = layout.dashboards
   }
-  undoStack.push({ before: structuredClone(snapshot), after: null })
+  const entry = { before: structuredClone(snapshot), after: null }
+  undoStack.push(entry)
   if (undoStack.length > 50) {
     undoStack.shift()
   }
   redoStack.length = 0
+  return entry
 }
 
 // 最近一步操作寫完之後記下「操作後」的版面
@@ -899,13 +901,38 @@ function registerCardDropTarget(cardEl, card, ctx) {
         else if (applied?.notice) showToast(applied.notice)
         return
       }
-      await pushHistory()
-      await updateCard(currentDashId, card.id, (latest) => {
+      const redoBefore = structuredClone(redoStack)
+      const historyEntry = await pushHistory()
+      let sourceCheckError = null
+      let sourceNoLongerLive = false
+      const changed = await updateCard(currentDashId, card.id, async (latest) => {
+        let liveTasks
+        try {
+          // updater 在 layout lock 內執行；與抽屜相同，來源快照要靠近實際寫入核對。
+          liveTasks = await getTasks()
+        } catch (err) {
+          sourceCheckError = err
+          return null
+        }
+        const liveIndex = buildSeriesIndex(liveTasks)
+        if (droppedIds.some(id => !liveIndex.byId[id] && !liveIndex.parents[id])) {
+          sourceNoLongerLive = true
+          return null
+        }
         applied = makePatch(latest)
         if (!applied || applied.rejected) return null
         const { notice, ...cardPatch } = applied
         return cardPatch
       })
+      if (!changed) {
+        const historyIndex = undoStack.indexOf(historyEntry)
+        if (historyIndex >= 0) undoStack.splice(historyIndex, 1)
+        redoStack.splice(0, redoStack.length, ...redoBefore)
+        if (sourceCheckError) showToast('無法確認來源是否仍有效，請稍後再試')
+        else if (sourceNoLongerLive) showToast('來源已不存在，請重新整理後再拖曳')
+        else if (applied?.rejected) showToast(applied.reason)
+        return
+      }
       await sealHistory()
       if (applied?.rejected) showToast(applied.reason)
       else if (applied?.notice) showToast(applied.notice)
