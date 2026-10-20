@@ -531,7 +531,7 @@
 
 - [x] **T02** — 已完成：新增固定 today=2026-10-20 的截止日前／當日／後一日驗收，分別核對帳本 today-14 與含 today 共14日紀錄的截止規則；countRecordsBeyondRetention、trimOldRecords、trimOldRuns 實際結果一致。`node --no-experimental-global-navigator --test tests/af23_retention_boundary.test.js` 1/1 通過，不依真實今天。
 - [x] **T03** — 已完成：正式 BEGIN_FIELD_REPAIR/PICKED→content EXTRACT→fetcher→storage 歷史整合驗證 scalar 1.234×100=123.4、文字001仍為字串、cell=29.625，原 field key 與三條舊歷史保留。tests/af23_t03_repair_formal_history.test.js 1/1 通過；主代理修正測試URL名稱遮蔽後以預設入口獨立驗證。
-- [ ] **T04 拖入與背景修剪交錯（B3）**：確認實際 drop 更新路徑已有鎖內交錯測試；不足才新增受控 barrier。驗收：投放準備後被刪除的來源不復活，無關來源及其他卡片保持不變。
+- [x] **T04** — 已完成：核對真實 dashboard pointer/drop 路徑已有 layout 鎖內第二次 tasks read 的受控 barrier。加強目標卡無關來源及另一卡片完整屬性不變斷言；tests/j3_palette_drop.test.js 的 AF-23 拖入現有卡片案例獨立通過1/1，來源刪除交錯不復活，未新增產品架構。
 - [ ] **T05 真實 Undo／Redo（B4）**：補來源被背景移除後的實際復原／重做操作。驗收：已刪來源不復活，另一頁修改的無關屬性仍保留。
 - [ ] **T06 在途正式抓取與修復／刪除（F2）**：已有受控整合測試，核對是否還缺 Chrome API／實際頁面邊界證據，只補必要實機情境。驗收：過期執行不新增失效值的歷史、健康或告警；修復保留舊歷史，明確刪任務依既有契約處理自身歷史，無關任務不受影響。
 

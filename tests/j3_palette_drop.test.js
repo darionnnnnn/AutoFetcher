@@ -149,7 +149,11 @@ test('拖到折線卡片會追加一條序列', async () => {
 
 test('AF-23 拖入現有卡片時在 layout 鎖內重驗來源，刪除交錯不復活系列', async () => {
   const { c, st, ls, db, doc, win } = await fresh()
-  const { did, ids } = await seed(ls, [CARD('line', { source: [{ taskId: 't1', aggregation: 'raw' }] })])
+  const { did, ids } = await seed(ls, [
+    CARD('line', { source: [{ taskId: 't1', aggregation: 'raw' }] }),
+    CARD('table', { x: 6, y: 0, source: [{ taskId: 't3', aggregation: 'raw' }], options: { mode: 'pivot' } })
+  ])
+  const untouchedOtherCard = await cardOf(ls, did, ids[1])
   await db.renderDashboard(did)
   await enterEditMode(doc)
   stubRect(doc.querySelector(`[data-card-id="${ids[0]}"]`), [0, 0, 600, 200])
@@ -176,7 +180,11 @@ test('AF-23 拖入現有卡片時在 layout 鎖內重驗來源，刪除交錯不
   release()
   await deletion
   await settle()
-  assert.deepEqual((await cardOf(ls, did, ids[0])).source.map(item => item.taskId), ['t1'])
+  const after = (await ls.getLayout()).dashboards.find(d => d.id === did)
+  assert.deepEqual(after.cards.find(c => c.id === ids[0]).source.map(item => item.taskId), ['t1'],
+    '目標卡保留無關來源、被刪的拖入來源不復活')
+  assert.deepEqual(after.cards.find(c => c.id === ids[1]), untouchedOtherCard,
+    '同時存在的其他卡片及其選項保持不變')
 })
 
 test('拖到數值卡片會取代原本的來源', async () => {
