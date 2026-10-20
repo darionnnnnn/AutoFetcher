@@ -390,10 +390,10 @@ export function recoverFieldRepairOperations() {
         } else {
           await notifyFieldRepairPending(operation, result)
         }
-      } catch (error) {
+      } catch {
         try {
           await diag.log('field_repair_recovery_failed', {
-            taskId: operation.taskId, repairMode: operation.repairMode, message: error?.message
+            taskId: operation.taskId, repairMode: operation.repairMode, reason: 'operation_recovery_failed'
           })
         } catch {}
       }

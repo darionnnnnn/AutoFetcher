@@ -532,18 +532,23 @@ test('AC-A4 recovery continues after one operation and its diagnostic write both
   let failedTaskWrite = false
   let failedReceiptRead = false
   let failedDiagWrite = false
+  let rejectDiagWrite = true
+  const secretSentinel = 'textarea-token-password-sentinel-7f3a'
   f.chrome.storage.local.set = async items => {
     if (!failedTaskWrite && Object.hasOwn(items, 'tasks')) {
       failedTaskWrite = true
       throw new Error('injected first recovery task write failure')
     }
-    if (Object.hasOwn(items, 'diag')) { failedDiagWrite = true; throw new Error('injected diagnostic write failure') }
+    if (Object.hasOwn(items, 'diag') && rejectDiagWrite) {
+      failedDiagWrite = true
+      throw new Error('injected diagnostic write failure')
+    }
     return realSet(items)
   }
   f.chrome.storage.local.get = async keys => {
     if (failedTaskWrite && !failedReceiptRead && keys === 'fieldRepairOperations') {
       failedReceiptRead = true
-      throw new Error('injected first recovery receipt read failure')
+      throw new Error(secretSentinel)
     }
     return realGet(keys)
   }
@@ -559,6 +564,33 @@ test('AC-A4 recovery continues after one operation and its diagnostic write both
     'the later operation recovers despite the first operation and diagnostic write failing')
   const recovered = await f.storage.getTask(task.id)
   assert.equal(recovered.spec.fields.find(entry => entry.key === 'f2').source.locator.css, '#second-recovered')
+
+  rejectDiagWrite = false
+  failedTaskWrite = false
+  failedReceiptRead = false
+  f.chrome.storage.local.set = async items => {
+    if (!failedTaskWrite && Object.hasOwn(items, 'tasks')) {
+      failedTaskWrite = true
+      throw new Error('injected retry task write failure')
+    }
+    if (Object.hasOwn(items, 'diag') && rejectDiagWrite) throw new Error('injected retry diagnostic write failure')
+    return realSet(items)
+  }
+  f.chrome.storage.local.get = async keys => {
+    if (failedTaskWrite && !failedReceiptRead && keys === 'fieldRepairOperations') {
+      failedReceiptRead = true
+      throw new Error(secretSentinel)
+    }
+    return realGet(keys)
+  }
+  await f.bg.recoverFieldRepairOperations()
+  f.chrome.storage.local.get = realGet
+  f.chrome.storage.local.set = realSet
+  const diag = await import('../src/shared/diag.js?af23=' + Math.random())
+  const recoveryLogs = (await diag.getAll()).filter(entry => entry.kind === 'field_repair_recovery_failed')
+  assert.ok(recoveryLogs.length > 0, 'a retry records the sanitized recovery diagnostic')
+  assert.ok(!JSON.stringify(recoveryLogs).includes(secretSentinel), 'diagnostics never persist raw exception text')
+  assert.equal(recoveryLogs.at(-1).detail.reason, 'operation_recovery_failed')
 })
 
 test('AC-A4 task 已替換但版面清理中斷，重啟只補清理且不再換 key', async t => {
