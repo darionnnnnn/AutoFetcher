@@ -57,4 +57,3 @@ test('復原只套用本步 options 子欄位並保留其他頁的新設定', as
   assert.equal(actual.options.title, '另一頁新標題')
   assert.equal(actual.options.showDisabled, false)
 })
-

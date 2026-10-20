@@ -354,4 +354,3 @@ test('摘要圖表的舊讀取拒絕會被處理且不寫入新路由', async t 
   assert.equal(chart.hidden, true)
   assert.equal(chart.children.length, 0)
 })
-
