@@ -45,6 +45,8 @@ let exitedDraftIdentity = null
 let repairSessionId = undefined, repairFieldKey = undefined, repairMode = undefined
 const REPAIR_ACK_TIMEOUT_MS = 15000
 let repairSubmissionState = 'idle'
+let repairRetryPayload = null
+let repairSubmissionAttempt = 0
 let pickDocumentGeneration = undefined, pickRouteIdentity = undefined
 let pickLocationAtEntry = ''
 let pickImmediateDraft = false
@@ -2223,7 +2225,13 @@ function updatePanelActions(el) {
   const done = panelDoneEl
   const n = selectedCount()
   done.removeAttribute('aria-disabled')
-  if (n > 0) {
+  if (repairSessionId !== undefined && repairSubmissionState === 'uncertain') {
+    setButtonText(done, '再次確認同一操作')
+    done.removeAttribute('aria-disabled')
+  } else if (repairSessionId !== undefined && repairSubmissionState === 'sending') {
+    setButtonText(done, '正在確認…')
+    done.setAttribute('aria-disabled', 'true')
+  } else if (n > 0) {
     setButtonText(done, `完成（${n} 個值）`)
   } else if (iframeOf(el)) {
     setButtonText(done, '進入這個框架')
@@ -2881,9 +2889,13 @@ function dropGoneSelection() {
 // 送出確認訊息並離開
 async function confirmPick() {
   if (repairSessionId !== undefined && repairSubmissionState !== 'idle') {
+    if (repairSubmissionState === 'uncertain' && repairRetryPayload) {
+      await submitFieldRepair(repairRetryPayload, { retry: true })
+      return
+    }
     toolbarNotice = repairSubmissionState === 'sending'
       ? '正在套用已選來源，請等候確認'
-      : '這次結果尚未確認或授權已失效；請回設定重新開始，不要重送這次操作'
+      : '授權已失效；請回設定重新開始'
     if (panelEl) updatePanel(panelEl, currentTargetEl)
     return
   }
@@ -3163,6 +3175,11 @@ async function ascendFrame() {
 
 // 請求取消選取模式（已選 2 個以上需二段確認）
 function requestCancel() {
+  if (repairSessionId !== undefined && repairSubmissionState !== 'idle') {
+    toolbarNotice = '這筆操作尚未確認；請按「再次確認同一操作」，目前不能取消或更改選取'
+    if (panelEl) updatePanel(panelEl, currentTargetEl)
+    return
+  }
   const count = selectedCount()
   const needConfirm = (currentPurpose === 'task' || currentPurpose === 'repick') && count >= 2
   if (needConfirm) {
@@ -3199,15 +3216,20 @@ async function cancelPick() {
   exitPickMode({ clearOnly: purpose })
 }
 
-async function submitFieldRepair(msg, { cancelled = false } = {}) {
-  if (repairSubmissionState !== 'idle') return
+async function submitFieldRepair(msg, { cancelled = false, retry = false } = {}) {
+  if (repairSubmissionState !== 'idle' && !(retry && repairSubmissionState === 'uncertain' && repairRetryPayload)) return
   const sessionId = repairSessionId
   const purpose = currentPurpose
+  const payload = retry ? structuredClone(repairRetryPayload) : structuredClone(msg)
+  if (!retry) repairRetryPayload = structuredClone(payload)
+  const attempt = ++repairSubmissionAttempt
   repairSubmissionState = 'sending'
-  toolbarNotice = cancelled ? '正在確認取消，請等候回覆' : '正在套用已選來源，確認儲存前選取畫面會保留'
+  toolbarNotice = cancelled ? '正在確認取消，請等候回覆' : retry
+    ? '正在核對同一筆重選操作；選取內容已凍結'
+    : '正在套用已選來源，確認儲存前選取畫面會保留'
   if (panelEl) updatePanel(panelEl, currentTargetEl)
 
-  const request = Promise.resolve().then(() => chrome.runtime.sendMessage(msg)).then(
+  const request = Promise.resolve().then(() => chrome.runtime.sendMessage(payload)).then(
     response => ({ response }),
     error => ({ error })
   )
@@ -3225,14 +3247,16 @@ async function submitFieldRepair(msg, { cancelled = false } = {}) {
       exitPickMode(cancelled ? { clearOnly: purpose } : {})
       return
     }
-    if (result?.error || result?.timeout || result?.response?.error === 'stale_field_repair') {
+    if (attempt !== repairSubmissionAttempt) return
+    if (result?.error || result?.timeout || ['stale_field_repair', 'field_repair_pending',
+      'field_repair_cleanup_pending', 'field_repair_submitting'].includes(result?.response?.error)) {
       repairSubmissionState = 'uncertain'
       toolbarNotice = result?.response?.message || (cancelled
-        ? '取消結果尚未確認，請勿重送；回設定重新開始'
-        : '結果尚未確認，請勿重送；回設定重新確認這個值')
+        ? '取消結果尚未確認；請再次確認同一操作'
+        : '結果尚未確認；按「再次確認同一操作」核對，不會改動選取')
     } else {
-      repairSubmissionState = 'idle'
-      toolbarNotice = result?.response?.message || '這次重選未儲存；請修正選取後再試'
+      repairSubmissionState = 'uncertain'
+      toolbarNotice = result?.response?.message || '這次操作未確認；請再次確認同一操作'
     }
     if (panelEl) updatePanel(panelEl, currentTargetEl)
   }
@@ -3830,6 +3854,7 @@ function setToolbarCorner(corner) {
 function onMouseMove(event) {
   routeChanged()
   if (!active || draftPickDrainPaused) return
+  if (repairSessionId !== undefined && repairSubmissionState !== 'idle') return
   let target = event.target
   syncProxyRects()
   // 指標已經離開讓路的那個元素：把代理層裝回去，不然 iframe 從此選不到
@@ -3871,6 +3896,12 @@ function onMouseMove(event) {
 function onKeyDown(event) {
   routeChanged()
   if (!active || draftPickDrainPaused) return
+  if (repairSessionId !== undefined && repairSubmissionState !== 'idle') {
+    if (repairSubmissionState === 'uncertain' && event.key === 'Enter') confirmPick()
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
   // 頁面輸入欄／contenteditable 的快捷鍵交回網站；尤其不能攔 Enter、Delete
   // 來誤完成或移除選取值（群組命名輸入在擴充功能頁，不會走這裡）。
   const keyTarget = event.target
@@ -4149,7 +4180,20 @@ function relockAfterMove() {
 
 function onClick(event) {
   routeChanged()
-  if (!active || draftPickDrainPaused) return
+  if (!active) return
+  if (repairSessionId !== undefined && repairSubmissionState !== 'idle') {
+    const ownControl = overlayEl && overlayEl.contains(event.target) && !frameOfProxy(event.target)
+    const done = ownControl && event.target.closest?.('[data-af-done]')
+    if (done && repairSubmissionState === 'uncertain') {
+      event.preventDefault()
+      event.stopPropagation()
+      confirmPick()
+      return
+    }
+    if (!ownControl) { event.preventDefault(); event.stopPropagation() }
+    return
+  }
+  if (draftPickDrainPaused) return
   event.preventDefault(); event.stopPropagation()
 
   if (suppressClick) {
@@ -4871,7 +4915,13 @@ function onDblClick(event) {
 }
 
 function onMouseDown(event) {
-  if (!active || draftPickDrainPaused) return
+  if (!active) return
+  if (repairSessionId !== undefined && repairSubmissionState !== 'idle') {
+    const ownControl = overlayEl && overlayEl.contains(event.target) && !frameOfProxy(event.target)
+    if (!ownControl) { event.preventDefault(); event.stopPropagation() }
+    return
+  }
+  if (draftPickDrainPaused) return
   if (menuEl) {
     if (!menuEl.contains(event.target)) {
       closeMenu()
@@ -5078,6 +5128,8 @@ export function enterPickMode(opts) {
   pickSessionId = opts?.sessionId !== undefined ? opts.sessionId : undefined
   repairSessionId = opts?.repairSessionId
   repairSubmissionState = 'idle'
+  repairRetryPayload = null
+  repairSubmissionAttempt++
   repairFieldKey = opts?.repairFieldKey
   repairMode = opts?.repairMode
   pickGroupKey = opts?.groupKey ?? opts?.activeGroupKey
@@ -5321,6 +5373,8 @@ export function exitPickMode(opts = {}) {
   pickSessionId = undefined; pickGroupKey = undefined; pickFrame = undefined; pickRevision = undefined; parentFrameId = undefined
   repairSessionId = undefined; repairFieldKey = undefined; repairMode = undefined
   repairSubmissionState = 'idle'
+  repairRetryPayload = null
+  repairSubmissionAttempt++
   pickDocumentGeneration = undefined; pickRouteIdentity = undefined
   pickLocationAtEntry = ''
   pickImmediateDraft = false

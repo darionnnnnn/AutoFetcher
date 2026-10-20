@@ -112,6 +112,53 @@ test('AC-A2 ACK 延遲時保留畫面；成功才退出，拒絕保留原因', a
   }
 })
 
+test('AC-A2 uncertain repair retries the immutable same payload from the visible control', async t => {
+  resetChromeMock()
+  const chrome = installChromeMock()
+  const dom = new JSDOM('<table><tbody><tr><td id="metric">123</td></tr></tbody></table>', { url: 'https://a.test/prices' })
+  const previous = { window: globalThis.window, document: globalThis.document, Event: globalThis.Event, MouseEvent: globalThis.MouseEvent }
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, Event: dom.window.Event, MouseEvent: dom.window.MouseEvent })
+  const realSetTimeout = globalThis.setTimeout
+  globalThis.setTimeout = (callback, ms, ...args) => realSetTimeout(callback, ms === 15000 ? 3 : ms, ...args)
+  const submissions = []
+  let resolveSecond
+  chrome.__setRuntimeResponder(message => {
+    if (message?.type !== 'PICKED' || !message.repairSessionId) return undefined
+    submissions.push(structuredClone(message))
+    if (submissions.length === 2) return new Promise(resolve => { resolveSecond = resolve })
+    return new Promise(() => {})
+  })
+  const picker = await import('../src/content/picker-mode.js?af23-retry=' + Math.random())
+  try {
+    picker.enterPickMode({ purpose: 'repick', taskId: 'af23-repair', repairSessionId: 'same-op', repairFieldKey: 'f1', repairMode: 'repair', documentGeneration: 'doc-a', initialTarget: document.querySelector('table') })
+    const cell = document.getElementById('metric')
+    cell.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+    cell.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    document.querySelector('[data-af-done]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    await new Promise(resolve => realSetTimeout(resolve, 20))
+    assert.ok(document.querySelector('[data-af-overlay]'))
+    assert.equal(document.querySelector('[data-af-done]').textContent, '再次確認同一操作')
+    const firstPayload = structuredClone(submissions[0])
+    document.querySelector('[data-af-done]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(submissions.length, 2)
+    assert.deepEqual(submissions[1], firstPayload, 'retry reuses the exact operation and selection payload')
+    assert.ok(document.querySelector('[data-af-overlay]'), 'the UI stays open until authoritative success ACK')
+    resolveSecond({ ok: true })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(document.querySelector('[data-af-overlay]'), null)
+  } finally {
+    picker.exitPickMode()
+    globalThis.window = previous.window
+    globalThis.document = previous.document
+    globalThis.Event = previous.Event
+    globalThis.MouseEvent = previous.MouseEvent
+    globalThis.setTimeout = realSetTimeout
+    dom.window.close()
+    resetChromeMock()
+  }
+})
+
 test('AC-A5 舊修復拒絕來源/stateActions 衝突；改名與排程保留最新內容', async t => {
   const f = await setup(t)
   const grant = await begin(f)
