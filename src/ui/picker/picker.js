@@ -1326,19 +1326,22 @@ function bindFieldRepairListeners() {
     }
     for (const [identity, session] of repairSessionsByField) {
       if (session.tabId !== tabId) continue
-      if (session.operationId || session.state === 'pending') {
-        session.tabId = null
-        const row = findFieldRow(session.taskId, session.fieldKey)
-        if (row) {
-          setFieldRowHint(row, '來源頁已關閉，但操作結果尚未確認；再次確認會核對同一操作。')
-          addFieldRepairResumeAction(row, null)
-        }
-        continue
+      // Closing the source tab can race the success ACK: background persists,
+      // closes its tab, then broadcasts DONE. Keep the session identity until
+      // that ACK is reconciled; manual close can use the same control to restart
+      // or check the journal without allowing a second field operation.
+      session.tabId = null
+      if (!session.operationId && session.state !== 'pending' && session.state !== 'applying') {
+        session.state = 'closed'
       }
-      repairSessionsByField.delete(identity)
-      updateCurrentRepairActionState(session.taskId, session.fieldKey)
       const row = findFieldRow(session.taskId, session.fieldKey)
-      if (row) setFieldRowHint(row, '來源重選頁已關閉；可以重新開始')
+      if (row) {
+        updateRepairActionState(row)
+        setFieldRowHint(row, session.state === 'applying'
+          ? '來源頁已關閉；正在核對剛完成的重選結果。'
+          : '來源頁已關閉；再次確認會核對同一操作，或重新開啟來源頁。')
+        addFieldRepairResumeAction(row, null)
+      }
     }
   })
   fieldRepairListenersBound = true
@@ -1382,7 +1385,23 @@ function handleFieldRepairDone(message) {
       typeof message.operationId !== 'string' || !message.operationId ||
       typeof message.sessionId !== 'string' || !message.sessionId ||
       message.operationId !== message.sessionId) return undefined
-  void applyFieldRepairDone(message).catch(() => {
+  const repairIdentity = fieldRepairIdentity(message.taskId, message.repairMode === 'replace' ? message.oldFieldKey : message.fieldKey)
+  const session = repairSessionsByField.get(repairIdentity)
+  if (session?.sessionId && session.sessionId !== message.sessionId) return undefined
+  if (session) {
+    session.state = 'applying'
+    updateRepairActionState(findFieldRow(session.taskId, session.fieldKey))
+  }
+  void applyFieldRepairDone(message).then(() => {
+    if (!session || repairSessionsByField.get(repairIdentity) !== session || session.state !== 'applying') return
+    session.state = session.tabId === null ? 'closed' : 'pending'
+    const row = findFieldRow(session.taskId, session.fieldKey)
+    if (row) {
+      updateRepairActionState(row)
+      setFieldRowHint(row, '成功回覆尚未完成本機核對；再次確認會核對同一操作。')
+      addFieldRepairResumeAction(row, null)
+    }
+  }).catch(() => {
     const identity = fieldRepairIdentity(message.taskId, message.repairMode === 'replace' ? message.oldFieldKey : message.fieldKey)
     const row = findFieldRow(message.taskId, message.repairMode === 'replace' ? message.oldFieldKey : message.fieldKey)
     if (row) setFieldRowHint(row, '成功回覆尚未完成本機核對；請再次確認同一操作，系統不會重複替換。')

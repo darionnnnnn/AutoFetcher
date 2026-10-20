@@ -174,7 +174,14 @@ test('AC-C3:忙碌狀態隨重畫與切換任務正確解除', async () => {
   await sleep(5)
   for (const listener of removedListeners) listener(89)
   button = doc.querySelector('#field-list [data-field-repair]')
-  assert.equal(button.disabled, false, '關閉 session 分頁要解除目前 row，而非舊 row')
+  assert.equal(button.disabled, true, '關閉來源頁不能被當成操作成功或失敗而解除同一欄位鎖')
+  assert.ok(button.closest('[data-field-row]').querySelector('[data-action="resume-field-repair"]'),
+    '關閉後保留同一操作的核對入口')
+  for (const listener of c.runtime.onMessage._listeners) listener({
+    type: 'FIELD_REPAIR_PENDING', state: 'failed', operationId: 'repair-session-rerender', sessionId: 'repair-session-rerender',
+    taskId: 'task-rerender', fieldKey: 'field-a', message: '這次操作確定尚未套用，可以重試。'
+  })
+  assert.equal(button.disabled, false, '確定失敗後才解除同欄位鎖')
 
   let releaseOld
   const oldGate = new Promise(resolve => { releaseOld = resolve })
