@@ -1242,7 +1242,8 @@ function fieldRepairIdentity(taskId, fieldKey) {
 }
 
 function updateRepairActionState(row) {
-  const active = repairSessionsByField.has(fieldRepairIdentity(currentCtx?.task?.id, row?.dataset?.fieldKey))
+  const session = repairSessionsByField.get(fieldRepairIdentity(currentCtx?.task?.id, row?.dataset?.fieldKey))
+  const active = Boolean(session && session.state !== 'closed')
   for (const button of row?.querySelectorAll?.('[data-field-repair], [data-field-replace]') || []) {
     button.disabled = active
     if (active) button.setAttribute('aria-disabled', 'true')
@@ -1254,12 +1255,13 @@ async function startFieldRepair(row, repairMode) {
   const taskId = currentCtx?.task?.id
   const fieldKey = row?.dataset?.fieldKey
   const identity = fieldRepairIdentity(taskId, fieldKey)
-  if (!taskId || !fieldKey || repairSessionsByField.has(identity)) return
+  const previousSession = repairSessionsByField.get(identity)
+  if (!taskId || !fieldKey || (previousSession && previousSession.state !== 'closed')) return
   const draftAtStart = {
     source: structuredClone(row._source || {}),
     spec: structuredClone(row._spec || {})
   }
-  repairSessionsByField.set(identity, { tabId: null, taskId, fieldKey, repairMode, sessionId: null, draftAtStart })
+  repairSessionsByField.set(identity, { tabId: null, taskId, fieldKey, repairMode, sessionId: null, state: 'opening', draftAtStart })
   updateRepairActionState(row)
   setFieldRowHint(row, '正在開啟來源重選…')
   try {
@@ -1339,7 +1341,9 @@ function bindFieldRepairListeners() {
         updateRepairActionState(row)
         setFieldRowHint(row, session.state === 'applying'
           ? '來源頁已關閉；正在核對剛完成的重選結果。'
-          : '來源頁已關閉；再次確認會核對同一操作，或重新開啟來源頁。')
+          : session.state === 'closed'
+            ? '來源頁已關閉；可以重新開始，晚到結果仍會核對原操作。'
+            : '來源頁已關閉；再次確認會核對同一操作，或重新開啟來源頁。')
         addFieldRepairResumeAction(row, null)
       }
     }
@@ -1387,6 +1391,9 @@ function handleFieldRepairDone(message) {
       message.operationId !== message.sessionId) return undefined
   const repairIdentity = fieldRepairIdentity(message.taskId, message.repairMode === 'replace' ? message.oldFieldKey : message.fieldKey)
   const session = repairSessionsByField.get(repairIdentity)
+  // A closed session may be restarted before a late ACK arrives. While BEGIN
+  // for the replacement session is unresolved, the old ACK has no authority.
+  if (session?.state === 'opening') return undefined
   if (session?.sessionId && session.sessionId !== message.sessionId) return undefined
   if (session) {
     session.state = 'applying'

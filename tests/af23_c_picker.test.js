@@ -162,7 +162,8 @@ test('AC-C3:忙碌狀態隨重畫與切換任務正確解除', async () => {
   c.__setRuntimeResponder(async message => {
     if (message?.type !== 'BEGIN_FIELD_REPAIR') return undefined
     await gate
-    return { ok: true, sessionId: 'repair-session-rerender', tabId: 89 }
+    return { ok: false, error: 'field_repair_pending', operationId: 'repair-session-rerender',
+      sessionId: 'repair-session-rerender', state: 'pending', tabId: 89 }
   })
   picker.render({ task: repairTask('task-rerender'), url: 'https://preview.test/page' })
   doc.querySelector('#field-list [data-field-repair]').click()
@@ -174,7 +175,7 @@ test('AC-C3:忙碌狀態隨重畫與切換任務正確解除', async () => {
   await sleep(5)
   for (const listener of removedListeners) listener(89)
   button = doc.querySelector('#field-list [data-field-repair]')
-  assert.equal(button.disabled, true, '關閉來源頁不能被當成操作成功或失敗而解除同一欄位鎖')
+  assert.equal(button.disabled, true, 'journal pending 的來源頁關閉後仍鎖住同一欄位')
   assert.ok(button.closest('[data-field-row]').querySelector('[data-action="resume-field-repair"]'),
     '關閉後保留同一操作的核對入口')
   for (const listener of c.runtime.onMessage._listeners) listener({
@@ -193,6 +194,8 @@ test('AC-C3:忙碌狀態隨重畫與切換任務正確解除', async () => {
   button.click()
   await sleep(5)
   picker.render({ task: repairTask('task-other'), url: 'https://preview.test/page' })
+  releaseOld()
+  await sleep(5)
   const done = { ...doneMessage('task-rerender'), operationId: 'repair-session-switch', sessionId: 'repair-session-switch' }
   await persistRepairResult(storage, 'task-rerender', done)
   for (const listener of c.runtime.onMessage._listeners) listener(done)
@@ -200,8 +203,6 @@ test('AC-C3:忙碌狀態隨重畫與切換任務正確解除', async () => {
   picker.render({ task: repairTask('task-rerender'), url: 'https://preview.test/page' })
   button = doc.querySelector('#field-list [data-field-repair]')
   assert.equal(button.disabled, false, '切換期間收到的舊任務完成事件要清理 session')
-  releaseOld()
-  await sleep(5)
 })
 
 test('AC-C3:BEGIN ACK 前快速關閉來源分頁不留下永久 busy', async () => {
