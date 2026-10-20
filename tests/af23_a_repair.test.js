@@ -498,6 +498,69 @@ test('AC-A4 pending operation older than the completed TTL remains recoverable',
   assert.equal((await f.storage.listPendingFieldRepairOperations()).some(item => item.id === operation.id), true)
 })
 
+test('AC-A4 recovery continues after one operation and its diagnostic write both fail', async t => {
+  const f = await setup(t)
+  await f.bg.fieldRepairWorkerRecovery
+  const task = await f.storage.getTask('af23-repair')
+  const stable = value => {
+    if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`
+    if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stable(value[key])}`).join(',')}}`
+    return JSON.stringify(value)
+  }
+  const makeOperation = (id, fieldKey, source, nextSpec) => {
+    const field = task.fields.find(item => item.key === fieldKey)
+    const entry = task.spec.fields.find(item => item.key === fieldKey)
+    return {
+      id, taskId: task.id, fieldKey, repairMode: 'repair', status: 'prepared', createdAt: Date.now(),
+      fieldSnapshot: stable({ key: field.key, mode: field.mode, fieldSource: field.source,
+        entrySource: entry.source, spec: entry.spec, fieldStateActions: field.stateActions,
+        entryStateActions: entry.stateActions }),
+      source: { locator: { css: source } }, nextSpec, selectedMode: field.mode,
+      cleanup: { layout: false, lastValues: false, alarms: false }
+    }
+  }
+  const first = makeOperation('recovery-first-fails', 'f1', '#first-recovered',
+    { block: { axis: 'col', index: 5, headerText: '新現價', aggregate: 'last' } })
+  const second = makeOperation('recovery-second-succeeds', 'f2', '#second-recovered',
+    { cell: { row: { index: 8 }, col: { index: 3 } } })
+  await f.storage.beginFieldRepairOperation(first)
+  await f.storage.beginFieldRepairOperation(second)
+  assert.deepEqual((await f.storage.listPendingFieldRepairOperations()).map(item => item.id), [first.id, second.id])
+
+  const realGet = f.chrome.storage.local.get.bind(f.chrome.storage.local)
+  const realSet = f.chrome.storage.local.set.bind(f.chrome.storage.local)
+  let failedTaskWrite = false
+  let failedReceiptRead = false
+  let failedDiagWrite = false
+  f.chrome.storage.local.set = async items => {
+    if (!failedTaskWrite && Object.hasOwn(items, 'tasks')) {
+      failedTaskWrite = true
+      throw new Error('injected first recovery task write failure')
+    }
+    if (Object.hasOwn(items, 'diag')) { failedDiagWrite = true; throw new Error('injected diagnostic write failure') }
+    return realSet(items)
+  }
+  f.chrome.storage.local.get = async keys => {
+    if (failedTaskWrite && !failedReceiptRead && keys === 'fieldRepairOperations') {
+      failedReceiptRead = true
+      throw new Error('injected first recovery receipt read failure')
+    }
+    return realGet(keys)
+  }
+
+  assert.equal(await f.bg.recoverFieldRepairOperations(), 2)
+  f.chrome.storage.local.get = realGet
+  f.chrome.storage.local.set = realSet
+  assert.equal(failedReceiptRead, true, 'the first operation reaches the per-item recovery catch')
+  assert.equal(failedDiagWrite, true, 'diagnostic storage failure is isolated from the recovery loop')
+  assert.equal((await f.storage.getFieldRepairOperation(first.id)).status, 'prepared',
+    'failed operation remains pending for a later recovery attempt')
+  assert.equal((await f.storage.getFieldRepairOperation(second.id)).status, 'complete',
+    'the later operation recovers despite the first operation and diagnostic write failing')
+  const recovered = await f.storage.getTask(task.id)
+  assert.equal(recovered.spec.fields.find(entry => entry.key === 'f2').source.locator.css, '#second-recovered')
+})
+
 test('AC-A4 task 已替換但版面清理中斷，重啟只補清理且不再換 key', async t => {
   const f = await setup(t)
   const layout = await import('../src/shared/layout-store.js?af23=' + Math.random())

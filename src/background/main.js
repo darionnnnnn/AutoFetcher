@@ -391,7 +391,11 @@ export function recoverFieldRepairOperations() {
           await notifyFieldRepairPending(operation, result)
         }
       } catch (error) {
-        diag.error('field_repair_recovery_failed', { taskId: operation.taskId, repairMode: operation.repairMode, message: error?.message })
+        try {
+          await diag.log('field_repair_recovery_failed', {
+            taskId: operation.taskId, repairMode: operation.repairMode, message: error?.message
+          })
+        } catch {}
       }
     }
     return pending.length
