@@ -5278,18 +5278,36 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
         setPanelBootReady(true)
       }
     }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') boot()
+    }
+    const onTabActivated = info => {
+      if (forcedTab !== null || !globalThis.chrome?.sidePanel || document.visibilityState !== 'visible') return
+      if (!Number.isInteger(panelWindowId) || info?.windowId !== panelWindowId) return
+      boot()
+    }
+    const onPageHide = () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      document.removeEventListener('pagehide', onPageHide)
+      chrome.tabs.onActivated?.removeListener?.(onTabActivated)
+      unsubscribePanelSession()
+    }
     // 載入當下就解析會拿到切換前的舊分頁；轉為可見時再解析才正確，
     // 而且每次轉為可見都重解析一次（自癒）
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') boot()
-    })
+    document.addEventListener('visibilitychange', onVisibilityChange)
     if (document.visibilityState === 'visible') boot()
     // ctx 變了（例如使用者在頁面上選好了目標）就重畫
-    subscribe(() => {
+    const unsubscribePanelSession = subscribe(() => {
       // A hidden side panel can receive session updates while its target tab is
       // being prepared. Keep it from racing a visible panel's tab binding.
       if (document.visibilityState === 'visible') boot()
     }, { area: 'session' })
+    // Side panels stay visible while their window's active tab changes; Chrome
+    // does not guarantee a visibilitychange for that transition.
+    if (forcedTab === null && globalThis.chrome?.sidePanel) {
+      chrome.tabs.onActivated?.addListener?.(onTabActivated)
+    }
+    document.addEventListener('pagehide', onPageHide, { once: true })
     document.addEventListener('af:pick-group-name-result', event => { consumeGroupNameResult(event.detail) })
     chrome.runtime.onMessage?.addListener((message) => {
       if (message?.type === PICK_GROUP_NAME_RESULT) return consumeGroupNameResult(message)
