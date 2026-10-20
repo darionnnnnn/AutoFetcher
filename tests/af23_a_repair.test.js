@@ -97,6 +97,10 @@ test('AC-A2 ACK 延遲時保留畫面；成功才退出，拒絕保留原因', a
         } else {
           assert.ok(document.querySelector('[data-af-overlay]'), 'a rejected repair keeps the selection recoverable')
           assert.match(document.querySelector('[data-af-panel]').textContent, /請重新開始/)
+          assert.equal(document.querySelector('[data-af-done]').getAttribute('aria-disabled'), 'true', 'stale authorization cannot retry forever')
+          document.querySelector('[data-af-cancel]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+          await new Promise(resolve => setImmediate(resolve))
+          assert.equal(document.querySelector('[data-af-overlay]'), null, 'failed authorization can be exited safely')
         }
       } finally {
         picker.exitPickMode()
@@ -115,7 +119,7 @@ test('AC-A2 ACK 延遲時保留畫面；成功才退出，拒絕保留原因', a
 test('AC-A2 uncertain repair retries the immutable same payload from the visible control', async t => {
   resetChromeMock()
   const chrome = installChromeMock()
-  const dom = new JSDOM('<table><tbody><tr><td id="metric">123</td></tr></tbody></table>', { url: 'https://a.test/prices' })
+  const dom = new JSDOM('<table><tbody><tr><td id="metric">123</td><td id="other">456</td></tr></tbody></table>', { url: 'https://a.test/prices' })
   const previous = { window: globalThis.window, document: globalThis.document, Event: globalThis.Event, MouseEvent: globalThis.MouseEvent }
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, Event: dom.window.Event, MouseEvent: dom.window.MouseEvent })
   const realSetTimeout = globalThis.setTimeout
@@ -138,6 +142,17 @@ test('AC-A2 uncertain repair retries the immutable same payload from the visible
     await new Promise(resolve => realSetTimeout(resolve, 20))
     assert.ok(document.querySelector('[data-af-overlay]'))
     assert.equal(document.querySelector('[data-af-done]').textContent, '再次確認同一操作')
+    const tabKey = new dom.window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    document.querySelector('[data-af-done]').dispatchEvent(tabKey)
+    assert.equal(tabKey.defaultPrevented, false, 'keyboard focus can still move to the retry control')
+    const panel = document.querySelector('[data-af-panel]')
+    const rightBeforeMove = panel.style.right
+    document.querySelector('[data-af-panel-move]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    assert.notEqual(panel.style.right, rightBeforeMove, 'panel movement remains available while the operation is pending')
+    document.querySelector('[data-af-tool="row"]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    document.querySelector('[data-af-chip-remove]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    document.getElementById('other').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    assert.equal(document.querySelectorAll('[data-af-chip]').length, 1, 'selection removal and mode changes are blocked while pending')
     const firstPayload = structuredClone(submissions[0])
     document.querySelector('[data-af-done]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     await new Promise(resolve => setImmediate(resolve))
@@ -154,6 +169,49 @@ test('AC-A2 uncertain repair retries the immutable same payload from the visible
     globalThis.Event = previous.Event
     globalThis.MouseEvent = previous.MouseEvent
     globalThis.setTimeout = realSetTimeout
+    dom.window.close()
+    resetChromeMock()
+  }
+})
+
+test('AC-A2 deterministic repair rejection permits correcting the selection', async t => {
+  resetChromeMock()
+  const chrome = installChromeMock()
+  const dom = new JSDOM('<table><tbody><tr><td id="first">123</td><td id="second">456</td></tr></tbody></table>', { url: 'https://a.test/prices' })
+  const previous = { window: globalThis.window, document: globalThis.document, Event: globalThis.Event, MouseEvent: globalThis.MouseEvent }
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, Event: dom.window.Event, MouseEvent: dom.window.MouseEvent })
+  const sent = []
+  chrome.__setRuntimeResponder(message => {
+    if (message?.type !== 'PICKED' || !message.repairSessionId) return undefined
+    sent.push(structuredClone(message))
+    return sent.length === 1
+      ? { ok: false, error: 'repair_type_mismatch', message: '新選取的資料類型與原本不同' }
+      : { ok: true }
+  })
+  const picker = await import('../src/content/picker-mode.js?af23-repairable=' + Math.random())
+  try {
+    picker.enterPickMode({ purpose: 'repick', taskId: 'af23-repair', repairSessionId: 'correctable-op', repairFieldKey: 'f1', repairMode: 'repair', documentGeneration: 'doc-a', initialTarget: document.querySelector('table') })
+    const first = document.getElementById('first')
+    first.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+    first.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    document.querySelector('[data-af-done]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    await new Promise(resolve => setImmediate(resolve))
+    assert.ok(document.querySelector('[data-af-overlay]'))
+    assert.notEqual(document.querySelector('[data-af-done]').textContent, '再次確認同一操作')
+    const second = document.getElementById('second')
+    second.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+    second.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    document.querySelector('[data-af-done]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(sent.length, 2)
+    assert.notDeepEqual(sent[1].picks, sent[0].picks, 'the corrected selection is a fresh payload after a known rejection')
+    assert.equal(document.querySelector('[data-af-overlay]'), null)
+  } finally {
+    picker.exitPickMode()
+    globalThis.window = previous.window
+    globalThis.document = previous.document
+    globalThis.Event = previous.Event
+    globalThis.MouseEvent = previous.MouseEvent
     dom.window.close()
     resetChromeMock()
   }
@@ -324,6 +382,9 @@ test('AC-A4 worker entry recovers pending operation on ordinary worker reload', 
   const task = await f.storage.getTask('af23-repair')
   assert.equal(task.fields.filter(field => field.key !== 'f2').length, 1)
   assert.equal((await f.storage.getFieldRepairOperation(grant.enter.repairSessionId)).status, 'complete')
+  assert.ok(f.chrome.__calls.some(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'FIELD_REPAIR_DONE' &&
+    call.args[0].done === true && call.args[0].operationId === grant.enter.repairSessionId),
+  'worker recovery broadcasts only the authoritative successful completion')
 })
 
 test('AC-A4 cancel cannot report success while submitted repair is waiting on storage', async t => {
@@ -397,6 +458,35 @@ test('AC-A4 terminal repair result stays immutable and pending replay does not c
   assert.deepEqual(replayAgain, terminalResult)
   assert.equal((await f.storage.getFieldRepairOperation(operation.id)).updatedAt, terminalAt,
     'replaying a completed operation does not mutate its receipt')
+})
+
+test('AC-A4 terminal failure replay returns the stored result shape, not a receipt object', async t => {
+  const f = await setup(t)
+  const grant = await begin(f)
+  const realGet = f.chrome.storage.local.get.bind(f.chrome.storage.local)
+  const realSet = f.chrome.storage.local.set.bind(f.chrome.storage.local)
+  let changedAfterReceipt = false
+  f.chrome.storage.local.set = async items => {
+    await realSet(items)
+    if (!changedAfterReceipt && Object.hasOwn(items, 'fieldRepairOperations')) {
+      changedAfterReceipt = true
+      const { tasks } = await realGet('tasks')
+      const next = tasks.map(task => task.id !== 'af23-repair' ? task : {
+        ...task, spec: { ...task.spec, fields: task.spec.fields.map(entry => entry.key === 'f1'
+          ? { ...entry, source: { locator: { css: '#concurrent-edit' } } } : entry) }
+      })
+      await realSet({ tasks: next })
+    }
+  }
+  const first = await picked(f, grant)
+  assert.equal(first.error, 'stale_field_repair')
+  const receipt = await f.storage.getFieldRepairOperation(grant.enter.repairSessionId)
+  assert.equal(receipt.status, 'complete')
+  assert.deepEqual(receipt.result, first)
+  const terminalAt = receipt.updatedAt
+  const replay = await picked(f, grant)
+  assert.deepEqual(replay, first)
+  assert.equal((await f.storage.getFieldRepairOperation(receipt.id)).updatedAt, terminalAt)
 })
 
 test('AC-A4 pending operation older than the completed TTL remains recoverable', async t => {

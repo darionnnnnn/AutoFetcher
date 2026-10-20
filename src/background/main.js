@@ -338,7 +338,15 @@ export function recoverFieldRepairOperations() {
   fieldRepairRecoveryPromise = (async () => {
     const pending = await listPendingFieldRepairOperations()
     for (const operation of pending) {
-      try { await runFieldRepairOperation(operation) } catch (error) {
+      try {
+        const result = await runFieldRepairForMessage(operation)
+        if (result?.ok === true) {
+          await notifyFieldRepairDone(operation, result)
+          try { await chrome.tabs.remove(operation.auth?.tabId) } catch {}
+        } else {
+          await notifyFieldRepairPending(operation, result)
+        }
+      } catch (error) {
         diag.error('field_repair_recovery_failed', { taskId: operation.taskId, repairMode: operation.repairMode, message: error?.message })
       }
     }
@@ -475,8 +483,9 @@ async function notifyFieldRepairDone(operation, result) {
 }
 
 async function notifyFieldRepairPending(operation, result) {
+  const pending = result?.error?.includes('pending') || result?.error?.includes('submitting')
   try {
-    await chrome.runtime.sendMessage({ type: 'FIELD_REPAIR_PENDING', state: result?.error?.includes('pending') ? 'pending' : 'failed',
+    await chrome.runtime.sendMessage({ type: 'FIELD_REPAIR_PENDING', state: pending ? 'pending' : 'failed',
       operationId: operation.id, sessionId: operation.id, taskId: operation.taskId,
       fieldKey: operation.fieldKey, repairMode: operation.repairMode, message: result?.message || '重選操作尚未完成' })
   } catch {}
