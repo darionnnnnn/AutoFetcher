@@ -25,7 +25,8 @@ async function clean(init = true) {
   return { c, storage, settings, exporter }
 }
 
-test('R16 schema 3 / AutoFetcher 0.20 資料初始化至 schema 4，任務、設定、舊紀錄與帳本可讀', async () => {
+test('R16 schema 3 / AutoFetcher 0.20 資料初始化至 schema 4，任務、設定、舊紀錄與帳本可讀', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-09-23T01:00:00Z') })
   const { c, storage } = await clean(false)
   await c.storage.local.set({
     schemaVersion: 3,
@@ -47,6 +48,23 @@ test('R16 schema 3 / AutoFetcher 0.20 資料初始化至 schema 4，任務、設
   assert.ok(Array.isArray(raw[`rec:${date}`]), '舊日紀錄仍保留並可讀')
   assert.equal(raw.runs, undefined)
   assert.equal(raw[`runs:${date}`][originalTask.id][`${date}T09:00`], 'ok')
+})
+
+test('AC-A1 帳本遷移保留截止日，僅移除截止日前資料，不受執行當天影響', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-09-23T01:00:00Z') })
+  const { c, storage } = await clean(false)
+  await c.storage.local.set({
+    schemaVersion: 2,
+    runs: { [originalTask.id]: {
+      '2026-09-08T09:00': 'ok',
+      '2026-09-09T09:00': 'ok',
+      '2026-09-10T09:00': 'ok'
+    } }
+  })
+  await storage.init()
+  assert.equal(await storage.getRunStatus(originalTask.id, '2026-09-08T09:00'), undefined)
+  assert.equal(await storage.getRunStatus(originalTask.id, '2026-09-09T09:00'), 'ok')
+  assert.equal(await storage.getRunStatus(originalTask.id, '2026-09-10T09:00'), 'ok')
 })
 
 test('R16 新版設定備份可回匯；恢復覆蓋同 id 設定但不刪新增任務或回滾歷史', async () => {

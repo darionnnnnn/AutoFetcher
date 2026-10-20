@@ -204,6 +204,89 @@ function isMultiExecutionTask(task) {
 const EXECUTION_INVALIDATIONS_KEY = 'executionInvalidations'
 const MAX_EXECUTION_INVALIDATIONS = 100
 const MAX_EXECUTION_INVALIDATION_BYTES = 64 * 1024
+const FIELD_REPAIR_OPERATIONS_KEY = 'fieldRepairOperations'
+const MAX_FIELD_REPAIR_OPERATIONS = 50
+const MAX_FIELD_REPAIR_OPERATION_BYTES = 64 * 1024
+const FIELD_REPAIR_OPERATION_TTL_MS = 7 * 24 * 60 * 60 * 1000
+
+function liveFieldRepairOperations(rows, now = Date.now()) {
+  return asArray(rows).filter(operation => operation && typeof operation.id === 'string' &&
+    (operation.status !== 'complete' || now - Number(operation.updatedAt || operation.createdAt || 0) < FIELD_REPAIR_OPERATION_TTL_MS))
+}
+
+/** Remove expired terminal receipts on recovery or another repair-journal write. */
+export async function pruneFieldRepairOperations(now = Date.now()) {
+  let removed = 0
+  await mutateKey(FIELD_REPAIR_OPERATIONS_KEY, current => {
+    const rows = asArray(current)
+    const live = liveFieldRepairOperations(rows, now)
+    removed = rows.length - live.length
+    return removed > 0 ? live : undefined
+  })
+  return removed
+}
+
+/**
+ * Minimal bounded journal for single-field repair/replacement. The operation is
+ * recorded before the task key changes, so worker recovery can recognize the
+ * fixed replacement key and finish idempotent cleanup after an interruption.
+ */
+export async function getFieldRepairOperation(id) {
+  if (typeof id !== 'string' || !id) return null
+  const stored = await chrome.storage.local.get(FIELD_REPAIR_OPERATIONS_KEY)
+  return liveFieldRepairOperations(stored?.[FIELD_REPAIR_OPERATIONS_KEY])
+    .find(operation => operation.id === id) || null
+}
+
+export async function beginFieldRepairOperation(operation) {
+  if (!operation || typeof operation.id !== 'string' || !operation.id ||
+      typeof operation.taskId !== 'string' || typeof operation.fieldKey !== 'string') {
+    throw new Error('invalid field repair operation')
+  }
+  let saved
+  await mutateKey(FIELD_REPAIR_OPERATIONS_KEY, current => {
+    const rows = liveFieldRepairOperations(current)
+    const existing = rows.find(item => item.id === operation.id)
+    if (existing) { saved = existing; return undefined }
+    const next = [...rows, structuredClone(operation)]
+    while (next.length > MAX_FIELD_REPAIR_OPERATIONS ||
+      new TextEncoder().encode(JSON.stringify(next)).length > MAX_FIELD_REPAIR_OPERATION_BYTES) {
+      const index = next.findIndex(item => item.status === 'complete')
+      if (index < 0) throw new Error('field repair operation journal is full')
+      next.splice(index, 1)
+    }
+    saved = structuredClone(operation)
+    return next
+  })
+  return saved
+}
+
+export async function updateFieldRepairOperation(id, mutator) {
+  if (typeof id !== 'string' || !id || typeof mutator !== 'function') return null
+  let updated = null
+  await mutateKey(FIELD_REPAIR_OPERATIONS_KEY, current => {
+    const rows = liveFieldRepairOperations(current)
+    const index = rows.findIndex(item => item.id === id)
+    if (index < 0) return undefined
+    const nextOperation = mutator(structuredClone(rows[index]))
+    if (!nextOperation) return undefined
+    if (nextOperation.id !== id) throw new Error('field repair operation id cannot change')
+    nextOperation.updatedAt = Date.now()
+    rows[index] = nextOperation
+    if (new TextEncoder().encode(JSON.stringify(rows)).length > MAX_FIELD_REPAIR_OPERATION_BYTES) {
+      throw new Error('field repair operation journal is full')
+    }
+    updated = structuredClone(nextOperation)
+    return rows
+  })
+  return updated
+}
+
+export async function listPendingFieldRepairOperations() {
+  const stored = await chrome.storage.local.get(FIELD_REPAIR_OPERATIONS_KEY)
+  return liveFieldRepairOperations(stored?.[FIELD_REPAIR_OPERATIONS_KEY])
+    .filter(operation => operation.status !== 'complete')
+}
 
 function executionSpecChanged(before, after) {
   if (!isMultiExecutionTask(before)) return false
@@ -213,11 +296,21 @@ function executionSpecChanged(before, after) {
 
 async function invalidationOf(before, after) {
   if (!executionSpecChanged(before, after)) return null
+  const pendingCommits = []
+  const runState = await getRunState()
+  const prefix = `${before.id}@`
+  for (const [key, entry] of Object.entries(runState)) {
+    if (!key.startsWith(prefix) || entry?.state !== 'running') continue
+    const slot = key.slice(prefix.length)
+    if (!slot || await getRunStatus(before.id, slot)) continue
+    pendingCommits.push({ slot, commitId: key })
+  }
   return {
     taskId: before.id,
     executionFingerprint: await executionFingerprintOf(before),
     seriesKeys: changedExecutionSeriesOf(before, after),
-    clearHealth: true
+    clearHealth: true,
+    ...(pendingCommits.length > 0 ? { pendingCommits } : {})
   }
 }
 
@@ -284,6 +377,41 @@ async function clearInvalidatedExecutionState(changes) {
   })
 }
 
+// Remove only the incomplete scheduled commits observed by the durable marker.
+// Completed ledger slots and manual executionId records are not invalidation
+// cleanup targets (task deletion still performs its own full history purge).
+async function clearInvalidatedExecutionRecords(changes) {
+  for (const change of changes || []) {
+    if (typeof change?.taskId !== 'string' || typeof change?.executionFingerprint !== 'string') continue
+    for (const commit of Array.isArray(change.pendingCommits) ? change.pendingCommits : []) {
+      if (typeof commit?.slot !== 'string' || typeof commit?.commitId !== 'string') continue
+      const date = commit.slot.slice(0, 10)
+      // Serialize the ledger decision with setRunStatusForExecution. A writer
+      // that already checked the old task must finish before this barrier reads
+      // its status; a later writer will check the now-changed task and reject.
+      // Release this key before touching rec2 below; storage locks are not nested.
+      let completed = false
+      await mutateKey(runsKey(date), current => {
+        completed = Boolean(asObject(asObject(current)[change.taskId])[commit.slot])
+        return undefined
+      })
+      // A completed ledger is authoritative and its history must remain intact.
+      if (completed) continue
+      for (const key of dayRecordKeys(date).filter(isRecordKey)) {
+        await mutateKey(key, current => {
+          const rows = asArray(current)
+          const kept = rows.filter(record => !(
+            parentIdOf(record?.taskId) === change.taskId && record?.slot === commit.slot &&
+            record?.commitId === commit.commitId && record?.executionFingerprint === change.executionFingerprint
+          ))
+          if (kept.length === rows.length) return undefined
+          return kept.length === 0 ? REMOVE : kept
+        })
+      }
+    }
+  }
+}
+
 // Recovery is deliberately off the fetch path. A marker written before a task
 // mutation is harmless if that mutation never committed; replay only cleans
 // after the task disappeared or its execution identity changed.
@@ -297,6 +425,7 @@ async function replayExecutionInvalidationsForMarker(marker) {
     if (!stillOld) eligible.push(change)
   }
   await clearInvalidatedExecutionState(eligible)
+  await clearInvalidatedExecutionRecords(eligible)
   await removeExecutionInvalidation(marker.id)
 }
 
@@ -789,6 +918,23 @@ export async function appendRecords(date, records) {
   for (const [hh, group] of groupByHour(records)) {
     await mutateKey(hourRecordKey(date, hh), (current) => [...asArray(current), ...group])
   }
+}
+
+// Append a scheduled execution's records only while its source fingerprint is
+// still current. The check runs under each rec2 key lock immediately before write.
+export async function appendRecordsForExecution(date, records, taskId, executionFingerprint) {
+  if (!ISO_DATE_RE.test(String(date)) || !Array.isArray(records) || records.length === 0 ||
+      typeof taskId !== 'string' || typeof executionFingerprint !== 'string') return false
+  for (const [hh, group] of groupByHour(records)) {
+    let allowed = false
+    await mutateKey(hourRecordKey(date, hh), async current => {
+      allowed = await currentTaskMatchesExecution(taskId, executionFingerprint)
+      if (!allowed) return undefined
+      return [...asArray(current), ...group]
+    })
+    if (!allowed) return false
+  }
+  return true
 }
 
 // 追加紀錄至指定日期的小時鍵（rec2:<date>:<HH>）

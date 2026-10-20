@@ -1,0 +1,50 @@
+TAP version 13
+# Subtest: 卡片拖入以鎖內最新來源計算，prune 後不會由舊畫面復活來源
+ok 1 - 卡片拖入以鎖內最新來源計算，prune 後不會由舊畫面復活來源
+  ---
+  duration_ms: 12.5145
+  ...
+# Subtest: 狀態卡拖入以最新 options.taskIds 更新，保留 prune 並行結果與其他選項
+ok 2 - 狀態卡拖入以最新 options.taskIds 更新，保留 prune 並行結果與其他選項
+  ---
+  duration_ms: 0.857875
+  ...
+# Subtest: 復原只套用本步 options 子欄位並保留其他頁的新設定
+ok 3 - 復原只套用本步 options 子欄位並保留其他頁的新設定
+  ---
+  duration_ms: 0.729709
+  ...
+# Subtest: B4 undo rechecks live sources under layout lock after task deletion and prune
+ok 4 - B4 undo rechecks live sources under layout lock after task deletion and prune
+  ---
+  duration_ms: 43.121459
+  ...
+# Subtest: B4 failed task read or layout write preserves the undo step for retry
+ok 5 - B4 failed task read or layout write preserves the undo step for retry
+  ---
+  duration_ms: 7.320875
+  ...
+# Subtest: B4 repeated undo while a live-source check is pending cannot consume a second step
+ok 6 - B4 repeated undo while a live-source check is pending cannot consume a second step
+  ---
+  duration_ms: 6.294916
+  ...
+# Subtest: B4 an edit recorded during pending undo keeps its own step and does not expose stale redo
+ok 7 - B4 an edit recorded during pending undo keeps its own step and does not expose stale redo
+  ---
+  duration_ms: 5.0405
+  ...
+# Subtest: B4 completing undo after switching dashboard never moves the old step into the new dashboard history
+ok 8 - B4 completing undo after switching dashboard never moves the old step into the new dashboard history
+  ---
+  duration_ms: 8.687125
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 8
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 373.026792

@@ -1,0 +1,3 @@
+[T06] repair EXTRACT released to native Chrome messaging
+[PASS] T06 scheduled EXTRACT held in Chrome; real Picker repair preserves history and rejects old result { originalTabId: 765386931 }
+[PASS] T06 scheduled EXTRACT held in Chrome; confirmed delete clears own history and stale run cannot recreate it

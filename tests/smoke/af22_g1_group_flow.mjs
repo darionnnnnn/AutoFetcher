@@ -5,10 +5,11 @@ import puppeteer from 'puppeteer-core'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, resolve, dirname, basename } from 'node:path'
+import { findBrowser, ROOT } from './browser-path.mjs'
 
-const SRC = resolve('src')
-const CHROME = process.env.BROWSER_PATH || join(os.tmpdir(), 'af22-cft', 'chrome', 'win64-154.0.8037.57', 'chrome-win64', 'chrome.exe')
+const SRC = process.env.AF23_EXTENSION_PATH ? resolve(process.env.AF23_EXTENSION_PATH) : resolve(ROOT, 'src')
+const CHROME = findBrowser()
 const deadline = Date.now() + 300_000
 const ck = label => console.log(`[checkpoint] ${label}`)
 const bounded = async (label, fn, ms = 12000) => {
@@ -32,14 +33,30 @@ const sameFrameFixture = mainPort => `<!doctype html><meta charset="utf-8"><div 
 const nestedFrameFixture = '<!doctype html><meta charset="utf-8"><div id="nested-price" style="margin:120px 20px;padding:20px">707</div>'
 const listen = server => new Promise((resolveListen, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => resolveListen(server.address().port)) })
 const clickSelector = async (page, selector) => {
-  const el = await page.$(selector)
-  if (!el) throw new Error(`missing ${selector}`)
-  await el.evaluate(element => element.scrollIntoView({ block: 'center' }))
-  const box = await el.boundingBox()
-  if (!box) throw new Error(`no visible bounds for ${selector}`)
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+  await page.bringToFront()
+  // Newly attached tabs may resize on their first pointer input. Wait for the
+  // actual control to stabilize and verify its hit target before pressing.
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const el = await page.$(selector)
+    if (!el) throw new Error(`missing ${selector}`)
+    await el.evaluate(element => element.scrollIntoView({ block: 'center' }))
+    const box = await el.boundingBox()
+    if (!box) throw new Error(`no visible bounds for ${selector}`)
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+    await bounded(`settle ${selector}`, () => page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))), 3000)
+    const hit = await page.evaluate(({ s, b }) => {
+      const control = document.querySelector(s)
+      const target = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)
+      return control && (control === target || control.contains(target))
+    }, { s: selector, b: box })
+    if (!hit) { console.log('[pointer-layout-settle]', selector, box); continue }
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+    return
+  }
+  throw new Error(`unstable or covered control: ${selector}`)
 }
 const clickPanel = async (page, selector) => {
+  if (page.actualClick) return page.actualClick(selector)
   const clicked = await page.evaluate(selectorText => {
     const element = document.querySelector(selectorText)
     if (!element) return false
@@ -74,7 +91,7 @@ try {
   framePort = await listen(frameServer)
   mainPort = await listen(mainServer)
   const url = `http://127.0.0.1:${mainPort}/`
-  profile = mkdtempSync(join(os.tmpdir(), 'af22-g1-'))
+  profile = process.env.AF23_UPGRADE_PROFILE || mkdtempSync(join(os.tmpdir(), 'af22-g1-'))
   browser = await bounded('launch CfT', () => puppeteer.launch({ executablePath: CHROME, headless: false, userDataDir: profile, args: [`--disable-extensions-except=${SRC}`, `--load-extension=${SRC}`, '--no-first-run', '--no-default-browser-check'] }), 25000)
   const worker = await bounded('extension worker', async () => {
     const end = Date.now() + 20000
@@ -149,6 +166,27 @@ try {
     console.log('[debug] rebound picker target', pickerTarget.type(), pickerTarget.url())
   }
   const picker = {
+    async actualClick(selector) {
+      await refreshPickerTarget()
+      let details
+      for(let attempt=0;attempt<4;attempt++) {
+        await this.evaluate(s=>document.querySelector(s)?.scrollIntoView({block:'center'}),selector)
+        await bounded('panel frame '+selector,()=>this.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))),3000)
+        details=await this.evaluate(s=>{
+          const e=document.querySelector(s);if(!e)return {missing:true}
+          const b=e.getBoundingClientRect(),x=b.x+b.width/2,y=b.y+b.height/2,hit=document.elementFromPoint(x,y)
+          return {x,y,width:b.width,height:b.height,hidden:e.hidden||Boolean(e.closest('[hidden]')),disabled:e.disabled,hit:hit?.outerHTML.slice(0,350),matched:hit===e||e.contains(hit),viewport:[innerWidth,innerHeight],visibility:document.visibilityState}
+        },selector)
+        if(!details.hidden&&!details.disabled&&details.width&&details.height&&details.matched) {
+          const box={x:details.x,y:details.y}
+          await pickerCdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',...box})
+          await pickerCdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...box,button:'left',clickCount:1})
+          await pickerCdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...box,button:'left',clickCount:1})
+          return
+        }
+      }
+      throw new Error('Panel control hidden or covered: '+selector+' '+JSON.stringify(details))
+    },
     async evaluate(fn, ...args) {
       await refreshPickerTarget()
       const expression = `(${fn.toString()})(...${JSON.stringify(args)})`
@@ -173,7 +211,7 @@ try {
       throw new Error('panel condition timeout')
     },
     async type(selector, text) { await this.evaluate((s, value) => { const e = document.querySelector(s); e.focus(); e.value += value; e.dispatchEvent(new Event('input', { bubbles: true })) }, selector, text) },
-    async $(selector) { const exists = await this.evaluate(s => Boolean(document.querySelector(s)), selector); return exists ? { click: () => this.evaluate(s => document.querySelector(s)?.click(), selector) } : null },
+    async $(selector) { const exists = await this.evaluate(s => Boolean(document.querySelector(s)), selector); return exists ? { click: () => this.actualClick(selector) } : null },
     async $$(selector) { const n = await this.evaluate(s => document.querySelectorAll(s).length, selector); return Array.from({ length: n }, () => ({ evaluate: fn => fn({ textContent: '' }) })) }
   }
   await picker.waitForSelector('#group-start-first:not([hidden])', { timeout: 15000 })
@@ -524,11 +562,12 @@ try {
   if (!editField) throw new Error(`reopened task lost original field key ${fieldKey}`)
   const repairButton = await picker.$(`[data-field-row][data-field-key="${fieldKey}"] [data-field-repair]`)
   if (!repairButton) throw new Error('reopened multi field is missing the same-metric repair action')
+  const beforeRepairTargets = new Set(browser.targets())
   await repairButton.click()
   const repairPage = await bounded('repair page opens', async () => {
     const end = Date.now() + 15000
     while (Date.now() < end) {
-      const page = (await browser.pages()).find(candidate => candidate !== target && candidate !== report && candidate.url().includes(`:${mainPort}/`))
+      const page = (await browser.pages()).find(candidate => !beforeRepairTargets.has(candidate.target()) && candidate.url().includes(`:${mainPort}/`))
       if (page) return page
       await new Promise(resolveWait => setTimeout(resolveWait, 100))
     }
@@ -621,6 +660,11 @@ try {
 
   const newTab = await report.evaluate(async url => {
     const tab = await chrome.tabs.create({ url, active: true })
+    const loadDeadline=Date.now()+10000
+    while((await chrome.tabs.get(tab.id)).status!=='complete') {
+      if(Date.now()>loadDeadline)throw new Error('second fixture tab did not finish loading')
+      await new Promise(r=>setTimeout(r,50))
+    }
     await chrome.storage.session.set({ [`panel:${tab.id}`]: { kind: 'new', batch: true, tabId: tab.id, url } })
     await chrome.sidePanel.setOptions({ tabId: tab.id, path: 'ui/picker/picker.html', enabled: true })
     const button = document.createElement('button')
@@ -638,11 +682,21 @@ try {
   }, { timeout: 10000 })
   const secondPanelOpen = await report.$eval('#open-second-round-panel', button => ({ opened: button.dataset.opened, error: button.dataset.error }))
   if (secondPanelOpen.opened !== 'true') throw new Error(`second-round side panel failed to open: ${JSON.stringify(secondPanelOpen)}`)
+  await report.evaluate(async id => chrome.tabs.update(id, { active: true }), newTab.id)
+  try {
+    await report.waitForFunction(async id => {
+      const key='pickDraft:'+id
+      return Boolean((await chrome.storage.session.get(key))[key])
+    },{timeout:20000,polling:100},newTab.id)
+  } catch(error) {
+    console.log('[diagnostic] second draft bootstrap',await report.evaluate(async id=>({tabs:await chrome.tabs.query({}),session:await chrome.storage.session.get(null),read:await chrome.runtime.sendMessage({type:'PICK_DRAFT_READ',tabId:id})}),newTab.id))
+    throw error
+  }
   await refreshPickerTarget(false, null, newTab.id)
   pickerTargetPinned = true
   await picker.waitForFunction(() => document.querySelector('#group-start-first') && !document.querySelector('#group-start-first').hidden, { timeout: 20000 })
   const freshDraft = await picker.evaluate(async id => (await chrome.runtime.sendMessage({ type: 'PICK_DRAFT_READ', tabId: id }))?.draft, newTab.id)
-  if (!freshDraft || freshDraft.sessionId === firstGroupState.sessionId || freshDraft.groups.length !== 0) throw new Error('second round inherited old picker draft groups')
+  if (!freshDraft || freshDraft.sessionId === firstGroupState.sessionId || freshDraft.groups.length !== 0) throw new Error(`second round draft mismatch: ${JSON.stringify({freshDraft, firstSession:firstGroupState.sessionId,newTab})}`)
   const freshContext = await picker.evaluate(async id => (await chrome.storage.session.get(`panel:${id}`))[`panel:${id}`], newTab.id)
   const priorTaskIds = persisted.map(task => task.id)
   const freshDraftJson = JSON.stringify(freshDraft)
@@ -820,11 +874,38 @@ try {
   await picker.waitForSelector('#batch-section:not([hidden])', { timeout: 15000 })
   const secondSuggestedNames = await picker.evaluate(() => [...document.querySelectorAll('#batch-list [data-batch-name]')].map(input => input.value))
   if (JSON.stringify(secondSuggestedNames) !== JSON.stringify(['Second Round Only'])) throw new Error(`second round name did not carry into settings: ${JSON.stringify(secondSuggestedNames)}`)
+  await picker.evaluate(() => {
+    window.__g1SecondTestTrace = []
+    document.addEventListener('click', event => {
+      window.__g1SecondTestTrace.push({ event: 'click', id: event.target?.id, trusted: event.isTrusted })
+    }, { capture: true })
+    const send = chrome.runtime.sendMessage.bind(chrome.runtime)
+    chrome.runtime.sendMessage = (message, ...args) => {
+      const response = send(message, ...args)
+      if (message?.type === 'TEST_TASK') {
+        window.__g1SecondTestTrace.push({ event: 'request', type: message.type })
+        Promise.resolve(response).then(value => window.__g1SecondTestTrace.push({ event: 'response', ok: value?.ok, error: value?.error }))
+          .catch(error => window.__g1SecondTestTrace.push({ event: 'rejection', error: String(error) }))
+      }
+      return response
+    }
+  })
   await clickPanel(picker, '#test-now')
-  await picker.waitForFunction(() => {
-    const rows = [...document.querySelectorAll('#batch-list [data-batch-result]')]
-    return rows.length === 1 && rows[0].textContent.trim() !== '—' && !document.querySelector('#test-now')?.disabled
-  }, { timeout: 45000 })
+  try {
+    await picker.waitForFunction(() => {
+      const rows = [...document.querySelectorAll('#batch-list [data-batch-result]')]
+      return rows.length === 1 && rows[0].textContent.trim() !== '—' && !document.querySelector('#test-now')?.disabled
+    }, { timeout: 45000 })
+  } catch (error) {
+    console.log('[diagnostic] second-round dry run', await picker.evaluate(() => ({
+      trace: window.__g1SecondTestTrace, visibility: document.visibilityState,
+      button: document.querySelector('#test-now')?.outerHTML,
+      rows: [...document.querySelectorAll('#batch-list [data-batch-result]')].map(e => e.textContent),
+      errors: document.querySelector('#errors')?.textContent,
+      status: document.querySelector('#group-draft-status')?.textContent
+    })))
+    throw error
+  }
   const secondDryRun = await picker.evaluate(() => ({
     names: [...document.querySelectorAll('#batch-list [data-batch-name]')].map(input => input.value),
     results: [...document.querySelectorAll('#batch-list [data-batch-result]')].map(node => node.textContent.trim())
@@ -883,10 +964,10 @@ try {
   for (const server of [mainServer, frameServer]) {
     if (server.listening) { server.closeAllConnections?.(); await new Promise(r => server.close(() => r())) }
   }
-  if (profile) {
+  if (profile && !process.env.AF23_UPGRADE_PROFILE) {
     const temp = resolve(os.tmpdir())
     const abs = resolve(profile)
-    if (abs.startsWith(`${temp}\\`) && abs.split(/[\\/]/).pop()?.startsWith('af22-g1-')) rmSync(abs, { recursive: true, force: true, maxRetries: 4, retryDelay: 200 })
+    if (dirname(abs) === temp && basename(abs).startsWith('af22-g1-')) rmSync(abs, { recursive: true, force: true, maxRetries: 4, retryDelay: 200 })
     else console.error(`refused profile cleanup outside temp: ${abs}`)
   }
 }

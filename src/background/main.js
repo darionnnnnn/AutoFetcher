@@ -2,7 +2,9 @@
 import {
   init as initStorage, getTask, updateTasks, getRecordsByDate, updateRepickTabs, getRepickTabs,
   getPanelCtx, setPanelCtx, mergePanelCtx, clearPanelCtx,
-  getSettings, subscribe, deleteLastValues, getSite
+  getSettings, subscribe, deleteLastValues, getSite,
+  beginFieldRepairOperation, getFieldRepairOperation,
+  updateFieldRepairOperation, listPendingFieldRepairOperations, pruneFieldRepairOperations
 } from '../shared/storage.js'
 import { pruneSeries } from '../shared/layout-store.js'
 import { openPanel, closePanel } from '../shared/panel.js'
@@ -51,6 +53,7 @@ import {
 } from '../shared/pick-protocol.js'
 import { getPickDraft, updatePickDraft } from '../shared/pick-draft.js'
 import { routeIdentityMatchesUrl, sameRouteIgnoringTracking } from '../shared/route.js'
+import { normalizeTaskSources, validateMultiTask } from '../shared/task-source.js'
 
 // 面板 ctx 可能尚未寫入就收到 pagehide；用短命記號避免無 ctx 時重複清場，
 // 同時讓新一輪開啟能再次廣播 EXIT_PICK。
@@ -64,10 +67,84 @@ const groupNamePickRequests = new Map()
 // Per-field repair grants are deliberately worker-memory only: a worker restart
 // invalidates every outstanding grant, so a stale page cannot replay a repair.
 const fieldRepairSessions = new Map()
+const fieldRepairBeginInFlight = new Map()
 
-async function beginFieldRepair(msg) {
+function stableRepairValue(value) {
+  if (Array.isArray(value)) return `[${value.map(stableRepairValue).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableRepairValue(value[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+function repairFrameUrl(value) {
+  if (typeof value !== 'string') return ''
+  try {
+    const url = new URL(value)
+    return `${url.origin}${url.pathname}`
+  } catch { return '' }
+}
+
+function fieldRepairSnapshot(task, field, entry) {
+  return stableRepairValue({
+    taskUrl: task?.url,
+    preActions: task?.preActions,
+    key: field?.key,
+    mode: field?.mode,
+    fieldSource: field?.source,
+    entrySource: entry?.source,
+    spec: entry?.spec || (entry?.cell ? { cell: entry.cell } : entry?.block ? { block: entry.block } : {}),
+    fieldStateActions: field?.stateActions,
+    entryStateActions: entry?.stateActions
+  })
+}
+
+function fieldRepairTaskContextSnapshot(task) {
+  return stableRepairValue({ taskUrl: task?.url, preActions: task?.preActions })
+}
+
+function beginFieldRepair(msg) {
+  if (typeof msg?.taskId !== 'string' || typeof msg?.fieldKey !== 'string' ||
+      !['repair', 'replace'].includes(msg.repairMode)) return Promise.resolve({ ok: false, error: 'invalid_repair' })
+  const key = JSON.stringify([msg.taskId, msg.fieldKey])
+  const existing = fieldRepairBeginInFlight.get(key)
+  if (existing) {
+    if (existing.repairMode === msg.repairMode) return existing.promise
+    return existing.promise.then(result => ({ ok: false, error: 'field_repair_active',
+      operationId: result?.sessionId, sessionId: result?.sessionId, tabId: result?.tabId,
+      message: '這個值已有另一種重選模式正在開啟；請先完成或取消該頁面' }))
+  }
+  const reservation = { repairMode: msg.repairMode, promise: null }
+  const running = beginFieldRepairOnce(msg).finally(() => {
+    if (fieldRepairBeginInFlight.get(key) === reservation) fieldRepairBeginInFlight.delete(key)
+  })
+  reservation.promise = running
+  fieldRepairBeginInFlight.set(key, reservation)
+  return running
+}
+
+async function beginFieldRepairOnce(msg) {
   if (typeof msg.taskId !== 'string' || typeof msg.fieldKey !== 'string' ||
       !['repair', 'replace'].includes(msg.repairMode)) return { ok: false, error: 'invalid_repair' }
+  const pending = (await listPendingFieldRepairOperations()).find(operation =>
+    operation.taskId === msg.taskId && (operation.fieldKey === msg.fieldKey || operation.newFieldKey === msg.fieldKey))
+  if (pending) {
+    if (fieldRepairInFlight.has(pending.id)) {
+      const result = { ok: false, error: 'field_repair_pending',
+        message: '上一筆重選仍在儲存；再次確認同一操作後才能開始新的重選' }
+      await notifyFieldRepairPending(pending, result)
+      return { ...result, operationId: pending.id, sessionId: pending.id, state: pending.status }
+    }
+    const result = await runFieldRepairForMessage(pending)
+    if (result?.ok === true) {
+      await notifyFieldRepairDone(pending, result)
+      return { ...result, recovered: true, operationId: pending.id, sessionId: pending.id }
+    }
+    await notifyFieldRepairPending(pending, result)
+    return { ok: false, error: 'field_repair_pending',
+      message: result?.message || '上一筆重選尚未完成；請再次確認同一操作',
+      operationId: pending.id, sessionId: pending.id, state: pending.status }
+  }
   const task = await getTask(msg.taskId)
   const fields = Array.isArray(task?.fields) ? task.fields : []
   const field = fields.find(item => item?.key === msg.fieldKey)
@@ -78,6 +155,11 @@ async function beginFieldRepair(msg) {
   if (!task || !field || !fieldSpec || !locator || task.mode !== 'multi') {
     return { ok: false, error: 'field_not_found', message: '找不到這個多值任務欄位，請重新載入設定' }
   }
+  const active = [...fieldRepairSessions.values()].find(session =>
+    session.taskId === task.id && session.fieldKey === field.key)
+  if (active) return { ok: false, error: 'field_repair_active', operationId: active.sessionId,
+    sessionId: active.sessionId, tabId: active.tabId,
+    message: '這個值已有重選頁面開啟；請先完成或取消該頁面' }
   const sessionId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
   let tabId = null
   let keepTab = false
@@ -105,7 +187,9 @@ async function beginFieldRepair(msg) {
     fieldRepairSessions.set(sessionId, {
       sessionId, taskId: task.id, fieldKey: field.key, repairMode: msg.repairMode,
       tabId, frameId: loc.frameId, frameUrl,
-      documentGeneration, routeIdentity
+      documentGeneration, routeIdentity,
+      fieldSnapshot: fieldRepairSnapshot(task, field, fieldSpec),
+      taskContextSnapshot: fieldRepairTaskContextSnapshot(task)
     })
     const entered = await sendToFrame(tabId, {
       type: MSG.ENTER_PICK, purpose: 'repick', taskId: task.id, locator,
@@ -138,19 +222,259 @@ async function beginFieldRepair(msg) {
   }
 }
 
+function mergedRepairSpec(previous, spec) {
+  const next = { ...structuredClone(previous), ...structuredClone(spec) }
+  if (next.cell && previous.cell) {
+    next.cell = { ...structuredClone(previous.cell), ...structuredClone(spec.cell) }
+    for (const axis of ['row', 'col']) {
+      if (previous.cell[axis]?.pos && next.cell[axis]) next.cell[axis].pos = previous.cell[axis].pos
+    }
+    if (!next.cell.inner && previous.cell.inner) next.cell.inner = structuredClone(previous.cell.inner)
+  } else if (next.block && previous.block) {
+    next.block = { ...structuredClone(previous.block), ...structuredClone(spec.block) }
+    for (const key of ['aggregate', 'skip', 'exclude', 'pos', 'inner']) {
+      if (next.block[key] === undefined && previous.block[key] !== undefined) next.block[key] = structuredClone(previous.block[key])
+    }
+  }
+  return next
+}
+
+function operationMatchesSender(operation, msg, sender) {
+  return operation && operation.taskId === msg.taskId && operation.fieldKey === msg.repairFieldKey &&
+    operation.repairMode === msg.repairMode && operation.auth?.tabId === sender?.tab?.id &&
+    operation.auth?.frameId === (sender?.frameId ?? 0) &&
+    operation.auth?.documentGeneration === msg.documentGeneration &&
+    sameOriginPath(sender?.url, operation.auth?.frameUrl)
+}
+
+function fieldAndEntryOf(task, key) {
+  return {
+    field: task?.fields?.find(item => item?.key === key),
+    entry: task?.spec?.fields?.find(item => item?.key === key)
+  }
+}
+
+function operationAlreadyApplied(task, operation) {
+  if (!operation.taskContextSnapshot ||
+      fieldRepairTaskContextSnapshot(task) !== operation.taskContextSnapshot) return null
+  if (operation.repairMode === 'replace') {
+    const active = fieldAndEntryOf(task, operation.newFieldKey)
+    const archived = (task?.archivedFields || []).find(item => item?.repairOperationId === operation.id)
+    return active.field && active.entry && archived ? { field: active.field, entry: active.entry, archived } : null
+  }
+  const current = fieldAndEntryOf(task, operation.fieldKey)
+  if (!current.field || !current.entry) return null
+  if (current.entry.source?.locator && stableRepairValue(current.entry.source) === stableRepairValue(operation.source) &&
+      stableRepairValue(current.entry.spec || {}) === stableRepairValue(operation.nextSpec)) return current
+  return null
+}
+
+async function finishFieldRepairOperation(operation) {
+  if (operation?.status === 'complete' && operation.result) return structuredClone(operation.result)
+  const task = await getTask(operation.taskId)
+  if (!task || task.mode !== 'multi') {
+    const result = { ok: false, error: 'field_not_found', message: '任務已移除，沒有套用重選結果' }
+    await updateFieldRepairOperation(operation.id, current => ({ ...current, status: 'complete', result }))
+    return result
+  }
+
+  let applied = operationAlreadyApplied(task, operation)
+  let conflict = false
+  let missing = false
+  if (!applied) {
+    const [updated] = await updateTasks([operation.taskId], currentTask => {
+      const { field, entry } = fieldAndEntryOf(currentTask, operation.fieldKey)
+      if (!field || !entry || currentTask.mode !== 'multi') { missing = true; return null }
+      if (fieldRepairSnapshot(currentTask, field, entry) !== operation.fieldSnapshot) { conflict = true; return null }
+      const previous = entry.spec || (entry.cell ? { cell: entry.cell } : entry.block ? { block: entry.block } : {})
+      if (operation.repairMode === 'repair' &&
+          (Boolean(previous.cell) !== Boolean(operation.nextSpec.cell) || Boolean(previous.block) !== Boolean(operation.nextSpec.block))) {
+        missing = true
+        return null
+      }
+      if (operation.repairMode === 'replace') {
+        const oldAlerts = (Array.isArray(currentTask.alerts) ? currentTask.alerts : []).filter(alert => alert?.field === operation.fieldKey)
+        currentTask.archivedFields = Array.isArray(currentTask.archivedFields) ? currentTask.archivedFields : []
+        currentTask.archivedFields.push({ ...structuredClone(operation.archivedField), repairOperationId: operation.id })
+        const fieldIndex = currentTask.fields.findIndex(item => item?.key === operation.fieldKey)
+        currentTask.fields[fieldIndex] = { ...field, key: operation.newFieldKey, name: operation.name, mode: operation.selectedMode }
+        entry.key = operation.newFieldKey
+        entry.name = operation.name
+        entry.mode = operation.selectedMode
+        entry.source = structuredClone(operation.source)
+        entry.spec = structuredClone(operation.nextSpec)
+        currentTask.alerts = (Array.isArray(currentTask.alerts) ? currentTask.alerts : []).filter(alert => alert?.field !== operation.fieldKey)
+        if (currentTask.alerts.length === 0) delete currentTask.alerts
+      } else {
+        entry.source = structuredClone(operation.source)
+        entry.spec = structuredClone(operation.nextSpec)
+        delete entry.cell
+        delete entry.block
+      }
+      return currentTask
+    })
+    applied = updated ? operationAlreadyApplied(updated, operation) : operationAlreadyApplied(await getTask(operation.taskId), operation)
+    if (!applied) {
+      const failure = conflict
+        ? { ok: false, error: 'stale_field_repair', message: '這個值的來源或狀態動作已變更，請重新開始' }
+        : { ok: false, error: 'field_not_found', message: missing ? '這個值已移除或選取類型不同，沒有套用重選結果' : '這個值已移除，沒有套用重選結果' }
+      await updateFieldRepairOperation(operation.id, current => ({ ...current, status: 'complete', result: failure }))
+      return failure
+    }
+  }
+
+  const fieldKey = operation.repairMode === 'replace' ? operation.newFieldKey : operation.fieldKey
+  const currentTask = await getTask(operation.taskId)
+  const current = fieldAndEntryOf(currentTask, fieldKey)
+  const result = { ok: true, taskId: operation.taskId, fieldKey,
+    source: structuredClone(current.entry.source), spec: structuredClone(current.entry.spec) }
+  if (operation.repairMode === 'replace') Object.assign(result, {
+    repairMode: 'replace', oldFieldKey: operation.fieldKey, newFieldKey: operation.newFieldKey,
+    name: operation.name, fieldName: operation.name, oldSeriesId: operation.oldSeriesId,
+    archivedField: structuredClone(operation.archivedField)
+  })
+  await updateFieldRepairOperation(operation.id, currentOperation => ({ ...currentOperation,
+    status: operation.repairMode === 'replace' ? 'cleanup' : 'complete', result }))
+
+  if (operation.repairMode === 'replace') {
+    const cleanup = [
+      ['layout', async () => pruneSeries([operation.oldSeriesId])],
+      ['lastValues', async () => deleteLastValues([operation.oldSeriesId])],
+      ['alarms', async () => {
+        await rebuildAlarms()
+        const liveTask = await getTask(operation.taskId)
+        const schedule = liveTask?.schedule
+        const weekdays = schedule?.weekdays ?? liveTask?.weekdays
+        const expected = liveTask?.enabled !== false && schedule?.type === 'daily' && Array.isArray(schedule.times) &&
+          Array.isArray(weekdays) && weekdays.length > 0
+          ? schedule.times.length
+          : liveTask?.enabled !== false && schedule?.type === 'interval' ? 1 : 0
+        const found = (await chrome.alarms.getAll()).filter(alarm => parseAlarmName(alarm.name)?.taskId === operation.taskId).length
+        if (found < expected) throw new Error('任務排程警示尚未完整重建')
+      }]
+    ]
+    for (const [name, action] of cleanup) {
+      const latest = await getFieldRepairOperation(operation.id)
+      if (latest?.cleanup?.[name]) continue
+      await action()
+      await updateFieldRepairOperation(operation.id, currentOperation => ({
+        ...currentOperation, cleanup: { ...currentOperation.cleanup, [name]: true }
+      }))
+    }
+    await updateFieldRepairOperation(operation.id, currentOperation => ({ ...currentOperation, status: 'complete' }))
+  }
+  return result
+}
+
+const fieldRepairInFlight = new Map()
+function runFieldRepairOperation(operation) {
+  if (fieldRepairInFlight.has(operation.id)) return fieldRepairInFlight.get(operation.id)
+  const running = finishFieldRepairOperation(operation).finally(() => fieldRepairInFlight.delete(operation.id))
+  fieldRepairInFlight.set(operation.id, running)
+  return running
+}
+
+async function runFieldRepairForMessage(operation) {
+  try { return await runFieldRepairOperation(operation) } catch (error) {
+    const latest = await getFieldRepairOperation(operation.id)
+    if (latest?.status === 'cleanup') {
+      return { ok: false, error: 'field_repair_cleanup_pending',
+        message: '來源已套用，但版面、快取或排程清理尚未完成；可再次確認，系統會續作且不會建立第二個值' }
+    }
+    return { ok: false, error: 'field_repair_pending',
+      message: '重選結果尚未確認；可再次確認同一操作，系統會先核對已寫入狀態' }
+  }
+}
+
+let fieldRepairRecoveryPromise = null
+export function recoverFieldRepairOperations() {
+  if (fieldRepairRecoveryPromise) return fieldRepairRecoveryPromise
+  fieldRepairRecoveryPromise = (async () => {
+    try {
+      await pruneFieldRepairOperations()
+    } catch {
+      // Receipt cleanup is best-effort; it must not block recovery of pending writes.
+    }
+    const pending = await listPendingFieldRepairOperations()
+    for (const operation of pending) {
+      try {
+        const result = await runFieldRepairForMessage(operation)
+        if (result?.ok === true) {
+          await notifyFieldRepairDone(operation, result)
+        } else {
+          await notifyFieldRepairPending(operation, result)
+        }
+      } catch {
+        try {
+          await diag.log('field_repair_recovery_failed', {
+            taskId: operation.taskId, repairMode: operation.repairMode, reason: 'operation_recovery_failed'
+          })
+        } catch {}
+      }
+    }
+    return pending.length
+  })().finally(() => { fieldRepairRecoveryPromise = null })
+  return fieldRepairRecoveryPromise
+}
+
 async function applyFieldRepair(msg, sender) {
-  const grant = typeof msg.repairSessionId === 'string' ? fieldRepairSessions.get(msg.repairSessionId) : null
+  const sessionId = typeof msg?.repairSessionId === 'string' ? msg.repairSessionId : ''
+  const grant = fieldRepairSessions.get(sessionId)
+  const isSubmission = grant && msg?.cancelled !== true &&
+    grant.taskId === msg.taskId && grant.fieldKey === msg.repairFieldKey && grant.repairMode === msg.repairMode &&
+    grant.tabId === sender?.tab?.id && grant.frameId === (sender?.frameId ?? 0) &&
+    grant.documentGeneration === msg.documentGeneration && sameOriginPath(sender?.url, grant.frameUrl) &&
+    Array.isArray(msg.picks) && msg.picks.length === 1
+  if (!isSubmission) return await applyFieldRepairNow(msg, sender)
+  if (grant.submissionState === 'committing' || grant.submissionState === 'persisted') {
+    return { ok: false, error: 'field_repair_submitting', message: '重選結果正在儲存，請等候確認' }
+  }
+  // Reserve synchronously before applyFieldRepairNow reaches its first await;
+  // cancellation arriving during task reads or receipt persistence cannot lie
+  // that the operation was cancelled while it is still able to commit.
+  grant.submissionState = 'committing'
+  try {
+    return await applyFieldRepairNow(msg, sender)
+  } finally {
+    if (fieldRepairSessions.get(sessionId) === grant && grant.submissionState === 'committing') {
+      if (grant.tabClosed) fieldRepairSessions.delete(sessionId)
+      else grant.submissionState = 'active'
+    }
+  }
+}
+
+async function applyFieldRepairNow(msg, sender) {
+  const sessionId = typeof msg.repairSessionId === 'string' ? msg.repairSessionId : ''
+  const grant = fieldRepairSessions.get(sessionId)
   const tabId = sender?.tab?.id
   const frameId = sender?.frameId ?? 0
-  if (!grant || grant.taskId !== msg.taskId || grant.fieldKey !== msg.repairFieldKey ||
+  if (msg.cancelled === true && grant && operationMatchesSender({ ...grant, auth: grant }, msg, sender)) {
+    if (grant.submissionState === 'committing' || grant.submissionState === 'persisted') {
+      return { ok: false, error: 'field_repair_submitting', message: '重選結果正在儲存，尚不能確認取消；請等候結果' }
+    }
+    fieldRepairSessions.delete(sessionId)
+    try { await chrome.tabs.remove(grant.tabId) } catch {}
+    return { ok: true, cancelled: true }
+  }
+
+  if (!grant) {
+    const existing = await getFieldRepairOperation(sessionId)
+    if (!operationMatchesSender(existing, msg, sender)) {
+      return { ok: false, error: 'stale_field_repair', message: '這次單值重選已失效，請重新開始' }
+    }
+    const result = await runFieldRepairForMessage(existing)
+    if (result?.ok === true) {
+      await notifyFieldRepairDone(existing, result)
+      try { await chrome.tabs.remove(tabId) } catch {}
+    } else {
+      await notifyFieldRepairPending(existing, result)
+    }
+    return result
+  }
+  if (grant.taskId !== msg.taskId || grant.fieldKey !== msg.repairFieldKey ||
       grant.repairMode !== msg.repairMode || tabId !== grant.tabId || frameId !== grant.frameId ||
       msg.documentGeneration !== grant.documentGeneration || !sameOriginPath(sender?.url, grant.frameUrl)) {
     return { ok: false, error: 'stale_field_repair', message: '這次單值重選已失效，請重新開始' }
-  }
-  if (msg.cancelled === true) {
-    fieldRepairSessions.delete(grant.sessionId)
-    try { await chrome.tabs.remove(grant.tabId) } catch {}
-    return { ok: true, cancelled: true }
   }
   if (!Array.isArray(msg.picks) || msg.picks.length !== 1) {
     return { ok: false, error: 'invalid_repair_pick', message: '一次只能重選一個值' }
@@ -160,99 +484,75 @@ async function applyFieldRepair(msg, sender) {
   const selectedMode = msg.pickModes?.[0]
   const hasLocator = value => value && typeof value === 'object' &&
     ['css', 'path', 'xpath'].some(key => typeof value[key] === 'string' && value[key].trim() !== '')
-  const locatorSignature = value => hasLocator(value)
-    ? JSON.stringify(['css', 'path', 'xpath'].map(key => value[key] || ''))
-    : ''
-  if (!spec && ['number', 'text'].includes(selectedMode) && hasLocator(pick?.locator) &&
-      locatorSignature(pick.locator) === locatorSignature(msg.locator)) {
-    // A non-table metric is identified by its URL-only locator and has no
-    // cell/block selector. Accept only the one target emitted by this pick and
-    // retain the content-side scalar type hint.
-    spec = { mode: selectedMode }
-  }
+  const locatorSignature = value => hasLocator(value) ? JSON.stringify(['css', 'path', 'xpath'].map(key => value[key] || '')) : ''
+  if (!spec && ['number', 'text'].includes(selectedMode) && hasLocator(pick?.locator) && locatorSignature(pick.locator) === locatorSignature(msg.locator)) spec = { mode: selectedMode }
   if (!spec) return { ok: false, error: 'invalid_repair_pick', message: '這個選取沒有可用的定位規格' }
+  const task = await getTask(grant.taskId)
+  const { field, entry } = fieldAndEntryOf(task, grant.fieldKey)
+  if (grant.repairMode === 'repair' && !spec.cell && !spec.block &&
+      ['number', 'text'].includes(selectedMode) && ['number', 'text'].includes(field?.mode) && selectedMode !== field.mode) {
+    return { ok: false, error: 'repair_type_mismatch', message: '新選取的資料類型與原本不同，請改用「替換指標」或重新選取' }
+  }
   const locator = msg.locator && typeof msg.locator === 'object' ? structuredClone(msg.locator) : {}
   if (!hasLocator(locator)) return { ok: false, error: 'invalid_repair_pick', message: '這個選取沒有可用的定位規格' }
   const frame = frameDescriptorOf(sender, msg)
   const source = { locator, ...(frame?.url ? { frame: { url: frame.url } } : {}) }
-  // One-shot grant: duplicate delivery cannot repair twice, and a worker restart
-  // naturally loses the grant so old page messages fail closed.
-  fieldRepairSessions.delete(grant.sessionId)
-  let found = false
-  let replacement = null
-  let archivedField = null
-  const oldSeriesId = seriesIdOf(grant.taskId, grant.fieldKey)
-  const [updated] = await updateTasks([grant.taskId], task => {
-    const fields = Array.isArray(task.fields) ? task.fields : []
-    const field = fields.find(item => item?.key === grant.fieldKey)
-    const specs = Array.isArray(task.spec?.fields) ? task.spec.fields : []
-    const entry = specs.find(item => item?.key === grant.fieldKey)
-    if (!field || !entry || task.mode !== 'multi') return null
-    const previous = entry.spec || (entry.cell ? { cell: entry.cell } : entry.block ? { block: entry.block } : {})
-    if (grant.repairMode === 'repair' &&
-        (Boolean(previous.cell) !== Boolean(spec.cell) || Boolean(previous.block) !== Boolean(spec.block))) {
-      return null
-    }
-    const next = structuredClone(spec)
-    if (next.cell && previous.cell) {
-      for (const axis of ['row', 'col']) {
-        if (previous.cell[axis]?.pos && next.cell[axis]) next.cell[axis].pos = previous.cell[axis].pos
-      }
-      if (!next.cell.inner && previous.cell.inner) next.cell.inner = structuredClone(previous.cell.inner)
-    } else if (next.block && previous.block) {
-      for (const key of ['aggregate', 'skip', 'exclude', 'pos', 'inner']) {
-        if (next.block[key] === undefined && previous.block[key] !== undefined) next.block[key] = structuredClone(previous.block[key])
-      }
-    }
-    if (grant.repairMode === 'replace') {
-      const newKey = `field-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
-      const fieldIndex = fields.findIndex(item => item?.key === grant.fieldKey)
-      const name = defaultFieldName(pick, fields.length + 1)
-      const mode = ['number', 'text'].includes(selectedMode) ? selectedMode : (field.mode || pick.mode || 'number')
-      const oldAlerts = (Array.isArray(task.alerts) ? task.alerts : []).filter(alert => alert?.field === grant.fieldKey)
-      task.archivedFields = Array.isArray(task.archivedFields) ? task.archivedFields : []
-      archivedField = {
-        key: grant.fieldKey, name: field.name || grant.fieldKey, mode: field.mode,
-        source: structuredClone(entry.source || field.source || {}), spec: structuredClone(previous),
-        alerts: structuredClone(oldAlerts), archivedAt: new Date().toISOString()
-      }
-      task.archivedFields.push(archivedField)
-      task.fields[fieldIndex] = { ...field, key: newKey, name, mode }
-      entry.key = newKey
-      entry.name = name
-      entry.mode = mode
-      entry.source = source
-      entry.spec = next
-      task.alerts = (Array.isArray(task.alerts) ? task.alerts : []).filter(alert => alert?.field !== grant.fieldKey)
-      if (task.alerts.length === 0) delete task.alerts
-      replacement = { oldFieldKey: grant.fieldKey, newFieldKey: newKey, name, oldSeriesId }
-    } else {
-      entry.source = source
-      entry.spec = next
-      // Legacy normalized copies are removed so future reads use this single spec.
-      delete entry.cell
-      delete entry.block
-    }
-    found = true
-    return task
-  })
-  if (!updated || !found) return { ok: false, error: 'field_not_found', message: '這個值已移除或選取類型不同，沒有套用重選結果' }
-  if (replacement) {
-    await pruneSeries([replacement.oldSeriesId])
-    await deleteLastValues([replacement.oldSeriesId])
-    await rebuildAlarms()
+  const previous = entry?.spec || (entry?.cell ? { cell: entry.cell } : entry?.block ? { block: entry.block } : {})
+  if (!field || !entry || task?.mode !== 'multi') return { ok: false, error: 'field_not_found', message: '這個值已移除，沒有套用重選結果' }
+  if (fieldRepairSnapshot(task, field, entry) !== grant.fieldSnapshot) return { ok: false, error: 'stale_field_repair', message: '這個值的來源或狀態動作已變更，請重新開始' }
+  if (grant.repairMode === 'repair' && (Boolean(previous.cell) !== Boolean(spec.cell) || Boolean(previous.block) !== Boolean(spec.block))) {
+    return { ok: false, error: 'field_not_found', message: '這個值的選取類型不同，沒有套用重選結果' }
   }
-  const resultFieldKey = replacement?.newFieldKey || grant.fieldKey
-  const repaired = updated.spec.fields.find(item => item.key === resultFieldKey)
-  const result = { ok: true, taskId: updated.id, fieldKey: resultFieldKey,
-    source: structuredClone(repaired.source), spec: structuredClone(repaired.spec) }
-  if (replacement) Object.assign(result, replacement, {
-    repairMode: 'replace', fieldName: replacement.name,
-    archivedField: structuredClone(archivedField)
-  })
-  try { await chrome.runtime.sendMessage({ type: 'FIELD_REPAIR_DONE', ...result }) } catch {}
-  try { await chrome.tabs.remove(grant.tabId) } catch {}
+  const nextSpec = grant.repairMode === 'repair' ? mergedRepairSpec(previous, spec) : structuredClone(spec)
+  const name = grant.repairMode === 'replace' ? defaultFieldName(pick, task.fields.length + 1) : undefined
+  const newFieldKey = grant.repairMode === 'replace'
+    ? `field-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
+    : undefined
+  const operation = {
+    id: sessionId, taskId: grant.taskId, fieldKey: grant.fieldKey, repairMode: grant.repairMode,
+    status: 'prepared', createdAt: Date.now(), fieldSnapshot: grant.fieldSnapshot,
+    taskContextSnapshot: grant.taskContextSnapshot,
+    source, nextSpec, selectedMode: ['number', 'text'].includes(selectedMode) ? selectedMode : (field.mode || pick.mode || 'number'),
+    auth: { tabId: grant.tabId, frameId: grant.frameId, frameUrl: repairFrameUrl(grant.frameUrl), documentGeneration: grant.documentGeneration },
+    cleanup: { layout: false, lastValues: false, alarms: false }
+  }
+  if (grant.repairMode === 'replace') {
+    operation.newFieldKey = newFieldKey
+    operation.name = name
+    operation.oldSeriesId = seriesIdOf(grant.taskId, grant.fieldKey)
+    operation.archivedField = {
+      key: grant.fieldKey, name: field.name || grant.fieldKey, mode: field.mode,
+      source: structuredClone(entry.source || field.source || {}), spec: structuredClone(previous),
+      alerts: structuredClone((task.alerts || []).filter(alert => alert?.field === grant.fieldKey)), archivedAt: new Date().toISOString()
+    }
+  }
+  let persisted
+  try { persisted = await beginFieldRepairOperation(operation) } catch {
+    return { ok: false, error: 'field_repair_journal_failed', message: '重選結果尚未寫入，請稍後再試' }
+  }
+  fieldRepairSessions.delete(sessionId)
+  const result = await runFieldRepairForMessage(persisted)
+  if (result?.ok) try { await chrome.tabs.remove(grant.tabId) } catch {}
+  if (result?.ok === true) await notifyFieldRepairDone(persisted, result)
+  else await notifyFieldRepairPending(persisted, result)
   return result
+}
+
+async function notifyFieldRepairDone(operation, result) {
+  try {
+    await chrome.runtime.sendMessage({ type: 'FIELD_REPAIR_DONE', done: true, operationId: operation.id,
+      sessionId: operation.id, taskId: operation.taskId, fieldKey: operation.fieldKey,
+      repairMode: operation.repairMode, ...result })
+  } catch {}
+}
+
+async function notifyFieldRepairPending(operation, result) {
+  const pending = result?.error?.includes('pending') || result?.error?.includes('submitting')
+  try {
+    await chrome.runtime.sendMessage({ type: 'FIELD_REPAIR_PENDING', state: pending ? 'pending' : 'failed',
+      operationId: operation.id, sessionId: operation.id, taskId: operation.taskId,
+      fieldKey: operation.fieldKey, repairMode: operation.repairMode, message: result?.message || '重選操作尚未完成' })
+  } catch {}
 }
 
 function frameDescriptorOf(sender, extra = {}) {
@@ -665,6 +965,7 @@ export function handleSettingsChanged(changes) {
 export async function handleInstalled(details) {
   try {
     await initStorage()
+    await recoverFieldRepairOperations()
     await disablePanelGlobally()
     await setupContextMenus()
     await rebuildAlarms()
@@ -679,6 +980,7 @@ export async function handleInstalled(details) {
 export async function handleStartup() {
   try {
     await initStorage()
+    await recoverFieldRepairOperations()
     await disablePanelGlobally()
     await rebuildAlarms()
     await schedulePrechecks()
@@ -1478,10 +1780,32 @@ export async function handleMessage(msg, sender, runOpts = {}) {
 
     if (msg.type === MSG.TEST_TASK) {
       const task = msg.task
-      if (!task || typeof task !== 'object' || !task.url || !task.locator || !task.spec) {
+      if (!task || typeof task !== 'object' || typeof task.url !== 'string' || !task.url.trim() ||
+          !task.spec || typeof task.spec !== 'object' || Array.isArray(task.spec)) {
         return { ok: false, error: '任務設定不完整' }
       }
-      return await runTask(task, { dryRun: true, reason: 'manual', tabId: msg.tabId })
+      try {
+        const isMulti = task.mode === 'multi' || task.spec.mode === 'multi'
+        if (isMulti) {
+          validateMultiTask(task)
+        } else if (!task.locator || typeof task.locator !== 'object' || Array.isArray(task.locator) || Object.keys(task.locator).length === 0) {
+          throw new Error('locator 必須是非空物件')
+        }
+        const sources = normalizeTaskSources(task)
+        if (sources.length === 0 || sources.some(field =>
+          !field.source?.locator || typeof field.source.locator !== 'object' ||
+          Array.isArray(field.source.locator) || Object.keys(field.source.locator).length === 0
+        )) throw new Error('每個值都必須有合法來源定位')
+      } catch (error) {
+        return { ok: false, error: '任務設定不完整', message: String(error?.message || error) }
+      }
+      return await runTask(task, {
+        ...runOpts,
+        dryRun: true,
+        reason: 'manual',
+        tabId: msg.tabId,
+        interactivePreview: true
+      })
     }
 
     if (msg.type === MSG.RUN_TASK) {
@@ -2205,9 +2529,19 @@ chrome.contextMenus.onClicked.addListener(handleContextMenu)
 if (chrome.sidePanel?.onClosed?.addListener) {
   chrome.sidePanel.onClosed.addListener((info) => { closePanelFor(info?.tabId) })
 }
-chrome.tabs?.onRemoved?.addListener?.((tabId) => { closePanelFor(tabId, { keepMarks: true, clearDraft: true }) })
+chrome.tabs?.onRemoved?.addListener?.((tabId) => {
+  for (const [sessionId, grant] of fieldRepairSessions) {
+    if (grant.tabId !== tabId) continue
+    if (grant.submissionState === 'committing' || grant.submissionState === 'persisted') grant.tabClosed = true
+    else fieldRepairSessions.delete(sessionId)
+  }
+  closePanelFor(tabId, { keepMarks: true, clearDraft: true })
+})
 
 // worker 每次啟動（不只瀏覽器啟動）：上一個 worker 留下的抓取分頁與排隊中／執行中的排程槽。
 // storage 是空的時候兩者都只讀不寫
 cleanOrphanFetchTabs().catch((err) => diag.log('startup_error', `cleanOrphanFetchTabs：${String(err?.message || err)}`).catch(() => {}))
 recoverRunState().catch((err) => diag.log('startup_error', `recoverRunState：${String(err?.message || err)}`).catch(() => {}))
+export const fieldRepairWorkerRecovery = initStorage()
+  .then(() => recoverFieldRepairOperations())
+  .catch(err => diag.log('startup_error', `recoverFieldRepairOperations：${String(err?.message || err)}`).catch(() => {}))

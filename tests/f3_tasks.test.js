@@ -351,6 +351,16 @@ test('Picker 以 ?taskId= 開啟時載入該任務並帶入表單', async () => 
   const pk = await import('../src/ui/picker/picker.js?t=' + Math.random())
   await pk.initFromQuery('?taskId=a')
   assert.equal(jd.window.document.getElementById('name').value, '電費')
-  assert.ok(jd.window.document.getElementById('test-now').hidden, '沒有分頁時要隱藏立即測試')
-  void c
+  const testNow = jd.window.document.getElementById('test-now')
+  assert.equal(testNow.hidden, false, 'query 編輯入口必須能立即試抓')
+  jd.window.document.getElementById('name').value = '未儲存的名稱'
+  c.__setRuntimeResponder(() => ({ ok: true, value: '即時值' }))
+  await pk.handleTestNow()
+  const request = c.__calls
+    .filter(call => call.api === 'runtime.sendMessage')
+    .map(call => call.args[0])
+    .find(message => message?.type === 'TEST_TASK')
+  assert.ok(request, 'query 編輯應使用 TEST_TASK 執行試抓')
+  assert.equal(request.task.id, '__preview', '試抓使用暫存任務，不以正式任務執行')
+  assert.equal(request.task.name, '未儲存的名稱', '試抓採用未儲存表單')
 })

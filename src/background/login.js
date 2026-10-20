@@ -202,6 +202,9 @@ export async function attemptLogin(tabId, site, password, opts = {}) {
  */
 export async function ensureLoggedIn(tabId, task, opts) {
   const t = timingOf(opts)
+  // 互動試抓仍要真的走登入，但結果不能改正式站台狀態。dryRun 也用於
+  // 預檢，因此這個用途必須由 TEST_TASK 明確傳入，不能只看 dryRun。
+  const interactivePreview = opts?.interactivePreview === true
 
   // 1. 讀取分頁目前實際網址
   const tab = await chrome.tabs.get(tabId)
@@ -233,6 +236,7 @@ export async function ensureLoggedIn(tabId, task, opts) {
   try {
     plainPassword = await decryptSecret(site.passwordEnc)
   } catch {
+    if (interactivePreview) return { ok: false, reason: '無法解密站台密碼' }
     return await recordLoginFailure(origin, t.deadlineAt)
   }
 
@@ -241,15 +245,24 @@ export async function ensureLoggedIn(tabId, task, opts) {
 
   // 8. 登入成功：歸零失敗計數並寫回
   if (res.ok) {
-    await updateSite(origin, (latest) => {
-      if (latest.failStreak === 0) return null
-      latest.failStreak = 0
-      return latest
-    })
+    if (!interactivePreview) {
+      await updateSite(origin, (latest) => {
+        if (latest.failStreak === 0) return null
+        latest.failStreak = 0
+        return latest
+      })
+    }
     return { ok: true, attempted: true }
   }
 
   // 9. 登入失敗：累計次數並寫回（失敗計數、停用、通知只在這一層）
+  if (interactivePreview) {
+    return {
+      ok: false,
+      attempted: res.attempted === true,
+      reason: res.steps?.find(step => !step.ok)?.detail || '無法登入'
+    }
+  }
   const fail = await recordLoginFailure(origin, t.deadlineAt)
   return res.attempted ? { ...fail, attempted: true } : fail
 }

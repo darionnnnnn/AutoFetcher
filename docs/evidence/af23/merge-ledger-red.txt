@@ -1,0 +1,33 @@
+TAP version 13
+# Subtest: AC-F2 replay waits for an in-flight ledger commit before deciding to delete its history
+not ok 1 - AC-F2 replay waits for an in-flight ledger commit before deciding to delete its history
+  ---
+  duration_ms: 25.198708
+  location: '<workspace>/work/qa/tests/af23_f2_append_race.test.js:119:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    replay cannot decide to delete history until the earlier ledger writer releases runs lock
+    + actual - expected
+
+    + 'replay-read-ledger'
+    - 'still-waiting-for-ledger-lock'
+
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'still-waiting-for-ledger-lock'
+  actual: 'replay-read-ledger'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file://<workspace>/work/qa/tests/af23_f2_append_race.test.js:201:10)
+    async Test.run (node:internal/test_runner/test:980:9)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 56.816333

@@ -320,7 +320,7 @@
       color: var(--warn-text);
     }
     #field-list { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; counter-reset: field-row; }
-    [data-field-row] { display: flex; align-items: center; gap: 6px; counter-increment: field-row; }
+    [data-field-row] { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 0; counter-increment: field-row; }
     /* 序號用 CSS 計數器自己算：清單是 picker.js 動態產生的，
        沒有人會去寫 data-field-index，用 attr() 會是一條永遠空白的死規則 */
     [data-field-row]::before {
@@ -331,7 +331,9 @@
       text-align: right;
       flex-shrink: 0;
     }
-    [data-field-row] input[type="text"] { flex: 1; min-width: 0; }
+    [data-field-row] input[type="text"] { flex: 1 1 120px; min-width: 0; max-width: 100%; }
+    [data-field-row] [data-field-hint] { flex-basis: 100%; overflow-wrap: anywhere; }
+    [data-field-row] > span { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
     [data-field-row] button {
       flex-shrink: 0;
       padding: var(--space-1) var(--space-2);
@@ -340,6 +342,8 @@
       border: none;
       color: var(--text-muted);
       min-height: 28px;
+      max-width: 100%;
+      white-space: normal;
     }
     [data-field-row]:hover { background: var(--hover); border-radius: var(--radius); }
     [data-field-row] button:hover {
@@ -451,7 +455,7 @@
     <div id="task-status-note" role="status" hidden></div>
     <label for="name" class="field-label">任務名稱</label>
     <input type="text" id="name" placeholder="替這個任務取個名字">
-    <div id="name-error" class="field-error" hidden></div>
+    <div id="name-error" class="field-error" aria-live="polite" hidden></div>
     <div id="setup-summary" role="status">
       <div id="summary-target"></div>
       <button type="button" id="goto-rowpos" hidden>去設定「列定位」</button>

@@ -15,7 +15,7 @@ const task = (id, name, mode = 'number') => ({
 
 async function fresh() {
   resetChromeMock()
-  installChromeMock()
+  const c = installChromeMock()
   const st = await import('../src/shared/storage.js?t=' + Math.random())
   await st.init()
   await st.saveTask(task('t1', '電費'))
@@ -30,7 +30,7 @@ async function fresh() {
   if (grid) grid.getBoundingClientRect = () => ({ left: 0, top: 0, right: 1200, bottom: 800, width: 1200, height: 800 })
   Object.defineProperty(jd.window, 'innerWidth', { value: 1400, configurable: true })
   const db = await import('../src/ui/report/dashboard.js?t=' + Math.random())
-  return { st, ls, db, doc: jd.window.document, win: jd.window }
+  return { c, st, ls, db, doc: jd.window.document, win: jd.window }
 }
 
 async function seed(ls, cards) {
@@ -145,6 +145,46 @@ test('拖到折線卡片會追加一條序列', async () => {
   stubRect(doc.querySelector(`[data-card-id="${ids[0]}"]`), [0, 0, 600, 200])
   await dragTaskTo(doc, win, 't2', 300, 100)
   assert.deepEqual((await cardOf(ls, did, ids[0])).source.map(s => s.taskId), ['t1', 't2'])
+})
+
+test('AF-23 拖入現有卡片時在 layout 鎖內重驗來源，刪除交錯不復活系列', async () => {
+  const { c, st, ls, db, doc, win } = await fresh()
+  const { did, ids } = await seed(ls, [
+    CARD('line', { source: [{ taskId: 't1', aggregation: 'raw' }] }),
+    CARD('table', { x: 6, y: 0, source: [{ taskId: 't3', aggregation: 'raw' }], options: { mode: 'pivot' } })
+  ])
+  const untouchedOtherCard = await cardOf(ls, did, ids[1])
+  await db.renderDashboard(did)
+  await enterEditMode(doc)
+  stubRect(doc.querySelector(`[data-card-id="${ids[0]}"]`), [0, 0, 600, 200])
+
+  const realGet = c.storage.local.get.bind(c.storage.local)
+  let taskReadCount = 0
+  let entered
+  const enteredPromise = new Promise(resolve => { entered = resolve })
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  c.storage.local.get = async (keys, ...rest) => {
+    if (keys === 'tasks' && ++taskReadCount === 2) {
+      entered()
+      await gate
+    }
+    return realGet(keys, ...rest)
+  }
+
+  await dragTaskTo(doc, win, 't2', 300, 100)
+  await enteredPromise
+  const deletion = st.deleteTask('t2')
+  for (let i = 0; i < 50 && (await st.getTasks()).some(item => item.id === 't2'); i++) await new Promise(resolve => setTimeout(resolve, 5))
+  assert.equal((await st.getTasks()).some(item => item.id === 't2'), false, 'tasks 鍵先刪除')
+  release()
+  await deletion
+  await settle()
+  const after = (await ls.getLayout()).dashboards.find(d => d.id === did)
+  assert.deepEqual(after.cards.find(c => c.id === ids[0]).source.map(item => item.taskId), ['t1'],
+    '目標卡保留無關來源、被刪的拖入來源不復活')
+  assert.deepEqual(after.cards.find(c => c.id === ids[1]), untouchedOtherCard,
+    '同時存在的其他卡片及其選項保持不變')
 })
 
 test('拖到數值卡片會取代原本的來源', async () => {

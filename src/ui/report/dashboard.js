@@ -22,6 +22,8 @@ let editing = false
 let currentDashId = null
 const undoStack = []
 const redoStack = []
+let historyBusy = false
+let historyRevision = 0
 let activeOp = null
 let templateKindPending = null
 let tabDrag = null
@@ -77,11 +79,14 @@ export async function pushHistory(snapshot) {
     const layout = await getLayout()
     snapshot = layout.dashboards
   }
-  undoStack.push({ before: structuredClone(snapshot), after: null })
+  const entry = { before: structuredClone(snapshot), after: null }
+  undoStack.push(entry)
   if (undoStack.length > 50) {
     undoStack.shift()
   }
   redoStack.length = 0
+  historyRevision += 1
+  return entry
 }
 
 // 最近一步操作寫完之後記下「操作後」的版面
@@ -100,36 +105,70 @@ export function historySize() {
 
 // 序列是否還在任務清單裡（復原／重做不讓已刪的序列回到卡片上）
 async function liveSeriesCheck() {
-  let tasks = []
-  try { tasks = await getTasks() } catch {}
+  const tasks = await getTasks()
   const idx = buildSeriesIndex(tasks)
   return (id) => typeof id === 'string' && (Boolean(idx.byId[id]) || Boolean(idx.parents[id]))
+}
+
+async function applyHistoryStep(direction, step, startDashId, startRevision) {
+  const undoing = direction === 'undo'
+  try {
+    if (undoing) {
+      const after = step.after || structuredClone((await getLayout()).dashboards)
+      await applyLayoutStep(after, step.before, undefined, { loadIsLive: liveSeriesCheck })
+      if (!step.after) step.after = after
+    } else {
+      await applyLayoutStep(step.before, step.after, undefined, { loadIsLive: liveSeriesCheck })
+    }
+  } catch (err) {
+    showToast(`無法${undoing ? '復原' : '重做'}，操作仍保留，可稍後重試：${err?.message || err || '未知原因'}`)
+    return false
+  }
+  const sourceStack = undoing ? undoStack : redoStack
+  const destinationStack = undoing ? redoStack : undoStack
+  const stepIndex = sourceStack.indexOf(step)
+  if (stepIndex >= 0) {
+    sourceStack.splice(stepIndex, 1)
+    // A new edit or dashboard switch may have changed history while storage was
+    // awaited. Retire only this completed step; don't attach it to another history.
+    if (historyRevision === startRevision && currentDashId === startDashId) {
+      destinationStack.push(step)
+      if (!undoing && undoStack.length > 50) undoStack.shift()
+    }
+    historyRevision += 1
+  }
+  try {
+    await renderDashboard(currentDashId)
+  } catch (err) {
+    showToast(`版面已${undoing ? '復原' : '重做'}，但畫面更新失敗：${err?.message || err || '未知原因'}`)
+  }
+  return true
 }
 
 /**
  * 復原上一步
  */
 export async function undo() {
-  if (undoStack.length === 0) return
-  const step = undoStack.pop()
-  if (!step.after) step.after = structuredClone((await getLayout()).dashboards)
-  redoStack.push(step)
-  await applyLayoutStep(step.after, step.before, await liveSeriesCheck())
-  await renderDashboard(currentDashId)
+  if (historyBusy || undoStack.length === 0) return
+  historyBusy = true
+  try {
+    await applyHistoryStep('undo', undoStack[undoStack.length - 1], currentDashId, historyRevision)
+  } finally {
+    historyBusy = false
+  }
 }
 
 /**
  * 重做下一步
  */
 export async function redo() {
-  if (redoStack.length === 0) return
-  const step = redoStack.pop()
-  undoStack.push(step)
-  if (undoStack.length > 50) {
-    undoStack.shift()
+  if (historyBusy || redoStack.length === 0) return
+  historyBusy = true
+  try {
+    await applyHistoryStep('redo', redoStack[redoStack.length - 1], currentDashId, historyRevision)
+  } finally {
+    historyBusy = false
   }
-  await applyLayoutStep(step.before, step.after, await liveSeriesCheck())
-  await renderDashboard(currentDashId)
 }
 
 /**
@@ -384,6 +423,7 @@ function setupEvents(grid) {
       if (!editing) {
         undoStack.length = 0
         redoStack.length = 0
+        historyRevision += 1
         renderDashboard(currentDashId).catch(() => {})
       }
       updateEditingUI()
@@ -817,16 +857,20 @@ function registerCardDropTarget(cardEl, card, ctx) {
     },
     async onDrop(payload, pos) {
       if (!payload || !payload.taskId) return
-
-      if (card.type === 'line' || card.type === 'bar') {
-        const existingIds = new Set((card.source || []).map(s => s.taskId))
-        const idsToAdd = Array.isArray(payload.seriesIds)
-          ? numericDropIds(payload.seriesIds).filter(id => !existingIds.has(id))
-          : (numericDropIds([payload.taskId]).filter(id => !existingIds.has(id)))
-        if (idsToAdd.length > 0 && (card.source || []).length + idsToAdd.length > 8) {
-          showToast('圖表最多支援 8 個資料數列')
-          return
-        }
+      const droppedIds = Array.isArray(payload.seriesIds) && payload.seriesIds.length > 0
+        ? payload.seriesIds
+        : [payload.taskId]
+      let currentTasks
+      try {
+        currentTasks = await getTasks()
+      } catch {
+        showToast('無法確認來源是否仍有效，請稍後再試')
+        return
+      }
+      const currentIndex = buildSeriesIndex(currentTasks)
+      if (droppedIds.some(id => !currentIndex.byId[id] && !currentIndex.parents[id])) {
+        showToast('來源已不存在，請重新整理後再拖曳')
+        return
       }
 
       let index
@@ -863,29 +907,74 @@ function registerCardDropTarget(cardEl, card, ctx) {
       if (typeof taskName === 'string' && taskName) {
         opts.taskName = taskName
       }
-      const firstTaskId = card.source?.[0]?.taskId
-      const prevTaskName = firstTaskId ? ctx?.tasksById?.[firstTaskId]?.name : undefined
-      if (typeof prevTaskName === 'string' && prevTaskName) {
-        opts.prevTaskName = prevTaskName
+      const makePatch = (latest) => {
+        if (latest.type === 'line' || latest.type === 'bar') {
+          const existingIds = new Set((latest.source || []).map(s => s.taskId))
+          const idsToAdd = Array.isArray(payload.seriesIds)
+            ? numericDropIds(payload.seriesIds).filter(id => !existingIds.has(id))
+            : numericDropIds([payload.taskId]).filter(id => !existingIds.has(id))
+          if (idsToAdd.length > 0 && (latest.source || []).length + idsToAdd.length > 8) {
+            return { rejected: true, reason: '圖表最多支援 8 個資料數列' }
+          }
+        }
+        const currentOpts = { ...opts }
+        const firstTaskId = latest.source?.[0]?.taskId
+        const prevTaskName = firstTaskId ? ctx?.tasksById?.[firstTaskId]?.name : undefined
+        if (typeof prevTaskName === 'string' && prevTaskName) currentOpts.prevTaskName = prevTaskName
+        const result = (Array.isArray(payload.seriesIds) && payload.seriesIds.length > 0)
+          ? applyDropMany(latest, payload.seriesIds, dropOptions({ ...currentOpts, nameOf: (id) => ctx?.tasksById?.[id]?.name || id }))
+          : applyDrop(latest, payload.taskId, dropOptions(currentOpts))
+        if (!result || result.rejected) return result
+        return result
       }
-
-      const patch = (Array.isArray(payload.seriesIds) && payload.seriesIds.length > 0)
-        ? applyDropMany(card, payload.seriesIds, dropOptions({ ...opts, nameOf: (id) => ctx?.tasksById?.[id]?.name || id }))
-        : applyDrop(card, payload.taskId, dropOptions(opts))
-      if (!patch) return
-      if (patch.rejected) {
-        showToast(patch.reason)
+      let applied = null
+      // 抽屜正在編輯這張卡：投放併進草稿（抽屜的來源清單與預覽跟著變），不寫 storage
+      if (await mergeIntoDraft(currentDashId, card.id, (draft) => {
+        applied = makePatch({ ...card, ...draft, options: draft.options || card.options })
+        if (!applied || applied.rejected) return null
+        const { notice, ...cardPatch } = applied
+        return cardPatch
+      })) {
+        if (applied?.rejected) showToast(applied.reason)
+        else if (applied?.notice) showToast(applied.notice)
         return
       }
-      // 只吃得下一個值的卡片型別要說一聲，否則使用者以為其他值掉了
-      if (patch.notice) showToast(patch.notice)
-
-      const { notice, ...cardPatch } = patch
-      // 抽屜正在編輯這張卡：投放併進草稿（抽屜的來源清單與預覽跟著變），不寫 storage
-      if (await mergeIntoDraft(currentDashId, card.id, cardPatch)) return
-      await pushHistory()
-      await updateCard(currentDashId, card.id, cardPatch)
+      const redoBefore = structuredClone(redoStack)
+      const historyEntry = await pushHistory()
+      let sourceCheckError = null
+      let sourceNoLongerLive = false
+      const changed = await updateCard(currentDashId, card.id, async (latest) => {
+        let liveTasks
+        try {
+          // updater 在 layout lock 內執行；與抽屜相同，來源快照要靠近實際寫入核對。
+          liveTasks = await getTasks()
+        } catch (err) {
+          sourceCheckError = err
+          return null
+        }
+        const liveIndex = buildSeriesIndex(liveTasks)
+        if (droppedIds.some(id => !liveIndex.byId[id] && !liveIndex.parents[id])) {
+          sourceNoLongerLive = true
+          return null
+        }
+        applied = makePatch(latest)
+        if (!applied || applied.rejected) return null
+        const { notice, ...cardPatch } = applied
+        return cardPatch
+      })
+      if (!changed) {
+        const historyIndex = undoStack.indexOf(historyEntry)
+        if (historyIndex >= 0) undoStack.splice(historyIndex, 1)
+        redoStack.splice(0, redoStack.length, ...redoBefore)
+        historyRevision += 1
+        if (sourceCheckError) showToast('無法確認來源是否仍有效，請稍後再試')
+        else if (sourceNoLongerLive) showToast('來源已不存在，請重新整理後再拖曳')
+        else if (applied?.rejected) showToast(applied.reason)
+        return
+      }
       await sealHistory()
+      if (applied?.rejected) showToast(applied.reason)
+      else if (applied?.notice) showToast(applied.notice)
       await renderDashboard(currentDashId)
     }
   })
@@ -946,15 +1035,12 @@ function registerGridDropTarget(grid) {
         if (!stored) return
         // 抽屜正在編輯這張卡：以草稿為基準移除，併進草稿（不寫 storage）
         const draft = getDraftPreview(currentDash.id, cardId)
-        const card = draft ? { ...stored, ...draft } : stored
-
-        // status 卡片的來源存在 options.taskIds,不是 source
-        const patch = card.type === 'status'
+        const removeSource = (card) => card.type === 'status'
           ? { options: { ...(card.options || {}), taskIds: (card.options?.taskIds || []).filter(id => parentIdOf(id) !== parentIdOf(taskId)) } }
           : { source: (card.source || []).filter(s => s.taskId !== taskId) }
-        if (draft && await mergeIntoDraft(currentDash.id, cardId, patch)) return
+        if (draft && await mergeIntoDraft(currentDash.id, cardId, (currentDraft) => removeSource({ ...stored, ...currentDraft }))) return
         await pushHistory()
-        await updateCard(currentDash.id, cardId, patch)
+        await updateCard(currentDash.id, cardId, latest => removeSource(latest))
         await sealHistory()
         await renderDashboard(currentDash.id)
         return
@@ -1035,6 +1121,7 @@ export async function renderDashboard(dashId) {
   if (currentDashId && dash.id !== currentDashId) {
     undoStack.length = 0
     redoStack.length = 0
+    historyRevision += 1
   }
 
   currentDashId = dash.id

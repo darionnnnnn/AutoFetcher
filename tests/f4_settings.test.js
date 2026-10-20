@@ -137,7 +137,7 @@ test('選 HTML 格式匯出會下載 .html 並記下時間戳', async () => {
 })
 
 test('匯出成功後把時間戳寫進設定', async () => {
-  const { se, st, doc } = await fresh()
+  const { c, se, st, doc } = await fresh()
   await st.saveTask(task('t1'))
   await st.appendRecord('2026-09-05', { taskId: 't1', capturedAt: 'a', value: 1, status: 'ok' })
   await se.renderSettings()
@@ -287,11 +287,20 @@ test('messages.js 有兩個新訊息型別', async () => {
 
 // ---- 用量與隱私 ----
 
-test('設定頁顯示儲存用量、紀錄筆數與最舊日期', async () => {
-  const { se, st, doc } = await fresh()
+test('設定頁容量統計按需計算；點擊後顯示紀錄筆數與最舊日期', async () => {
+  const { c, se, st, doc } = await fresh()
   await st.appendRecord('2026-09-01', { taskId: 't1', capturedAt: 'a', value: 1, status: 'ok' })
   await se.renderSettings()
-  const txt = doc.getElementById('storage-stats').textContent
+  const statsBox = doc.getElementById('storage-stats')
+  assert.match(statsBox.textContent, /尚未計算/)
+  assert.equal(statsBox.querySelector('button')?.textContent, '計算資料用量')
+  assert.equal(c.__calls.filter(call => call.api === 'storage.local.get' && Array.isArray(call.args[0])
+    && call.args[0].some(key => /^rec2?:/.test(key))).length, 0, '初次設定頁不讀紀錄批次')
+  // 計算操作本身仍使用正式統計入口；初始 renderSettings 不呼叫它。
+  statsBox.querySelector('button').click()
+  await new Promise(r => setTimeout(r, 40))
+  const txt = statsBox.textContent
+  assert.match(txt, /正在計算資料用量|儲存用量：/, '操作中或完成結果需有明確狀態')
   assert.ok(txt.includes('2026-09-01'), `要顯示最舊日期，實得：${txt}`)
   assert.ok(/\b1\b/.test(txt), '要顯示紀錄筆數')
 })

@@ -18,6 +18,13 @@ import { MAX_PICK_DRAFT_BYTES } from '../../shared/pick-draft.js'
 let currentCtx = null
 let currentBlock = null
 const fieldSpecs = new Map()
+const repairSessionsByField = new Map()
+const recentlyCompletedFieldRepairs = new Map()
+const recentlyRemovedRepairTabs = new Map()
+let fieldRepairListenersBound = false
+let previewGeneration = 0
+let latestPreviewRequestId = 0
+let activePreviewBusy = null
 // multi 每個值可以有自己的 block 設定；只有使用者真的改動共用 controls
 // 時才把它們套用到所有適用值。render 時記下畫面基準，避免單純重畫／儲存洗掉來源規格。
 let multiControlBaseline = null
@@ -948,6 +955,12 @@ function fillSchedule(schedule) {
 }
 
 export function render(ctx) {
+  // A newly rendered context owns its own preview controls. Release the old
+  // request's button state now; its eventual finally must not touch this view.
+  activePreviewBusy?.release?.()
+  activePreviewBusy = null
+  latestPreviewRequestId = 0
+  previewGeneration += 1
   currentCtx = ctx || {}
   multiControlBaseline = null
   applyTerms()
@@ -1219,50 +1232,7 @@ export function render(ctx) {
   bindAlertEvents()
   bindPreActionEvents()
   bindPreActionMessageListener()
-  chrome.runtime.onMessage?.addListener(message => {
-    if (message?.type !== 'FIELD_REPAIR_DONE' || message.taskId !== currentCtx?.task?.id) return undefined
-    const replacing = message.repairMode === 'replace' && typeof message.oldFieldKey === 'string'
-    const row = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
-      .find(item => item.dataset.fieldKey === (replacing ? message.oldFieldKey : message.fieldKey))
-    if (!row) return undefined
-    const oldFieldKey = row.dataset.fieldKey
-    if (replacing) {
-      row.dataset.fieldKey = message.fieldKey
-      const nameInput = row.querySelector('input[data-field-name]')
-      if (nameInput && message.fieldName) nameInput.value = message.fieldName
-      for (const alertRow of document.querySelectorAll('[data-alert-row]')) {
-        if (alertRow.querySelector('select[data-alert-field]')?.value === oldFieldKey) alertRow.remove()
-      }
-      fieldSpecs.delete(oldFieldKey)
-      currentCtx.task.fields = (currentCtx.task.fields || []).map(field => field.key === oldFieldKey
-        ? { ...field, key: message.fieldKey, name: message.fieldName || field.name } : field)
-      currentCtx.task.alerts = (currentCtx.task.alerts || []).filter(alert => alert.field !== oldFieldKey)
-      if (Array.isArray(message.archivedField)) currentCtx.task.archivedFields = message.archivedField
-      else if (message.archivedField) {
-        currentCtx.task.archivedFields = [...(currentCtx.task.archivedFields || []), message.archivedField]
-      }
-    }
-    row._source = structuredClone(message.source)
-    row._spec = structuredClone(message.spec)
-    fieldSpecs.set(message.fieldKey, row._spec)
-    const where = row.querySelector('[data-field-where]')
-    if (where) {
-      where.textContent = fieldWhereText(row._spec)
-      where.title = where.textContent
-    }
-    const savedSpec = currentCtx.task.spec?.fields?.find(item => item.key === (replacing ? oldFieldKey : message.fieldKey))
-    if (savedSpec) {
-      savedSpec.key = message.fieldKey
-      savedSpec.name = message.fieldName || savedSpec.name
-      savedSpec.source = structuredClone(message.source)
-      savedSpec.spec = structuredClone(message.spec)
-    }
-    setFieldRowHint(row, replacing
-      ? '已建立不同指標的新歷史序列；舊紀錄保留，舊告警不會套用到新值'
-      : '這個值的來源已更新；名稱、告警與歷史序列保留')
-    if (replacing) updateFieldListState()
-    return undefined
-  })
+  bindFieldRepairListeners()
   bindPosEvents()
   bindBlurValidation()
   updateFrameHint(currentCtx)
@@ -1272,6 +1242,377 @@ export function render(ctx) {
     updateSetupSummary()
   }
   updateSourceStateWarning()
+}
+
+function fieldRepairIdentity(taskId, fieldKey) {
+  return `${String(taskId || '')}#${String(fieldKey || '')}`
+}
+
+function updateRepairActionState(row) {
+  const session = repairSessionsByField.get(fieldRepairIdentity(currentCtx?.task?.id, row?.dataset?.fieldKey))
+  const active = Boolean(session && session.state !== 'closed')
+  for (const button of row?.querySelectorAll?.('[data-field-repair], [data-field-replace]') || []) {
+    button.disabled = active
+    if (active) button.setAttribute('aria-disabled', 'true')
+    else button.removeAttribute('aria-disabled')
+  }
+}
+
+async function startFieldRepair(row, repairMode) {
+  const taskId = currentCtx?.task?.id
+  const fieldKey = row?.dataset?.fieldKey
+  const identity = fieldRepairIdentity(taskId, fieldKey)
+  const previousSession = repairSessionsByField.get(identity)
+  if (!taskId || !fieldKey || (previousSession && previousSession.state !== 'closed')) return
+  const draftAtStart = {
+    source: structuredClone(row._source || {}),
+    spec: structuredClone(row._spec || {})
+  }
+  repairSessionsByField.set(identity, { tabId: null, taskId, fieldKey, repairMode, sessionId: null, state: 'opening', draftAtStart })
+  updateRepairActionState(row)
+  setFieldRowHint(row, '正在開啟來源重選…')
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: MSG.BEGIN_FIELD_REPAIR, taskId, fieldKey, repairMode
+    })
+    if (response?.ok === true && response.recovered === true) {
+      await applyFieldRepairDone({ ...response, type: 'FIELD_REPAIR_DONE', done: true,
+        operationId: response.operationId || response.sessionId, sessionId: response.sessionId || response.operationId })
+      return
+    }
+    if (!response?.ok) {
+      if (['field_repair_pending', 'field_repair_cleanup_pending', 'field_repair_active'].includes(response?.error) &&
+          (response.operationId || response.sessionId)) {
+        const sessionId = response.operationId || response.sessionId
+        repairSessionsByField.set(identity, {
+          tabId: Number.isInteger(response.tabId) ? response.tabId : null,
+          taskId, fieldKey, repairMode, sessionId, operationId: sessionId, state: response.state || 'pending', draftAtStart
+        })
+        const currentRow = findFieldRow(taskId, fieldKey)
+        updateRepairActionState(currentRow)
+        if (currentRow) {
+          setFieldRowHint(currentRow, response.message || '結果尚未確認；再次確認會核對同一操作，不會建立第二個值。')
+          addFieldRepairResumeAction(currentRow, Number.isInteger(response.tabId) ? response.tabId : null)
+        }
+        return
+      }
+      repairSessionsByField.delete(identity)
+      updateCurrentRepairActionState(taskId, fieldKey)
+      setFieldRowHint(findFieldRow(taskId, fieldKey), response?.message || (repairMode === 'replace' ? '無法開始更換指標，請重試' : '無法開始來源重選，請重試'))
+      return
+    }
+    if (response.sessionId && recentlyCompletedFieldRepairs.get(identity) === response.sessionId) {
+      recentlyCompletedFieldRepairs.delete(identity)
+      repairSessionsByField.delete(identity)
+      updateCurrentRepairActionState(taskId, fieldKey)
+      return
+    }
+    const removedAt = recentlyRemovedRepairTabs.get(response.tabId)
+    if (removedAt !== undefined && Date.now() - removedAt < 10000) {
+      recentlyRemovedRepairTabs.delete(response.tabId)
+      repairSessionsByField.delete(identity)
+      updateCurrentRepairActionState(taskId, fieldKey)
+      setFieldRowHint(findFieldRow(taskId, fieldKey), '來源重選頁已關閉；可以重新開始')
+      return
+    }
+    recentlyRemovedRepairTabs.delete(response.tabId)
+    repairSessionsByField.set(identity, { tabId: response.tabId, taskId, fieldKey, repairMode, sessionId: response.sessionId || null, draftAtStart })
+    setFieldRowHint(findFieldRow(taskId, fieldKey), '重選頁面已開啟；套用後會立即儲存此來源')
+  } catch (error) {
+    repairSessionsByField.delete(identity)
+    updateCurrentRepairActionState(taskId, fieldKey)
+    setFieldRowHint(findFieldRow(taskId, fieldKey), String(error?.message || (repairMode === 'replace' ? '無法開始更換指標，請重試' : '無法開始來源重選，請重試')))
+  }
+}
+
+function bindFieldRepairListeners() {
+  if (fieldRepairListenersBound) return
+  chrome.runtime.onMessage?.addListener(handleFieldRepairDone)
+  chrome.tabs?.onRemoved?.addListener?.(tabId => {
+    if ([...repairSessionsByField.values()].some(session => session.tabId === null)) {
+      recentlyRemovedRepairTabs.set(tabId, Date.now())
+      if (recentlyRemovedRepairTabs.size > 128) recentlyRemovedRepairTabs.delete(recentlyRemovedRepairTabs.keys().next().value)
+    }
+    for (const [identity, session] of repairSessionsByField) {
+      if (session.tabId !== tabId) continue
+      // Closing the source tab can race the success ACK: background persists,
+      // closes its tab, then broadcasts DONE. Keep the session identity until
+      // that ACK is reconciled; manual close can use the same control to restart
+      // or check the journal without allowing a second field operation.
+      session.tabId = null
+      if (!session.operationId && session.state !== 'pending' && session.state !== 'applying') {
+        session.state = 'closed'
+      }
+      const row = findFieldRow(session.taskId, session.fieldKey)
+      if (row) {
+        updateRepairActionState(row)
+        setFieldRowHint(row, session.state === 'applying'
+          ? '來源頁已關閉；正在核對剛完成的重選結果。'
+          : session.state === 'closed'
+            ? '來源頁已關閉；可以重新開始，晚到結果仍會核對原操作。'
+            : '來源頁已關閉；再次確認會核對同一操作，或重新開啟來源頁。')
+        addFieldRepairResumeAction(row, null)
+      }
+    }
+  })
+  fieldRepairListenersBound = true
+}
+
+function handleFieldRepairDone(message) {
+  if (!['FIELD_REPAIR_DONE', 'FIELD_REPAIR_PENDING'].includes(message?.type)) return undefined
+  const pendingIdentity = fieldRepairIdentity(message.taskId, message.fieldKey)
+  if (message.type === 'FIELD_REPAIR_PENDING') {
+    let session = repairSessionsByField.get(pendingIdentity)
+    if (!session && message.operationId && message.sessionId) {
+      session = { tabId: null, taskId: message.taskId, fieldKey: message.fieldKey,
+        repairMode: message.repairMode, sessionId: message.sessionId, operationId: message.operationId,
+        state: message.state || 'pending' }
+      repairSessionsByField.set(pendingIdentity, session)
+    }
+    if (session && (!session.sessionId || session.sessionId === message.sessionId)) {
+      session.sessionId = message.sessionId || session.sessionId
+      session.operationId = message.operationId || session.operationId
+      session.state = message.state || 'pending'
+    }
+    const row = findFieldRow(message.taskId, message.fieldKey)
+    if (row) {
+      const state = message.state === 'failed' ? 'failed' : 'pending'
+      if (state === 'failed') {
+        repairSessionsByField.delete(pendingIdentity)
+        updateRepairActionState(row)
+      } else {
+        updateRepairActionState(row)
+      }
+      setFieldRowHint(row, message.message || (state === 'pending'
+        ? '結果尚未確認；回來源重選頁繼續完成同一操作，確認前不會重複替換。'
+        : '來源重選未套用；可重新開始。'))
+      if (state === 'pending') {
+        addFieldRepairResumeAction(row, session?.tabId ?? null)
+      }
+    }
+    return undefined
+  }
+  if (message.ok !== true || message.done !== true ||
+      typeof message.operationId !== 'string' || !message.operationId ||
+      typeof message.sessionId !== 'string' || !message.sessionId ||
+      message.operationId !== message.sessionId) return undefined
+  const repairIdentity = fieldRepairIdentity(message.taskId, message.repairMode === 'replace' ? message.oldFieldKey : message.fieldKey)
+  const session = repairSessionsByField.get(repairIdentity)
+  // A closed session may be restarted before a late ACK arrives. While BEGIN
+  // for the replacement session is unresolved, the old ACK has no authority.
+  if (session?.state === 'opening') return undefined
+  if (session?.sessionId && session.sessionId !== message.sessionId) return undefined
+  if (session) {
+    session.state = 'applying'
+    updateRepairActionState(findFieldRow(session.taskId, session.fieldKey))
+  }
+  void applyFieldRepairDone(message).then(() => {
+    if (!session || repairSessionsByField.get(repairIdentity) !== session || session.state !== 'applying') return
+    session.state = session.tabId === null ? 'closed' : 'pending'
+    const row = findFieldRow(session.taskId, session.fieldKey)
+    if (row) {
+      updateRepairActionState(row)
+      setFieldRowHint(row, '成功回覆尚未完成本機核對；再次確認會核對同一操作。')
+      addFieldRepairResumeAction(row, null)
+    }
+  }).catch(() => {
+    const identity = fieldRepairIdentity(message.taskId, message.repairMode === 'replace' ? message.oldFieldKey : message.fieldKey)
+    const row = findFieldRow(message.taskId, message.repairMode === 'replace' ? message.oldFieldKey : message.fieldKey)
+    if (row) setFieldRowHint(row, '成功回覆尚未完成本機核對；請再次確認同一操作，系統不會重複替換。')
+    const session = repairSessionsByField.get(identity)
+    if (session) session.state = 'pending'
+  })
+  return undefined
+}
+
+function sameRepairValue(left, right) {
+  return JSON.stringify(stableTaskValue(left ?? {})) === JSON.stringify(stableTaskValue(right ?? {}))
+}
+
+async function applyFieldRepairDone(message) {
+  const replacing = message.repairMode === 'replace' && typeof message.oldFieldKey === 'string' &&
+    typeof message.newFieldKey === 'string' && message.newFieldKey === message.fieldKey
+  const repairIdentity = fieldRepairIdentity(message.taskId, replacing ? message.oldFieldKey : message.fieldKey)
+  const activeSession = repairSessionsByField.get(repairIdentity)
+  const contextAtStart = currentCtx
+  const generationAtStart = previewGeneration
+  if (activeSession?.sessionId && activeSession.sessionId !== message.sessionId) return undefined
+  if (!message.source || !message.spec) return undefined
+  const savedTask = await getTask(message.taskId)
+  if (!savedTask || savedTask.mode !== 'multi') return undefined
+  const savedFieldKey = replacing ? message.newFieldKey : message.fieldKey
+  const savedField = savedTask.fields?.find(item => item?.key === savedFieldKey)
+  const persistedEntry = savedTask.spec?.fields?.find(item => item?.key === savedFieldKey)
+  if (!savedField || !persistedEntry ||
+      !sameRepairValue(persistedEntry.source, message.source) ||
+      !sameRepairValue(persistedEntry.spec, message.spec)) return undefined
+  if (replacing && (savedTask.fields?.some(item => item?.key === message.oldFieldKey) ||
+      !savedTask.archivedFields?.some(item => item?.repairOperationId === message.operationId))) return undefined
+
+  const latestSession = repairSessionsByField.get(repairIdentity)
+  if ((activeSession && latestSession !== activeSession) || (!activeSession && latestSession)) return undefined
+  // Another task/context owns the visible form now. Retire this in-memory lock;
+  // when the task is opened again it will be rehydrated from the saved task.
+  if (message.taskId !== currentCtx?.task?.id || contextAtStart !== currentCtx) {
+    repairSessionsByField.delete(repairIdentity)
+    recentlyCompletedFieldRepairs.set(repairIdentity, message.sessionId)
+    if (recentlyCompletedFieldRepairs.size > 128) recentlyCompletedFieldRepairs.delete(recentlyCompletedFieldRepairs.keys().next().value)
+    return undefined
+  }
+
+  // previewGeneration also advances when a newer preview starts. That must
+  // invalidate its old-source response, but it must not discard this repair:
+  // the same task form still needs the persisted source and a visible warning.
+  const supersededPreview = generationAtStart !== previewGeneration
+  repairSessionsByField.delete(repairIdentity)
+  recentlyCompletedFieldRepairs.set(repairIdentity, message.sessionId)
+  if (recentlyCompletedFieldRepairs.size > 128) recentlyCompletedFieldRepairs.delete(recentlyCompletedFieldRepairs.keys().next().value)
+
+  const draftKey = activeSession ? (replacing ? message.oldFieldKey : message.fieldKey) : savedFieldKey
+  const row = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
+    .find(item => item.dataset.fieldKey === draftKey)
+  if (!row) return undefined
+  if (activeSession?.draftAtStart &&
+      (!sameRepairValue(row._source, activeSession.draftAtStart.source) ||
+       !sameRepairValue(row._spec, activeSession.draftAtStart.spec))) {
+    repairSessionsByField.delete(repairIdentity)
+    updateRepairActionState(row)
+    setFieldRowHint(row, '來源已儲存，但目前草稿已有變更；請重新載入任務核對後再編輯。')
+    return undefined
+  }
+  if (!activeSession &&
+      (!sameRepairValue(row._source, message.source) || !sameRepairValue(row._spec, message.spec))) return undefined
+
+  previewGeneration += 1
+  updateRepairActionState(row)
+  const oldFieldKey = replacing ? message.oldFieldKey : row.dataset.fieldKey
+  if (replacing) {
+    row.dataset.fieldKey = message.fieldKey
+    const nameInput = row.querySelector('input[data-field-name]')
+    if (nameInput && message.fieldName) nameInput.value = message.fieldName
+    for (const alertRow of document.querySelectorAll('[data-alert-row]')) {
+      if (alertRow.querySelector('select[data-alert-field]')?.value === oldFieldKey) alertRow.remove()
+    }
+    fieldSpecs.delete(oldFieldKey)
+    currentCtx.task.fields = (currentCtx.task.fields || []).map(field => field.key === oldFieldKey
+      ? { ...field, key: message.fieldKey, name: message.fieldName || field.name } : field)
+    currentCtx.task.alerts = (currentCtx.task.alerts || []).filter(alert => alert.field !== oldFieldKey)
+    if (Array.isArray(message.archivedField)) currentCtx.task.archivedFields = message.archivedField
+    else if (message.archivedField) {
+      currentCtx.task.archivedFields = [...(currentCtx.task.archivedFields || []), message.archivedField]
+    }
+  }
+  row._source = structuredClone(message.source)
+  row._spec = structuredClone(message.spec)
+  fieldSpecs.set(message.fieldKey, row._spec)
+  const where = row.querySelector('[data-field-where]')
+  if (where) {
+    where.textContent = fieldWhereText(row._spec)
+    where.title = where.textContent
+  }
+  const savedSpec = currentCtx.task.spec?.fields?.find(item => item.key === (replacing ? oldFieldKey : message.fieldKey))
+  if (savedSpec) {
+    savedSpec.key = message.fieldKey
+    savedSpec.name = message.fieldName || savedSpec.name
+    savedSpec.source = structuredClone(message.source)
+    savedSpec.spec = structuredClone(message.spec)
+  }
+  setFieldRowHint(row, replacing
+    ? '不同指標已立即儲存為新歷史序列；舊紀錄保留，舊告警不會套用到新值'
+    : '來源已立即儲存；這個值的名稱、告警與歷史序列保留')
+  if (replacing) updateFieldListState()
+  if (supersededPreview) {
+    const message = '來源或設定已變更，這次結果未套用；請重新試抓確認目前草稿。'
+    showErrorText(message)
+    const previewEl = document.getElementById('preview')
+    if (previewEl) previewEl.textContent = '—'
+    setPreviewState('warn')
+    const note = document.getElementById('test-note')
+    if (note) {
+      note.textContent = message
+      note.dataset.state = 'warn'
+    }
+  }
+  return undefined
+}
+
+function addFieldRepairResumeAction(row, tabId) {
+  if (!row) return
+  let button = row.querySelector('[data-action="resume-field-repair"]')
+  if (button) {
+    if (Number.isInteger(tabId)) button.dataset.tabId = String(tabId)
+    else delete button.dataset.tabId
+    button.textContent = Number.isInteger(tabId) ? '返回來源頁核對' : '再次確認同一操作'
+    return
+  }
+  button = document.createElement('button')
+  button.type = 'button'
+  button.dataset.action = 'resume-field-repair'
+  if (Number.isInteger(tabId)) button.dataset.tabId = String(tabId)
+  button.textContent = Number.isInteger(tabId) ? '返回來源頁核對' : '再次確認同一操作'
+  button.addEventListener('click', async () => {
+    const targetTabId = Number.isInteger(Number(button.dataset.tabId)) ? Number(button.dataset.tabId) : null
+    if (targetTabId !== null) {
+      try {
+        await chrome.tabs.update(targetTabId, { active: true })
+      } catch {
+        setFieldRowHint(row, '來源頁已無法開啟；請再次確認同一操作或重新開始。')
+        const session = repairSessionsByField.get(fieldRepairIdentity(currentCtx?.task?.id, row.dataset.fieldKey))
+        if (session) session.tabId = null
+        delete button.dataset.tabId
+        button.textContent = '再次確認同一操作'
+      }
+      return
+    }
+    const identity = fieldRepairIdentity(currentCtx?.task?.id, row.dataset.fieldKey)
+    const session = repairSessionsByField.get(identity)
+    if (!session) return
+    button.disabled = true
+    setFieldRowHint(row, '正在核對同一重選操作…')
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: MSG.BEGIN_FIELD_REPAIR, taskId: session.taskId, fieldKey: session.fieldKey, repairMode: session.repairMode
+      })
+      if (response?.ok === true && response.recovered === true) {
+        await applyFieldRepairDone({ ...response, type: 'FIELD_REPAIR_DONE', done: true,
+          operationId: response.operationId || response.sessionId, sessionId: response.sessionId || response.operationId })
+        button.remove()
+        return
+      }
+      if (response?.ok && Number.isInteger(response.tabId)) {
+        session.tabId = response.tabId
+        session.sessionId = response.sessionId || session.sessionId
+        button.remove()
+        setFieldRowHint(row, '已返回原重選頁；完成後會立即儲存。')
+        await chrome.tabs.update(response.tabId, { active: true })
+      } else if (response?.operationId || response?.sessionId) {
+        session.sessionId = response.operationId || response.sessionId
+        session.operationId = session.sessionId
+        setFieldRowHint(row, response.message || '結果仍待確認；可再次確認同一操作。')
+      } else {
+        repairSessionsByField.delete(identity)
+        updateRepairActionState(row)
+        setFieldRowHint(row, response?.message || '無法確認這次重選；可重新開始。')
+        button.remove()
+      }
+    } catch (error) {
+      setFieldRowHint(row, String(error?.message || '無法確認這次重選；請稍後再試。'))
+    } finally {
+      if (button.isConnected) button.disabled = false
+    }
+  })
+  row.appendChild(button)
+}
+
+function findFieldRow(taskId, fieldKey) {
+  if (taskId !== currentCtx?.task?.id) return null
+  return Array.from(document.querySelectorAll('#field-list [data-field-row]'))
+    .find(row => row.dataset.fieldKey === fieldKey) || null
+}
+
+function updateCurrentRepairActionState(taskId, fieldKey) {
+  const row = findFieldRow(taskId, fieldKey)
+  if (row) updateRepairActionState(row)
 }
 
 // 欄位離開焦點就地驗證（錯誤字在欄位正下方、aria-describedby 指向它），不必等按儲存
@@ -2272,24 +2613,8 @@ function createFieldRow({ key, name, spec, source, mode, stateActions }) {
   repairBtn.textContent = '修復同一個值'
   repairBtn.title = '只修復這個值的來源，保留原名稱、告警與歷史序列；不同指標請建立新值'
   repairBtn.hidden = !(currentCtx?.task?.mode === 'multi' &&
-    Array.isArray(currentCtx.task.fields) && currentCtx.task.fields.length > 1)
-  repairBtn.addEventListener('click', async () => {
-    repairBtn.setAttribute('aria-disabled', 'true')
-    setFieldRowHint(row, '')
-    try {
-      const response = await chrome.runtime.sendMessage({
-        type: MSG.BEGIN_FIELD_REPAIR,
-        taskId: currentCtx?.task?.id,
-        fieldKey: row.dataset.fieldKey,
-        repairMode: 'repair'
-      })
-      if (!response?.ok) setFieldRowHint(row, response?.message || '無法開始單值重選，請重試')
-    } catch (error) {
-      setFieldRowHint(row, String(error?.message || '無法開始單值重選，請重試'))
-    } finally {
-      repairBtn.removeAttribute('aria-disabled')
-    }
-  })
+    Array.isArray(currentCtx.task.fields) && currentCtx.task.fields.length > 0)
+  repairBtn.addEventListener('click', () => startFieldRepair(row, 'repair'))
 
   row.appendChild(input)
   row.appendChild(whereEl)
@@ -2305,24 +2630,11 @@ function createFieldRow({ key, name, spec, source, mode, stateActions }) {
   replaceBtn.hidden = repairBtn.hidden
   replaceBtn.addEventListener('click', async () => {
     if (!globalThis.confirm?.('這會把目前欄位改成不同指標，建立新的歷史序列並移除原告警設定。舊歷史會保留。要繼續嗎？')) return
-    replaceBtn.setAttribute('aria-disabled', 'true')
-    setFieldRowHint(row, '')
-    try {
-      const response = await chrome.runtime.sendMessage({
-        type: MSG.BEGIN_FIELD_REPAIR,
-        taskId: currentCtx?.task?.id,
-        fieldKey: row.dataset.fieldKey,
-        repairMode: 'replace'
-      })
-      if (!response?.ok) setFieldRowHint(row, response?.message || '無法開始更換指標，請重試')
-    } catch (error) {
-      setFieldRowHint(row, String(error?.message || '無法開始更換指標，請重試'))
-    } finally {
-      replaceBtn.removeAttribute('aria-disabled')
-    }
+    await startFieldRepair(row, 'replace')
   })
   row.appendChild(replaceBtn)
   row.appendChild(removeBtn)
+  updateRepairActionState(row)
 
   if (source) {
     const stateButton = document.createElement('button')
@@ -2865,6 +3177,65 @@ export async function renderDashboardSection(task) {
 function taskFromForm(values, ctx, taskId) {
   const existing = taskId ? { id: taskId } : ctx?.task
   return buildTask(values, ctx?.locator, existing, ctx?.frameUrl ? { url: ctx.frameUrl } : undefined)
+}
+
+function previewStillMatches(requestId, taskId, fingerprint) {
+  if (requestId !== previewGeneration || (currentCtx?.task?.id || null) !== taskId) return false
+  try {
+    const currentTask = taskFromForm(getFormData(), currentCtx)
+    if (!currentTask.url && currentCtx?.url) currentTask.url = currentCtx.url
+    return taskFingerprintOf(currentTask) === fingerprint
+  } catch {
+    return false
+  }
+}
+
+function showStalePreview(requestId, contextAtStart, taskId, fingerprint) {
+  // A repair intentionally increments previewGeneration to invalidate the old
+  // response. Keep its warning only while the same task/context is still shown
+  // and its current draft differs from the request snapshot.
+  if (requestId !== latestPreviewRequestId || currentCtx !== contextAtStart ||
+      (currentCtx?.task?.id || null) !== taskId) return
+  try {
+    const currentTask = taskFromForm(getFormData(), currentCtx)
+    if (!currentTask.url && currentCtx?.url) currentTask.url = currentCtx.url
+    if (taskFingerprintOf(currentTask) === fingerprint) return
+  } catch {
+    return
+  }
+  const message = '來源或設定已變更，這次結果未套用；請重新試抓確認目前草稿。'
+  showErrorText(message)
+  const previewEl = document.getElementById('preview')
+  if (previewEl) previewEl.textContent = '—'
+  setPreviewState('warn')
+  const note = document.getElementById('test-note')
+  if (note) {
+    note.textContent = message
+    note.dataset.state = 'warn'
+  }
+}
+
+function showLoginSettingsAction(note, url) {
+  if (!note) return
+  note.replaceChildren()
+  const message = document.createElement('span')
+  message.textContent = '請檢查站台登入欄位與成功判定。'
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.dataset.action = 'open-site-login-settings'
+  button.textContent = '開啟站台登入設定'
+  button.addEventListener('click', async () => {
+    try {
+      const origin = new URL(url).origin
+      const query = new URLSearchParams({ origin })
+      if (Number.isInteger(currentCtx?.tabId)) query.set('tabId', String(currentCtx.tabId))
+      const path = `ui/site/site.html?${query}`
+      const pageUrl = typeof chrome.runtime?.getURL === 'function' ? await chrome.runtime.getURL(path) : path
+      chrome.tabs.create({ url: pageUrl })
+    } catch {}
+  })
+  note.append(message, document.createTextNode(' '), button)
+  note.dataset.state = 'warn'
 }
 
 /**
@@ -3640,6 +4011,7 @@ function scrollPreviewIntoView() {
 export async function handleTestNow() {
   if (blockActionUntilPanelReady()) return
   if (batchItems) return handleBatchTest()
+  if (document.getElementById('test-now')?.disabled) return
   const previewEl = document.getElementById('preview')
   // 引導句只給「還沒試抓」：按下去之後不論結果都換成這一次的內容
   if (previewEl?.hasAttribute('data-empty')) {
@@ -3662,6 +4034,14 @@ export async function handleTestNow() {
   if (!values.url && currentCtx?.url) values.url = currentCtx.url
   // buildTask 內部會呼叫 buildSpec(values) 組出規格
   const task = taskFromForm(values, currentCtx)
+  const requestId = ++previewGeneration
+  latestPreviewRequestId = requestId
+  const contextAtStart = currentCtx
+  const targetTaskId = currentCtx?.task?.id || null
+  activePreviewBusy = { requestId, context: contextAtStart, taskId: targetTaskId, release: busy }
+  const taskFingerprint = taskFingerprintOf(task)
+  const editPreview = Boolean(currentCtx?.task)
+  if (editPreview) task.foreground = false
   // 這個任務不會被儲存，id 只是讓 runTask（佇列與診斷）有個名字；試抓不登記 runState、不寫帳本
   task.id = '__preview'
 
@@ -3671,17 +4051,29 @@ export async function handleTestNow() {
       res = await chrome.runtime.sendMessage({
         type: MSG.TEST_TASK,
         task,
-        tabId: currentCtx?.tabId
+        ...(editPreview ? {} : { tabId: currentCtx?.tabId })
       })
     } catch {
+      if (!previewStillMatches(requestId, targetTaskId, taskFingerprint)) {
+        showStalePreview(requestId, contextAtStart, targetTaskId, taskFingerprint)
+        return
+      }
       // 訊息通道被拒絕（背景被回收等），與 ok:false 是兩條路，兩條都要有字
       showErrorText('抓取被中斷，請再試一次')
       if (previewEl) previewEl.textContent = '—'
       setPreviewState('error')
       return
     }
+    if (!previewStillMatches(requestId, targetTaskId, taskFingerprint)) {
+      showStalePreview(requestId, contextAtStart, targetTaskId, taskFingerprint)
+      return
+    }
     if (res && res.ok) {
       if (values.fields) {
+        const fieldOutcomes = values.fields.map(field => res.fields?.[field.key])
+        const successCount = fieldOutcomes.filter(fieldResult => fieldResult?.ok === true).length
+        const failedCount = fieldOutcomes.length - successCount
+        const partial = successCount > 0 && failedCount > 0
         const lines = values.fields.map(f => {
           const fieldRes = res.fields?.[f.key]
           if (fieldRes && fieldRes.ok) {
@@ -3694,7 +4086,10 @@ export async function handleTestNow() {
             return `${f.name}: ${err}`
           }
         })
-        if (previewEl) previewEl.textContent = lines.join('\n')
+        if (previewEl) {
+          const summary = failedCount > 0 ? `成功 ${successCount} 個、失敗 ${failedCount} 個` : ''
+          previewEl.textContent = [summary, ...lines].filter(Boolean).join('\n')
+        }
         // 逐值結果也要回到各自那一列，使用者才不必在預覽區裡對照名字
         applyFieldResults(values.fields, res)
         // 多值任務即使整體 ok，個別值仍可能失敗（SPEC §7）：那時 background 會附診斷
@@ -3706,7 +4101,8 @@ export async function handleTestNow() {
       showErrorText('')
       // 排除項找不到：值抓得到，但合計可能被加進去了——用警告色，不是成功的綠
       const warned = values.fields
-        ? Object.values(res.fields || {}).some(f => f && f.ok && f.message)
+        ? Object.values(res.fields || {}).some(f => f && f.ok && f.message) ||
+          values.fields.some(field => res.fields?.[field.key]?.ok !== true)
         : Boolean(res.message)
       setPreviewState(warned ? 'warn' : 'ok')
       // 這次測試是在使用者眼前這個分頁跑的，iframe 已經開著；排程會自己另外開一份頁面，
@@ -3719,9 +4115,15 @@ export async function handleTestNow() {
         // 只回一句「成功」等於什麼都沒說
         const total = res.preActionTrace.reduce((sum, step) => sum + (Number(step.ms) || 0), 0)
         notes.push(`前置動作 ${res.preActionTrace.length} 步完成（共 ${(total / 1000).toFixed(1)} 秒）`)
-      } else if (noteEl && currentCtx?.frameUrl && noPreActions) {
+      } else if (noteEl && currentCtx?.frameUrl && noPreActions && !editPreview) {
         notes.push('這次測試在目前分頁執行；排程會自己另外開一份頁面，若那個框架要先點才會出現，請加入前置動作。')
       }
+      if (noteEl && values.fields) {
+        const successCount = values.fields.filter(field => res.fields?.[field.key]?.ok === true).length
+        const failedCount = values.fields.length - successCount
+        if (failedCount > 0) notes.push(`逐值結果：成功 ${successCount} 個、失敗 ${failedCount} 個；請先修復或重新選取失敗值，再試抓確認。`)
+      }
+      if (noteEl && editPreview) notes.push('編輯試抓使用專用抓取頁；尚未儲存的欄位、來源與前置動作都會納入本次結果。')
       if (!values.fields && res.message) {
         notes.push(res.message)
       }
@@ -3733,10 +4135,17 @@ export async function handleTestNow() {
       renderTestDetail(values, res)
     } else {
       // 有解法的訊息優先：'not_found' 只說了失敗，沒說使用者能怎麼辦
-      const err = res?.message || statusTextOf(res?.error) || '找不到目標元素'
+      const baseError = res?.message || statusTextOf(res?.error) || '找不到目標元素'
+      const nextStep = res?.error === 'login_failed'
+        ? '請開啟站台登入設定檢查欄位後再試。'
+        : ['not_found', 'selector_lost', 'frame_not_found'].includes(res?.error)
+          ? '請回來源頁重新選取目標，或補上必要的前置動作後再試。'
+          : '請確認目前來源與設定後再試。'
+      const err = `${baseError} ${nextStep}`
       showErrorText(err)
       if (previewEl) previewEl.textContent = '—'
       setPreviewState('error')
+      if (values.fields) applyFieldResults(values.fields, res)
       // 失敗才有診斷可以匯出（成功時 background 不組）
       setDiagAvailable(res?.debug)
       // 走到第幾步也要說：調 hover 選單時，「hover 有做、click 沒點到」與「hover 就失敗」是兩種修法
@@ -3745,6 +4154,7 @@ export async function handleTestNow() {
         const done = res.preActionTrace.filter(step => step.ok).length
         noteEl.textContent = `前置動作走到第 ${res.preActionTrace.length} 步（前 ${done} 步成功）`
       }
+      if (res?.error === 'login_failed') showLoginSettingsAction(noteEl, values.url || currentCtx?.url)
       // 抓不到而且沒有任何前置動作：很多站台要先關彈窗、點頁籤才看得到，指一條路過去
       const noPreActions = !Array.isArray(values.preActions) || values.preActions.length === 0
       setTestPreActionHint(noPreActions)
@@ -3756,8 +4166,16 @@ export async function handleTestNow() {
     if (previewEl) previewEl.textContent = '—'
     setPreviewState('error')
   } finally {
-    busy()
-    try { scrollPreviewIntoView() } catch {}
+    // 若使用者已切到另一個任務，舊請求不能重設新表單的按鈕狀態。
+    const stillOwnsCurrentContext = currentCtx === contextAtStart &&
+      (currentCtx?.task?.id || null) === targetTaskId && requestId === latestPreviewRequestId
+    if (requestId === previewGeneration || stillOwnsCurrentContext) {
+      busy()
+      if (activePreviewBusy?.requestId === requestId) activePreviewBusy = null
+    }
+    if (requestId === previewGeneration) {
+      try { scrollPreviewIntoView() } catch {}
+    }
   }
 }
 
@@ -3803,6 +4221,7 @@ let pickDraftUndo = null
 let pickDraftUndoRevision = null
 let pickDraftUndoToken = 0
 let pickDraftKeyHandlerBound = false
+let pickDraftFinishPending = false
 
 function clonePickDraft(value) {
   if (value === undefined || value === null) return value
@@ -3871,8 +4290,14 @@ function showPickDraftView() {
   if (waiting) waiting.hidden = true
   const form = document.getElementById('picker-form') || document.querySelector('.settings-body')
   if (form) form.hidden = true
-  const footer = document.querySelector('.settings-footer') || document.querySelector('.action-bar')
+  const footer = pickerActionBar()
   if (footer) footer.hidden = true
+}
+
+function pickerActionBar() {
+  return document.querySelector('.settings-footer') ||
+    document.querySelector('.action-bar') ||
+    document.getElementById('picker-actions')
 }
 
 function operationIdOf(type) { return `picker-${type}-${Date.now()}-${Math.random().toString(36).slice(2)}` }
@@ -4045,7 +4470,28 @@ function groupValueLabel(value) {
   return `${name}（識別：${key}）`
 }
 
+function syncPickDraftFinishButton() {
+  const finish = document.getElementById('group-finish')
+  if (!finish) return
+  finish.textContent = pickDraftFinishPending ? '正在完成…' : '完成選取'
+  finish.disabled = pickDraftFinishPending || !Array.isArray(pickDraftState?.groups) || pickDraftState.groups.length === 0
+}
+
 async function finishPickDraft() {
+  if (pickDraftFinishPending) return
+  // Give immediate local feedback before any tab lookup, rename flush, or background ACK.
+  pickDraftFinishPending = true
+  syncPickDraftFinishButton()
+  setGroupDraftStatus('正在同步選取…')
+  try {
+    await finishPickDraftOperation()
+  } finally {
+    pickDraftFinishPending = false
+    syncPickDraftFinishButton()
+  }
+}
+
+async function finishPickDraftOperation() {
   if (!pickDraftState) return
   if (panelBootSequence > 0 && Number.isInteger(panelTabId)) {
     const activeTabId = await resolvePanelTab()
@@ -4460,7 +4906,7 @@ export function renderPickDraft(draft = pickDraftState) {
   if (input && active) input.dataset.groupKey = active.key
   if (startSelection) startSelection.hidden = !active || !pendingNameOf(active).trim()
   if (finish) finish.hidden = groups.length === 0
-  if (finish) finish.disabled = groups.length === 0
+  if (finish) syncPickDraftFinishButton()
   if (undo) undo.hidden = !pickDraftUndo || (pickDraftUndoRevision !== null && draft.revision !== pickDraftUndoRevision)
   const title = document.getElementById('group-draft-title')
   if (title) title.textContent = groups.length === 0 ? '先建立群組' : `群組與選值（${groups.length}/${MAX_PICK_GROUPS}）`
@@ -4562,7 +5008,7 @@ export async function renderFromPanelCtx(ctx, { reload = () => globalThis.locati
   if (waiting) waiting.hidden = kind !== 'waiting'
   // 等待態時把表單藏起來：面板一開就看到一整頁空欄位，使用者不知道自己該做什麼
   if (form) form.hidden = kind === 'waiting'
-  const footer = document.querySelector('.settings-footer') || document.getElementById('picker-actions')
+  const footer = pickerActionBar()
   if (footer) footer.hidden = kind === 'waiting'
   if (ctx?.pickDraft) {
     renderPickDraft(ctx.pickDraft)
@@ -4604,7 +5050,7 @@ export async function renderFromPanelCtx(ctx, { reload = () => globalThis.locati
     if (!task) return { rendered: false }
     render({ task, locator: task.locator, url: task.url })
     const testNow = document.getElementById('test-now')
-    if (testNow) testNow.hidden = true
+    if (testNow) testNow.hidden = false
     // 面板開在報表分頁旁，那裡沒有目標頁可選；選完回來還會被當成新表單而存出一個副本。
     // 要換目標一律走任務頁的「重選」（它會自己開目標頁）
     const repick = document.getElementById('repick-target')
@@ -4621,6 +5067,16 @@ export async function renderFromPanelCtx(ctx, { reload = () => globalThis.locati
       applyRetarget(ctx.ctx)
       return { rendered: true }
     }
+    // 新的選取 context 是新任務草稿：清掉上一個 context 的未存表單值與 busy 控制狀態。
+    // 相同 context 已在上方直接返回，所以這不會抹掉正在編輯的草稿；retarget 也走保留設定的專用路徑。
+    form?.reset?.()
+    const name = document.getElementById('name')
+    if (name) {
+      name.value = ''
+      delete name._afAutoName
+    }
+    const testNow = document.getElementById('test-now')
+    if (testNow) testNow.disabled = false
     render(ctx.ctx)
     await renderDashboardSection(ctx.ctx?.task)
     await applyPickerDefaults(ctx.ctx?.task)
@@ -4833,7 +5289,7 @@ export async function initFromQuery(search) {
   render({ task, locator: task.locator, url: task.url })
   const testNow = document.getElementById('test-now')
   if (testNow) {
-    testNow.hidden = true
+    testNow.hidden = false
   }
   const repick = document.getElementById('repick-target')
   if (repick) {
@@ -4932,18 +5388,36 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
         setPanelBootReady(true)
       }
     }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') boot()
+    }
+    const onTabActivated = info => {
+      if (forcedTab !== null || !globalThis.chrome?.sidePanel || document.visibilityState !== 'visible') return
+      if (!Number.isInteger(panelWindowId) || info?.windowId !== panelWindowId) return
+      boot()
+    }
+    const onPageHide = () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('pagehide', onPageHide)
+      chrome.tabs.onActivated?.removeListener?.(onTabActivated)
+      unsubscribePanelSession()
+    }
     // 載入當下就解析會拿到切換前的舊分頁；轉為可見時再解析才正確，
     // 而且每次轉為可見都重解析一次（自癒）
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') boot()
-    })
+    document.addEventListener('visibilitychange', onVisibilityChange)
     if (document.visibilityState === 'visible') boot()
     // ctx 變了（例如使用者在頁面上選好了目標）就重畫
-    subscribe(() => {
+    const unsubscribePanelSession = subscribe(() => {
       // A hidden side panel can receive session updates while its target tab is
       // being prepared. Keep it from racing a visible panel's tab binding.
       if (document.visibilityState === 'visible') boot()
     }, { area: 'session' })
+    // Side panels stay visible while their window's active tab changes; Chrome
+    // does not guarantee a visibilitychange for that transition.
+    if (forcedTab === null && globalThis.chrome?.sidePanel) {
+      chrome.tabs.onActivated?.addListener?.(onTabActivated)
+    }
+    window.addEventListener('pagehide', onPageHide, { once: true })
     document.addEventListener('af:pick-group-name-result', event => { consumeGroupNameResult(event.detail) })
     chrome.runtime.onMessage?.addListener((message) => {
       if (message?.type === PICK_GROUP_NAME_RESULT) return consumeGroupNameResult(message)

@@ -43,6 +43,11 @@ let pickSessionId = undefined, pickGroupKey = undefined, pickFrame = undefined, 
 // the last exact draft identity so that its already queued ACKs can settle.
 let exitedDraftIdentity = null
 let repairSessionId = undefined, repairFieldKey = undefined, repairMode = undefined
+const REPAIR_ACK_TIMEOUT_MS = 15000
+let repairSubmissionState = 'idle'
+let repairRetryPayload = null
+let repairSubmissionAttempt = 0
+let repairSelectionAnchor = null
 let pickDocumentGeneration = undefined, pickRouteIdentity = undefined
 let pickLocationAtEntry = ''
 let pickImmediateDraft = false
@@ -152,17 +157,169 @@ const draftSourceSessions = new Map()
 
 function sourceTableOf(target) {
   if (!target || target.nodeType !== 1) return null
-  return target.matches?.('table') ? target : target.closest?.('table') || null
+  return isTableMode(target) ? target : tableOf(target)
 }
 
-function sourceElementOf(target, pick) {
+function sourceElementOf(target, pick, table = sourceTableOf(target)) {
   const cell = pick?.cell
-  if (!cell || !isTableMode(target)) return target
+  if (!cell || !table || !isTableMode(table)) return target
   const rowIndex = cell.row?.index
   const colIndex = cell.col?.index
   if (!Number.isInteger(rowIndex) || !Number.isInteger(colIndex)) return target
-  const row = resolveDataRows(target)[rowIndex]
+  const row = resolveDataRows(table)[rowIndex]
   return row ? targetAtGrid(row, colIndex, cell.inner) || target : target
+}
+
+function resolvedSourceCell(table, rows, colIndex, inner) {
+  if (!Number.isInteger(colIndex)) return null
+  return rows.map(row => ({ row, target: targetAtGrid(row, colIndex, inner) }))
+    .filter(item => item.target)
+}
+
+function sourceColumnIndex(table, locator) {
+  const headers = columnHeaders(table)
+  const rowWidth = resolveDataRows(table).reduce((max, row) => Math.max(max,
+    getRowCells(row).reduce((sum, cell) => sum + (Number(cell?.colSpan) || 1), 0)), 0)
+  const result = locateByHeader(headers, locator, Math.max(headers.length, rowWidth), 'col')
+  return result.ok && Number.isInteger(result.index) ? result.index : null
+}
+
+function sourceColumnStillMatches(rows, index, cells, inner) {
+  if (!Number.isInteger(index) || !cells?.length) return false
+  const currentRows = new Set(rows)
+  const stillRendered = cells.filter(item => item.row?.isConnected && currentRows.has(item.row))
+  if (!stillRendered.length) return false
+  return stillRendered.every(item => targetAtGrid(item.row, index, inner) === item.target)
+}
+
+function sourceRowIndex(table, rows, locator) {
+  const headers = rows.map(row => rowHeader(row))
+  const result = locateByHeader(headers, locator, rows.length, 'row')
+  return result.ok && Number.isInteger(result.index) ? result.index : null
+}
+
+function sourceAnchorOf(target, pick, table) {
+  if (!table || !isTableMode(table)) return { kind: 'element', target }
+  const rows = resolveDataRows(table)
+  if (pick?.cell) {
+    const cell = pick.cell
+    const rowLocator = cell.row || {}
+    const colLocator = cell.col || {}
+    const rowIndex = sourceRowIndex(table, rows, rowLocator)
+    const colIndex = sourceColumnIndex(table, colLocator)
+    const target = Number.isInteger(rowIndex) && Number.isInteger(colIndex)
+      ? targetAtGrid(rows[rowIndex], colIndex, cell.inner) : null
+    const rowHeaderCell = Number.isInteger(rowIndex)
+      ? getRowCells(rows[rowIndex]).find(item => (item?.textContent || '').trim()) : null
+    return {
+      kind: 'cell', table, rowLocator: structuredClone(rowLocator), colLocator: structuredClone(colLocator),
+      row: Number.isInteger(rowIndex) ? rows[rowIndex] : null,
+      target,
+      // A one-cell row can make its selected value look like a row header.
+      // Keep that fact so a live text refresh on the same node is not mistaken
+      // for a changed row identity when the row remains at its original index.
+      rowHeaderTracksTarget: Boolean(target && rowHeaderCell === target),
+      inner: structuredClone(cell.inner || []),
+      columnCells: Number.isInteger(colIndex) ? resolvedSourceCell(table, rows, colIndex, cell.inner) : []
+    }
+  }
+  if (pick?.block?.axis === 'row') {
+    const block = pick.block
+    const locator = { index: block.index, header: block.headerText, ...(block.pos ? { pos: block.pos } : {}) }
+    const index = sourceRowIndex(table, rows, locator)
+    return { kind: 'row', table, locator, row: Number.isInteger(index) ? rows[index] : null }
+  }
+  if (pick?.block?.axis === 'col') {
+    const block = pick.block
+    const locator = { index: block.index, header: block.headerText, ...(block.pos ? { pos: block.pos } : {}) }
+    const index = sourceColumnIndex(table, locator)
+    return { kind: 'column', table, locator, inner: structuredClone(block.inner || []),
+      cells: Number.isInteger(index) ? resolvedSourceCell(table, rows, index, block.inner) : [] }
+  }
+  return null
+}
+
+function sourceAnchorStillMatches(anchor) {
+  if (!anchor) return true
+  if (anchor.kind === 'element') return Boolean(anchor.target?.isConnected)
+  const table = anchor.table
+  flushTableMutations()
+  if (!table?.isConnected) return false
+  const rows = resolveDataRows(table)
+  if (anchor.kind === 'cell') {
+    const rowIndex = sourceRowIndex(table, rows, anchor.rowLocator)
+    const colIndex = sourceColumnIndex(table, anchor.colLocator)
+    if (!Number.isInteger(colIndex)) return false
+    if (!Number.isInteger(rowIndex)) {
+      // When the selected cell itself supplied the row's fallback label, a
+      // value refresh changes that label. Accept only the same connected row
+      // at the same fixed index and the same cell node; an inserted row shifts
+      // the original row and still fails closed.
+      const originalIndex = anchor.row ? rows.indexOf(anchor.row) : -1
+      if (!anchor.rowLocator.pos && anchor.rowHeaderTracksTarget &&
+          Number.isInteger(anchor.rowLocator.index) && originalIndex === anchor.rowLocator.index) {
+        return targetAtGrid(rows[originalIndex], colIndex, anchor.inner) === anchor.target
+      }
+      return false
+    }
+    if (!anchor.rowLocator.pos && rows[rowIndex] !== anchor.row) return false
+    if (anchor.rowLocator.pos || anchor.colLocator.pos) return Boolean(targetAtGrid(rows[rowIndex], colIndex, anchor.inner))
+    return targetAtGrid(rows[rowIndex], colIndex, anchor.inner) === anchor.target
+  }
+  if (anchor.kind === 'row') {
+    const index = sourceRowIndex(table, rows, anchor.locator)
+    if (anchor.locator.pos) return Number.isInteger(index) && Boolean(rows[index])
+    return Number.isInteger(index) && rows[index] === anchor.row
+  }
+  if (anchor.kind === 'column') {
+    const index = sourceColumnIndex(table, anchor.locator)
+    if (anchor.locator.pos) return Number.isInteger(index) && rows.some(row => targetAtGrid(row, index, anchor.inner))
+    const header = typeof anchor.locator?.header === 'string' ? anchor.locator.header.trim() : ''
+    const headers = columnHeaders(table)
+    if (!anchor.locator?.pos && header && headers.filter(item => item === header).length === 1 && headers[index] === header) {
+      return resolveDataRows(table).some(row => targetAtGrid(row, index, anchor.inner))
+    }
+    return sourceColumnStillMatches(rows, index, anchor.cells, anchor.inner)
+  }
+  return false
+}
+
+function sourceAnchorForSpec(anchor, spec) {
+  if (!anchor || !spec) return anchor
+  anchor = { ...anchor, cells: anchor.cells?.map(item => ({ ...item })) }
+  if (anchor.kind === 'cell' && spec.cell) {
+    anchor.rowLocator = structuredClone(spec.cell.row || {})
+    anchor.colLocator = structuredClone(spec.cell.col || {})
+    anchor.inner = structuredClone(spec.cell.inner || [])
+  } else if (anchor.kind === 'row' && spec.block?.axis === 'row') {
+    anchor.locator = { index: spec.block.index, header: spec.block.headerText,
+      ...(spec.block.pos ? { pos: spec.block.pos } : {}) }
+    anchor.inner = structuredClone(spec.block.inner || [])
+  } else if (anchor.kind === 'column' && spec.block?.axis === 'col') {
+    anchor.locator = { index: spec.block.index, header: spec.block.headerText,
+      ...(spec.block.pos ? { pos: spec.block.pos } : {}) }
+    anchor.inner = structuredClone(spec.block.inner || [])
+  }
+  return anchor
+}
+
+function repairAnchorSpecOf(pick) {
+  const spec = pickSpecOf(pick)
+  if (!spec || repairMode !== 'repair' || !Array.isArray(pendingPreselect)) return spec
+  const prior = pendingPreselect[0]?.cell
+  if (spec.cell && prior) {
+    spec.cell = { ...spec.cell }
+    for (const axis of ['row', 'col']) {
+      if (prior[axis]?.pos && spec.cell[axis]) {
+        spec.cell[axis] = { ...spec.cell[axis], pos: prior[axis].pos }
+      }
+    }
+  }
+  const priorBlock = pendingPreselect[0]?.block
+  if (spec.block && priorBlock?.pos && spec.block.axis === priorBlock.axis) {
+    spec.block = { ...spec.block, pos: priorBlock.pos }
+  }
+  return spec
 }
 
 function recordDraftSource(identity, key, target, pick, remove) {
@@ -177,12 +334,14 @@ function recordDraftSource(identity, key, target, pick, remove) {
     return
   }
   if (!groups) { groups = new Map(); records.set(key, groups) }
-  const sourceElement = sourceElementOf(target, pick)
+  const table = sourceTableOf(target)
+  const sourceElement = sourceElementOf(target, pick, table)
   groups.set(identity.groupKey, {
     groupKey: identity.groupKey,
-    valueLabel: (target?.textContent || getPickName(pick) || '已選值').trim().slice(0, 80),
+    valueLabel: (sourceElement?.textContent || getPickName(pick) || '已選值').trim().slice(0, 80),
     target: sourceElement,
-    table: sourceTableOf(target)
+    table,
+    anchor: sourceAnchorOf(target, pick, table)
   })
 }
 
@@ -206,7 +365,12 @@ function validateDraftSources(sessionId, expectedSources = []) {
       const label = (value.preview || value.previewValue || value.name || '已選值').toString().trim().slice(0, 80)
       return { ok: false, error: 'stale_source', message: `${groupLabel}的「${label}」來源未經目前文件核對，請重新選取` }
     }
-    if (!record.target?.isConnected || (record.table && (!record.table.isConnected || sourceTableOf(record.target) !== record.table))) {
+    const anchor = sourceAnchorForSpec(record.anchor, spec)
+    const anchorMatches = record.anchor ? sourceAnchorStillMatches(anchor) : record.target?.isConnected
+    const tableMatches = record.table
+      ? record.table.isConnected && (!record.target?.isConnected || sourceTableOf(record.target) === record.table)
+      : record.target?.isConnected
+    if (!tableMatches || !anchorMatches) {
       return {
         ok: false,
         error: 'stale_source',
@@ -2110,7 +2274,16 @@ function updatePanelActions(el) {
   const done = panelDoneEl
   const n = selectedCount()
   done.removeAttribute('aria-disabled')
-  if (n > 0) {
+  if (repairSessionId !== undefined && repairSubmissionState === 'uncertain') {
+    setButtonText(done, '再次確認同一操作')
+    done.removeAttribute('aria-disabled')
+  } else if (repairSessionId !== undefined && repairSubmissionState === 'failed') {
+    setButtonText(done, '請重新開始')
+    done.setAttribute('aria-disabled', 'true')
+  } else if (repairSessionId !== undefined && repairSubmissionState === 'sending') {
+    setButtonText(done, '正在確認…')
+    done.setAttribute('aria-disabled', 'true')
+  } else if (n > 0) {
     setButtonText(done, `完成（${n} 個值）`)
   } else if (iframeOf(el)) {
     setButtonText(done, '進入這個框架')
@@ -2767,6 +2940,17 @@ function dropGoneSelection() {
 
 // 送出確認訊息並離開
 async function confirmPick() {
+  if (repairSessionId !== undefined && repairSubmissionState !== 'idle') {
+    if (repairSubmissionState === 'uncertain' && repairRetryPayload) {
+      await submitFieldRepair(repairRetryPayload, { retry: true })
+      return
+    }
+    toolbarNotice = repairSubmissionState === 'sending'
+      ? '正在套用已選來源，請等候確認'
+      : '授權已失效；請回設定重新開始'
+    if (panelEl) updatePanel(panelEl, currentTargetEl)
+    return
+  }
   // 新群組模式的完成屏障在側欄；頁面上的普通 Enter／雙擊只應完成一次加值，
   // 不得把目前頁面內容再次送成整批結果。
   if (isImmediateDraftGroupMode() && !iframeOf(currentTargetEl)) {
@@ -2990,6 +3174,10 @@ async function confirmPick() {
     msg.routeIdentity = structuredClone(pickRouteIdentity)
   }
 
+  if (repairSessionId !== undefined) {
+    await submitFieldRepair(msg)
+    return
+  }
   chrome.runtime.sendMessage(msg)
   // 設定面板就開在旁邊，使用者要看得到自己剛剛選的是哪一格；
   // repick 沒有面板（存檔就結束），維持全清
@@ -3039,6 +3227,15 @@ async function ascendFrame() {
 
 // 請求取消選取模式（已選 2 個以上需二段確認）
 function requestCancel() {
+  if (repairSessionId !== undefined && repairSubmissionState === 'failed') {
+    cancelPick()
+    return
+  }
+  if (repairSessionId !== undefined && repairSubmissionState !== 'idle') {
+    toolbarNotice = '這筆操作尚未確認；請按「再次確認同一操作」，目前不能取消或更改選取'
+    if (panelEl) updatePanel(panelEl, currentTargetEl)
+    return
+  }
   const count = selectedCount()
   const needConfirm = (currentPurpose === 'task' || currentPurpose === 'repick') && count >= 2
   if (needConfirm) {
@@ -3059,7 +3256,7 @@ function requestCancel() {
 }
 
 // 送出取消訊息並離開
-function cancelPick() {
+async function cancelPick() {
   const msg = { type: MSG.PICKED, purpose: currentPurpose, cancelled: true }
   if (currentTaskId !== undefined) msg.taskId = currentTaskId
   if (repairSessionId !== undefined) {
@@ -3067,10 +3264,83 @@ function cancelPick() {
     msg.repairFieldKey = repairFieldKey
     msg.repairMode = repairMode
     msg.documentGeneration = structuredClone(pickDocumentGeneration)
+    if (repairSubmissionState === 'failed') {
+      chrome.runtime.sendMessage(msg).catch(() => {})
+      exitPickMode({ clearOnly: currentPurpose })
+      return
+    }
+    await submitFieldRepair(msg, { cancelled: true })
+    return
   }
   const purpose = currentPurpose
   chrome.runtime.sendMessage(msg)
   exitPickMode({ clearOnly: purpose })
+}
+
+async function submitFieldRepair(msg, { cancelled = false, retry = false } = {}) {
+  if (repairSubmissionState !== 'idle' && !(retry && repairSubmissionState === 'uncertain' && repairRetryPayload)) return
+  const sessionId = repairSessionId
+  const purpose = currentPurpose
+  const payload = retry ? structuredClone(repairRetryPayload) : structuredClone(msg)
+  if (!retry && !cancelled && repairSelectionAnchor &&
+      !sourceAnchorStillMatches(sourceAnchorForSpec(repairSelectionAnchor, repairAnchorSpecOf(payload.picks?.[0])))) {
+    toolbarNotice = '選取來源在送出前已改變；請重新選取目前要抓的值'
+    if (panelEl) updatePanel(panelEl, currentTargetEl)
+    return
+  }
+  if (!retry) repairRetryPayload = structuredClone(payload)
+  const attempt = ++repairSubmissionAttempt
+  repairSubmissionState = 'sending'
+  toolbarNotice = cancelled ? '正在確認取消，請等候回覆' : retry
+    ? '正在核對同一筆重選操作；選取內容已凍結'
+    : '正在套用已選來源，確認儲存前選取畫面會保留'
+  if (panelEl) updatePanel(panelEl, currentTargetEl)
+
+  const request = Promise.resolve().then(() => chrome.runtime.sendMessage(payload)).then(
+    response => ({ response }),
+    error => ({ error })
+  )
+  let timer
+  const timed = await Promise.race([
+    request,
+    new Promise(resolve => { timer = setTimeout(() => resolve({ timeout: true }), REPAIR_ACK_TIMEOUT_MS) })
+  ])
+  if (timer !== undefined) clearTimeout(timer)
+
+  const finish = result => {
+    if (!active || repairSessionId !== sessionId) return
+    if (result?.response?.ok === true) {
+      repairSubmissionState = 'done'
+      exitPickMode(cancelled ? { clearOnly: purpose } : {})
+      return
+    }
+    if (attempt !== repairSubmissionAttempt) return
+    if (result?.error || result?.timeout || ['field_repair_pending',
+      'field_repair_cleanup_pending', 'field_repair_submitting'].includes(result?.response?.error)) {
+      repairSubmissionState = 'uncertain'
+      toolbarNotice = result?.response?.message || (cancelled
+        ? '取消結果尚未確認；請再次確認同一操作'
+        : '結果尚未確認；按「再次確認同一操作」核對，不會改動選取')
+    } else if (result?.response?.error === 'stale_field_repair') {
+      repairSubmissionState = 'failed'
+      repairRetryPayload = null
+      toolbarNotice = result?.response?.message || '這次授權已失效；請取消並回設定重新開始'
+    } else {
+      repairSubmissionState = 'idle'
+      repairRetryPayload = null
+      toolbarNotice = result?.response?.message || '這次重選未儲存；請修正選取後再試'
+    }
+    if (panelEl) updatePanel(panelEl, currentTargetEl)
+  }
+
+  if (timed.timeout) {
+    finish(timed)
+    // The message may still complete after the visible deadline. A late ACK is
+    // still authoritative; its absence never triggers an automatic retry.
+    request.then(finish)
+    return
+  }
+  finish(timed)
 }
 
 // 關閉右鍵選單
@@ -3445,6 +3715,10 @@ function addPick(pick) {
     return false
   }
   selectedList.push(pick)
+  if (repairSessionId !== undefined && selectedList.length === 1) {
+    const target = pickedTableEl || currentTargetEl
+    repairSelectionAnchor = sourceAnchorOf(target, pick, sourceTableOf(target))
+  }
   staleNotice = false
   // 只有整欄值會有表尾排除：候選值算好的待報數可能沒被消耗（點表頭只觸發「再點一次才取代」提示就早退），
   // 整欄的每個建立入口都會重算它，整列值撿到殘留的就不得說（體檢探針抓到）
@@ -3461,6 +3735,7 @@ function togglePick(pick) {
     const previous = takeUndoSnapshot(selectedList, pickedTableEl)
     clearUndoSnapshot()
     selectedList.splice(at, 1)
+    if (repairSessionId !== undefined && selectedList.length === 0) repairSelectionAnchor = null
     undoSnapshot = previous
     limitReached = false
     if (selectedList.length === 0) {
@@ -3656,6 +3931,7 @@ function setToolbarCorner(corner) {
 function onMouseMove(event) {
   routeChanged()
   if (!active || draftPickDrainPaused) return
+  if (repairSessionId !== undefined && repairSubmissionState !== 'idle') return
   let target = event.target
   syncProxyRects()
   // 指標已經離開讓路的那個元素：把代理層裝回去，不然 iframe 從此選不到
@@ -3697,6 +3973,26 @@ function onMouseMove(event) {
 function onKeyDown(event) {
   routeChanged()
   if (!active || draftPickDrainPaused) return
+  if (repairSessionId !== undefined && repairSubmissionState !== 'idle') {
+    if (event.key === 'Tab') return
+    const ownControl = overlayEl && overlayEl.contains(event.target) && !frameOfProxy(event.target)
+    const done = ownControl && event.target.closest?.('[data-af-done]')
+    const cancel = ownControl && event.target.closest?.('[data-af-cancel]')
+    const move = ownControl && event.target.closest?.('[data-af-panel-move], [data-af-toolbar-move]')
+    if (repairSubmissionState === 'uncertain' && event.key === 'Enter' && done) {
+      confirmPick()
+    } else if (repairSubmissionState === 'failed' && (event.key === 'Enter' || event.key === ' ') && cancel) {
+      requestCancel()
+    } else if (ownControl && (event.key === ' ' || event.key === 'Spacebar' || event.key === 'Enter') &&
+        (move || done || (cancel && repairSubmissionState === 'failed'))) {
+      return
+    } else if (event.key === 'Escape' && repairSubmissionState === 'failed') {
+      requestCancel()
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
   // 頁面輸入欄／contenteditable 的快捷鍵交回網站；尤其不能攔 Enter、Delete
   // 來誤完成或移除選取值（群組命名輸入在擴充功能頁，不會走這裡）。
   const keyTarget = event.target
@@ -3975,7 +4271,45 @@ function relockAfterMove() {
 
 function onClick(event) {
   routeChanged()
-  if (!active || draftPickDrainPaused) return
+  if (!active) return
+  if (repairSessionId !== undefined && repairSubmissionState !== 'idle') {
+    const ownControl = overlayEl && overlayEl.contains(event.target) && !frameOfProxy(event.target)
+    const done = ownControl && event.target.closest?.('[data-af-done]')
+    const cancel = ownControl && event.target.closest?.('[data-af-cancel]')
+    const movePanel = ownControl && event.target.closest?.('[data-af-panel-move]')
+    const moveToolbar = ownControl && event.target.closest?.('[data-af-toolbar-move]')
+    if (done && repairSubmissionState === 'uncertain') {
+      event.preventDefault()
+      event.stopPropagation()
+      confirmPick()
+      return
+    }
+    if (cancel && repairSubmissionState === 'failed') {
+      event.preventDefault()
+      event.stopPropagation()
+      requestCancel()
+      return
+    }
+    if (movePanel) {
+      event.preventDefault()
+      event.stopPropagation()
+      setPanelCorner(panelCorner === 'right' ? 'left' : 'right')
+      return
+    }
+    if (moveToolbar) {
+      event.preventDefault()
+      event.stopPropagation()
+      setToolbarCorner(toolbarCorner === 'right' ? 'left' : 'right')
+      return
+    }
+    // Capture-phase guard: controls such as remove/undo/mode have their own
+    // delegated branches below, so merely returning here would still let the
+    // target action run while the operation is unresolved.
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
+  if (draftPickDrainPaused) return
   event.preventDefault(); event.stopPropagation()
 
   if (suppressClick) {
@@ -4246,6 +4580,7 @@ function onClick(event) {
       !pickedTableEl.contains(event.target) && !frameOfProxy(event.target)) {
     clearPickedMarks(pickedTableEl)
     selectedList = []
+    repairSelectionAnchor = null
     pickedTableEl = null
     clearPendingConfirms()
     setTarget(upgradeTarget(event.target, { deliberate: true }))
@@ -4444,9 +4779,11 @@ function onClick(event) {
     }
     if (lockedEl) {
       lockedEl = null
+      if (repairSessionId !== undefined) repairSelectionAnchor = null
       if (event.target && (!overlayEl || !overlayEl.contains(event.target))) setTarget(upgradeTarget(event.target))
     } else {
       lockedEl = currentTargetEl
+      if (repairSessionId !== undefined) repairSelectionAnchor = { kind: 'element', target: currentTargetEl }
     }
     updatePanel(panelEl, currentTargetEl)
     return
@@ -4567,12 +4904,16 @@ function undoReplace() {
   trimReady = false
   if (!undoSnapshot) return false
   clearPickedMarks(document)
-  selectedList = undoSnapshot.picks.slice()
+  const restored = undoSnapshot
+  selectedList = restored.picks.slice()
   // 快照裡的那一批索引屬於快照當時那張表：還原時目標與 pickedTableEl 要一起回去，
   // 只還原清單的話，接下來就是「舊表的索引配上新表的定位」——AF-7 同型缺陷
-  const backTo = undoSnapshot.tableEl
-  const batchBack = undoSnapshot.batchGroups ? undoSnapshot : null
+  const backTo = restored.tableEl
+  const batchBack = restored.batchGroups ? restored : null
   undoSnapshot = null
+  if (repairSessionId !== undefined) {
+    repairSelectionAnchor = selectedList.length ? (restored.repairAnchor || null) : null
+  }
   limitReached = selectedList.length >= maxPicks
   if (batchBack) {
     batchGroups = batchBack.batchGroups.map(g => g.el ? g : { tableEl: g.tableEl, picks: g.picks.slice() })
@@ -4602,11 +4943,15 @@ function takeUndoSnapshot(picks, tableEl) {
     return {
       picks: (picks || []).slice(),
       tableEl: tableEl || pickedTableEl || null,
+      repairAnchor: repairSelectionAnchor,
       batchGroups: batchGroups.map(g => g.el ? g : { tableEl: g.tableEl, picks: g.picks.slice() }),
       currentGroupIdx
     }
   }
-  return picks && picks.length > 0 ? { picks: picks.slice(), tableEl: tableEl || pickedTableEl || null } : null
+  return picks && picks.length > 0 ? {
+    picks: picks.slice(), tableEl: tableEl || pickedTableEl || null,
+    repairAnchor: repairSelectionAnchor
+  } : null
 }
 
 // 取代目前已選：點一下就是「只選這一個」
@@ -4697,7 +5042,13 @@ function onDblClick(event) {
 }
 
 function onMouseDown(event) {
-  if (!active || draftPickDrainPaused) return
+  if (!active) return
+  if (repairSessionId !== undefined && repairSubmissionState !== 'idle') {
+    const ownControl = overlayEl && overlayEl.contains(event.target) && !frameOfProxy(event.target)
+    if (!ownControl) { event.preventDefault(); event.stopPropagation() }
+    return
+  }
+  if (draftPickDrainPaused) return
   if (menuEl) {
     if (!menuEl.contains(event.target)) {
       closeMenu()
@@ -4903,6 +5254,10 @@ export function enterPickMode(opts) {
   currentTaskId = opts?.taskId !== undefined ? opts.taskId : undefined
   pickSessionId = opts?.sessionId !== undefined ? opts.sessionId : undefined
   repairSessionId = opts?.repairSessionId
+  repairSubmissionState = 'idle'
+  repairRetryPayload = null
+  repairSelectionAnchor = null
+  repairSubmissionAttempt++
   repairFieldKey = opts?.repairFieldKey
   repairMode = opts?.repairMode
   pickGroupKey = opts?.groupKey ?? opts?.activeGroupKey
@@ -5145,6 +5500,10 @@ export function exitPickMode(opts = {}) {
   active = false; currentPurpose = null; currentTaskId = undefined; currentTargetEl = null; backStack = []
   pickSessionId = undefined; pickGroupKey = undefined; pickFrame = undefined; pickRevision = undefined; parentFrameId = undefined
   repairSessionId = undefined; repairFieldKey = undefined; repairMode = undefined
+  repairSubmissionState = 'idle'
+  repairRetryPayload = null
+  repairSelectionAnchor = null
+  repairSubmissionAttempt++
   pickDocumentGeneration = undefined; pickRouteIdentity = undefined
   pickLocationAtEntry = ''
   pickImmediateDraft = false

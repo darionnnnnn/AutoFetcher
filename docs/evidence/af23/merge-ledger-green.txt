@@ -1,0 +1,35 @@
+TAP version 13
+# Subtest: AC-F2 source change while append waits for rec2 lock blocks the append and preserves completed history
+ok 1 - AC-F2 source change while append waits for rec2 lock blocks the append and preserves completed history
+  ---
+  duration_ms: 22.618209
+  ...
+# Subtest: AC-F2 replay waits for an in-flight ledger commit before deciding to delete its history
+ok 2 - AC-F2 replay waits for an in-flight ledger commit before deciding to delete its history
+  ---
+  duration_ms: 5.55275
+  ...
+# Subtest: AC-F2 source change after rec2 check but before set is replay-cleaned; cleanup can resume twice
+ok 3 - AC-F2 source change after rec2 check but before set is replay-cleaned; cleanup can resume twice
+  ---
+  duration_ms: 7.292834
+  ...
+# Subtest: AC-F2 deletion while append holds rec2 lock does not leave records for the deleted task
+ok 4 - AC-F2 deletion while append holds rec2 lock does not leave records for the deleted task
+  ---
+  duration_ms: 5.4675
+  ...
+# Subtest: AC-F2 invalidation cleanup is scoped to scheduled commitId and leaves manual executionId records alone
+ok 5 - AC-F2 invalidation cleanup is scoped to scheduled commitId and leaves manual executionId records alone
+  ---
+  duration_ms: 4.568292
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 76.693333

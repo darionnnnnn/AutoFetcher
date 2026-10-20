@@ -1,0 +1,49 @@
+TAP version 13
+# Subtest: delayed picker 300ms input timer snapshots the next test global document
+not ok 1 - delayed picker 300ms input timer snapshots the next test global document
+  ---
+  duration_ms: 88.253458
+  location: '<workspace>/work/repair-final/work/f1b-timer-repro.test.mjs:10:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    a stale timer must not overwrite the next panel draft from a blank document
+    + actual - expected
+
+    + []
+    - [
+    -   0,
+    -   1,
+    -   2,
+    -   3,
+    -   4,
+    -   5,
+    -   6
+    - ]
+
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0: 0
+    1: 1
+    2: 2
+    3: 3
+    4: 4
+    5: 5
+    6: 6
+  actual:
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (file://<workspace>/work/repair-final/work/f1b-timer-repro.test.mjs:79:10)
+    async Test.run (node:internal/test_runner/test:980:9)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# {"capturedDelayMs":300,"persistedDraft":{"name":"","schedule-type":"daily","times":"09:30","every-minutes":"15","window-enabled":false,"window-from":"","window-to":"","block-aggregate":"sum","row-pos":"","col-pos":"","dashboard-select":"none","regex":"","weekdays":[],"cardTypes":[],"preActions":[],"batchNames":{},"batch-aggregate":"sum"},"storageWrite":{"kind":"batch","batch":true,"draft":{"name":"","schedule-type":"daily","times":"09:30","every-minutes":"15","window-enabled":false,"window-from":"","window-to":"","block-aggregate":"sum","row-pos":"","col-pos":"","dashboard-select":"none","regex":"","weekdays":[],"cardTypes":[],"preActions":[],"batchNames":{},"batch-aggregate":"sum"}}}
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 285.573916

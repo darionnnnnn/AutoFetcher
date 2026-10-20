@@ -1,0 +1,5280 @@
+{
+  "schema": "af23-perf-report-v1",
+  "generatedAt": "2026-10-20T13:06:59.738Z",
+  "commit": "e81b3dd862158fe4c0b5a23afacdc831873879c4",
+  "extensionVersion": "0.21.0",
+  "seed": 23012026,
+  "samplePlan": {
+    "coldPerScenario": 5,
+    "warmPerOperation": 20,
+    "percentile": "warm p95 = sorted sample 19 (1-based); cold reports median and max"
+  },
+  "environment": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v22.14.0",
+    "chromePath": "<repository>/.browsers/chrome/mac_arm-152.0.7977.82/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+    "chromeVersion": "Google Chrome for Testing 152.0.7977.82",
+    "timezone": "Asia/Taipei"
+  },
+  "targets": {
+    "buttonFeedbackP95Ms": 100,
+    "warmFilterAndTabSwitchP95MsFor10k": 300
+  },
+  "byteMeasurement": "UTF-8 byte length of JSON.stringify(storage API payload/result)",
+  "scenarios": [
+    {
+      "records": 1000,
+      "cards": 1,
+      "tasks": 1,
+      "fixture": {
+        "seed": 23012026,
+        "range": {
+          "from": "2026-07-02",
+          "to": "2026-10-20"
+        },
+        "dateCount": 111,
+        "storageKeyCount": 888,
+        "expectedRecords": 1000,
+        "expectedMatches": 1,
+        "checksum": "1000:1:23012026"
+      },
+      "cold": [
+        {
+          "sample": 1,
+          "openMs": 57.700000047683716,
+          "dashboardCardCount": 1,
+          "dashboardCardValues": [
+            {
+              "id": "af23-report-card-0",
+              "value": "345.4"
+            }
+          ],
+          "correct": true,
+          "storage": {
+            "getCalls": 28,
+            "getBytes": 178321,
+            "recordGetCalls": 18,
+            "recordKeyCount": 888,
+            "setCalls": 0,
+            "setBytes": 0,
+            "instrumentationErrors": []
+          },
+          "domNodes": 399,
+          "domEventListeners": 34,
+          "propertyEventHandlers": 0,
+          "pageErrors": [],
+          "historyActivation": {
+            "feedbackMs": 29.831999856948855,
+            "resultMs": 78.89999985694885,
+            "storage": {
+              "getCalls": 23,
+              "getBytes": 225258,
+              "recordGetCalls": 19,
+              "recordKeyCount": 1663,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "correct": true,
+            "domNodes": 4559,
+            "domEventListeners": 705,
+            "propertyEventHandlers": 0
+          }
+        },
+        {
+          "sample": 2,
+          "openMs": 55.60000014305115,
+          "dashboardCardCount": 1,
+          "dashboardCardValues": [
+            {
+              "id": "af23-report-card-0",
+              "value": "345.4"
+            }
+          ],
+          "correct": true,
+          "storage": {
+            "getCalls": 28,
+            "getBytes": 178321,
+            "recordGetCalls": 18,
+            "recordKeyCount": 888,
+            "setCalls": 0,
+            "setBytes": 0,
+            "instrumentationErrors": []
+          },
+          "domNodes": 399,
+          "domEventListeners": 34,
+          "propertyEventHandlers": 0,
+          "pageErrors": [],
+          "historyActivation": {
+            "feedbackMs": 14.700000000000003,
+            "resultMs": 48.032,
+            "storage": {
+              "getCalls": 23,
+              "getBytes": 225258,
+              "recordGetCalls": 19,
+              "recordKeyCount": 1663,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "correct": true,
+            "domNodes": 4559,
+            "domEventListeners": 705,
+            "propertyEventHandlers": 0
+          }
+        },
+        {
+          "sample": 3,
+          "openMs": 63.700000047683716,
+          "dashboardCardCount": 1,
+          "dashboardCardValues": [
+            {
+              "id": "af23-report-card-0",
+              "value": "345.4"
+            }
+          ],
+          "correct": true,
+          "storage": {
+            "getCalls": 28,
+            "getBytes": 178321,
+            "recordGetCalls": 18,
+            "recordKeyCount": 888,
+            "setCalls": 0,
+            "setBytes": 0,
+            "instrumentationErrors": []
+          },
+          "domNodes": 399,
+          "domEventListeners": 34,
+          "propertyEventHandlers": 0,
+          "pageErrors": [],
+          "historyActivation": {
+            "feedbackMs": 13.699999904632563,
+            "resultMs": 47.16599990463257,
+            "storage": {
+              "getCalls": 23,
+              "getBytes": 225258,
+              "recordGetCalls": 19,
+              "recordKeyCount": 1663,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "correct": true,
+            "domNodes": 4559,
+            "domEventListeners": 705,
+            "propertyEventHandlers": 0
+          }
+        },
+        {
+          "sample": 4,
+          "openMs": 50.5,
+          "dashboardCardCount": 1,
+          "dashboardCardValues": [
+            {
+              "id": "af23-report-card-0",
+              "value": "345.4"
+            }
+          ],
+          "correct": true,
+          "storage": {
+            "getCalls": 28,
+            "getBytes": 178321,
+            "recordGetCalls": 18,
+            "recordKeyCount": 888,
+            "setCalls": 0,
+            "setBytes": 0,
+            "instrumentationErrors": []
+          },
+          "domNodes": 399,
+          "domEventListeners": 34,
+          "propertyEventHandlers": 0,
+          "pageErrors": [],
+          "historyActivation": {
+            "feedbackMs": 14.19999985694885,
+            "resultMs": 47.53199985694886,
+            "storage": {
+              "getCalls": 23,
+              "getBytes": 225258,
+              "recordGetCalls": 19,
+              "recordKeyCount": 1663,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "correct": true,
+            "domNodes": 4559,
+            "domEventListeners": 705,
+            "propertyEventHandlers": 0
+          }
+        },
+        {
+          "sample": 5,
+          "openMs": 54.60000014305115,
+          "dashboardCardCount": 1,
+          "dashboardCardValues": [
+            {
+              "id": "af23-report-card-0",
+              "value": "345.4"
+            }
+          ],
+          "correct": true,
+          "storage": {
+            "getCalls": 28,
+            "getBytes": 178321,
+            "recordGetCalls": 18,
+            "recordKeyCount": 888,
+            "setCalls": 0,
+            "setBytes": 0,
+            "instrumentationErrors": []
+          },
+          "domNodes": 399,
+          "domEventListeners": 34,
+          "propertyEventHandlers": 0,
+          "pageErrors": [],
+          "historyActivation": {
+            "feedbackMs": 14.499999952316287,
+            "resultMs": 47.83199995231628,
+            "storage": {
+              "getCalls": 23,
+              "getBytes": 225258,
+              "recordGetCalls": 19,
+              "recordKeyCount": 1663,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "correct": true,
+            "domNodes": 4559,
+            "domEventListeners": 705,
+            "propertyEventHandlers": 0
+          }
+        }
+      ],
+      "warm": {
+        "filter": [
+          {
+            "sample": 1,
+            "query": "af23-match-token",
+            "expectedCount": 1,
+            "feedbackMs": 14.165999904632372,
+            "resultMs": 14.165999904632372,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 587,
+            "domEventListeners": 14293,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 2,
+            "query": "af23-no-match-0-1",
+            "expectedCount": 0,
+            "feedbackMs": 12.531999952316255,
+            "resultMs": 12.531999952316255,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 555,
+            "domEventListeners": 14462,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 3,
+            "query": "af23-match-token",
+            "expectedCount": 1,
+            "feedbackMs": 12.099999904632568,
+            "resultMs": 12.099999904632568,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 587,
+            "domEventListeners": 14633,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 4,
+            "query": "af23-no-match-0-3",
+            "expectedCount": 0,
+            "feedbackMs": 130.90000004768353,
+            "resultMs": 130.90000004768353,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 555,
+            "domEventListeners": 14802,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 5,
+            "query": "af23-match-token",
+            "expectedCount": 1,
+            "feedbackMs": 11.799999856948943,
+            "resultMs": 11.799999856948943,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 587,
+            "domEventListeners": 14973,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 6,
+            "query": "af23-no-match-0-5",
+            "expectedCount": 0,
+            "feedbackMs": 12.465999856948656,
+            "resultMs": 12.465999856948656,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 555,
+            "domEventListeners": 15142,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 7,
+            "query": "af23-match-token",
+            "expectedCount": 1,
+            "feedbackMs": 12.59999985694867,
+            "resultMs": 12.59999985694867,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 587,
+            "domEventListeners": 15313,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 8,
+            "query": "af23-no-match-0-7",
+            "expectedCount": 0,
+            "feedbackMs": 13.299999856948943,
+            "resultMs": 13.299999856948943,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 555,
+            "domEventListeners": 15482,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 9,
+            "query": "af23-match-token",
+            "expectedCount": 1,
+            "feedbackMs": 12.899999952316193,
+            "resultMs": 12.899999952316193,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 587,
+            "domEventListeners": 15653,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 10,
+            "query": "af23-no-match-0-9",
+            "expectedCount": 0,
+            "feedbackMs": 12.266000000000076,
+            "resultMs": 12.266000000000076,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 555,
+            "domEventListeners": 15822,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 11,
+            "query": "af23-match-token",
+            "expectedCount": 1,
+            "feedbackMs": 13.231999952316073,
+            "resultMs": 13.231999952316073,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 587,
+            "domEventListeners": 15993,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 12,
+            "query": "af23-no-match-0-11",
+            "expectedCount": 0,
+            "feedbackMs": 12.800000047683625,
+            "resultMs": 12.800000047683625,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 555,
+            "domEventListeners": 16162,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 13,
+            "query": "af23-match-token",
+            "expectedCount": 1,
+            "feedbackMs": 13.06599995231636,
+            "resultMs": 13.06599995231636,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 587,
+            "domEventListeners": 16333,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 14,
+            "query": "af23-no-match-0-13",
+            "expectedCount": 0,
+            "feedbackMs": 12.632000047683505,
+            "resultMs": 12.632000047683505,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 555,
+            "domEventListeners": 16502,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 15,
+            "query": "af23-match-token",
+            "expectedCount": 1,
+            "feedbackMs": 12.09999985694867,
+            "resultMs": 12.09999985694867,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 587,
+            "domEventListeners": 16673,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 16,
+            "query": "af23-no-match-0-15",
+            "expectedCount": 0,
+            "feedbackMs": 12.16599995231627,
+            "resultMs": 12.16599995231627,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 555,
+            "domEventListeners": 16842,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 17,
+            "query": "af23-match-token",
+            "expectedCount": 1,
+            "feedbackMs": 13.99999990463266,
+            "resultMs": 13.99999990463266,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 587,
+            "domEventListeners": 17013,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 18,
+            "query": "af23-no-match-0-17",
+            "expectedCount": 0,
+            "feedbackMs": 12.965999856948656,
+            "resultMs": 12.965999856948656,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 555,
+            "domEventListeners": 17182,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 19,
+            "query": "af23-match-token",
+            "expectedCount": 1,
+            "feedbackMs": 12.199999856949034,
+            "resultMs": 12.199999856949034,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 587,
+            "domEventListeners": 17353,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 20,
+            "query": "af23-no-match-0-19",
+            "expectedCount": 0,
+            "feedbackMs": 13.49999990463266,
+            "resultMs": 13.49999990463266,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 555,
+            "domEventListeners": 17522,
+            "propertyEventHandlers": 0,
+            "correct": true
+          }
+        ],
+        "tabSwitch": [
+          {
+            "sample": 1,
+            "feedbackMs": 14.599999856948841,
+            "resultMs": 80.39999985694885,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 1392,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 2,
+            "feedbackMs": 13.632000047683732,
+            "resultMs": 79.4000000476837,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 2062,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 3,
+            "feedbackMs": 14.565999999999974,
+            "resultMs": 81.19999999999999,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 2732,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 4,
+            "feedbackMs": 13.700000000000045,
+            "resultMs": 80.39999999999998,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 3402,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 5,
+            "feedbackMs": 14.365999999999985,
+            "resultMs": 81,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 4072,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 6,
+            "feedbackMs": 13.16599995231627,
+            "resultMs": 80.49999995231633,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 4742,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 7,
+            "feedbackMs": 14.565999952316247,
+            "resultMs": 80.99999995231633,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 5412,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 8,
+            "feedbackMs": 12.600000047683693,
+            "resultMs": 78.30000004768362,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 6082,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 9,
+            "feedbackMs": 14.800000047683625,
+            "resultMs": 81.40000004768376,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 6752,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 10,
+            "feedbackMs": 13.365999904632645,
+            "resultMs": 79.49999990463266,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 7422,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 11,
+            "feedbackMs": 13.765999856948838,
+            "resultMs": 80.49999985694876,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 8092,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 12,
+            "feedbackMs": 14.099999999999909,
+            "resultMs": 64.09999999999991,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 8762,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 13,
+            "feedbackMs": 14.266000000000076,
+            "resultMs": 80.70000000000005,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 9432,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 14,
+            "feedbackMs": 14.131999856948823,
+            "resultMs": 63.99999985694876,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 10102,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 15,
+            "feedbackMs": 14.900000047683761,
+            "resultMs": 81.50000004768367,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 10772,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 16,
+            "feedbackMs": 14.265999856948838,
+            "resultMs": 63.99999985694876,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 11442,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 17,
+            "feedbackMs": 13.900000000000091,
+            "resultMs": 80.5,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 12112,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 18,
+            "feedbackMs": 14.465999856948656,
+            "resultMs": 64.39999985694885,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 12782,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 19,
+            "feedbackMs": 14.399999952316193,
+            "resultMs": 80.79999995231628,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 13452,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 20,
+            "feedbackMs": 14.365999904632645,
+            "resultMs": 80.99999990463266,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 332,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 14122,
+            "propertyEventHandlers": 0,
+            "correct": true
+          }
+        ],
+        "receivedRecord": [
+          {
+            "sample": 1,
+            "feedbackMs": null,
+            "resultMs": 88.69999999999982,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 177441,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 177,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 18837,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900000
+            }
+          },
+          {
+            "sample": 2,
+            "feedbackMs": null,
+            "resultMs": 80.3999999523162,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 177769,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 330,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 19482,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900001
+            }
+          },
+          {
+            "sample": 3,
+            "feedbackMs": null,
+            "resultMs": 80.29999985694894,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 178075,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 483,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 20127,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900002
+            }
+          },
+          {
+            "sample": 4,
+            "feedbackMs": null,
+            "resultMs": 79.69999999999982,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 178381,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 636,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 20772,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900003
+            }
+          },
+          {
+            "sample": 5,
+            "feedbackMs": null,
+            "resultMs": 89.26600000000008,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 178687,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 789,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 21417,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900004
+            }
+          },
+          {
+            "sample": 6,
+            "feedbackMs": null,
+            "resultMs": 80.76599995231618,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 178993,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 942,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 22062,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900005
+            }
+          },
+          {
+            "sample": 7,
+            "feedbackMs": null,
+            "resultMs": 80.0660000476837,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 179299,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 1095,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 22707,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900006
+            }
+          },
+          {
+            "sample": 8,
+            "feedbackMs": null,
+            "resultMs": 79.69999999999982,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 179605,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 1248,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 23352,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900007
+            }
+          },
+          {
+            "sample": 9,
+            "feedbackMs": null,
+            "resultMs": 75.59999999999991,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 179911,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 1401,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 23997,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900008
+            }
+          },
+          {
+            "sample": 10,
+            "feedbackMs": null,
+            "resultMs": 75.49999990463266,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 180217,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 1554,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 24642,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900009
+            }
+          },
+          {
+            "sample": 11,
+            "feedbackMs": null,
+            "resultMs": 76.46600004768379,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 180524,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 1708,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 25287,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900010
+            }
+          },
+          {
+            "sample": 12,
+            "feedbackMs": null,
+            "resultMs": 78.29999995231628,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 180832,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 1862,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 25932,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900011
+            }
+          },
+          {
+            "sample": 13,
+            "feedbackMs": null,
+            "resultMs": 75.36599999999999,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 181140,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2016,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 26577,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900012
+            }
+          },
+          {
+            "sample": 14,
+            "feedbackMs": null,
+            "resultMs": 77.06599995231636,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 181448,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2170,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 27222,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900013
+            }
+          },
+          {
+            "sample": 15,
+            "feedbackMs": null,
+            "resultMs": 78.69999990463293,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 181756,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2324,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 27867,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900014
+            }
+          },
+          {
+            "sample": 16,
+            "feedbackMs": null,
+            "resultMs": 81.10000004768335,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 182064,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2478,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 28512,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900015
+            }
+          },
+          {
+            "sample": 17,
+            "feedbackMs": null,
+            "resultMs": 92.06599990463292,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 182372,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2632,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 29157,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900016
+            }
+          },
+          {
+            "sample": 18,
+            "feedbackMs": null,
+            "resultMs": 80.29999990463239,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 182680,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2786,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 29802,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900017
+            }
+          },
+          {
+            "sample": 19,
+            "feedbackMs": null,
+            "resultMs": 79.9999999523161,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 182988,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2940,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 30447,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900018
+            }
+          },
+          {
+            "sample": 20,
+            "feedbackMs": null,
+            "resultMs": 80.76599985694884,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 183296,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 3094,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4579,
+            "domEventListeners": 31092,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900019
+            }
+          }
+        ]
+      },
+      "aggregates": {
+        "coldOpen": {
+          "sampleCount": 5,
+          "medianMs": 55.60000014305115,
+          "maxMs": 63.700000047683716
+        },
+        "coldHistoryActivation": {
+          "sampleCount": 5,
+          "medianMs": 47.83199995231628,
+          "maxMs": 78.89999985694885
+        },
+        "warmFilter": {
+          "sampleCount": 20,
+          "p50Ms": 12.800000047683625,
+          "p95Ms": 14.165999904632372,
+          "maxMs": 130.90000004768353,
+          "feedbackP95Ms": 14.165999904632372
+        },
+        "warmTabSwitch": {
+          "sampleCount": 20,
+          "p50Ms": 80.49999995231633,
+          "p95Ms": 81.40000004768376,
+          "maxMs": 81.50000004768367,
+          "feedbackP95Ms": 14.800000047683625
+        },
+        "warmReceivedRecord": {
+          "sampleCount": 20,
+          "p50Ms": 80.0660000476837,
+          "p95Ms": 89.26600000000008,
+          "maxMs": 92.06599990463292,
+          "feedbackP95Ms": 89.26600000000008
+        }
+      },
+      "correctnessPercent": 100,
+      "settingsHistoryRecordReads": 0,
+      "gates": {
+        "correctness100Percent": true,
+        "buttonFeedbackP95Under100ms": true,
+        "tenKFilterAndTabP95Under300ms": true
+      }
+    },
+    {
+      "records": 10000,
+      "cards": 10,
+      "tasks": 10,
+      "fixture": {
+        "seed": 23012027,
+        "range": {
+          "from": "2026-07-02",
+          "to": "2026-10-20"
+        },
+        "dateCount": 111,
+        "storageKeyCount": 888,
+        "expectedRecords": 10000,
+        "expectedMatches": 10,
+        "checksum": "10000:10:23012027"
+      },
+      "cold": [
+        {
+          "sample": 1,
+          "openMs": 84.60000014305115,
+          "dashboardCardCount": 10,
+          "dashboardCardValues": [
+            {
+              "id": "af23-report-card-0",
+              "value": "259.68"
+            },
+            {
+              "id": "af23-report-card-1",
+              "value": "224.29"
+            },
+            {
+              "id": "af23-report-card-2",
+              "value": "613.2"
+            },
+            {
+              "id": "af23-report-card-3",
+              "value": "810.21"
+            },
+            {
+              "id": "af23-report-card-4",
+              "value": "966.72"
+            },
+            {
+              "id": "af23-report-card-5",
+              "value": "163.73"
+            },
+            {
+              "id": "af23-report-card-6",
+              "value": "552.64"
+            },
+            {
+              "id": "af23-report-card-7",
+              "value": "517.25"
+            },
+            {
+              "id": "af23-report-card-8",
+              "value": "673.76"
+            },
+            {
+              "id": "af23-report-card-9",
+              "value": "870.77"
+            }
+          ],
+          "correct": true,
+          "storage": {
+            "getCalls": 28,
+            "getBytes": 1605186,
+            "recordGetCalls": 18,
+            "recordKeyCount": 888,
+            "setCalls": 0,
+            "setBytes": 0,
+            "instrumentationErrors": []
+          },
+          "domNodes": 579,
+          "domEventListeners": 70,
+          "propertyEventHandlers": 0,
+          "pageErrors": [],
+          "historyActivation": {
+            "feedbackMs": 14.599999952316281,
+            "resultMs": 147.99999995231627,
+            "storage": {
+              "getCalls": 23,
+              "getBytes": 2031310,
+              "recordGetCalls": 19,
+              "recordKeyCount": 1663,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "correct": true,
+            "domNodes": 4865,
+            "domEventListeners": 750,
+            "propertyEventHandlers": 0
+          }
+        },
+        {
+          "sample": 2,
+          "openMs": 80.10000014305115,
+          "dashboardCardCount": 10,
+          "dashboardCardValues": [
+            {
+              "id": "af23-report-card-0",
+              "value": "259.68"
+            },
+            {
+              "id": "af23-report-card-1",
+              "value": "224.29"
+            },
+            {
+              "id": "af23-report-card-2",
+              "value": "613.2"
+            },
+            {
+              "id": "af23-report-card-3",
+              "value": "810.21"
+            },
+            {
+              "id": "af23-report-card-4",
+              "value": "966.72"
+            },
+            {
+              "id": "af23-report-card-5",
+              "value": "163.73"
+            },
+            {
+              "id": "af23-report-card-6",
+              "value": "552.64"
+            },
+            {
+              "id": "af23-report-card-7",
+              "value": "517.25"
+            },
+            {
+              "id": "af23-report-card-8",
+              "value": "673.76"
+            },
+            {
+              "id": "af23-report-card-9",
+              "value": "870.77"
+            }
+          ],
+          "correct": true,
+          "storage": {
+            "getCalls": 28,
+            "getBytes": 1605186,
+            "recordGetCalls": 18,
+            "recordKeyCount": 888,
+            "setCalls": 0,
+            "setBytes": 0,
+            "instrumentationErrors": []
+          },
+          "domNodes": 579,
+          "domEventListeners": 70,
+          "propertyEventHandlers": 0,
+          "pageErrors": [],
+          "historyActivation": {
+            "feedbackMs": 13.900000047683719,
+            "resultMs": 80.56600004768373,
+            "storage": {
+              "getCalls": 23,
+              "getBytes": 2031310,
+              "recordGetCalls": 19,
+              "recordKeyCount": 1663,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "correct": true,
+            "domNodes": 4865,
+            "domEventListeners": 750,
+            "propertyEventHandlers": 0
+          }
+        },
+        {
+          "sample": 3,
+          "openMs": 84.59999990463257,
+          "dashboardCardCount": 10,
+          "dashboardCardValues": [
+            {
+              "id": "af23-report-card-0",
+              "value": "259.68"
+            },
+            {
+              "id": "af23-report-card-1",
+              "value": "224.29"
+            },
+            {
+              "id": "af23-report-card-2",
+              "value": "613.2"
+            },
+            {
+              "id": "af23-report-card-3",
+              "value": "810.21"
+            },
+            {
+              "id": "af23-report-card-4",
+              "value": "966.72"
+            },
+            {
+              "id": "af23-report-card-5",
+              "value": "163.73"
+            },
+            {
+              "id": "af23-report-card-6",
+              "value": "552.64"
+            },
+            {
+              "id": "af23-report-card-7",
+              "value": "517.25"
+            },
+            {
+              "id": "af23-report-card-8",
+              "value": "673.76"
+            },
+            {
+              "id": "af23-report-card-9",
+              "value": "870.77"
+            }
+          ],
+          "correct": true,
+          "storage": {
+            "getCalls": 28,
+            "getBytes": 1605186,
+            "recordGetCalls": 18,
+            "recordKeyCount": 888,
+            "setCalls": 0,
+            "setBytes": 0,
+            "instrumentationErrors": []
+          },
+          "domNodes": 579,
+          "domEventListeners": 70,
+          "propertyEventHandlers": 0,
+          "pageErrors": [],
+          "historyActivation": {
+            "feedbackMs": 14.165999856948858,
+            "resultMs": 64.19999985694886,
+            "storage": {
+              "getCalls": 23,
+              "getBytes": 2031310,
+              "recordGetCalls": 19,
+              "recordKeyCount": 1663,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "correct": true,
+            "domNodes": 4865,
+            "domEventListeners": 750,
+            "propertyEventHandlers": 0
+          }
+        },
+        {
+          "sample": 4,
+          "openMs": 76.89999985694885,
+          "dashboardCardCount": 10,
+          "dashboardCardValues": [
+            {
+              "id": "af23-report-card-0",
+              "value": "259.68"
+            },
+            {
+              "id": "af23-report-card-1",
+              "value": "224.29"
+            },
+            {
+              "id": "af23-report-card-2",
+              "value": "613.2"
+            },
+            {
+              "id": "af23-report-card-3",
+              "value": "810.21"
+            },
+            {
+              "id": "af23-report-card-4",
+              "value": "966.72"
+            },
+            {
+              "id": "af23-report-card-5",
+              "value": "163.73"
+            },
+            {
+              "id": "af23-report-card-6",
+              "value": "552.64"
+            },
+            {
+              "id": "af23-report-card-7",
+              "value": "517.25"
+            },
+            {
+              "id": "af23-report-card-8",
+              "value": "673.76"
+            },
+            {
+              "id": "af23-report-card-9",
+              "value": "870.77"
+            }
+          ],
+          "correct": true,
+          "storage": {
+            "getCalls": 28,
+            "getBytes": 1605186,
+            "recordGetCalls": 18,
+            "recordKeyCount": 888,
+            "setCalls": 0,
+            "setBytes": 0,
+            "instrumentationErrors": []
+          },
+          "domNodes": 579,
+          "domEventListeners": 70,
+          "propertyEventHandlers": 0,
+          "pageErrors": [],
+          "historyActivation": {
+            "feedbackMs": 14.299999952316284,
+            "resultMs": 81.03199995231628,
+            "storage": {
+              "getCalls": 23,
+              "getBytes": 2031310,
+              "recordGetCalls": 19,
+              "recordKeyCount": 1663,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "correct": true,
+            "domNodes": 4865,
+            "domEventListeners": 750,
+            "propertyEventHandlers": 0
+          }
+        },
+        {
+          "sample": 5,
+          "openMs": 78,
+          "dashboardCardCount": 10,
+          "dashboardCardValues": [
+            {
+              "id": "af23-report-card-0",
+              "value": "259.68"
+            },
+            {
+              "id": "af23-report-card-1",
+              "value": "224.29"
+            },
+            {
+              "id": "af23-report-card-2",
+              "value": "613.2"
+            },
+            {
+              "id": "af23-report-card-3",
+              "value": "810.21"
+            },
+            {
+              "id": "af23-report-card-4",
+              "value": "966.72"
+            },
+            {
+              "id": "af23-report-card-5",
+              "value": "163.73"
+            },
+            {
+              "id": "af23-report-card-6",
+              "value": "552.64"
+            },
+            {
+              "id": "af23-report-card-7",
+              "value": "517.25"
+            },
+            {
+              "id": "af23-report-card-8",
+              "value": "673.76"
+            },
+            {
+              "id": "af23-report-card-9",
+              "value": "870.77"
+            }
+          ],
+          "correct": true,
+          "storage": {
+            "getCalls": 28,
+            "getBytes": 1605186,
+            "recordGetCalls": 18,
+            "recordKeyCount": 888,
+            "setCalls": 0,
+            "setBytes": 0,
+            "instrumentationErrors": []
+          },
+          "domNodes": 579,
+          "domEventListeners": 70,
+          "propertyEventHandlers": 0,
+          "pageErrors": [],
+          "historyActivation": {
+            "feedbackMs": 14.265999952316278,
+            "resultMs": 64.3319999523163,
+            "storage": {
+              "getCalls": 23,
+              "getBytes": 2031310,
+              "recordGetCalls": 19,
+              "recordKeyCount": 1663,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "correct": true,
+            "domNodes": 4865,
+            "domEventListeners": 750,
+            "propertyEventHandlers": 0
+          }
+        }
+      ],
+      "warm": {
+        "filter": [
+          {
+            "sample": 1,
+            "query": "af23-match-token",
+            "expectedCount": 10,
+            "feedbackMs": 14.300000000000182,
+            "resultMs": 14.300000000000182,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 875,
+            "domEventListeners": 14527,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 2,
+            "query": "af23-no-match-1-1",
+            "expectedCount": 0,
+            "feedbackMs": 12.100000143051147,
+            "resultMs": 12.100000143051147,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 771,
+            "domEventListeners": 14696,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 3,
+            "query": "af23-match-token",
+            "expectedCount": 10,
+            "feedbackMs": 12.60000009536725,
+            "resultMs": 12.60000009536725,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 875,
+            "domEventListeners": 14876,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 4,
+            "query": "af23-no-match-1-3",
+            "expectedCount": 0,
+            "feedbackMs": 12.266000095367417,
+            "resultMs": 12.266000095367417,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 771,
+            "domEventListeners": 15045,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 5,
+            "query": "af23-match-token",
+            "expectedCount": 10,
+            "feedbackMs": 13.099999999999909,
+            "resultMs": 13.099999999999909,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 875,
+            "domEventListeners": 15225,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 6,
+            "query": "af23-no-match-1-5",
+            "expectedCount": 0,
+            "feedbackMs": 12.499999952316102,
+            "resultMs": 12.499999952316102,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 771,
+            "domEventListeners": 15394,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 7,
+            "query": "af23-match-token",
+            "expectedCount": 10,
+            "feedbackMs": 12.500000047683898,
+            "resultMs": 12.500000047683898,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 875,
+            "domEventListeners": 15574,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 8,
+            "query": "af23-no-match-1-7",
+            "expectedCount": 0,
+            "feedbackMs": 13,
+            "resultMs": 13,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 771,
+            "domEventListeners": 15743,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 9,
+            "query": "af23-match-token",
+            "expectedCount": 10,
+            "feedbackMs": 13.066000095367599,
+            "resultMs": 13.066000095367599,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 875,
+            "domEventListeners": 15923,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 10,
+            "query": "af23-no-match-1-9",
+            "expectedCount": 0,
+            "feedbackMs": 12.33199999999988,
+            "resultMs": 12.33199999999988,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 771,
+            "domEventListeners": 16092,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 11,
+            "query": "af23-match-token",
+            "expectedCount": 10,
+            "feedbackMs": 13,
+            "resultMs": 13,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 875,
+            "domEventListeners": 16272,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 12,
+            "query": "af23-no-match-1-11",
+            "expectedCount": 0,
+            "feedbackMs": 11.700000143051057,
+            "resultMs": 11.700000143051057,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 771,
+            "domEventListeners": 16441,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 13,
+            "query": "af23-match-token",
+            "expectedCount": 10,
+            "feedbackMs": 13.500000143051238,
+            "resultMs": 13.500000143051238,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 875,
+            "domEventListeners": 16621,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 14,
+            "query": "af23-no-match-1-13",
+            "expectedCount": 0,
+            "feedbackMs": 12.166000143050951,
+            "resultMs": 12.166000143050951,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 771,
+            "domEventListeners": 16790,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 15,
+            "query": "af23-match-token",
+            "expectedCount": 10,
+            "feedbackMs": 13.10000009536725,
+            "resultMs": 13.10000009536725,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 875,
+            "domEventListeners": 16970,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 16,
+            "query": "af23-no-match-1-15",
+            "expectedCount": 0,
+            "feedbackMs": 10.566000047683701,
+            "resultMs": 10.566000047683701,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 771,
+            "domEventListeners": 17139,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 17,
+            "query": "af23-match-token",
+            "expectedCount": 10,
+            "feedbackMs": 12.532000000000153,
+            "resultMs": 12.532000000000153,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 875,
+            "domEventListeners": 17319,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 18,
+            "query": "af23-no-match-1-17",
+            "expectedCount": 0,
+            "feedbackMs": 11.999999952316102,
+            "resultMs": 11.999999952316102,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 771,
+            "domEventListeners": 17488,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 19,
+            "query": "af23-match-token",
+            "expectedCount": 10,
+            "feedbackMs": 11.766000095367417,
+            "resultMs": 11.766000095367417,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 875,
+            "domEventListeners": 17668,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 20,
+            "query": "af23-no-match-1-19",
+            "expectedCount": 0,
+            "feedbackMs": 10.799999952316284,
+            "resultMs": 10.799999952316284,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 771,
+            "domEventListeners": 17837,
+            "propertyEventHandlers": 0,
+            "correct": true
+          }
+        ],
+        "tabSwitch": [
+          {
+            "sample": 1,
+            "feedbackMs": 14.232,
+            "resultMs": 80,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 1446,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 2,
+            "feedbackMs": 13.799999952316284,
+            "resultMs": 80.49999995231627,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 2125,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 3,
+            "feedbackMs": 13.499999952316273,
+            "resultMs": 80.19999995231626,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 2804,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 4,
+            "feedbackMs": 13.266000095367417,
+            "resultMs": 79.80000009536741,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 3483,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 5,
+            "feedbackMs": 14.166000143051178,
+            "resultMs": 80.8000001430512,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 4162,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 6,
+            "feedbackMs": 13.99999995231633,
+            "resultMs": 81.69999995231626,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 4841,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 7,
+            "feedbackMs": 13.865999952316315,
+            "resultMs": 80.29999995231628,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 5520,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 8,
+            "feedbackMs": 14.232000047683641,
+            "resultMs": 80.90000004768376,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 6199,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 9,
+            "feedbackMs": 13.49999995231633,
+            "resultMs": 80.09999995231624,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 6878,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 10,
+            "feedbackMs": 14.332000000000107,
+            "resultMs": 81,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 7557,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 11,
+            "feedbackMs": 14.166000095367508,
+            "resultMs": 81.10000009536748,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 8236,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 12,
+            "feedbackMs": 14.231999999999971,
+            "resultMs": 80.59999999999991,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 8915,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 13,
+            "feedbackMs": 13.966000143051133,
+            "resultMs": 80.60000014305115,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 9594,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 14,
+            "feedbackMs": 14.600000143051147,
+            "resultMs": 98.00000014305124,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 10273,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 15,
+            "feedbackMs": 13.600000047683807,
+            "resultMs": 80.20000004768372,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 10952,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 16,
+            "feedbackMs": 14.166000143051178,
+            "resultMs": 80.70000014305106,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 11631,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 17,
+            "feedbackMs": 14.166000095367508,
+            "resultMs": 96.90000009536743,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 12310,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 18,
+            "feedbackMs": 14.065999999999804,
+            "resultMs": 80.40000000000009,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 12989,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 19,
+            "feedbackMs": 14.066000095367599,
+            "resultMs": 80.70000009536761,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 13668,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 20,
+            "feedbackMs": 31.032000143050936,
+            "resultMs": 98.20000014305106,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 3086,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 14347,
+            "propertyEventHandlers": 0,
+            "correct": true
+          }
+        ],
+        "receivedRecord": [
+          {
+            "sample": 1,
+            "feedbackMs": null,
+            "resultMs": 110.36599995231609,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 1598736,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 177,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 19170,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900000
+            }
+          },
+          {
+            "sample": 2,
+            "feedbackMs": null,
+            "resultMs": 128.4000000000001,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 1599064,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 330,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 19824,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900001
+            }
+          },
+          {
+            "sample": 3,
+            "feedbackMs": null,
+            "resultMs": 96.50000014305124,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 1599370,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 483,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 20478,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900002
+            }
+          },
+          {
+            "sample": 4,
+            "feedbackMs": null,
+            "resultMs": 107.80000004768362,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 1599676,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 636,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 21132,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900003
+            }
+          },
+          {
+            "sample": 5,
+            "feedbackMs": null,
+            "resultMs": 96.20000004768372,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 1599982,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 789,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 21786,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900004
+            }
+          },
+          {
+            "sample": 6,
+            "feedbackMs": null,
+            "resultMs": 91.20000014305106,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 1600288,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 942,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 22440,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900005
+            }
+          },
+          {
+            "sample": 7,
+            "feedbackMs": null,
+            "resultMs": 102.76600014305131,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 1600594,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 1095,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 23094,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900006
+            }
+          },
+          {
+            "sample": 8,
+            "feedbackMs": null,
+            "resultMs": 104.0660000476837,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 1600900,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 1248,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 23748,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900007
+            }
+          },
+          {
+            "sample": 9,
+            "feedbackMs": null,
+            "resultMs": 96.30000009536752,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 1601206,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 1401,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 24402,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900008
+            }
+          },
+          {
+            "sample": 10,
+            "feedbackMs": null,
+            "resultMs": 108.0659999999998,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 1601512,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 1554,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 25056,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900009
+            }
+          },
+          {
+            "sample": 11,
+            "feedbackMs": null,
+            "resultMs": 94.70000004768372,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 1601819,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 1708,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 25710,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900010
+            }
+          },
+          {
+            "sample": 12,
+            "feedbackMs": null,
+            "resultMs": 106.9999999523161,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 1602127,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 1862,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 26364,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900011
+            }
+          },
+          {
+            "sample": 13,
+            "feedbackMs": null,
+            "resultMs": 97.30000014305097,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 1602435,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2016,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 27018,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900012
+            }
+          },
+          {
+            "sample": 14,
+            "feedbackMs": null,
+            "resultMs": 109.03200004768405,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 1602743,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2170,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 27672,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900013
+            }
+          },
+          {
+            "sample": 15,
+            "feedbackMs": null,
+            "resultMs": 106.90000009536743,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 1603051,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2324,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 28326,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900014
+            }
+          },
+          {
+            "sample": 16,
+            "feedbackMs": null,
+            "resultMs": 97.39999995231665,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 1603359,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2478,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 28980,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900015
+            }
+          },
+          {
+            "sample": 17,
+            "feedbackMs": null,
+            "resultMs": 92.60000014305115,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 1603667,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2632,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 29634,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900016
+            }
+          },
+          {
+            "sample": 18,
+            "feedbackMs": null,
+            "resultMs": 100.86600004768388,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 1603975,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2786,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 30288,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900017
+            }
+          },
+          {
+            "sample": 19,
+            "feedbackMs": null,
+            "resultMs": 93.60000009536725,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 1604283,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2940,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 30942,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900018
+            }
+          },
+          {
+            "sample": 20,
+            "feedbackMs": null,
+            "resultMs": 105.90000014305133,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 1604591,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 3094,
+              "instrumentationErrors": []
+            },
+            "domNodes": 4894,
+            "domEventListeners": 31596,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900019
+            }
+          }
+        ]
+      },
+      "aggregates": {
+        "coldOpen": {
+          "sampleCount": 5,
+          "medianMs": 80.10000014305115,
+          "maxMs": 84.60000014305115
+        },
+        "coldHistoryActivation": {
+          "sampleCount": 5,
+          "medianMs": 80.56600004768373,
+          "maxMs": 147.99999995231627
+        },
+        "warmFilter": {
+          "sampleCount": 20,
+          "p50Ms": 12.500000047683898,
+          "p95Ms": 13.500000143051238,
+          "maxMs": 14.300000000000182,
+          "feedbackP95Ms": 13.500000143051238
+        },
+        "warmTabSwitch": {
+          "sampleCount": 20,
+          "p50Ms": 80.70000009536761,
+          "p95Ms": 98.00000014305124,
+          "maxMs": 98.20000014305106,
+          "feedbackP95Ms": 14.600000143051147
+        },
+        "warmReceivedRecord": {
+          "sampleCount": 20,
+          "p50Ms": 102.76600014305131,
+          "p95Ms": 110.36599995231609,
+          "maxMs": 128.4000000000001,
+          "feedbackP95Ms": 110.36599995231609
+        }
+      },
+      "correctnessPercent": 100,
+      "settingsHistoryRecordReads": 0,
+      "gates": {
+        "correctness100Percent": true,
+        "buttonFeedbackP95Under100ms": true,
+        "tenKFilterAndTabP95Under300ms": true
+      }
+    },
+    {
+      "records": 100000,
+      "cards": 30,
+      "tasks": 30,
+      "fixture": {
+        "seed": 23012028,
+        "range": {
+          "from": "2026-07-02",
+          "to": "2026-10-20"
+        },
+        "dateCount": 111,
+        "storageKeyCount": 888,
+        "expectedRecords": 100000,
+        "expectedMatches": 100,
+        "checksum": "100000:30:23012028"
+      },
+      "cold": [
+        {
+          "sample": 1,
+          "openMs": 382.59999990463257,
+          "dashboardCardCount": 30,
+          "dashboardCardValues": [
+            {
+              "id": "af23-report-card-0",
+              "value": "886.49"
+            },
+            {
+              "id": "af23-report-card-1",
+              "value": "369.2"
+            },
+            {
+              "id": "af23-report-card-2",
+              "value": "851.91"
+            },
+            {
+              "id": "af23-report-card-3",
+              "value": "437.02"
+            },
+            {
+              "id": "af23-report-card-4",
+              "value": "919.73"
+            },
+            {
+              "id": "af23-report-card-5",
+              "value": "402.44"
+            },
+            {
+              "id": "af23-report-card-6",
+              "value": "271.05"
+            },
+            {
+              "id": "af23-report-card-7",
+              "value": "753.76"
+            },
+            {
+              "id": "af23-report-card-8",
+              "value": "236.47"
+            },
+            {
+              "id": "af23-report-card-9",
+              "value": "821.58"
+            },
+            {
+              "id": "af23-report-card-10",
+              "value": "304.29"
+            },
+            {
+              "id": "af23-report-card-11",
+              "value": "787"
+            },
+            {
+              "id": "af23-report-card-12",
+              "value": "866.81"
+            },
+            {
+              "id": "af23-report-card-13",
+              "value": "349.52"
+            },
+            {
+              "id": "af23-report-card-14",
+              "value": "832.23"
+            },
+            {
+              "id": "af23-report-card-15",
+              "value": "417.34"
+            },
+            {
+              "id": "af23-report-card-16",
+              "value": "900.05"
+            },
+            {
+              "id": "af23-report-card-17",
+              "value": "382.76"
+            },
+            {
+              "id": "af23-report-card-18",
+              "value": "462.57"
+            },
+            {
+              "id": "af23-report-card-19",
+              "value": "945.28"
+            },
+            {
+              "id": "af23-report-card-20",
+              "value": "427.99"
+            },
+            {
+              "id": "af23-report-card-21",
+              "value": "13.1"
+            },
+            {
+              "id": "af23-report-card-22",
+              "value": "495.81"
+            },
+            {
+              "id": "af23-report-card-23",
+              "value": "978.52"
+            },
+            {
+              "id": "af23-report-card-24",
+              "value": "290.73"
+            },
+            {
+              "id": "af23-report-card-25",
+              "value": "773.44"
+            },
+            {
+              "id": "af23-report-card-26",
+              "value": "256.15"
+            },
+            {
+              "id": "af23-report-card-27",
+              "value": "841.26"
+            },
+            {
+              "id": "af23-report-card-28",
+              "value": "323.97"
+            },
+            {
+              "id": "af23-report-card-29",
+              "value": "806.68"
+            }
+          ],
+          "correct": true,
+          "storage": {
+            "getCalls": 28,
+            "getBytes": 15976527,
+            "recordGetCalls": 18,
+            "recordKeyCount": 888,
+            "setCalls": 0,
+            "setBytes": 0,
+            "instrumentationErrors": []
+          },
+          "domNodes": 979,
+          "domEventListeners": 150,
+          "propertyEventHandlers": 0,
+          "pageErrors": [],
+          "historyActivation": {
+            "feedbackMs": 14.666000095367451,
+            "resultMs": 415.29400009536744,
+            "storage": {
+              "getCalls": 23,
+              "getBytes": 20272271,
+              "recordGetCalls": 19,
+              "recordKeyCount": 1663,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "correct": true,
+            "domNodes": 5545,
+            "domEventListeners": 850,
+            "propertyEventHandlers": 0
+          }
+        },
+        {
+          "sample": 2,
+          "openMs": 372.2999999523163,
+          "dashboardCardCount": 30,
+          "dashboardCardValues": [
+            {
+              "id": "af23-report-card-0",
+              "value": "886.49"
+            },
+            {
+              "id": "af23-report-card-1",
+              "value": "369.2"
+            },
+            {
+              "id": "af23-report-card-2",
+              "value": "851.91"
+            },
+            {
+              "id": "af23-report-card-3",
+              "value": "437.02"
+            },
+            {
+              "id": "af23-report-card-4",
+              "value": "919.73"
+            },
+            {
+              "id": "af23-report-card-5",
+              "value": "402.44"
+            },
+            {
+              "id": "af23-report-card-6",
+              "value": "271.05"
+            },
+            {
+              "id": "af23-report-card-7",
+              "value": "753.76"
+            },
+            {
+              "id": "af23-report-card-8",
+              "value": "236.47"
+            },
+            {
+              "id": "af23-report-card-9",
+              "value": "821.58"
+            },
+            {
+              "id": "af23-report-card-10",
+              "value": "304.29"
+            },
+            {
+              "id": "af23-report-card-11",
+              "value": "787"
+            },
+            {
+              "id": "af23-report-card-12",
+              "value": "866.81"
+            },
+            {
+              "id": "af23-report-card-13",
+              "value": "349.52"
+            },
+            {
+              "id": "af23-report-card-14",
+              "value": "832.23"
+            },
+            {
+              "id": "af23-report-card-15",
+              "value": "417.34"
+            },
+            {
+              "id": "af23-report-card-16",
+              "value": "900.05"
+            },
+            {
+              "id": "af23-report-card-17",
+              "value": "382.76"
+            },
+            {
+              "id": "af23-report-card-18",
+              "value": "462.57"
+            },
+            {
+              "id": "af23-report-card-19",
+              "value": "945.28"
+            },
+            {
+              "id": "af23-report-card-20",
+              "value": "427.99"
+            },
+            {
+              "id": "af23-report-card-21",
+              "value": "13.1"
+            },
+            {
+              "id": "af23-report-card-22",
+              "value": "495.81"
+            },
+            {
+              "id": "af23-report-card-23",
+              "value": "978.52"
+            },
+            {
+              "id": "af23-report-card-24",
+              "value": "290.73"
+            },
+            {
+              "id": "af23-report-card-25",
+              "value": "773.44"
+            },
+            {
+              "id": "af23-report-card-26",
+              "value": "256.15"
+            },
+            {
+              "id": "af23-report-card-27",
+              "value": "841.26"
+            },
+            {
+              "id": "af23-report-card-28",
+              "value": "323.97"
+            },
+            {
+              "id": "af23-report-card-29",
+              "value": "806.68"
+            }
+          ],
+          "correct": true,
+          "storage": {
+            "getCalls": 28,
+            "getBytes": 15976527,
+            "recordGetCalls": 18,
+            "recordKeyCount": 888,
+            "setCalls": 0,
+            "setBytes": 0,
+            "instrumentationErrors": []
+          },
+          "domNodes": 979,
+          "domEventListeners": 150,
+          "propertyEventHandlers": 0,
+          "pageErrors": [],
+          "historyActivation": {
+            "feedbackMs": 15.700000095367443,
+            "resultMs": 449.3640000953675,
+            "storage": {
+              "getCalls": 23,
+              "getBytes": 20272271,
+              "recordGetCalls": 19,
+              "recordKeyCount": 1663,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "correct": true,
+            "domNodes": 5545,
+            "domEventListeners": 850,
+            "propertyEventHandlers": 0
+          }
+        },
+        {
+          "sample": 3,
+          "openMs": 384.2999999523163,
+          "dashboardCardCount": 30,
+          "dashboardCardValues": [
+            {
+              "id": "af23-report-card-0",
+              "value": "886.49"
+            },
+            {
+              "id": "af23-report-card-1",
+              "value": "369.2"
+            },
+            {
+              "id": "af23-report-card-2",
+              "value": "851.91"
+            },
+            {
+              "id": "af23-report-card-3",
+              "value": "437.02"
+            },
+            {
+              "id": "af23-report-card-4",
+              "value": "919.73"
+            },
+            {
+              "id": "af23-report-card-5",
+              "value": "402.44"
+            },
+            {
+              "id": "af23-report-card-6",
+              "value": "271.05"
+            },
+            {
+              "id": "af23-report-card-7",
+              "value": "753.76"
+            },
+            {
+              "id": "af23-report-card-8",
+              "value": "236.47"
+            },
+            {
+              "id": "af23-report-card-9",
+              "value": "821.58"
+            },
+            {
+              "id": "af23-report-card-10",
+              "value": "304.29"
+            },
+            {
+              "id": "af23-report-card-11",
+              "value": "787"
+            },
+            {
+              "id": "af23-report-card-12",
+              "value": "866.81"
+            },
+            {
+              "id": "af23-report-card-13",
+              "value": "349.52"
+            },
+            {
+              "id": "af23-report-card-14",
+              "value": "832.23"
+            },
+            {
+              "id": "af23-report-card-15",
+              "value": "417.34"
+            },
+            {
+              "id": "af23-report-card-16",
+              "value": "900.05"
+            },
+            {
+              "id": "af23-report-card-17",
+              "value": "382.76"
+            },
+            {
+              "id": "af23-report-card-18",
+              "value": "462.57"
+            },
+            {
+              "id": "af23-report-card-19",
+              "value": "945.28"
+            },
+            {
+              "id": "af23-report-card-20",
+              "value": "427.99"
+            },
+            {
+              "id": "af23-report-card-21",
+              "value": "13.1"
+            },
+            {
+              "id": "af23-report-card-22",
+              "value": "495.81"
+            },
+            {
+              "id": "af23-report-card-23",
+              "value": "978.52"
+            },
+            {
+              "id": "af23-report-card-24",
+              "value": "290.73"
+            },
+            {
+              "id": "af23-report-card-25",
+              "value": "773.44"
+            },
+            {
+              "id": "af23-report-card-26",
+              "value": "256.15"
+            },
+            {
+              "id": "af23-report-card-27",
+              "value": "841.26"
+            },
+            {
+              "id": "af23-report-card-28",
+              "value": "323.97"
+            },
+            {
+              "id": "af23-report-card-29",
+              "value": "806.68"
+            }
+          ],
+          "correct": true,
+          "storage": {
+            "getCalls": 28,
+            "getBytes": 15976527,
+            "recordGetCalls": 18,
+            "recordKeyCount": 888,
+            "setCalls": 0,
+            "setBytes": 0,
+            "instrumentationErrors": []
+          },
+          "domNodes": 979,
+          "domEventListeners": 150,
+          "propertyEventHandlers": 0,
+          "pageErrors": [],
+          "historyActivation": {
+            "feedbackMs": 15.099999856948841,
+            "resultMs": 381.6999998569488,
+            "storage": {
+              "getCalls": 23,
+              "getBytes": 20272271,
+              "recordGetCalls": 19,
+              "recordKeyCount": 1663,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "correct": true,
+            "domNodes": 5545,
+            "domEventListeners": 850,
+            "propertyEventHandlers": 0
+          }
+        },
+        {
+          "sample": 4,
+          "openMs": 368.10000014305115,
+          "dashboardCardCount": 30,
+          "dashboardCardValues": [
+            {
+              "id": "af23-report-card-0",
+              "value": "886.49"
+            },
+            {
+              "id": "af23-report-card-1",
+              "value": "369.2"
+            },
+            {
+              "id": "af23-report-card-2",
+              "value": "851.91"
+            },
+            {
+              "id": "af23-report-card-3",
+              "value": "437.02"
+            },
+            {
+              "id": "af23-report-card-4",
+              "value": "919.73"
+            },
+            {
+              "id": "af23-report-card-5",
+              "value": "402.44"
+            },
+            {
+              "id": "af23-report-card-6",
+              "value": "271.05"
+            },
+            {
+              "id": "af23-report-card-7",
+              "value": "753.76"
+            },
+            {
+              "id": "af23-report-card-8",
+              "value": "236.47"
+            },
+            {
+              "id": "af23-report-card-9",
+              "value": "821.58"
+            },
+            {
+              "id": "af23-report-card-10",
+              "value": "304.29"
+            },
+            {
+              "id": "af23-report-card-11",
+              "value": "787"
+            },
+            {
+              "id": "af23-report-card-12",
+              "value": "866.81"
+            },
+            {
+              "id": "af23-report-card-13",
+              "value": "349.52"
+            },
+            {
+              "id": "af23-report-card-14",
+              "value": "832.23"
+            },
+            {
+              "id": "af23-report-card-15",
+              "value": "417.34"
+            },
+            {
+              "id": "af23-report-card-16",
+              "value": "900.05"
+            },
+            {
+              "id": "af23-report-card-17",
+              "value": "382.76"
+            },
+            {
+              "id": "af23-report-card-18",
+              "value": "462.57"
+            },
+            {
+              "id": "af23-report-card-19",
+              "value": "945.28"
+            },
+            {
+              "id": "af23-report-card-20",
+              "value": "427.99"
+            },
+            {
+              "id": "af23-report-card-21",
+              "value": "13.1"
+            },
+            {
+              "id": "af23-report-card-22",
+              "value": "495.81"
+            },
+            {
+              "id": "af23-report-card-23",
+              "value": "978.52"
+            },
+            {
+              "id": "af23-report-card-24",
+              "value": "290.73"
+            },
+            {
+              "id": "af23-report-card-25",
+              "value": "773.44"
+            },
+            {
+              "id": "af23-report-card-26",
+              "value": "256.15"
+            },
+            {
+              "id": "af23-report-card-27",
+              "value": "841.26"
+            },
+            {
+              "id": "af23-report-card-28",
+              "value": "323.97"
+            },
+            {
+              "id": "af23-report-card-29",
+              "value": "806.68"
+            }
+          ],
+          "correct": true,
+          "storage": {
+            "getCalls": 28,
+            "getBytes": 15976527,
+            "recordGetCalls": 18,
+            "recordKeyCount": 888,
+            "setCalls": 0,
+            "setBytes": 0,
+            "instrumentationErrors": []
+          },
+          "domNodes": 979,
+          "domEventListeners": 150,
+          "propertyEventHandlers": 0,
+          "pageErrors": [],
+          "historyActivation": {
+            "feedbackMs": 15.100000143051147,
+            "resultMs": 381.8000001430512,
+            "storage": {
+              "getCalls": 23,
+              "getBytes": 20272271,
+              "recordGetCalls": 19,
+              "recordKeyCount": 1663,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "correct": true,
+            "domNodes": 5545,
+            "domEventListeners": 850,
+            "propertyEventHandlers": 0
+          }
+        },
+        {
+          "sample": 5,
+          "openMs": 367.69999980926514,
+          "dashboardCardCount": 30,
+          "dashboardCardValues": [
+            {
+              "id": "af23-report-card-0",
+              "value": "886.49"
+            },
+            {
+              "id": "af23-report-card-1",
+              "value": "369.2"
+            },
+            {
+              "id": "af23-report-card-2",
+              "value": "851.91"
+            },
+            {
+              "id": "af23-report-card-3",
+              "value": "437.02"
+            },
+            {
+              "id": "af23-report-card-4",
+              "value": "919.73"
+            },
+            {
+              "id": "af23-report-card-5",
+              "value": "402.44"
+            },
+            {
+              "id": "af23-report-card-6",
+              "value": "271.05"
+            },
+            {
+              "id": "af23-report-card-7",
+              "value": "753.76"
+            },
+            {
+              "id": "af23-report-card-8",
+              "value": "236.47"
+            },
+            {
+              "id": "af23-report-card-9",
+              "value": "821.58"
+            },
+            {
+              "id": "af23-report-card-10",
+              "value": "304.29"
+            },
+            {
+              "id": "af23-report-card-11",
+              "value": "787"
+            },
+            {
+              "id": "af23-report-card-12",
+              "value": "866.81"
+            },
+            {
+              "id": "af23-report-card-13",
+              "value": "349.52"
+            },
+            {
+              "id": "af23-report-card-14",
+              "value": "832.23"
+            },
+            {
+              "id": "af23-report-card-15",
+              "value": "417.34"
+            },
+            {
+              "id": "af23-report-card-16",
+              "value": "900.05"
+            },
+            {
+              "id": "af23-report-card-17",
+              "value": "382.76"
+            },
+            {
+              "id": "af23-report-card-18",
+              "value": "462.57"
+            },
+            {
+              "id": "af23-report-card-19",
+              "value": "945.28"
+            },
+            {
+              "id": "af23-report-card-20",
+              "value": "427.99"
+            },
+            {
+              "id": "af23-report-card-21",
+              "value": "13.1"
+            },
+            {
+              "id": "af23-report-card-22",
+              "value": "495.81"
+            },
+            {
+              "id": "af23-report-card-23",
+              "value": "978.52"
+            },
+            {
+              "id": "af23-report-card-24",
+              "value": "290.73"
+            },
+            {
+              "id": "af23-report-card-25",
+              "value": "773.44"
+            },
+            {
+              "id": "af23-report-card-26",
+              "value": "256.15"
+            },
+            {
+              "id": "af23-report-card-27",
+              "value": "841.26"
+            },
+            {
+              "id": "af23-report-card-28",
+              "value": "323.97"
+            },
+            {
+              "id": "af23-report-card-29",
+              "value": "806.68"
+            }
+          ],
+          "correct": true,
+          "storage": {
+            "getCalls": 28,
+            "getBytes": 15976527,
+            "recordGetCalls": 18,
+            "recordKeyCount": 888,
+            "setCalls": 0,
+            "setBytes": 0,
+            "instrumentationErrors": []
+          },
+          "domNodes": 979,
+          "domEventListeners": 150,
+          "propertyEventHandlers": 0,
+          "pageErrors": [],
+          "historyActivation": {
+            "feedbackMs": 15.100000047683693,
+            "resultMs": 381.82800004768376,
+            "storage": {
+              "getCalls": 23,
+              "getBytes": 20272271,
+              "recordGetCalls": 19,
+              "recordKeyCount": 1663,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "correct": true,
+            "domNodes": 5545,
+            "domEventListeners": 850,
+            "propertyEventHandlers": 0
+          }
+        }
+      ],
+      "warm": {
+        "filter": [
+          {
+            "sample": 1,
+            "query": "af23-match-token",
+            "expectedCount": 100,
+            "feedbackMs": 30.631999952316164,
+            "resultMs": 48.199999952316375,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 2097,
+            "domEventListeners": 15119,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 2,
+            "query": "af23-no-match-2-1",
+            "expectedCount": 0,
+            "feedbackMs": 14.565999999999804,
+            "resultMs": 31.300000000000182,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 1251,
+            "domEventListeners": 15288,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 3,
+            "query": "af23-match-token",
+            "expectedCount": 100,
+            "feedbackMs": 15.16600004768361,
+            "resultMs": 31.400000047683534,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 2097,
+            "domEventListeners": 15560,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 4,
+            "query": "af23-no-match-2-3",
+            "expectedCount": 0,
+            "feedbackMs": 14.90000014305133,
+            "resultMs": 31.566000143051042,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 1251,
+            "domEventListeners": 15729,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 5,
+            "query": "af23-match-token",
+            "expectedCount": 100,
+            "feedbackMs": 15.132000000000062,
+            "resultMs": 48.40000000000009,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 2097,
+            "domEventListeners": 16001,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 6,
+            "query": "af23-no-match-2-5",
+            "expectedCount": 0,
+            "feedbackMs": 14.599999999999909,
+            "resultMs": 48,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 1251,
+            "domEventListeners": 16170,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 7,
+            "query": "af23-match-token",
+            "expectedCount": 100,
+            "feedbackMs": 15.166000000000167,
+            "resultMs": 48.40000000000009,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 2097,
+            "domEventListeners": 16442,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 8,
+            "query": "af23-no-match-2-7",
+            "expectedCount": 0,
+            "feedbackMs": 14.800000047683625,
+            "resultMs": 31.500000047683898,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 1251,
+            "domEventListeners": 16611,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 9,
+            "query": "af23-match-token",
+            "expectedCount": 100,
+            "feedbackMs": 31.431999952316346,
+            "resultMs": 47.699999952316375,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 2097,
+            "domEventListeners": 16883,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 10,
+            "query": "af23-no-match-2-9",
+            "expectedCount": 0,
+            "feedbackMs": 31.132000095367403,
+            "resultMs": 47.20000009536761,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 1251,
+            "domEventListeners": 17052,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 11,
+            "query": "af23-match-token",
+            "expectedCount": 100,
+            "feedbackMs": 22.232000143050755,
+            "resultMs": 39.90000014305133,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 2097,
+            "domEventListeners": 17324,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 12,
+            "query": "af23-no-match-2-11",
+            "expectedCount": 0,
+            "feedbackMs": 14.96600000000035,
+            "resultMs": 31.699999999999818,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 1251,
+            "domEventListeners": 17493,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 13,
+            "query": "af23-match-token",
+            "expectedCount": 100,
+            "feedbackMs": 15.16599995231627,
+            "resultMs": 48.39999995231665,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 2097,
+            "domEventListeners": 17765,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 14,
+            "query": "af23-no-match-2-13",
+            "expectedCount": 0,
+            "feedbackMs": 14.666000095367053,
+            "resultMs": 31.33200009536722,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 1251,
+            "domEventListeners": 17934,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 15,
+            "query": "af23-match-token",
+            "expectedCount": 100,
+            "feedbackMs": 14.80000004768408,
+            "resultMs": 47.80000004768408,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 2097,
+            "domEventListeners": 18206,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 16,
+            "query": "af23-no-match-2-15",
+            "expectedCount": 0,
+            "feedbackMs": 15.100000000000364,
+            "resultMs": 31.800000000000182,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 1251,
+            "domEventListeners": 18375,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 17,
+            "query": "af23-match-token",
+            "expectedCount": 100,
+            "feedbackMs": 15,
+            "resultMs": 31.666000000000167,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 2097,
+            "domEventListeners": 18647,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 18,
+            "query": "af23-no-match-2-17",
+            "expectedCount": 0,
+            "feedbackMs": 12.432000143051482,
+            "resultMs": 28.40000014305133,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 1251,
+            "domEventListeners": 18816,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 19,
+            "query": "af23-match-token",
+            "expectedCount": 100,
+            "feedbackMs": 15.80000004768408,
+            "resultMs": 49.200000047683716,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 2097,
+            "domEventListeners": 19088,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 20,
+            "query": "af23-no-match-2-19",
+            "expectedCount": 0,
+            "feedbackMs": 31.03200004768405,
+            "resultMs": 47.60000004768335,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 1251,
+            "domEventListeners": 19257,
+            "propertyEventHandlers": 0,
+            "correct": true
+          }
+        ],
+        "tabSwitch": [
+          {
+            "sample": 1,
+            "feedbackMs": 14.166000095367394,
+            "resultMs": 114.20000009536739,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 1566,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 2,
+            "feedbackMs": 14.23200014305121,
+            "resultMs": 97.50000014305124,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 2265,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 3,
+            "feedbackMs": 14.33199995231621,
+            "resultMs": 97.59999995231624,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 2964,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 4,
+            "feedbackMs": 13.56599995231636,
+            "resultMs": 96.8999999523162,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 3663,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 5,
+            "feedbackMs": 14.365999952316315,
+            "resultMs": 131.09999995231624,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 4362,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 6,
+            "feedbackMs": 14.400000000000091,
+            "resultMs": 97.40000000000009,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 5061,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 7,
+            "feedbackMs": 14.50000004768367,
+            "resultMs": 97.80000004768362,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 5760,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 8,
+            "feedbackMs": 13.899999952316193,
+            "resultMs": 130.59999995231624,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 6459,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 9,
+            "feedbackMs": 14.300000143051193,
+            "resultMs": 97.70000014305106,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 7158,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 10,
+            "feedbackMs": 14.132000000000062,
+            "resultMs": 97.5,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 7857,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 11,
+            "feedbackMs": 14.16600004768361,
+            "resultMs": 114.20000004768372,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 8556,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 12,
+            "feedbackMs": 13.499999952316102,
+            "resultMs": 96.79999995231628,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 9255,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 13,
+            "feedbackMs": 13.866000095367326,
+            "resultMs": 97.20000009536761,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 9954,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 14,
+            "feedbackMs": 13.966000047683792,
+            "resultMs": 114.0000000476839,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 10653,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 15,
+            "feedbackMs": 11.131999952316164,
+            "resultMs": 93.79999995231628,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 11352,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 16,
+            "feedbackMs": 14.132000000000062,
+            "resultMs": 97.40000000000009,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 12051,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 17,
+            "feedbackMs": 13.66600004768361,
+            "resultMs": 113.6000000476838,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 12750,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 18,
+            "feedbackMs": 14.199999999999818,
+            "resultMs": 96.5,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 13449,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 19,
+            "feedbackMs": 14.800000095367523,
+            "resultMs": 98.20000009536761,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 14148,
+            "propertyEventHandlers": 0,
+            "correct": true
+          },
+          {
+            "sample": 20,
+            "feedbackMs": 14.500000047683898,
+            "resultMs": 114.5000000476839,
+            "storage": {
+              "getCalls": 4,
+              "getBytes": 9286,
+              "recordGetCalls": 0,
+              "recordKeyCount": 0,
+              "setCalls": 0,
+              "setBytes": 0,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 14847,
+            "propertyEventHandlers": 0,
+            "correct": true
+          }
+        ],
+        "receivedRecord": [
+          {
+            "sample": 1,
+            "feedbackMs": null,
+            "resultMs": 349.10000000000036,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 15957517,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 177,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 20630,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900000
+            }
+          },
+          {
+            "sample": 2,
+            "feedbackMs": null,
+            "resultMs": 369.2000000476837,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 15957845,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 330,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 21304,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900001
+            }
+          },
+          {
+            "sample": 3,
+            "feedbackMs": null,
+            "resultMs": 375.9999999523161,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 15958151,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 483,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 21978,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900002
+            }
+          },
+          {
+            "sample": 4,
+            "feedbackMs": null,
+            "resultMs": 393.764000095367,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 15958457,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 636,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 22652,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900003
+            }
+          },
+          {
+            "sample": 5,
+            "feedbackMs": null,
+            "resultMs": 378.1300000000001,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 15958763,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 789,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 23326,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900004
+            }
+          },
+          {
+            "sample": 6,
+            "feedbackMs": null,
+            "resultMs": 360.5640001430511,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 15959069,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 942,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 24000,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900005
+            }
+          },
+          {
+            "sample": 7,
+            "feedbackMs": null,
+            "resultMs": 346.09799995231606,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 15959375,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 1095,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 24674,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900006
+            }
+          },
+          {
+            "sample": 8,
+            "feedbackMs": null,
+            "resultMs": 381.9999999523161,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 15959681,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 1248,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 25348,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900007
+            }
+          },
+          {
+            "sample": 9,
+            "feedbackMs": null,
+            "resultMs": 408.5620001430516,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 15959987,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 1401,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 26022,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900008
+            }
+          },
+          {
+            "sample": 10,
+            "feedbackMs": null,
+            "resultMs": 365.2999999999993,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 15960293,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 1554,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 26696,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900009
+            }
+          },
+          {
+            "sample": 11,
+            "feedbackMs": null,
+            "resultMs": 374.499999952317,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 15960600,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 1708,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 27370,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900010
+            }
+          },
+          {
+            "sample": 12,
+            "feedbackMs": null,
+            "resultMs": 369,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 15960908,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 1862,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 28044,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900011
+            }
+          },
+          {
+            "sample": 13,
+            "feedbackMs": null,
+            "resultMs": 377.53000004768364,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 15961216,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2016,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 28718,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900012
+            }
+          },
+          {
+            "sample": 14,
+            "feedbackMs": null,
+            "resultMs": 360.10000014305115,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 15961524,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2170,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 29392,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900013
+            }
+          },
+          {
+            "sample": 15,
+            "feedbackMs": null,
+            "resultMs": 415.09800004768294,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 15961832,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2324,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 30066,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900014
+            }
+          },
+          {
+            "sample": 16,
+            "feedbackMs": null,
+            "resultMs": 715.3999999999996,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 15962140,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2478,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 30740,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900015
+            }
+          },
+          {
+            "sample": 17,
+            "feedbackMs": null,
+            "resultMs": 487.10000009536816,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 15962448,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2632,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 31414,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900016
+            }
+          },
+          {
+            "sample": 18,
+            "feedbackMs": null,
+            "resultMs": 398.1999999523159,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 15962756,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2786,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 32088,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900017
+            }
+          },
+          {
+            "sample": 19,
+            "feedbackMs": null,
+            "resultMs": 425.10000000000036,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 15963064,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 2940,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 32762,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900018
+            }
+          },
+          {
+            "sample": 20,
+            "feedbackMs": null,
+            "resultMs": 357.60000014305115,
+            "storage": {
+              "getCalls": 20,
+              "getBytes": 15963372,
+              "recordGetCalls": 18,
+              "recordKeyCount": 889,
+              "setCalls": 1,
+              "setBytes": 3094,
+              "instrumentationErrors": []
+            },
+            "domNodes": 5594,
+            "domEventListeners": 33436,
+            "propertyEventHandlers": 0,
+            "correct": true,
+            "record": {
+              "taskId": "af23-report-task-0",
+              "date": "2026-10-20",
+              "value": 900019
+            }
+          }
+        ]
+      },
+      "aggregates": {
+        "coldOpen": {
+          "sampleCount": 5,
+          "medianMs": 372.2999999523163,
+          "maxMs": 384.2999999523163
+        },
+        "coldHistoryActivation": {
+          "sampleCount": 5,
+          "medianMs": 381.82800004768376,
+          "maxMs": 449.3640000953675
+        },
+        "warmFilter": {
+          "sampleCount": 20,
+          "p50Ms": 47.20000009536761,
+          "p95Ms": 48.40000000000009,
+          "maxMs": 49.200000047683716,
+          "feedbackP95Ms": 31.132000095367403
+        },
+        "warmTabSwitch": {
+          "sampleCount": 20,
+          "p50Ms": 97.70000014305106,
+          "p95Ms": 130.59999995231624,
+          "maxMs": 131.09999995231624,
+          "feedbackP95Ms": 14.500000047683898
+        },
+        "warmReceivedRecord": {
+          "sampleCount": 20,
+          "p50Ms": 377.53000004768364,
+          "p95Ms": 487.10000009536816,
+          "maxMs": 715.3999999999996,
+          "feedbackP95Ms": 487.10000009536816
+        }
+      },
+      "correctnessPercent": 100,
+      "settingsHistoryRecordReads": 0,
+      "gates": {
+        "correctness100Percent": true,
+        "buttonFeedbackP95Under100ms": true,
+        "tenKFilterAndTabP95Under300ms": true
+      }
+    }
+  ],
+  "failures": [],
+  "pass": true
+}

@@ -104,14 +104,14 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 
 - 改任何行為 → `docs/SPEC.md`(現況規格,§編號會被程式碼註解引用,勿拆檔)
 - 想做但刻意沒做 → `docs/BACKLOG.md`(每項附觸發條件)
-- 本輪規劃 → `docs/AF-<N>-PLAN.md`;完工搬 `docs/archive/`(按需讀,勿全掃)。AF-1~AF-21 已歸檔。
+- 本輪規劃 → `docs/AF-<N>-PLAN.md`;完工搬 `docs/archive/`(按需讀,勿全掃)。AF-1~AF-23 已歸檔；AF-23 的驗收／效能索引亦位於 archive，原始證據在 `docs/evidence/af23/`。
 
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test` **基線 2973 綠**(Node 內建 test runner + jsdom;下一輪只能增不能減)。
+- 測試:`npm test`（Node 內建 test runner + jsdom）；最新數字與限制見 `docs/archive/AF-23-ACCEPTANCE.md`。維持有效覆蓋，不以測試數量取代行為驗證。
   真實瀏覽器端到端:`./run_smoke.sh`。
-- **測試由 Claude 先寫、再委派實作**,而且要做突變測試(把守門那行改壞,確認測試會紅);
+- Bug 驗收先重現錯誤再驗修正；關鍵守門有疑似假綠時做定點突變確認，不為每次文件整理重跑大型測試。
   併回前另做兩份獨立終檢(程式碼 + 文件)。
 - **突變要改到真正的守門那一行**:數呼叫次數、把門檻設在本來就不會命中的位置,都是任何實作下都會過的假斷言。
 - **段與段之間要有鏈結測試**:每段驗收都自己造輸入時,訊息欄位(`picks`、`locator`、`preselect`)沒有人從發訊端一路斷言到收訊端;
@@ -125,7 +125,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **每輪收尾要把版本號 minor +1**(`src/manifest.json` 與 `package.json` **兩處同步**,
   `tests/a4_conventions.test.js` 的 D3b 會擋不一致)。AF-6 與 AF-7 都漏升,
   到 AF-7 併 master 前才發現 manifest 停在 AF-5 的 0.4.0、package.json 還在開案的 0.1.0。
-- 實作委派:先地端 LLM,較複雜給 agy;Claude 只規劃、驗收、寫文件(見 ~/.claude/skills 之委派 skill)。
+- 實作委派遵守使用者指定與當前 `subagent-verification-policy`；AF-23 使用 Luna high，由主代理獨立核對與驗收。
 - **委派規格的 grep 驗收要比對基準數量，不寫絕對值**：寫「不得出現 `Number.isInteger`」時，委派端把兩個既有函式改寫成 `% 1 === 0` 來過驗收（AF-16）。
   規格一律加「不得為了通過驗收改寫無關既有程式碼」。
 - **Claude 寫的測試斷言別綁顯示格式的細節**：正則寫死「標籤後面緊接數字」，委派端就把歷史頁明細**所有**標籤的全形冒號拿掉（AF-16）。
@@ -325,3 +325,9 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 - **AF-22 多來源任務的來源正規化與驗證只有 `shared/task-source.js`**：舊單值／舊 block 與新 `mode:'multi'` 都由 `normalizeTaskSources` 轉為每值一個 `source + spec`;field key 是序列身分，source locator/frame 是目標身分的一部分，勿在消費端各自猜舊形狀。multi 的正式紀錄按 `taskId#fieldKey` 寫子序列，排程帳本與 health 用父 task id（SPEC §7）。
 - **AF-22 的 `stateActions` 屬於單一 field**：任務層 `preActions` 是共用前置動作草稿；某值旁的「來源狀態動作」複製當下共用動作到該 field，之後只在處理該來源前執行。修改值的來源／規格／狀態動作會使在途結果失效；擴充快照與編輯匯入驗證時要保留此欄位。
 - **單值修復／替換授權只在 `background/main.js`**：一次性 grant 綁定 task、field、tab、frame、document generation 與 repair mode；不可接受頁面任意指定 key。修復保留 field key，替換新建 key 並移除原告警，對應資料變更仍走 storage 的任務更新入口。
+- **修復與替換必須等待持久化 ACK**：Picker 不可在提交後先退出選取模式；明確拒絕要留下原因並保留草稿，結果不確定時以同一 operation id 重試。背景以持久 journal 恢復同一操作，不能產生第二次替換；來源快照包含 task URL／共用 preActions；已套用結果的恢復捷徑也必須核對，不能只因新舊值相同就繞過。修復／替換保留舊歷史；使用者明確確認刪任務仍依 `deleteTasks` 既有契約刪除該任務歷史。
+- **編輯試抓維持 dryRun 邊界**：使用 `runTask(..., { dryRun: true })` 的實際來源定位流程，不寫紀錄、帳本、`lastValues`、health，不停用站台或發告警；編輯任務可直接試抓，不能以隱藏按鈕當成副作用防護。
+- **Report 卡片寫入需鎖內重算並驗證來源**：抽屜、拖入／拖出與 status 的 `options.taskIds` 都以 layout 鎖內最新卡片為基礎，並在同一更新裡檢查任務／序列仍有效；live 任務讀取失敗不能當空集合寫入。復原／重做不可讓背景 prune 掉的來源復活，多卡操作不可用舊快照互相覆蓋。
+- **Report 只載入目前頁面需要的資料**：設定頁初始不得讀歷史（包含 storage stats）；容量統計由使用者操作觸發。storage 變更先使對應範圍快取失效，即使當前在隱藏歷史之外；過期 generation 不得更新新頁面的 loading、錯誤或 DOM。用 browser benchmark 報告效能時保留 seed、樣本數、原始 JSON 與瀏覽器環境，不把 fixture 結果說成使用者環境保證。
+
+- **非同步 UI 步驟要保留擁有者身分**：Undo/Redo 等待期間新增操作或切換頁面，不能以 pop 移走另一個步驟；按原步驟 identity 與 revision 處理。

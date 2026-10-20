@@ -7,9 +7,10 @@ import { installChromeMock, resetChromeMock } from './chrome-mock.js'
 
 const html = readFileSync(new URL('../src/ui/picker/picker.html', import.meta.url), 'utf8')
 
-async function fresh() {
+async function fresh({ bindExtensionUi = false } = {}) {
   resetChromeMock()
   const c = installChromeMock()
+  if (bindExtensionUi) c.runtime.id = 'autofetcher-test'
   const st = await import('../src/shared/storage.js?t=' + Math.random())
   await st.init()
   const jd = new JSDOM(html)
@@ -171,6 +172,23 @@ test('儲存:成功時寫入 storage 並請 background 重建排程', async () =
   assert.equal(msg.args[0].type, 'REBUILD_ALARMS')
 })
 
+test('AC-C5:存檔回饋可到報表；首次結果等待時不製造成功紀錄', async () => {
+  const { c, st, pk, doc } = await fresh()
+  const task = pk.buildTask(base(), LOCATOR)
+  await st.saveTask(task)
+  await pk.showSavedFeedback(task, {
+    closeDelayMs: null,
+    first: { state: 'neutral', text: '第一筆結果尚未確認；請到任務管理查看執行狀態。' }
+  })
+  assert.equal((await st.getRecordsByDate(new Date().toISOString().slice(0, 10))).length, 0)
+  assert.match(doc.querySelector('#saved-feedback [data-saved-first]').textContent, /尚未確認/)
+  const report = doc.getElementById('saved-open-report')
+  assert.ok(report, '存檔回饋必須提供結果去處')
+  report.click()
+  const reportUrl = c.__calls.find(call => call.api === 'tabs.create').args[0].url
+  assert.match(await reportUrl, /ui\/report\/report\.html/)
+})
+
 // AF-7 起改交給 background 走與正式抓取同一條路徑（重新定位 frame、重新注入），
 // 不再自己對頁面送 EXTRACT——頁面刷新後 content script 已經不在了。
 test('立即測試:交給背景執行並顯示結果,不寫入 storage', async () => {
@@ -190,10 +208,142 @@ test('立即測試:交給背景執行並顯示結果,不寫入 storage', async (
   assert.equal((await st.getTasks()).length, 0, '測試不得建立任務')
 })
 
+test('編輯中的試抓採用未儲存表單並交給專用抓取頁', async () => {
+  const { c, pk, doc } = await fresh()
+  c.__setRuntimeResponder(() => ({ ok: true, value: 73, raw: '73', status: 'ok', strategyUsed: 'auto' }))
+  pk.render({
+    task: { id: 'existing', name: '原名', url: 'https://a.test/old', mode: 'number', enabled: true,
+      locator: LOCATOR, spec: { strategy: 'auto' }, schedule: { type: 'daily', times: ['09:00'], weekdays: [1, 2, 3, 4, 5] } },
+    locator: LOCATOR, url: 'https://a.test/old', tabId: 7
+  })
+  doc.getElementById('name').value = '未儲存名稱'
+  doc.getElementById('url').value = 'https://a.test/unsaved'
+  await pk.handleTestNow()
+  const sent = c.__calls.map(call => call.args?.[0]).find(message => message?.type === 'TEST_TASK')
+  assert.ok(sent)
+  assert.equal(sent.task.name, '未儲存名稱')
+  assert.equal(sent.task.url, 'https://a.test/unsaved')
+  assert.equal(sent.tabId, undefined, '編輯試抓不得抓目前使用者分頁')
+  assert.equal(sent.task.foreground, false, '編輯試抓使用專用背景抓取頁')
+  assert.match(doc.getElementById('preview').textContent, /73/)
+  assert.match(doc.getElementById('test-note').textContent, /專用抓取頁/)
+})
+
+test('AC-C1:側邊編輯與query編輯都顯示試抓入口並用未儲存表單', async () => {
+  for (const entry of ['side-panel', 'query']) {
+    const { c, st, pk, doc } = await fresh({ bindExtensionUi: true })
+    const task = {
+      id: `edit-${entry}`, name: '原本名稱', url: 'https://a.test/original', mode: 'number', enabled: true,
+      locator: LOCATOR, spec: { strategy: 'auto' },
+      schedule: { type: 'daily', times: ['09:00'], weekdays: [1, 2, 3, 4, 5] }
+    }
+    await st.saveTask(task)
+    c.__setRuntimeResponder(message => message?.type === 'TEST_TASK'
+      ? { ok: true, value: 88, raw: '88', status: 'ok', strategyUsed: 'auto' }
+      : undefined)
+    if (entry === 'side-panel') await pk.renderFromPanelCtx({ kind: 'edit', taskId: task.id })
+    else await pk.initFromQuery(`?taskId=${task.id}`)
+    const testNow = doc.getElementById('test-now')
+    assert.equal(testNow.hidden, false, `${entry} 編輯入口要露出試抓按鈕`)
+    doc.getElementById('name').value = '未儲存名稱'
+    doc.getElementById('url').value = 'https://a.test/unsaved'
+    testNow.click()
+    await new Promise(resolve => setTimeout(resolve, 30))
+    const sent = c.__calls.map(call => call.args?.[0]).find(message => message?.type === 'TEST_TASK')
+    assert.ok(sent, `${entry} 實際按鈕點擊應送出 TEST_TASK`)
+    assert.equal(sent.task.name, '未儲存名稱')
+    assert.equal(sent.task.url, 'https://a.test/unsaved')
+    assert.equal(sent.tabId, undefined)
+    assert.match(doc.getElementById('preview').textContent, /88/)
+    assert.equal((await st.getTask(task.id)).url, 'https://a.test/original', '試抓不保存草稿欄位')
+  }
+})
+
+test('來源草稿在試抓途中變更時，舊結果不覆蓋目前表單並提示重新試抓', async () => {
+  const { c, pk, doc } = await fresh()
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  c.__setRuntimeResponder(async message => {
+    if (message?.type !== 'TEST_TASK') return undefined
+    await gate
+    return { ok: true, value: 73, raw: '73', status: 'ok', strategyUsed: 'auto' }
+  })
+  pk.render({ locator: LOCATOR, url: 'https://a.test/old' })
+  doc.getElementById('name').value = '試抓值'
+  const pending = pk.handleTestNow()
+  await new Promise(resolve => setTimeout(resolve, 10))
+  doc.getElementById('url').value = 'https://a.test/new-source'
+  release()
+  await pending
+  assert.doesNotMatch(doc.getElementById('preview').textContent, /73/)
+  assert.match(doc.getElementById('test-note').textContent, /來源或設定已變更/)
+  assert.match(doc.getElementById('errors').textContent, /請重新試抓/)
+})
+
+test('部分成功顯示成功與失敗數，逐值標出失敗並提示修復後重試', async () => {
+  const { c, pk, doc } = await fresh()
+  c.__setRuntimeResponder(() => ({
+    ok: true,
+    fields: {
+      first: { ok: true, value: 12, raw: '12' },
+      second: { ok: false, error: 'not_found', message: '找不到第二個來源' }
+    }
+  }))
+  const fields = [
+    { key: 'first', name: '第一值', mode: 'number', source: { locator: { css: '#first' } }, spec: { strategy: 'auto' } },
+    { key: 'second', name: '第二值', mode: 'number', source: { locator: { css: '#second' } }, spec: { strategy: 'auto' } }
+  ]
+  pk.render({ fields, locator: LOCATOR, url: 'https://a.test/p' })
+  doc.getElementById('name').value = '多值任務'
+  await pk.handleTestNow()
+  assert.match(doc.getElementById('preview').textContent, /成功 1 個、失敗 1 個/)
+  assert.match(doc.getElementById('test-note').textContent, /成功 1 個、失敗 1 個.*修復或重新選取失敗值/)
+  const rows = [...doc.querySelectorAll('#field-list [data-field-row]')]
+  assert.equal(rows[0].querySelector('[data-field-result]').textContent, '12')
+  assert.equal(rows[1].querySelector('[data-field-result]').dataset.state, 'error')
+})
+
+test('登入失敗回饋包含可執行的設定重試下一步', async () => {
+  const { c, pk, doc } = await fresh()
+  c.__setRuntimeResponder(() => ({ ok: false, error: 'login_failed', message: '站台仍在登入頁' }))
+  pk.render({ locator: LOCATOR, url: 'https://a.test/p' })
+  doc.getElementById('name').value = '登入後資料'
+  await pk.handleTestNow()
+  assert.match(doc.getElementById('errors').textContent, /開啟站台登入設定/)
+  const action = doc.querySelector('#test-note [data-action="open-site-login-settings"]')
+  assert.ok(action)
+  action.click()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const opened = c.__calls.find(call => call.api === 'tabs.create')
+  assert.match(opened.args[0].url, /ui\/site\/site\.html\?origin=https%3A%2F%2Fa\.test/)
+})
+
 test('立即測試:抓不到時顯示原因', async () => {
   const { c, pk, doc } = await fresh()
   c.__setRuntimeResponder(() => ({ ok: false, error: 'not_found' }))
   pk.render({ locator: LOCATOR, preview: '1', previewValue: 1, url: 'https://a.test/p', tabId: 7 })
   await pk.handleTestNow()
   assert.match(doc.getElementById('errors').textContent, /not_found|找不到/)
+})
+
+test('AC-C6:multi 找不到值時，失敗列的修復入口帶正確 fieldKey', async () => {
+  const { c, pk, doc } = await fresh()
+  c.__setRuntimeResponder(message => {
+    if (message?.type === 'TEST_TASK') return { ok: false, error: 'not_found', message: '找不到第二值', fields: { second: { ok: false, error: 'not_found' } } }
+    if (message?.type === 'BEGIN_FIELD_REPAIR') return { ok: true, tabId: 44 }
+    return undefined
+  })
+  const fields = [
+    { key: 'first', name: '第一值', mode: 'number', source: { locator: { css: '#first' } }, spec: { strategy: 'auto' } },
+    { key: 'second', name: '第二值', mode: 'number', source: { locator: { css: '#second' } }, spec: { strategy: 'auto' } }
+  ]
+  pk.render({ task: { id: 'task-not-found', mode: 'multi', fields }, fields, locator: LOCATOR, url: 'https://a.test/p' })
+  doc.getElementById('name').value = '多值任務'
+  await pk.handleTestNow()
+  const failedRow = [...doc.querySelectorAll('#field-list [data-field-row]')].find(row => row.dataset.fieldKey === 'second')
+  assert.equal(failedRow.querySelector('[data-field-result]').dataset.state, 'error')
+  failedRow.querySelector('[data-field-repair]').click()
+  const begin = c.__calls.map(call => call.args?.[0]).find(message => message?.type === 'BEGIN_FIELD_REPAIR')
+  assert.equal(begin.fieldKey, 'second', '錯誤旁操作必須進到正確欄位的修復入口')
+  assert.match(doc.getElementById('errors').textContent, /重新選取|修復/)
 })

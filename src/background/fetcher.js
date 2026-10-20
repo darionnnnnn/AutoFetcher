@@ -1,5 +1,5 @@
 // AutoFetcher 擷取流程：開分頁、注入、擷取、寫紀錄、重試
-import { getTask, checkTaskExecution, updateTasks, appendRecord, appendRecords, getRecordsByDate, getRecordsInRange, getSettings, getAlertCommitLog, updateAlertLog, updateAlertCommitLog, setLastValue, setLastValues, setLastValuesForExecution, clearLastValuesForExecution, clearHealthForExecution, getLastValues, getHealthMap, getRunStatus, setRunStatus, setRunStatusForExecution, getRunState, updateRunState, updateMissedList } from '../shared/storage.js'
+import { getTask, checkTaskExecution, updateTasks, appendRecord, appendRecords, appendRecordsForExecution, getRecordsByDate, getRecordsInRange, getSettings, getAlertCommitLog, updateAlertLog, updateAlertCommitLog, setLastValue, setLastValues, setLastValuesForExecution, clearLastValuesForExecution, clearHealthForExecution, getLastValues, getHealthMap, getRunStatus, setRunStatus, setRunStatusForExecution, getRunState, updateRunState, updateMissedList } from '../shared/storage.js'
 import { waitMsOf, timeoutMsOf, preActionFailure, DEFAULT_WAIT_TIMEOUT_MS, messageTimeoutMs, holdMsOf, capStepMs, PRE_ACTION_STEP_MAX_MS, PRE_ACTION_STEP_CAP_NOTE } from '../shared/preaction.js'
 import { seriesIdOf, parentIdOf, buildSeriesIndex, nameOf } from '../shared/series-index.js'
 import { MSG } from '../shared/messages.js'
@@ -619,7 +619,10 @@ async function appendMultiRecordsOnce(date, records, parentId, slot, commitId, d
   const pending = records.filter(record => !byId.has(record.taskId))
   if (pending.length > 0) {
     try {
-      await appendRecords(date, pending)
+      const appended = executionFingerprint
+        ? await appendRecordsForExecution(date, pending, parentId, executionFingerprint)
+        : (await appendRecords(date, pending), true)
+      if (!appended) return { records: records.map(record => byId.get(record.taskId) || record), fresh: [], taskChanged: true }
     } catch (err) {
       // storage.set 可能在實際寫入後才把例外傳回；確認所有 field 已落盤時，
       // 視為提交成功並繼續補帳本，不進外層 failure path 追加第二份紀錄。
@@ -813,6 +816,7 @@ async function writeMultiFailureRecords(task, slot, status, error, opts = {}) {
   const committedResult = await appendMultiRecordsOnce(
     date, records.map(slimRecord), task.id, slot, commitId, dedupe, opts.executionFingerprint
   )
+  if (committedResult.taskChanged) return { ...TASK_CHANGED_RESULT }
   if (opts.executionSnapshot && !(await multiExecutionStillValid(task, opts.executionSnapshot))) {
     return { ...TASK_CHANGED_RESULT }
   }
@@ -1224,7 +1228,12 @@ export async function runTask(task, opts = {}) {
 
         // 8. 確認登入狀態（若停留在登入頁則執行自動登入）
         checkDeadline()
-        const login = await ensureLoggedIn(tabId, task, { pollMs, loadTimeoutMs, extraDelayMs, deadlineAt })
+        const login = await ensureLoggedIn(tabId, task, {
+          pollMs, loadTimeoutMs, extraDelayMs, deadlineAt,
+          checkTimeoutMs: opts.checkTimeoutMs,
+          fillTimeoutMs: opts.fillTimeoutMs,
+          interactivePreview: opts.interactivePreview === true
+        })
         // 登入流程填了表單、換了頁,入口的載入次數量不到它:自己標記頁面被動過。
         // 本來打算沿用前置動作狀態的(session 剛好在兩個任務之間過期),回任務網址重跑。
         if (login?.attempted === true && acquiredTab) {
@@ -1576,6 +1585,7 @@ export async function runTask(task, opts = {}) {
               date, records, task.id, slot, commitId, !isManual,
               isMulti ? executionFingerprint : undefined
             )
+            if (committedResult.taskChanged) return { ...TASK_CHANGED_RESULT }
             const committedRecords = committedResult.records
             if (isMulti && !(await multiExecutionStillValid(task, executionSnapshot))) {
               return { ...TASK_CHANGED_RESULT }
