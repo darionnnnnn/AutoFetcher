@@ -558,7 +558,7 @@
 ### 14.6 最終驗收、文件與交付
 
 - [x] **T18** — 已完成：體檢後最終 npm test 3322/3322 通過，0失敗/取消/略過。體檢前13套核心smoke exit0；體檢後補跑受影響flows、pending重試、排程交錯、privacy，全部通過；release結果另見T19。原始輸出收錄evidence/af23/qa-post-review-unit.txt與qa-review-background-browser.txt、qa-post-review-browser.txt。初次3297項有3項快取fixture取消，修正後最終全套已無取消；未降低斷言或重跑效能矩陣。
-- [ ] **T19 最終發行檔與升級（F5/F6）**：以最終程式重新產生 0.22.0 交付物及 SHA-256，完成隔離 profile 原地升級及核心流程。驗收：檔案與 src 相同、runtime 版本正確、同 extension ID、任務／歷史保留。先前升級已通過，但其封裝 hash 不能代表之後修改的程式；不宣稱使用者安裝已更新。
+- [x] **T19** — 已完成：最終0.22.0交付目錄89檔逐一SHA-256與src、隔離升級套件三方相同；0.21.0原地升級同extension ID，任務/歷史保留，schema3/4設定匯入、歷史JSON與兩輪G1建立/修復/替換/新資料皆通過。第一次G1第二輪試抓45秒逾時，加入click/TEST_TASK診斷後同src重跑PASS，根因未確定；保留失敗與成功原始輸出，不宣稱已修復未知原因。證據final-release-evidence.json、qa-final-release-recheck.txt。實際使用者安裝未變。
 - [ ] **T20 文件、提交與完整收尾**：更新 PLAN／29 項 AC 證據表、README、SPEC、CLAUDE、BACKLOG；收錄可公開的原始結果與限制；逐段 commit/push 尚未推送的程式、測試及文件。驗收：每項 mandatory AC 有命令、預期／實際、版本與證據；QA 與本輪分支內容一致，遠端 head 確認，沒有未交代的修改。
 
 ## 不應重新列為待實作的項目

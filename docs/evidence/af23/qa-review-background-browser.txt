@@ -1,0 +1,39 @@
+[smoke] af23_c6_pending_browser.mjs
+[C6 pending] fixture ready
+[C6 pending] extension worker ready
+[C6 pending] task and old-series card seeded
+[C6 pending] edit picker ready
+[C6 pending] clicking replace action
+[C6 pending] replace click dispatched
+[C6 pending] source tab target found
+[C6 pending] replacement picker opened
+[C6 pending] injected cleanup failure is visible in source picker
+[C6 pending] clicked same-operation confirmation
+{
+  "status": "PASS",
+  "flow": "C6 pending cleanup → visible same-operation retry",
+  "operationId": "667eba00-48bc-4464-add5-455feca77687",
+  "fieldKeys": [
+    "field-da7e073b-f299-4418-8207-439167930f9d"
+  ],
+  "archivedCount": 1,
+  "retryClicks": 1,
+  "browser": "Chrome/152.0.7977.82",
+  "extensionSource": "<workspace>/work/qa/src"
+}
+[smoke] af23_t06_inflight_scheduler.mjs
+[T06] repair EXTRACT released to native Chrome messaging
+[PASS] T06 scheduled EXTRACT held in Chrome; real Picker repair preserves history and rejects old result { originalTabId: 946445951 }
+[PASS] T06 scheduled EXTRACT held in Chrome; confirmed delete clears own history and stale run cannot recreate it
+[smoke] af23_privacy.mjs
+{
+  status: 'PASS',
+  permissionsUnchanged: true,
+  workerObserved: true,
+  requestCount: 68,
+  diagnosticCount: 0,
+  formalStorageUnchanged: true,
+  sourceTokenPolicy: 'exact configured fixture URL only',
+  error: 'login_failed',
+  secretSentinelsAbsent: true
+}

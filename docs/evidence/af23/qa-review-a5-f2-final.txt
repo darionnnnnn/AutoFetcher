@@ -1,0 +1,255 @@
+TAP version 13
+# Subtest: AC-A2 ACK 延遲時保留畫面；成功才退出，拒絕保留原因
+    # Subtest: success
+    ok 1 - success
+      ---
+      duration_ms: 71.922291
+      ...
+    # Subtest: reject
+    ok 2 - reject
+      ---
+      duration_ms: 25.5095
+      ...
+    # Subtest: cancel
+    ok 3 - cancel
+      ---
+      duration_ms: 19.521
+      ...
+    # Subtest: timeout
+    ok 4 - timeout
+      ---
+      duration_ms: 41.662666
+      ...
+    # Subtest: channel
+    ok 5 - channel
+      ---
+      duration_ms: 24.033834
+      ...
+    1..5
+ok 1 - AC-A2 ACK 延遲時保留畫面；成功才退出，拒絕保留原因
+  ---
+  duration_ms: 183.538625
+  ...
+# Subtest: AC-A2 uncertain repair retries the immutable same payload from the visible control
+ok 2 - AC-A2 uncertain repair retries the immutable same payload from the visible control
+  ---
+  duration_ms: 44.199042
+  ...
+# Subtest: AC-A2 deterministic repair rejection permits correcting the selection
+ok 3 - AC-A2 deterministic repair rejection permits correcting the selection
+  ---
+  duration_ms: 25.336584
+  ...
+# Subtest: AC-A5 舊修復拒絕來源/stateActions 衝突；改名與排程保留最新內容
+ok 4 - AC-A5 舊修復拒絕來源/stateActions 衝突；改名與排程保留最新內容
+  ---
+  duration_ms: 29.339084
+  ...
+# Subtest: AC-A5 共用 URL 或前置動作改變會使舊來源授權失效
+    # Subtest: url
+    ok 1 - url
+      ---
+      duration_ms: 7.081208
+      ...
+    # Subtest: preActions
+    ok 2 - preActions
+      ---
+      duration_ms: 6.398667
+      ...
+    1..2
+ok 5 - AC-A5 共用 URL 或前置動作改變會使舊來源授權失效
+  ---
+  duration_ms: 13.780625
+  ...
+# Subtest: AC-A5 updateTasks 鎖內仍核對共用 URL 與前置動作快照
+    # Subtest: url
+    ok 1 - url
+      ---
+      duration_ms: 6.928208
+      ...
+    # Subtest: preActions
+    ok 2 - preActions
+      ---
+      duration_ms: 6.928666
+      ...
+    1..2
+ok 6 - AC-A5 updateTasks 鎖內仍核對共用 URL 與前置動作快照
+  ---
+  duration_ms: 14.043542
+  ...
+# Subtest: AC-A6 scalar same-value repair preserves strategy, multiplier, precision and final extracted value
+ok 7 - AC-A6 scalar same-value repair preserves strategy, multiplier, precision and final extracted value
+  ---
+  duration_ms: 10.476625
+  ...
+# Subtest: AC-A6 cell repair keeps explicit positions and inner path while replacing coordinates
+ok 8 - AC-A6 cell repair keeps explicit positions and inner path while replacing coordinates
+  ---
+  duration_ms: 9.90325
+  ...
+# Subtest: AC-A3 replace starts with the selected metric parameters instead of inheriting old extraction semantics
+ok 9 - AC-A3 replace starts with the selected metric parameters instead of inheriting old extraction semantics
+  ---
+  duration_ms: 10.829667
+  ...
+# Subtest: AC-A3 task 寫入前中斷可由已記錄操作恢復；重送不會建立第二個 key
+ok 10 - AC-A3 task 寫入前中斷可由已記錄操作恢復；重送不會建立第二個 key
+  ---
+  duration_ms: 9.842209
+  ...
+# Subtest: AC-A4 worker entry recovers pending operation on ordinary worker reload
+ok 11 - AC-A4 worker entry recovers pending operation on ordinary worker reload
+  ---
+  duration_ms: 9.205875
+  ...
+# Subtest: AC-A4 cancel cannot report success while submitted repair is waiting on storage
+ok 12 - AC-A4 cancel cannot report success while submitted repair is waiting on storage
+  ---
+  duration_ms: 6.431125
+  ...
+# Subtest: AC-A3 repair preserves the exact iframe source URL in the formal task
+ok 13 - AC-A3 repair preserves the exact iframe source URL in the formal task
+  ---
+  duration_ms: 14.921417
+  ...
+# Subtest: AC-A4 terminal repair result stays immutable and pending replay does not close the source tab
+ok 14 - AC-A4 terminal repair result stays immutable and pending replay does not close the source tab
+  ---
+  duration_ms: 7.071416
+  ...
+# Subtest: AC-A4 terminal failure replay returns the stored result shape, not a receipt object
+ok 15 - AC-A4 terminal failure replay returns the stored result shape, not a receipt object
+  ---
+  duration_ms: 5.216125
+  ...
+# Subtest: AC-A4 pending operation older than the completed TTL remains recoverable
+ok 16 - AC-A4 pending operation older than the completed TTL remains recoverable
+  ---
+  duration_ms: 3.695083
+  ...
+# Subtest: AC-A4 prune physically removes expired receipts but never removes old pending operations
+ok 17 - AC-A4 prune physically removes expired receipts but never removes old pending operations
+  ---
+  duration_ms: 4.102
+  ...
+# Subtest: AC-A4 worker recovery 惰性清除過期完成收據且連續恢復冪等
+ok 18 - AC-A4 worker recovery 惰性清除過期完成收據且連續恢復冪等
+  ---
+  duration_ms: 3.424625
+  ...
+# Subtest: AC-A4 recovery continues after one operation and its diagnostic write both fail
+ok 19 - AC-A4 recovery continues after one operation and its diagnostic write both fail
+  ---
+  duration_ms: 5.650208
+  ...
+# Subtest: AC-A4 task 已替換但版面清理中斷，重啟只補清理且不再換 key
+ok 20 - AC-A4 task 已替換但版面清理中斷，重啟只補清理且不再換 key
+  ---
+  duration_ms: 13.826625
+  ...
+# Subtest: AC-A5 already-applied no-op repair 仍核對共享任務來源語意
+    # Subtest: url
+    ok 1 - url
+      ---
+      duration_ms: 8.046125
+      ...
+    # Subtest: preActions
+    ok 2 - preActions
+      ---
+      duration_ms: 7.861583
+      ...
+    1..2
+ok 21 - AC-A5 already-applied no-op repair 仍核對共享任務來源語意
+  ---
+  duration_ms: 16.129667
+  ...
+# Subtest: AC-A4 lastValues 清理失敗後會略過已完成版面清理並完成恢復
+ok 22 - AC-A4 lastValues 清理失敗後會略過已完成版面清理並完成恢復
+  ---
+  duration_ms: 13.765292
+  ...
+# Subtest: AC-A4 alarm 重建失敗後恢復不重做欄位替換
+ok 23 - AC-A4 alarm 重建失敗後恢復不重做欄位替換
+  ---
+  duration_ms: 8.638625
+  ...
+# Subtest: AC-F2 source change while append waits for rec2 lock blocks the append and preserves completed history
+ok 24 - AC-F2 source change while append waits for rec2 lock blocks the append and preserves completed history
+  ---
+  duration_ms: 34.7005
+  ...
+# Subtest: AC-F2 source change after rec2 check but before set is replay-cleaned; cleanup can resume twice
+ok 25 - AC-F2 source change after rec2 check but before set is replay-cleaned; cleanup can resume twice
+  ---
+  duration_ms: 12.451916
+  ...
+# Subtest: AC-F2 deletion while append holds rec2 lock does not leave records for the deleted task
+ok 26 - AC-F2 deletion while append holds rec2 lock does not leave records for the deleted task
+  ---
+  duration_ms: 9.634791
+  ...
+# Subtest: AC-F2 invalidation cleanup is scoped to scheduled commitId and leaves manual executionId records alone
+ok 27 - AC-F2 invalidation cleanup is scoped to scheduled commitId and leaves manual executionId records alone
+  ---
+  duration_ms: 6.178041
+  ...
+# Subtest: AC-F2 scheduled multi repair during extraction cannot publish stale records, ledger, health, or alerts
+ok 28 - AC-F2 scheduled multi repair during extraction cannot publish stale records, ledger, health, or alerts
+  ---
+  duration_ms: 49.839167
+  ...
+# Subtest: AC-F2 scheduled multi replace during extraction cannot publish stale records, ledger, health, or alerts
+ok 29 - AC-F2 scheduled multi replace during extraction cannot publish stale records, ledger, health, or alerts
+  ---
+  duration_ms: 10.509875
+  ...
+# Subtest: AC-F2 scheduled multi delete during extraction cannot publish stale records, ledger, health, or alerts
+ok 30 - AC-F2 scheduled multi delete during extraction cannot publish stale records, ledger, health, or alerts
+  ---
+  duration_ms: 7.363583
+  ...
+# Subtest: AC-F2 precheck alarm still warns and TEST_TASK remains a dry run after repair integrity changes
+ok 31 - AC-F2 precheck alarm still warns and TEST_TASK remains a dry run after repair integrity changes
+  ---
+  duration_ms: 6.962542
+  ...
+# Subtest: AC-F2 a new BEGIN recovers the same pending journal without opening a second repair tab
+ok 32 - AC-F2 a new BEGIN recovers the same pending journal without opening a second repair tab
+  ---
+  duration_ms: 8.184458
+  ...
+# Subtest: AC-A4 pending replacement cleanup recovers by either old or new field key before field validation
+    # Subtest: BEGIN by price
+    ok 1 - BEGIN by price
+      ---
+      duration_ms: 7.152334
+      ...
+    # Subtest: BEGIN by field-recovered
+    ok 2 - BEGIN by field-recovered
+      ---
+      duration_ms: 8.456
+      ...
+    1..2
+ok 33 - AC-A4 pending replacement cleanup recovers by either old or new field key before field validation
+  ---
+  duration_ms: 15.952625
+  ...
+# Subtest: AC-A4 concurrent BEGIN calls share one source tab and a closed grant can be started again
+ok 34 - AC-A4 concurrent BEGIN calls share one source tab and a closed grant can be started again
+  ---
+  duration_ms: 5.307583
+  ...
+# Subtest: AC-F4 auto fetch diagnostics redact credential, URL token, hidden-page, and exception sentinels
+ok 35 - AC-F4 auto fetch diagnostics redact credential, URL token, hidden-page, and exception sentinels
+  ---
+  duration_ms: 7.667
+  ...
+1..35
+# tests 48
+# suites 0
+# pass 48
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 828.418

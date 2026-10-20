@@ -874,11 +874,38 @@ try {
   await picker.waitForSelector('#batch-section:not([hidden])', { timeout: 15000 })
   const secondSuggestedNames = await picker.evaluate(() => [...document.querySelectorAll('#batch-list [data-batch-name]')].map(input => input.value))
   if (JSON.stringify(secondSuggestedNames) !== JSON.stringify(['Second Round Only'])) throw new Error(`second round name did not carry into settings: ${JSON.stringify(secondSuggestedNames)}`)
+  await picker.evaluate(() => {
+    window.__g1SecondTestTrace = []
+    document.addEventListener('click', event => {
+      window.__g1SecondTestTrace.push({ event: 'click', id: event.target?.id, trusted: event.isTrusted })
+    }, { capture: true })
+    const send = chrome.runtime.sendMessage.bind(chrome.runtime)
+    chrome.runtime.sendMessage = (message, ...args) => {
+      const response = send(message, ...args)
+      if (message?.type === 'TEST_TASK') {
+        window.__g1SecondTestTrace.push({ event: 'request', type: message.type })
+        Promise.resolve(response).then(value => window.__g1SecondTestTrace.push({ event: 'response', ok: value?.ok, error: value?.error }))
+          .catch(error => window.__g1SecondTestTrace.push({ event: 'rejection', error: String(error) }))
+      }
+      return response
+    }
+  })
   await clickPanel(picker, '#test-now')
-  await picker.waitForFunction(() => {
-    const rows = [...document.querySelectorAll('#batch-list [data-batch-result]')]
-    return rows.length === 1 && rows[0].textContent.trim() !== '—' && !document.querySelector('#test-now')?.disabled
-  }, { timeout: 45000 })
+  try {
+    await picker.waitForFunction(() => {
+      const rows = [...document.querySelectorAll('#batch-list [data-batch-result]')]
+      return rows.length === 1 && rows[0].textContent.trim() !== '—' && !document.querySelector('#test-now')?.disabled
+    }, { timeout: 45000 })
+  } catch (error) {
+    console.log('[diagnostic] second-round dry run', await picker.evaluate(() => ({
+      trace: window.__g1SecondTestTrace, visibility: document.visibilityState,
+      button: document.querySelector('#test-now')?.outerHTML,
+      rows: [...document.querySelectorAll('#batch-list [data-batch-result]')].map(e => e.textContent),
+      errors: document.querySelector('#errors')?.textContent,
+      status: document.querySelector('#group-draft-status')?.textContent
+    })))
+    throw error
+  }
   const secondDryRun = await picker.evaluate(() => ({
     names: [...document.querySelectorAll('#batch-list [data-batch-name]')].map(input => input.value),
     results: [...document.querySelectorAll('#batch-list [data-batch-result]')].map(node => node.textContent.trim())

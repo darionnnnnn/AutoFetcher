@@ -1,0 +1,245 @@
+{
+  "schema": "af23-sources-browser-v1",
+  "generatedAt": "2026-10-20T15:39:19.225Z",
+  "cases": [
+    {
+      "id": "html-duplicate-row-insert",
+      "expected": "reject",
+      "startedAt": "2026-10-20T15:39:11.837Z",
+      "selectionPanel": "已選 1／100已選 1 個值:1 · 價格×移除最後一項可按復原或 Ctrl／⌘＋Z 還原上一步\nShift＋點可以拉出範圍，Ctrl+A 全選\n已選 1 個值，再點其他格可加選、點已選的可取消，好了按完成（或雙擊、Enter）完成（1 個值）取消復原去掉第一格去掉最後一格移到左側",
+      "mutationState": {
+        "selectedText": "123",
+        "targetHtml": "<table id=\"dup-row\"><thead><tr><th>項目</th><th>價格</th></tr></thead><tbody><tr><th>1</th><td>111</td></tr>\n<tr id=\"dup-selected-row\"><th>1</th><td id=\"dup-selected\" style=\"outline: rgb(251, 191, 36) solid 2px; transition: outline-color 100ms, background-color 100ms;\" data-af-cell=\"\" data-af-picked=\"\">123</td></tr><tr><th>2</th><td>200</td></tr></tbody></table>"
+      },
+      "beforeMutation": {
+        "targetPresent": true,
+        "frameUrl": "http://127.0.0.1:52584/"
+      },
+      "mutationApplied": true,
+      "rejectionText": "已選 1／100已選 1 個值:1 · 價格×移除最後一項可按復原或 Ctrl／⌘＋Z 還原上一步\n選取來源在送出前已改變；請重新選取目前要抓的值\nShift＋點可以拉出範圍，Ctrl+A 全選\n已選 1 個值，再點其他格可加選、點已選的可取消，好了按完成（或雙擊、Enter）完成（1 個值）取消復原去掉第一格去掉最後一格移到左側",
+      "journalDelta": 0,
+      "pass": true,
+      "finishedAt": "2026-10-20T15:39:12.679Z"
+    },
+    {
+      "id": "html-selected-row-delete",
+      "expected": "reject",
+      "startedAt": "2026-10-20T15:39:12.679Z",
+      "selectionPanel": "已選 1／100已選 1 個值:A · 價格×移除最後一項可按復原或 Ctrl／⌘＋Z 還原上一步\nShift＋點可以拉出範圍，Ctrl+A 全選\n已選 1 個值，再點其他格可加選、點已選的可取消，好了按完成（或雙擊、Enter）完成（1 個值）取消復原去掉第一格去掉最後一格移到左側",
+      "mutationState": {
+        "selectedText": null,
+        "targetHtml": "<table id=\"delete-row\"><thead><tr><th>項目</th><th>價格</th></tr></thead><tbody>\n<tr><th>B</th><td>200</td></tr></tbody></table>"
+      },
+      "beforeMutation": {
+        "targetPresent": true,
+        "frameUrl": "http://127.0.0.1:52584/"
+      },
+      "mutationApplied": true,
+      "rejectionText": "已選 1／100已選 1 個值:A · 價格×移除最後一項可按復原或 Ctrl／⌘＋Z 還原上一步\n選取來源在送出前已改變；請重新選取目前要抓的值\nShift＋點可以拉出範圍，Ctrl+A 全選\n已選 1 個值，再點其他格可加選、點已選的可取消，好了按完成（或雙擊、Enter）完成（1 個值）取消復原去掉第一格去掉最後一格移到左側",
+      "journalDelta": 0,
+      "pass": true,
+      "finishedAt": "2026-10-20T15:39:13.492Z"
+    },
+    {
+      "id": "html-fixed-column-insert",
+      "expected": "reject",
+      "startedAt": "2026-10-20T15:39:13.493Z",
+      "selectionPanel": "已選 1／100已選 1 個值:A×移除最後一項可按復原或 Ctrl／⌘＋Z 還原上一步\nShift＋點可以拉出範圍，Ctrl+A 全選\n已選 1 個值，再點其他格可加選、點已選的可取消，好了按完成（或雙擊、Enter）完成（1 個值）取消復原去掉第一格去掉最後一格移到左側",
+      "mutationState": {
+        "selectedText": "123",
+        "targetHtml": "<table id=\"insert-col\"><tbody>\n<tr><th>A</th><td>111</td><td id=\"col-selected\" style=\"outline: rgb(251, 191, 36) solid 2px; transition: outline-color 100ms, background-color 100ms;\" data-af-cell=\"\" data-af-picked=\"\">123</td></tr><tr><th>B</th><td>111</td><td>200</td></tr></tbody></table>"
+      },
+      "beforeMutation": {
+        "targetPresent": true,
+        "frameUrl": "http://127.0.0.1:52584/"
+      },
+      "mutationApplied": true,
+      "rejectionText": "已選 1／100已選 1 個值:A×移除最後一項可按復原或 Ctrl／⌘＋Z 還原上一步\n選取來源在送出前已改變；請重新選取目前要抓的值\nShift＋點可以拉出範圍，Ctrl+A 全選\n已選 1 個值，再點其他格可加選、點已選的可取消，好了按完成（或雙擊、Enter）完成（1 個值）取消復原去掉第一格去掉最後一格移到左側",
+      "journalDelta": 0,
+      "pass": true,
+      "finishedAt": "2026-10-20T15:39:14.295Z"
+    },
+    {
+      "id": "html-table-node-replaced",
+      "expected": "reject",
+      "startedAt": "2026-10-20T15:39:14.296Z",
+      "selectionPanel": "已選 1／100已選 1 個值:A · 價格×移除最後一項可按復原或 Ctrl／⌘＋Z 還原上一步\nShift＋點可以拉出範圍，Ctrl+A 全選\n已選 1 個值，再點其他格可加選、點已選的可取消，好了按完成（或雙擊、Enter）完成（1 個值）取消復原去掉第一格去掉最後一格移到左側",
+      "mutationState": {
+        "selectedText": "123",
+        "targetHtml": "<table id=\"replace-table\"><thead><tr><th>項目</th><th>價格</th></tr></thead><tbody>\n<tr><th>A</th><td id=\"replace-selected\" style=\"outline: rgb(251, 191, 36) solid 2px; transition: outline-color 100ms, background-color 100ms;\" data-af-cell=\"\" data-af-picked=\"\">123</td></tr><tr><th>B</th><td>200</td></tr></tbody></table>"
+      },
+      "beforeMutation": {
+        "targetPresent": true,
+        "frameUrl": "http://127.0.0.1:52584/"
+      },
+      "mutationApplied": true,
+      "rejectionText": "已選 0／100頁面剛剛更新過，請重新點選\n把滑鼠移到要抓的內容上；還沒出現的話按 Esc，先操作頁面讓它載入，再在它上面按右鍵完成取消復原去掉第一格去掉最後一格移到左側",
+      "journalDelta": 0,
+      "pass": true,
+      "finishedAt": "2026-10-20T15:39:15.127Z"
+    },
+    {
+      "id": "aria-duplicate-row-insert",
+      "expected": "reject",
+      "startedAt": "2026-10-20T15:39:15.128Z",
+      "selectionPanel": "已選 1／100已選 1 個值:1 · 價格×移除最後一項（位置已變）\n可按復原或 Ctrl／⌘＋Z 還原上一步\nShift＋點可以拉出範圍，Ctrl+A 全選\n已選 1 個值，再點其他格可加選、點已選的可取消，好了按完成（或雙擊、Enter）完成（1 個值）取消復原去掉第一格去掉最後一格移到左側",
+      "mutationState": {
+        "selectedText": "123",
+        "targetHtml": "<div id=\"aria-grid\" role=\"grid\" aria-label=\"ARIA fixture\">\n <div role=\"row\"><span role=\"columnheader\">項目</span><span role=\"columnheader\">價格</span></div>\n <div role=\"row\"><span role=\"rowheader\">1</span><span role=\"gridcell\">111</span></div><div role=\"row\"><span role=\"rowheader\">1</span><span role=\"gridcell\" id=\"aria-selected\" style=\"outline: rgb(251, 191, 36) solid 2px; transition: outline-color 100ms, background-color 100ms;\" data-af-cell=\"\" data-af-picked=\"\">123</span></div>\n <div role=\"row\"><span role=\"rowheader\">2</span><span role=\"gridcell\">200</span></div>\n</div>"
+      },
+      "beforeMutation": {
+        "targetPresent": true,
+        "frameUrl": "http://127.0.0.1:52584/"
+      },
+      "mutationApplied": true,
+      "rejectionText": "已選 1／100已選 1 個值:1 · 價格×移除最後一項（位置已變）\n可按復原或 Ctrl／⌘＋Z 還原上一步\n選取來源在送出前已改變；請重新選取目前要抓的值\nShift＋點可以拉出範圍，Ctrl+A 全選\n已選 1 個值，再點其他格可加選、點已選的可取消，好了按完成（或雙擊、Enter）完成（1 個值）取消復原去掉第一格去掉最後一格移到左側",
+      "journalDelta": 0,
+      "pass": true,
+      "finishedAt": "2026-10-20T15:39:15.928Z"
+    },
+    {
+      "id": "css-grid-fixed-column-insert",
+      "expected": "reject",
+      "startedAt": "2026-10-20T15:39:15.928Z",
+      "selectionPanel": "已選 1／100已選 1 個值:A×移除最後一項可按復原或 Ctrl／⌘＋Z 還原上一步\nShift＋點可以拉出範圍，Ctrl+A 全選\n已選 1 個值，再點其他格可加選、點已選的可取消，好了按完成（或雙擊、Enter）完成（1 個值）取消復原去掉第一格去掉最後一格移到左側",
+      "mutationState": {
+        "selectedText": "123",
+        "targetHtml": "<div id=\"css-grid\" class=\"css-grid\" role=\"table\" aria-label=\"CSS fixture\">\n <div role=\"row\"><span role=\"rowheader\">A</span><span role=\"cell\">111</span><span role=\"cell\" id=\"css-selected\" style=\"outline: rgb(251, 191, 36) solid 2px; transition: outline-color 100ms, background-color 100ms;\" data-af-cell=\"\" data-af-picked=\"\">123</span></div>\n <div role=\"row\"><span role=\"rowheader\">B</span><span role=\"cell\">111</span><span role=\"cell\">200</span></div>\n</div>"
+      },
+      "beforeMutation": {
+        "targetPresent": true,
+        "frameUrl": "http://127.0.0.1:52584/"
+      },
+      "mutationApplied": true,
+      "rejectionText": "已選 1／100已選 1 個值:A×移除最後一項可按復原或 Ctrl／⌘＋Z 還原上一步\n選取來源在送出前已改變；請重新選取目前要抓的值\nShift＋點可以拉出範圍，Ctrl+A 全選\n已選 1 個值，再點其他格可加選、點已選的可取消，好了按完成（或雙擊、Enter）完成（1 個值）取消復原去掉第一格去掉最後一格移到左側",
+      "journalDelta": 0,
+      "pass": true,
+      "finishedAt": "2026-10-20T15:39:16.744Z"
+    },
+    {
+      "id": "same-node-value-refresh",
+      "expected": "accept",
+      "startedAt": "2026-10-20T15:39:16.744Z",
+      "selectionPanel": "已選 1／100已選 1 個值:A · 價格×移除最後一項可按復原或 Ctrl／⌘＋Z 還原上一步\nShift＋點可以拉出範圍，Ctrl+A 全選\n已選 1 個值，再點其他格可加選、點已選的可取消，好了按完成（或雙擊、Enter）完成（1 個值）取消復原去掉第一格去掉最後一格移到左側",
+      "mutationState": {
+        "selectedText": "124",
+        "targetHtml": "<table id=\"refresh-table\"><thead><tr><th>項目</th><th>價格</th></tr></thead><tbody>\n<tr><th>A</th><td id=\"refresh-selected\" style=\"outline: rgb(251, 191, 36) solid 2px; transition: outline-color 100ms, background-color 100ms;\" data-af-cell=\"\" data-af-picked=\"\">124</td></tr></tbody></table>"
+      },
+      "beforeMutation": {
+        "targetPresent": true,
+        "frameUrl": "http://127.0.0.1:52584/"
+      },
+      "mutationApplied": true,
+      "journalDelta": 1,
+      "fieldKey": "b1-7",
+      "pass": true,
+      "finishedAt": "2026-10-20T15:39:17.011Z"
+    },
+    {
+      "id": "explicit-first-follows-insert",
+      "expected": "accept",
+      "startedAt": "2026-10-20T15:39:17.011Z",
+      "selectionPanel": "已選 1／100已選 1 個值:A · 價格×移除最後一項可按復原或 Ctrl／⌘＋Z 還原上一步\nShift＋點可以拉出範圍，Ctrl+A 全選\n已選 1 個值，再點其他格可加選、點已選的可取消，好了按完成（或雙擊、Enter）完成（1 個值）取消復原去掉第一格去掉最後一格移到左側",
+      "mutationState": {
+        "selectedText": "100",
+        "targetHtml": "<table id=\"first-table\"><thead><tr><th>項目</th><th>價格</th></tr></thead><tbody><tr><th>新列</th><td>111</td></tr>\n<tr><th>A</th><td id=\"first-selected\" style=\"outline: rgb(251, 191, 36) solid 2px; transition: outline-color 100ms, background-color 100ms;\" data-af-cell=\"\" data-af-picked=\"\">100</td></tr><tr><th>B</th><td id=\"first-next\">200</td></tr></tbody></table>"
+      },
+      "beforeMutation": {
+        "targetPresent": true,
+        "frameUrl": "http://127.0.0.1:52584/"
+      },
+      "mutationApplied": true,
+      "journalDelta": 1,
+      "fieldKey": "b1-8",
+      "pass": true,
+      "finishedAt": "2026-10-20T15:39:17.277Z"
+    },
+    {
+      "id": "explicit-last-follows-delete",
+      "expected": "accept",
+      "startedAt": "2026-10-20T15:39:17.277Z",
+      "selectionPanel": "已選 1／100已選 1 個值:C · 價格×移除最後一項可按復原或 Ctrl／⌘＋Z 還原上一步\nShift＋點可以拉出範圍，Ctrl+A 全選\n已選 1 個值，再點其他格可加選、點已選的可取消，好了按完成（或雙擊、Enter）完成（1 個值）取消復原去掉第一格去掉最後一格移到左側",
+      "mutationState": {
+        "selectedText": null,
+        "targetHtml": "<table id=\"last-table\"><thead><tr><th>項目</th><th>價格</th></tr></thead><tbody>\n<tr><th>A</th><td>100</td></tr><tr><th>B</th><td id=\"last-prev\">200</td></tr></tbody></table>"
+      },
+      "beforeMutation": {
+        "targetPresent": true,
+        "frameUrl": "http://127.0.0.1:52584/"
+      },
+      "mutationApplied": true,
+      "journalDelta": 1,
+      "fieldKey": "b1-9",
+      "pass": true,
+      "finishedAt": "2026-10-20T15:39:17.544Z"
+    },
+    {
+      "id": "unique-header-tbody-refresh",
+      "expected": "accept",
+      "startedAt": "2026-10-20T15:39:17.544Z",
+      "selectionPanel": "已選 1／100已選 1 個值:價格×移除最後一項Shift＋點可以拉出範圍，Ctrl+A 全選\n已選 1 個值，再點其他格可加選、點已選的可取消，好了按完成（或雙擊、Enter）完成（1 個值）取消復原去掉第一格去掉最後一格移到左側",
+      "mutationState": {
+        "selectedText": null,
+        "targetHtml": "<table id=\"header-table\"><thead><tr><th>項目</th><th>價格</th></tr></thead><tbody id=\"header-body\"><tr><th>A</th><td>101</td></tr><tr><th>B</th><td>201</td></tr></tbody></table>"
+      },
+      "beforeMutation": {
+        "targetPresent": false,
+        "frameUrl": "http://127.0.0.1:52584/"
+      },
+      "mutationApplied": true,
+      "journalDelta": 1,
+      "fieldKey": "b1-10",
+      "pass": true,
+      "finishedAt": "2026-10-20T15:39:17.759Z"
+    },
+    {
+      "id": "unique-row-header-follows-reordered-row",
+      "expected": "accept",
+      "startedAt": "2026-10-20T15:39:17.760Z",
+      "selectionPanel": "已選 1／100已選 1 個值:北區 · 價格×移除最後一項可按復原或 Ctrl／⌘＋Z 還原上一步\nShift＋點可以拉出範圍，Ctrl+A 全選\n已選 1 個值，再點其他格可加選、點已選的可取消，好了按完成（或雙擊、Enter）完成（1 個值）取消復原去掉第一格去掉最後一格移到左側",
+      "mutationState": {
+        "selectedText": "100",
+        "targetHtml": "<table id=\"unique-row-table\"><thead><tr><th>區域</th><th>價格</th></tr></thead><tbody>\n<tr id=\"unique-row-other\"><th>南區</th><td>200</td></tr><tr id=\"unique-row\"><th>北區</th><td id=\"unique-row-selected\" style=\"outline: rgb(251, 191, 36) solid 2px; transition: outline-color 100ms, background-color 100ms;\" data-af-cell=\"\" data-af-picked=\"\">100</td></tr></tbody></table>"
+      },
+      "beforeMutation": {
+        "targetPresent": true,
+        "frameUrl": "http://127.0.0.1:52584/"
+      },
+      "mutationApplied": true,
+      "journalDelta": 1,
+      "fieldKey": "b1-11",
+      "pass": true,
+      "finishedAt": "2026-10-20T15:39:18.027Z"
+    },
+    {
+      "id": "iframe-duplicate-row-insert",
+      "expected": "reject",
+      "startedAt": "2026-10-20T15:39:18.027Z",
+      "selectionPanel": "已選 1／100已選 1 個值:1 · 價格×移除最後一項可按復原或 Ctrl／⌘＋Z 還原上一步\nShift＋點可以拉出範圍，Ctrl+A 全選\n已選 1 個值，再點其他格可加選、點已選的可取消，好了按完成（或雙擊、Enter）完成（1 個值）取消復原去掉第一格去掉最後一格移到左側",
+      "mutationState": {
+        "selectedText": "123",
+        "targetHtml": "<table id=\"frame-table\"><thead><tr><th>項目</th><th>價格</th></tr></thead><tbody><tr><th>1</th><td>111</td></tr>\n<tr><th>1</th><td id=\"frame-selected\" style=\"outline: rgb(251, 191, 36) solid 2px; transition: outline-color 100ms, background-color 100ms;\" data-af-cell=\"\" data-af-picked=\"\">123</td></tr><tr><th>2</th><td>200</td></tr></tbody></table>"
+      },
+      "beforeMutation": {
+        "targetPresent": true,
+        "frameUrl": "http://127.0.0.1:52585/frame"
+      },
+      "mutationApplied": true,
+      "rejectionText": "已選 1／100已選 1 個值:1 · 價格×移除最後一項可按復原或 Ctrl／⌘＋Z 還原上一步\n選取來源在送出前已改變；請重新選取目前要抓的值\nShift＋點可以拉出範圍，Ctrl+A 全選\n已選 1 個值，再點其他格可加選、點已選的可取消，好了按完成（或雙擊、Enter）完成（1 個值）取消復原去掉第一格去掉最後一格移到左側",
+      "journalDelta": 0,
+      "pass": true,
+      "finishedAt": "2026-10-20T15:39:19.108Z"
+    }
+  ],
+  "failures": [],
+  "environment": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v22.14.0",
+    "chromePath": "<repository>/.browsers/chrome/mac_arm-152.0.7977.82/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+    "qaSrc": "<workspace>/work/qa/src"
+  },
+  "qaCommit": "079bbd2349874744e5b3e0a84a6d1dc69d7564ae",
+  "extensionVersion": "0.22.0",
+  "pass": true
+}
