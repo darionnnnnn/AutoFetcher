@@ -547,7 +547,7 @@
 ## 4. 頁面與生命週期：待整合確認
 
 - [ ] **T13 按需渲染與過期查詢（D1/D2）**：核對設定頁零隱藏歷史／月曆渲染，以及舊查詢晚回的瀏覽器證據；已有讀取計數與整合案例可沿用。驗收：設定頁不讀歷史、不畫隱藏歷史；A 晚回不能改 B 的 DOM/loading/error，返回上一頁仍正確。
-- [ ] **T14 同文件十輪生命週期（D4）**：新 context 殘留名稱／busy 已修正並推送，七項獨立窄測通過；Luna 已回報真實瀏覽器十輪通過，主代理尚待審查、整合測試檔與證據。驗收：同 context 保留草稿、新 context 重設狀態，listener 不遞增，離開清理 timer。
+- [x] **T14** — 已完成：主代理獨立CfT執行tests/smoke/af23_d4_picker_lifecycle.mjs，同一文件十輪context切換、表單輸入與實際Cancel通過；name/mode/save/test/cancel listener維持1/2/1/1/1。同context保留未存內容、新context重設name/preview/busy。context由正式renderFromPanelCtx驅動；不冒稱十輪完整端到端建立流程，F1另驗。
 
 ## 5. 效能：量測尚未全部完成
 
