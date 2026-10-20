@@ -5,10 +5,11 @@ import puppeteer from 'puppeteer-core'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, resolve, dirname, basename } from 'node:path'
+import { findBrowser, ROOT } from './browser-path.mjs'
 
-const SRC = resolve('src')
-const CHROME = process.env.BROWSER_PATH || join(os.tmpdir(), 'af22-cft', 'chrome', 'win64-154.0.8037.57', 'chrome-win64', 'chrome.exe')
+const SRC = resolve(ROOT, 'src')
+const CHROME = findBrowser()
 const deadline = Date.now() + 300_000
 const ck = label => console.log(`[checkpoint] ${label}`)
 const bounded = async (label, fn, ms = 12000) => {
@@ -886,7 +887,7 @@ try {
   if (profile) {
     const temp = resolve(os.tmpdir())
     const abs = resolve(profile)
-    if (abs.startsWith(`${temp}\\`) && abs.split(/[\\/]/).pop()?.startsWith('af22-g1-')) rmSync(abs, { recursive: true, force: true, maxRetries: 4, retryDelay: 200 })
+    if (dirname(abs) === temp && basename(abs).startsWith('af22-g1-')) rmSync(abs, { recursive: true, force: true, maxRetries: 4, retryDelay: 200 })
     else console.error(`refused profile cleanup outside temp: ${abs}`)
   }
 }

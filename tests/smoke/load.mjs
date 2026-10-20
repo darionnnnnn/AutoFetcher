@@ -2,33 +2,14 @@
 // 用法:node tests/smoke/load.mjs            (預設 Chrome)
 //       BROWSER_PATH="/path/to/Edge" node tests/smoke/load.mjs
 import puppeteer from 'puppeteer-core'
-import { existsSync } from 'node:fs'
 import http from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
+import { findBrowser } from './browser-path.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SRC = resolve(HERE, '../../src')
-const WINDOWS_EDGE_CANDIDATES = process.platform === 'win32'
-  ? [
-      process.env['ProgramFiles(x86)'] && resolve(process.env['ProgramFiles(x86)'], 'Microsoft/Edge/Application/msedge.exe'),
-      process.env.ProgramFiles && resolve(process.env.ProgramFiles, 'Microsoft/Edge/Application/msedge.exe'),
-      process.env.LOCALAPPDATA && resolve(process.env.LOCALAPPDATA, 'Microsoft/Edge/Application/msedge.exe')
-    ]
-  : []
-
-const CANDIDATES = [
-  process.env.BROWSER_PATH,
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-  ...WINDOWS_EDGE_CANDIDATES
-].filter(Boolean)
-
-const exe = CANDIDATES.find(p => existsSync(p))
-if (!exe) {
-  console.log('SKIP:找不到 Chrome 或 Edge 執行檔')
-  process.exit(0)
-}
+const exe = findBrowser()
 const browserName = exe.includes('Edge') ? 'Edge' : 'Chrome'
 
 const errors = []
