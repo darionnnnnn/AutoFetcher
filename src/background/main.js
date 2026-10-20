@@ -230,7 +230,9 @@ async function applyFieldRepair(msg, sender) {
     // Repair changes the source locator while retaining this metric's extraction
     // semantics. The new pick owns the coordinates; all omitted calculation and
     // type options stay attached to the existing field.
-    const next = { ...structuredClone(previous), ...structuredClone(spec) }
+    const next = grant.repairMode === 'repair'
+      ? { ...structuredClone(previous), ...structuredClone(spec) }
+      : structuredClone(spec)
     if (next.cell && previous.cell) {
       next.cell = { ...structuredClone(previous.cell), ...structuredClone(spec.cell) }
       for (const axis of ['row', 'col']) {

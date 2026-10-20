@@ -169,3 +169,30 @@ test('AC-A6 scalar same-value repair preserves strategy, multiplier, precision a
   assert.equal(extractValue(dom.window.document.getElementById('v'), after.spec.fields[0].spec).value, 123.4)
   dom.window.close()
 })
+
+test('AC-A3 replace starts with the selected metric parameters instead of inheriting old extraction semantics', async t => {
+  const f = await setup(t)
+  await f.storage.updateTasks(['af23-repair'], task => {
+    task.fields[0].mode = 'number'
+    task.spec.fields[0].mode = 'number'
+    task.spec.fields[0].spec = { strategy: 'fixed', multiplier: 100, decimals: 2, type: 'currency' }
+    return task
+  })
+  const grant = await begin(f, 'replace')
+  const result = await picked(f, grant, {
+    pickModes: ['text'],
+    picks: [{ block: { axis: 'col', index: 1, aggregate: 'last' } }]
+  })
+  assert.equal(result.ok, true)
+  const after = await f.storage.getTask('af23-repair')
+  const replacement = after.spec.fields.find(entry => entry.key === result.newFieldKey)
+  assert.ok(replacement)
+  assert.deepEqual(Object.keys(replacement.spec), ['block'])
+  assert.equal(replacement.spec.block.axis, 'col')
+  assert.equal(replacement.spec.block.index, 1)
+  assert.equal(replacement.spec.multiplier, undefined)
+  assert.equal(replacement.spec.decimals, undefined)
+  assert.equal(replacement.spec.type, undefined)
+  assert.equal(replacement.mode, 'text')
+  assert.equal(after.fields.find(field => field.key === replacement.key).mode, 'text')
+})
