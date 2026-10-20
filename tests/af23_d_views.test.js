@@ -125,9 +125,13 @@ test('其他頁面期間新增紀錄會失效歷史快取，返回歷史時讀�
 })
 
 test('較新的歷史查詢完成後，較舊查詢的晚到錯誤不得覆寫畫面', async () => {
+  // Keep these ranges distinct from earlier tests: report.js keeps a module-level
+  // range cache, and mount() intentionally exercises the same module instance.
+  const dateA = '2026-11-02'
+  const dateB = '2026-11-03'
   const { chrome, storage, win, doc, report } = await mount()
-  await storage.appendRecord('2026-10-20', { taskId: 't1', capturedAt: '2026-10-20T08:00:00.000Z', slot: '2026-10-20T08:00:00', value: 'A-only', raw: 'A-only', status: 'ok' })
-  await storage.appendRecord('2026-10-21', { taskId: 't1', capturedAt: '2026-10-21T08:00:00.000Z', slot: '2026-10-21T08:00:00', value: 'B-only', raw: 'B-only', status: 'ok' })
+  await storage.appendRecord(dateA, { taskId: 't1', capturedAt: `${dateA}T08:00:00.000Z`, slot: `${dateA}T08:00:00`, value: 'A-only', raw: 'A-only', status: 'ok' })
+  await storage.appendRecord(dateB, { taskId: 't1', capturedAt: `${dateB}T08:00:00.000Z`, slot: `${dateB}T08:00:00`, value: 'B-only', raw: 'B-only', status: 'ok' })
   await delay(140)
 
   const realGet = chrome.storage.local.get.bind(chrome.storage.local)
@@ -137,7 +141,7 @@ test('較新的歷史查詢完成後，較舊查詢的晚到錯誤不得覆寫�
   let release
   const gate = new Promise(resolve => { release = resolve })
   chrome.storage.local.get = async (keys, ...rest) => {
-    if (!held && Array.isArray(keys) && keys.includes('rec2:2026-10-20:00')) {
+    if (!held && Array.isArray(keys) && keys.includes(`rec2:${dateA}:00`)) {
       held = true
       entered()
       await gate
@@ -146,10 +150,10 @@ test('較新的歷史查詢完成後，較舊查詢的晚到錯誤不得覆寫�
     return realGet(keys, ...rest)
   }
 
-  win.location.hash = '#view=history&from=2026-10-20&to=2026-10-20'
+  win.location.hash = `#view=history&from=${dateA}&to=${dateA}`
   const oldLoad = report.loadAndRenderPage(win.location.hash, { force: true })
   await enteredPromise
-  win.location.hash = '#view=history&from=2026-10-21&to=2026-10-21'
+  win.location.hash = `#view=history&from=${dateB}&to=${dateB}`
   await report.loadAndRenderPage(win.location.hash, { force: true })
   assert.match(doc.querySelector('#record-table tbody')?.textContent || '', /B-only/)
   const latestSummary = doc.querySelector('#summary tbody')?.textContent || ''

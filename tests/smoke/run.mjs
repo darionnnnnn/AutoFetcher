@@ -3,13 +3,16 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { findBrowser, ROOT } from './browser-path.mjs'
 
-export const SUITES = ['load.mjs', 'af22_g1_group_flow.mjs']
+export const SUITES = ["load.mjs","af23_release.mjs","af23_flows.mjs","af23_sources.mjs","af23_edit_flow.mjs","af23_d_route_flow.mjs","af23_journeys.mjs","af23_privacy.mjs","af23_d4_picker_lifecycle.mjs","af23_c3_c4_c6_browser.mjs","af23_preview_repair_seams.mjs","af23_prune_undo.mjs","af23_t06_inflight_scheduler.mjs"]
 
 export function runSmoke({ browserPath = findBrowser(), run = spawnSync, suites = SUITES } = {}) {
+  const env = { ...process.env, BROWSER_PATH: browserPath }
+  // Full acceptance always tests this checkout and every functional case.
+  for (const key of ['AF23_CASES', 'AF23_QA_SRC', 'AF23_EXTENSION_PATH', 'AF23_D4_SRC', 'AF23_UPGRADE_PROFILE']) delete env[key]
   for (const suite of suites) {
     console.log(`[smoke] ${suite}`)
     const result = run(process.execPath, [resolve(ROOT, 'tests/smoke', suite)], {
-      cwd: ROOT, env: { ...process.env, BROWSER_PATH: browserPath }, stdio: 'inherit'
+      cwd: ROOT, env, stdio: 'inherit'
     })
     if (result.error || result.signal || result.status !== 0) {
       console.error(`[smoke] ${suite} failed: ${result.error?.message || result.signal || result.status}`)
