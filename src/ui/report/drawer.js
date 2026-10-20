@@ -74,9 +74,11 @@ export function getDraftPreview(dashId, cardId) {
  */
 export async function mergeIntoDraft(dashId, cardId, patch) {
   if (!getDraftPreview(dashId, cardId) || !patch) return false
+  const nextPatch = typeof patch === 'function' ? patch(structuredClone(currentCard)) : patch
+  if (!nextPatch || typeof nextPatch !== 'object') return true
   const next = { ...currentCard }
   for (const k of DRAFT_KEYS) {
-    if (patch[k] !== undefined) next[k] = structuredClone(patch[k])
+    if (nextPatch[k] !== undefined) next[k] = structuredClone(nextPatch[k])
   }
   currentCard = next
   populateFields(currentCard)
@@ -796,17 +798,68 @@ async function applyDraft() {
   const patch = changedFields()
   const did = currentDashId
   const cid = currentCardId
-  // 抽屜開著時背景可能修剪過序列（值被移除、任務被刪）：以寫入當下的任務清單為準，
-  // 草稿來源裡已經不存在的序列丟掉，不讓它復活
-  if (Array.isArray(patch.source)) {
-    let tasks = []
-    try { tasks = await getTasks() } catch {}
-    const idx = buildSeriesIndex(tasks)
-    patch.source = patch.source.filter(s => typeof s?.taskId === 'string' && (Boolean(idx.byId[s.taskId]) || Boolean(idx.parents[s.taskId])))
-  }
+  const base = structuredClone(baseline || {})
+  let tasks = []
+  try { tasks = await getTasks() } catch {}
+  const idx = buildSeriesIndex(tasks)
+  const isLive = (id) => typeof id === 'string' && (Boolean(idx.byId[id]) || Boolean(idx.parents[id]))
   if (Object.keys(patch).length > 0) {
     try {
-      await updateCard(did, cid, patch)
+      const conflicts = []
+      const result = await updateCard(did, cid, (latest) => {
+        const merged = { ...patch }
+        for (const key of ['title', 'type']) {
+          if (Object.hasOwn(patch, key) && JSON.stringify(latest[key]) !== JSON.stringify(base[key]) && JSON.stringify(latest[key]) !== JSON.stringify(patch[key])) {
+            conflicts.push(key)
+          }
+        }
+        if (Array.isArray(patch.source)) {
+          const before = Array.isArray(base.source) ? base.source : []
+          const desired = patch.source.filter(s => typeof s?.taskId === 'string' && isLive(s.taskId))
+          const baselineIds = new Set(before.map(s => s?.taskId))
+          const desiredIds = new Set(desired.map(s => s?.taskId))
+          const current = Array.isArray(latest.source) ? latest.source : []
+          // 沿用最新版未被使用者動過的來源；移除序列依草稿意圖刪除，新增來源須仍有效。
+          const concurrent = current.filter(s => !baselineIds.has(s?.taskId) && isLive(s?.taskId))
+          merged.source = [...desired, ...concurrent.filter(s => !desiredIds.has(s?.taskId))]
+        }
+        if (patch.options && typeof patch.options === 'object') {
+          const before = base.options || {}
+          const desired = patch.options
+          const options = { ...(latest.options || {}) }
+          for (const key of new Set([...Object.keys(before), ...Object.keys(desired)])) {
+            if (JSON.stringify(before[key]) === JSON.stringify(desired[key])) continue
+            if (key === 'taskIds' && Array.isArray(desired.taskIds)) {
+              const wanted = desired.taskIds.filter(isLive)
+              const beforeIds = new Set(Array.isArray(before.taskIds) ? before.taskIds : [])
+              const latestIds = Array.isArray(options.taskIds) ? options.taskIds : []
+              const concurrent = latestIds.filter(id => !beforeIds.has(id) && isLive(id))
+              options.taskIds = [...wanted, ...concurrent.filter(id => !wanted.includes(id))]
+            } else if (Object.hasOwn(desired, key)) {
+              if (JSON.stringify(options[key]) !== JSON.stringify(before[key]) && JSON.stringify(options[key]) !== JSON.stringify(desired[key])) {
+                conflicts.push(`options.${key}`)
+                continue
+              }
+              options[key] = structuredClone(desired[key])
+            } else {
+              if (JSON.stringify(options[key]) !== JSON.stringify(before[key])) {
+                conflicts.push(`options.${key}`)
+                continue
+              }
+              delete options[key]
+            }
+          }
+          merged.options = options
+        }
+        if (conflicts.length) return null
+        return merged
+      })
+      if (!result) {
+        showDrawerError(conflicts.length
+          ? `套用衝突：${conflicts.join('、')} 已在其他頁變更，草稿仍留在這裡。請調整後再套用。`
+          : '卡片已不存在，草稿仍留在這裡。請複製需要的設定後關閉抽屜。')
+        return false
+      }
     } catch (err) {
       showDrawerError(`套用失敗，設定還留在這裡：${err?.message || err || '未知原因'}`)
       return false

@@ -818,17 +818,6 @@ function registerCardDropTarget(cardEl, card, ctx) {
     async onDrop(payload, pos) {
       if (!payload || !payload.taskId) return
 
-      if (card.type === 'line' || card.type === 'bar') {
-        const existingIds = new Set((card.source || []).map(s => s.taskId))
-        const idsToAdd = Array.isArray(payload.seriesIds)
-          ? numericDropIds(payload.seriesIds).filter(id => !existingIds.has(id))
-          : (numericDropIds([payload.taskId]).filter(id => !existingIds.has(id)))
-        if (idsToAdd.length > 0 && (card.source || []).length + idsToAdd.length > 8) {
-          showToast('圖表最多支援 8 個資料數列')
-          return
-        }
-      }
-
       let index
       if (card.type === 'table' && card.options?.mode === 'pivot') {
         const ths = [...cardEl.querySelectorAll('thead th')]
@@ -863,29 +852,48 @@ function registerCardDropTarget(cardEl, card, ctx) {
       if (typeof taskName === 'string' && taskName) {
         opts.taskName = taskName
       }
-      const firstTaskId = card.source?.[0]?.taskId
-      const prevTaskName = firstTaskId ? ctx?.tasksById?.[firstTaskId]?.name : undefined
-      if (typeof prevTaskName === 'string' && prevTaskName) {
-        opts.prevTaskName = prevTaskName
+      const makePatch = (latest) => {
+        if (latest.type === 'line' || latest.type === 'bar') {
+          const existingIds = new Set((latest.source || []).map(s => s.taskId))
+          const idsToAdd = Array.isArray(payload.seriesIds)
+            ? numericDropIds(payload.seriesIds).filter(id => !existingIds.has(id))
+            : numericDropIds([payload.taskId]).filter(id => !existingIds.has(id))
+          if (idsToAdd.length > 0 && (latest.source || []).length + idsToAdd.length > 8) {
+            return { rejected: true, reason: '圖表最多支援 8 個資料數列' }
+          }
+        }
+        const currentOpts = { ...opts }
+        const firstTaskId = latest.source?.[0]?.taskId
+        const prevTaskName = firstTaskId ? ctx?.tasksById?.[firstTaskId]?.name : undefined
+        if (typeof prevTaskName === 'string' && prevTaskName) currentOpts.prevTaskName = prevTaskName
+        const result = (Array.isArray(payload.seriesIds) && payload.seriesIds.length > 0)
+          ? applyDropMany(latest, payload.seriesIds, dropOptions({ ...currentOpts, nameOf: (id) => ctx?.tasksById?.[id]?.name || id }))
+          : applyDrop(latest, payload.taskId, dropOptions(currentOpts))
+        if (!result || result.rejected) return result
+        return result
       }
-
-      const patch = (Array.isArray(payload.seriesIds) && payload.seriesIds.length > 0)
-        ? applyDropMany(card, payload.seriesIds, dropOptions({ ...opts, nameOf: (id) => ctx?.tasksById?.[id]?.name || id }))
-        : applyDrop(card, payload.taskId, dropOptions(opts))
-      if (!patch) return
-      if (patch.rejected) {
-        showToast(patch.reason)
+      let applied = null
+      // 抽屜正在編輯這張卡：投放併進草稿（抽屜的來源清單與預覽跟著變），不寫 storage
+      if (await mergeIntoDraft(currentDashId, card.id, (draft) => {
+        applied = makePatch({ ...card, ...draft, options: draft.options || card.options })
+        if (!applied || applied.rejected) return null
+        const { notice, ...cardPatch } = applied
+        return cardPatch
+      })) {
+        if (applied?.rejected) showToast(applied.reason)
+        else if (applied?.notice) showToast(applied.notice)
         return
       }
-      // 只吃得下一個值的卡片型別要說一聲，否則使用者以為其他值掉了
-      if (patch.notice) showToast(patch.notice)
-
-      const { notice, ...cardPatch } = patch
-      // 抽屜正在編輯這張卡：投放併進草稿（抽屜的來源清單與預覽跟著變），不寫 storage
-      if (await mergeIntoDraft(currentDashId, card.id, cardPatch)) return
       await pushHistory()
-      await updateCard(currentDashId, card.id, cardPatch)
+      await updateCard(currentDashId, card.id, (latest) => {
+        applied = makePatch(latest)
+        if (!applied || applied.rejected) return null
+        const { notice, ...cardPatch } = applied
+        return cardPatch
+      })
       await sealHistory()
+      if (applied?.rejected) showToast(applied.reason)
+      else if (applied?.notice) showToast(applied.notice)
       await renderDashboard(currentDashId)
     }
   })
@@ -946,15 +954,12 @@ function registerGridDropTarget(grid) {
         if (!stored) return
         // 抽屜正在編輯這張卡：以草稿為基準移除，併進草稿（不寫 storage）
         const draft = getDraftPreview(currentDash.id, cardId)
-        const card = draft ? { ...stored, ...draft } : stored
-
-        // status 卡片的來源存在 options.taskIds,不是 source
-        const patch = card.type === 'status'
+        const removeSource = (card) => card.type === 'status'
           ? { options: { ...(card.options || {}), taskIds: (card.options?.taskIds || []).filter(id => parentIdOf(id) !== parentIdOf(taskId)) } }
           : { source: (card.source || []).filter(s => s.taskId !== taskId) }
-        if (draft && await mergeIntoDraft(currentDash.id, cardId, patch)) return
+        if (draft && await mergeIntoDraft(currentDash.id, cardId, (currentDraft) => removeSource({ ...stored, ...currentDraft }))) return
         await pushHistory()
-        await updateCard(currentDash.id, cardId, patch)
+        await updateCard(currentDash.id, cardId, latest => removeSource(latest))
         await sealHistory()
         await renderDashboard(currentDash.id)
         return

@@ -328,14 +328,18 @@ export async function addCard(dashId, card) {
  * 淺層更新指定卡片（未提供的欄位保留，id 不可被竄改）
  */
 export async function updateCard(dashId, cardId, patch) {
-  if (!patch || typeof patch !== 'object') return
-  await editLayout((layout) => {
+  if (!patch || (typeof patch !== 'object' && typeof patch !== 'function')) return false
+  return editLayout((layout) => {
     const dash = layout.dashboards.find(d => d.id === dashId)
-    if (!dash) return unchanged()
+    if (!dash) return unchanged(false)
     const card = dash.cards.find(c => c.id === cardId)
-    if (!card) return unchanged()
+    if (!card) return unchanged(false)
 
-    Object.assign(card, patch, { id: cardId })
+    // 函式形式在鎖內以最新版卡片計算操作意圖；舊的 object patch 介面仍可用。
+    const next = typeof patch === 'function' ? patch(structuredClone(card)) : patch
+    if (!next || typeof next !== 'object') return unchanged(false)
+    Object.assign(card, next, { id: cardId })
+    return true
   })
 }
 
@@ -391,34 +395,58 @@ function sourceIdsOf(card) {
   return new Set((Array.isArray(card?.source) ? card.source : []).map(s => s?.taskId))
 }
 
-function restoredSource(toList, fromCard, latestCard, isLive) {
-  const inFrom = sourceIdsOf(fromCard)
-  const inLatest = sourceIdsOf(latestCard)
-  return (Array.isArray(toList) ? toList : []).filter(s => {
-    const id = s?.taskId
-    if (inFrom.has(id)) return inLatest.has(id)
-    return isLive(id)
-  })
-}
-
-function restoredStatusIds(toIds, fromCard, latestCard, isLive) {
-  const inFrom = new Set(Array.isArray(fromCard?.options?.taskIds) ? fromCard.options.taskIds : [])
-  const inLatest = new Set(Array.isArray(latestCard?.options?.taskIds) ? latestCard.options.taskIds : [])
-  return toIds.filter(id => inFrom.has(id) ? inLatest.has(id) : isLive(id))
-}
-
 function applyCardStep(latestCard, fromCard, toCard, isLive) {
   for (const k of GEOMETRY_KEYS) {
-    if (fromCard[k] !== toCard[k]) latestCard[k] = toCard[k]
+    if (fromCard[k] !== toCard[k] && latestCard[k] === fromCard[k]) latestCard[k] = toCard[k]
   }
   if (JSON.stringify(fromCard.source) !== JSON.stringify(toCard.source)) {
-    latestCard.source = restoredSource(toCard.source, fromCard, latestCard, isLive)
+    const fromIds = sourceIdsOf(fromCard)
+    const toIds = sourceIdsOf(toCard)
+    const next = (Array.isArray(latestCard.source) ? latestCard.source : []).filter(s =>
+      !(fromIds.has(s?.taskId) && !toIds.has(s?.taskId))
+    )
+    const latestIds = new Set(next.map(s => s?.taskId))
+    for (const source of (Array.isArray(toCard.source) ? toCard.source : [])) {
+      if (fromIds.has(source?.taskId) || latestIds.has(source?.taskId) || !isLive(source?.taskId)) continue
+      next.push(structuredClone(source))
+      latestIds.add(source.taskId)
+    }
+    const fromOrder = (Array.isArray(fromCard.source) ? fromCard.source : []).filter(s => isLive(s?.taskId)).map(s => s.taskId)
+    const latestOrder = (Array.isArray(latestCard.source) ? latestCard.source : []).map(s => s.taskId)
+    if (JSON.stringify(latestOrder) === JSON.stringify(fromOrder)) {
+      const ordered = (Array.isArray(toCard.source) ? toCard.source : [])
+        .filter(s => isLive(s?.taskId) && next.some(item => item.taskId === s.taskId))
+      for (const source of next) if (!ordered.some(item => item.taskId === source.taskId)) ordered.push(source)
+      next.splice(0, next.length, ...ordered)
+    }
+    latestCard.source = next
   }
-  if (JSON.stringify(fromCard.options) !== JSON.stringify(toCard.options)) {
-    const options = structuredClone(toCard.options || {})
-    if (Array.isArray(options.taskIds)) options.taskIds = restoredStatusIds(options.taskIds, fromCard, latestCard, isLive)
-    latestCard.options = options
+  const fromOptions = fromCard.options || {}
+  const toOptions = toCard.options || {}
+  const latestOptions = latestCard.options || {}
+  const optionKeys = new Set([...Object.keys(fromOptions), ...Object.keys(toOptions)])
+  let optionsChanged = false
+  for (const key of optionKeys) {
+    if (JSON.stringify(fromOptions[key]) === JSON.stringify(toOptions[key])) continue
+    if (key === 'taskIds' && Array.isArray(toOptions.taskIds)) {
+      const fromIds = new Set(Array.isArray(fromOptions.taskIds) ? fromOptions.taskIds : [])
+      const toIds = new Set(toOptions.taskIds)
+      const current = Array.isArray(latestOptions.taskIds) ? latestOptions.taskIds : []
+      const next = current.filter(id => !(fromIds.has(id) && !toIds.has(id)))
+      for (const id of toOptions.taskIds) {
+        if (!fromIds.has(id) && !next.includes(id) && isLive(id)) next.push(id)
+      }
+      latestOptions.taskIds = next
+    } else if (Object.hasOwn(toOptions, key)) {
+      if (JSON.stringify(latestOptions[key]) !== JSON.stringify(fromOptions[key])) continue
+      latestOptions[key] = structuredClone(toOptions[key])
+    } else {
+      if (JSON.stringify(latestOptions[key]) !== JSON.stringify(fromOptions[key])) continue
+      delete latestOptions[key]
+    }
+    optionsChanged = true
   }
+  if (optionsChanged) latestCard.options = latestOptions
 }
 
 /**
@@ -448,7 +476,8 @@ export async function applyLayoutStep(from, to, isLive = () => true) {
       for (const tc of t.cards || []) {
         if (fCards.has(tc.id) || dash.cards.some(c => c.id === tc.id)) continue
         const src = Array.isArray(tc.source) ? tc.source : []
-        if (!src.every(s => isLive(s?.taskId))) continue
+        const taskIds = Array.isArray(tc.options?.taskIds) ? tc.options.taskIds : []
+        if (!src.every(s => isLive(s?.taskId)) || !taskIds.every(isLive)) continue
         dash.cards.push(structuredClone(tc))
       }
       if (JSON.stringify(dash.cards) !== before) changed = true
