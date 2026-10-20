@@ -43,6 +43,8 @@ let pickSessionId = undefined, pickGroupKey = undefined, pickFrame = undefined, 
 // the last exact draft identity so that its already queued ACKs can settle.
 let exitedDraftIdentity = null
 let repairSessionId = undefined, repairFieldKey = undefined, repairMode = undefined
+const REPAIR_ACK_TIMEOUT_MS = 15000
+let repairSubmissionState = 'idle'
 let pickDocumentGeneration = undefined, pickRouteIdentity = undefined
 let pickLocationAtEntry = ''
 let pickImmediateDraft = false
@@ -2767,6 +2769,13 @@ function dropGoneSelection() {
 
 // 送出確認訊息並離開
 async function confirmPick() {
+  if (repairSessionId !== undefined && repairSubmissionState !== 'idle') {
+    toolbarNotice = repairSubmissionState === 'sending'
+      ? '正在套用已選來源，請等候確認'
+      : '這次結果尚未確認或授權已失效；請回設定重新開始，不要重送這次操作'
+    if (panelEl) updatePanel(panelEl, currentTargetEl)
+    return
+  }
   // 新群組模式的完成屏障在側欄；頁面上的普通 Enter／雙擊只應完成一次加值，
   // 不得把目前頁面內容再次送成整批結果。
   if (isImmediateDraftGroupMode() && !iframeOf(currentTargetEl)) {
@@ -2990,6 +2999,10 @@ async function confirmPick() {
     msg.routeIdentity = structuredClone(pickRouteIdentity)
   }
 
+  if (repairSessionId !== undefined) {
+    await submitFieldRepair(msg)
+    return
+  }
   chrome.runtime.sendMessage(msg)
   // 設定面板就開在旁邊，使用者要看得到自己剛剛選的是哪一格；
   // repick 沒有面板（存檔就結束），維持全清
@@ -3059,7 +3072,7 @@ function requestCancel() {
 }
 
 // 送出取消訊息並離開
-function cancelPick() {
+async function cancelPick() {
   const msg = { type: MSG.PICKED, purpose: currentPurpose, cancelled: true }
   if (currentTaskId !== undefined) msg.taskId = currentTaskId
   if (repairSessionId !== undefined) {
@@ -3067,10 +3080,60 @@ function cancelPick() {
     msg.repairFieldKey = repairFieldKey
     msg.repairMode = repairMode
     msg.documentGeneration = structuredClone(pickDocumentGeneration)
+    await submitFieldRepair(msg, { cancelled: true })
+    return
   }
   const purpose = currentPurpose
   chrome.runtime.sendMessage(msg)
   exitPickMode({ clearOnly: purpose })
+}
+
+async function submitFieldRepair(msg, { cancelled = false } = {}) {
+  if (repairSubmissionState !== 'idle') return
+  const sessionId = repairSessionId
+  const purpose = currentPurpose
+  repairSubmissionState = 'sending'
+  toolbarNotice = cancelled ? '正在確認取消，請等候回覆' : '正在套用已選來源，確認儲存前選取畫面會保留'
+  if (panelEl) updatePanel(panelEl, currentTargetEl)
+
+  const request = Promise.resolve().then(() => chrome.runtime.sendMessage(msg)).then(
+    response => ({ response }),
+    error => ({ error })
+  )
+  let timer
+  const timed = await Promise.race([
+    request,
+    new Promise(resolve => { timer = setTimeout(() => resolve({ timeout: true }), REPAIR_ACK_TIMEOUT_MS) })
+  ])
+  if (timer !== undefined) clearTimeout(timer)
+
+  const finish = result => {
+    if (!active || repairSessionId !== sessionId) return
+    if (result?.response?.ok === true) {
+      repairSubmissionState = 'done'
+      exitPickMode(cancelled ? { clearOnly: purpose } : {})
+      return
+    }
+    if (result?.error || result?.timeout || result?.response?.error === 'stale_field_repair') {
+      repairSubmissionState = 'uncertain'
+      toolbarNotice = result?.response?.message || (cancelled
+        ? '取消結果尚未確認，請勿重送；回設定重新開始'
+        : '結果尚未確認，請勿重送；回設定重新確認這個值')
+    } else {
+      repairSubmissionState = 'idle'
+      toolbarNotice = result?.response?.message || '這次重選未儲存；請修正選取後再試'
+    }
+    if (panelEl) updatePanel(panelEl, currentTargetEl)
+  }
+
+  if (timed.timeout) {
+    finish(timed)
+    // The message may still complete after the visible deadline. A late ACK is
+    // still authoritative; its absence never triggers an automatic retry.
+    request.then(finish)
+    return
+  }
+  finish(timed)
 }
 
 // 關閉右鍵選單
@@ -4903,6 +4966,7 @@ export function enterPickMode(opts) {
   currentTaskId = opts?.taskId !== undefined ? opts.taskId : undefined
   pickSessionId = opts?.sessionId !== undefined ? opts.sessionId : undefined
   repairSessionId = opts?.repairSessionId
+  repairSubmissionState = 'idle'
   repairFieldKey = opts?.repairFieldKey
   repairMode = opts?.repairMode
   pickGroupKey = opts?.groupKey ?? opts?.activeGroupKey
@@ -5145,6 +5209,7 @@ export function exitPickMode(opts = {}) {
   active = false; currentPurpose = null; currentTaskId = undefined; currentTargetEl = null; backStack = []
   pickSessionId = undefined; pickGroupKey = undefined; pickFrame = undefined; pickRevision = undefined; parentFrameId = undefined
   repairSessionId = undefined; repairFieldKey = undefined; repairMode = undefined
+  repairSubmissionState = 'idle'
   pickDocumentGeneration = undefined; pickRouteIdentity = undefined
   pickLocationAtEntry = ''
   pickImmediateDraft = false

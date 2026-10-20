@@ -65,6 +65,26 @@ const groupNamePickRequests = new Map()
 // invalidates every outstanding grant, so a stale page cannot replay a repair.
 const fieldRepairSessions = new Map()
 
+function stableRepairValue(value) {
+  if (Array.isArray(value)) return `[${value.map(stableRepairValue).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableRepairValue(value[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+function fieldRepairSnapshot(field, entry) {
+  return stableRepairValue({
+    key: field?.key,
+    mode: field?.mode,
+    fieldSource: field?.source,
+    entrySource: entry?.source,
+    spec: entry?.spec || (entry?.cell ? { cell: entry.cell } : entry?.block ? { block: entry.block } : {}),
+    fieldStateActions: field?.stateActions,
+    entryStateActions: entry?.stateActions
+  })
+}
+
 async function beginFieldRepair(msg) {
   if (typeof msg.taskId !== 'string' || typeof msg.fieldKey !== 'string' ||
       !['repair', 'replace'].includes(msg.repairMode)) return { ok: false, error: 'invalid_repair' }
@@ -105,7 +125,8 @@ async function beginFieldRepair(msg) {
     fieldRepairSessions.set(sessionId, {
       sessionId, taskId: task.id, fieldKey: field.key, repairMode: msg.repairMode,
       tabId, frameId: loc.frameId, frameUrl,
-      documentGeneration, routeIdentity
+      documentGeneration, routeIdentity,
+      fieldSnapshot: fieldRepairSnapshot(field, fieldSpec)
     })
     const entered = await sendToFrame(tabId, {
       type: MSG.ENTER_PICK, purpose: 'repick', taskId: task.id, locator,
@@ -171,6 +192,14 @@ async function applyFieldRepair(msg, sender) {
     spec = { mode: selectedMode }
   }
   if (!spec) return { ok: false, error: 'invalid_repair_pick', message: '這個選取沒有可用的定位規格' }
+  const grantTask = await getTask(grant.taskId)
+  const grantField = grantTask?.fields?.find(item => item?.key === grant.fieldKey)
+  const grantEntry = grantTask?.spec?.fields?.find(item => item?.key === grant.fieldKey)
+  if (grant.repairMode === 'repair' && !spec.cell && !spec.block &&
+      ['number', 'text'].includes(selectedMode) && ['number', 'text'].includes(grantField?.mode) &&
+      selectedMode !== grantField.mode) {
+    return { ok: false, error: 'repair_type_mismatch', message: '新選取的資料類型與原本不同，請改用「替換指標」或重新選取' }
+  }
   const locator = msg.locator && typeof msg.locator === 'object' ? structuredClone(msg.locator) : {}
   if (!hasLocator(locator)) return { ok: false, error: 'invalid_repair_pick', message: '這個選取沒有可用的定位規格' }
   const frame = frameDescriptorOf(sender, msg)
@@ -179,6 +208,7 @@ async function applyFieldRepair(msg, sender) {
   // naturally loses the grant so old page messages fail closed.
   fieldRepairSessions.delete(grant.sessionId)
   let found = false
+  let sourceConflict = false
   let replacement = null
   let archivedField = null
   const oldSeriesId = seriesIdOf(grant.taskId, grant.fieldKey)
@@ -188,18 +218,27 @@ async function applyFieldRepair(msg, sender) {
     const specs = Array.isArray(task.spec?.fields) ? task.spec.fields : []
     const entry = specs.find(item => item?.key === grant.fieldKey)
     if (!field || !entry || task.mode !== 'multi') return null
+    if (fieldRepairSnapshot(field, entry) !== grant.fieldSnapshot) {
+      sourceConflict = true
+      return null
+    }
     const previous = entry.spec || (entry.cell ? { cell: entry.cell } : entry.block ? { block: entry.block } : {})
     if (grant.repairMode === 'repair' &&
         (Boolean(previous.cell) !== Boolean(spec.cell) || Boolean(previous.block) !== Boolean(spec.block))) {
       return null
     }
-    const next = structuredClone(spec)
+    // Repair changes the source locator while retaining this metric's extraction
+    // semantics. The new pick owns the coordinates; all omitted calculation and
+    // type options stay attached to the existing field.
+    const next = { ...structuredClone(previous), ...structuredClone(spec) }
     if (next.cell && previous.cell) {
+      next.cell = { ...structuredClone(previous.cell), ...structuredClone(spec.cell) }
       for (const axis of ['row', 'col']) {
         if (previous.cell[axis]?.pos && next.cell[axis]) next.cell[axis].pos = previous.cell[axis].pos
       }
       if (!next.cell.inner && previous.cell.inner) next.cell.inner = structuredClone(previous.cell.inner)
     } else if (next.block && previous.block) {
+      next.block = { ...structuredClone(previous.block), ...structuredClone(spec.block) }
       for (const key of ['aggregate', 'skip', 'exclude', 'pos', 'inner']) {
         if (next.block[key] === undefined && previous.block[key] !== undefined) next.block[key] = structuredClone(previous.block[key])
       }
@@ -236,7 +275,10 @@ async function applyFieldRepair(msg, sender) {
     found = true
     return task
   })
-  if (!updated || !found) return { ok: false, error: 'field_not_found', message: '這個值已移除或選取類型不同，沒有套用重選結果' }
+  if (!updated || !found) {
+    if (sourceConflict) return { ok: false, error: 'stale_field_repair', message: '這個值的來源或狀態動作已變更，請重新開始' }
+    return { ok: false, error: 'field_not_found', message: '這個值已移除或選取類型不同，沒有套用重選結果' }
+  }
   if (replacement) {
     await pruneSeries([replacement.oldSeriesId])
     await deleteLastValues([replacement.oldSeriesId])
