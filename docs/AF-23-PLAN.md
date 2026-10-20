@@ -530,7 +530,7 @@
 ## 2. 可靠性與資料一致性：待補齊證據
 
 - [x] **T02** — 已完成：新增固定 today=2026-10-20 的截止日前／當日／後一日驗收，分別核對帳本 today-14 與含 today 共14日紀錄的截止規則；countRecordsBeyondRetention、trimOldRecords、trimOldRuns 實際結果一致。`node --no-experimental-global-navigator --test tests/af23_retention_boundary.test.js` 1/1 通過，不依真實今天。
-- [ ] **T03 修復後最終值與歷史（A6）**：補 scalar 倍率／精度與 cell 修復後的正式執行及歷史精確值證據。驗收：1.234 × 100 = 123.4；cell 保持正確值與原 key，舊歷史保留。
+- [x] **T03** — 已完成：正式 BEGIN_FIELD_REPAIR/PICKED→content EXTRACT→fetcher→storage 歷史整合驗證 scalar 1.234×100=123.4、文字001仍為字串、cell=29.625，原 field key 與三條舊歷史保留。tests/af23_t03_repair_formal_history.test.js 1/1 通過；主代理修正測試URL名稱遮蔽後以預設入口獨立驗證。
 - [ ] **T04 拖入與背景修剪交錯（B3）**：確認實際 drop 更新路徑已有鎖內交錯測試；不足才新增受控 barrier。驗收：投放準備後被刪除的來源不復活，無關來源及其他卡片保持不變。
 - [ ] **T05 真實 Undo／Redo（B4）**：補來源被背景移除後的實際復原／重做操作。驗收：已刪來源不復活，另一頁修改的無關屬性仍保留。
 - [ ] **T06 在途正式抓取與修復／刪除（F2）**：已有受控整合測試，核對是否還缺 Chrome API／實際頁面邊界證據，只補必要實機情境。驗收：過期執行不新增失效值的歷史、健康或告警；修復保留舊歷史，明確刪任務依既有契約處理自身歷史，無關任務不受影響。
