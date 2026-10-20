@@ -207,11 +207,18 @@ function sourceAnchorOf(target, pick, table) {
     const colLocator = cell.col || {}
     const rowIndex = sourceRowIndex(table, rows, rowLocator)
     const colIndex = sourceColumnIndex(table, colLocator)
+    const target = Number.isInteger(rowIndex) && Number.isInteger(colIndex)
+      ? targetAtGrid(rows[rowIndex], colIndex, cell.inner) : null
+    const rowHeaderCell = Number.isInteger(rowIndex)
+      ? getRowCells(rows[rowIndex]).find(item => (item?.textContent || '').trim()) : null
     return {
       kind: 'cell', table, rowLocator: structuredClone(rowLocator), colLocator: structuredClone(colLocator),
       row: Number.isInteger(rowIndex) ? rows[rowIndex] : null,
-      target: Number.isInteger(rowIndex) && Number.isInteger(colIndex)
-        ? targetAtGrid(rows[rowIndex], colIndex, cell.inner) : null,
+      target,
+      // A one-cell row can make its selected value look like a row header.
+      // Keep that fact so a live text refresh on the same node is not mistaken
+      // for a changed row identity when the row remains at its original index.
+      rowHeaderTracksTarget: Boolean(target && rowHeaderCell === target),
       inner: structuredClone(cell.inner || []),
       columnCells: Number.isInteger(colIndex) ? resolvedSourceCell(table, rows, colIndex, cell.inner) : []
     }
@@ -242,7 +249,19 @@ function sourceAnchorStillMatches(anchor) {
   if (anchor.kind === 'cell') {
     const rowIndex = sourceRowIndex(table, rows, anchor.rowLocator)
     const colIndex = sourceColumnIndex(table, anchor.colLocator)
-    if (!Number.isInteger(rowIndex) || !Number.isInteger(colIndex)) return false
+    if (!Number.isInteger(colIndex)) return false
+    if (!Number.isInteger(rowIndex)) {
+      // When the selected cell itself supplied the row's fallback label, a
+      // value refresh changes that label. Accept only the same connected row
+      // at the same fixed index and the same cell node; an inserted row shifts
+      // the original row and still fails closed.
+      const originalIndex = anchor.row ? rows.indexOf(anchor.row) : -1
+      if (!anchor.rowLocator.pos && anchor.rowHeaderTracksTarget &&
+          Number.isInteger(anchor.rowLocator.index) && originalIndex === anchor.rowLocator.index) {
+        return targetAtGrid(rows[originalIndex], colIndex, anchor.inner) === anchor.target
+      }
+      return false
+    }
     if (!anchor.rowLocator.pos && rows[rowIndex] !== anchor.row) return false
     if (anchor.rowLocator.pos || anchor.colLocator.pos) return Boolean(targetAtGrid(rows[rowIndex], colIndex, anchor.inner))
     return targetAtGrid(rows[rowIndex], colIndex, anchor.inner) === anchor.target
