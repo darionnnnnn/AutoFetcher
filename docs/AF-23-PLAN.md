@@ -533,7 +533,7 @@
 - [x] **T03** — 已完成：正式 BEGIN_FIELD_REPAIR/PICKED→content EXTRACT→fetcher→storage 歷史整合驗證 scalar 1.234×100=123.4、文字001仍為字串、cell=29.625，原 field key 與三條舊歷史保留。tests/af23_t03_repair_formal_history.test.js 1/1 通過；主代理修正測試URL名稱遮蔽後以預設入口獨立驗證。
 - [x] **T04** — 已完成：核對真實 dashboard pointer/drop 路徑已有 layout 鎖內第二次 tasks read 的受控 barrier。加強目標卡無關來源及另一卡片完整屬性不變斷言；tests/j3_palette_drop.test.js 的 AF-23 拖入現有卡片案例獨立通過1/1，來源刪除交錯不復活，未新增產品架構。
 - [x] **T05** — 已完成：CfT 真實拖曳後於 Tasks 刪除來源、第二報表抽屜修改標題，再於第一頁 Ctrl+Z／Ctrl+Shift+Z；undoDepth 1→0→1，來源不復活，另一頁標題及無關卡片完整保留。tests/smoke/af23_prune_undo.mjs 主代理獨立 PASS。
-- [ ] **T06 在途正式抓取與修復／刪除（F2）**：已有受控整合測試，核對是否還缺 Chrome API／實際頁面邊界證據，只補必要實機情境。驗收：過期執行不新增失效值的歷史、健康或告警；修復保留舊歷史，明確刪任務依既有契約處理自身歷史，無關任務不受影響。
+- [x] **T06** — 已完成：CfT 真實 alarm 排程在原生 EXTRACT 訊息邊界暫停，分別操作 Picker 修復及 Tasks 確認刪除；釋放後等到 fetcher finally 移除 runState 才對帳。tests/smoke/af23_t06_inflight_scheduler.mjs 主代理獨立2/2通過；過期值不寫歷史/health/lastValues/alerts/notifications，修復留舊歷史、明確刪除只清自己資料。
 
 ## 3. 使用者操作：待補齊真實瀏覽器驗收
 
