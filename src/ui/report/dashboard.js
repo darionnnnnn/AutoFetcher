@@ -22,6 +22,8 @@ let editing = false
 let currentDashId = null
 const undoStack = []
 const redoStack = []
+let historyBusy = false
+let historyRevision = 0
 let activeOp = null
 let templateKindPending = null
 let tabDrag = null
@@ -83,6 +85,7 @@ export async function pushHistory(snapshot) {
     undoStack.shift()
   }
   redoStack.length = 0
+  historyRevision += 1
   return entry
 }
 
@@ -102,36 +105,70 @@ export function historySize() {
 
 // 序列是否還在任務清單裡（復原／重做不讓已刪的序列回到卡片上）
 async function liveSeriesCheck() {
-  let tasks = []
-  try { tasks = await getTasks() } catch {}
+  const tasks = await getTasks()
   const idx = buildSeriesIndex(tasks)
   return (id) => typeof id === 'string' && (Boolean(idx.byId[id]) || Boolean(idx.parents[id]))
+}
+
+async function applyHistoryStep(direction, step, startDashId, startRevision) {
+  const undoing = direction === 'undo'
+  try {
+    if (undoing) {
+      const after = step.after || structuredClone((await getLayout()).dashboards)
+      await applyLayoutStep(after, step.before, undefined, { loadIsLive: liveSeriesCheck })
+      if (!step.after) step.after = after
+    } else {
+      await applyLayoutStep(step.before, step.after, undefined, { loadIsLive: liveSeriesCheck })
+    }
+  } catch (err) {
+    showToast(`無法${undoing ? '復原' : '重做'}，操作仍保留，可稍後重試：${err?.message || err || '未知原因'}`)
+    return false
+  }
+  const sourceStack = undoing ? undoStack : redoStack
+  const destinationStack = undoing ? redoStack : undoStack
+  const stepIndex = sourceStack.indexOf(step)
+  if (stepIndex >= 0) {
+    sourceStack.splice(stepIndex, 1)
+    // A new edit or dashboard switch may have changed history while storage was
+    // awaited. Retire only this completed step; don't attach it to another history.
+    if (historyRevision === startRevision && currentDashId === startDashId) {
+      destinationStack.push(step)
+      if (!undoing && undoStack.length > 50) undoStack.shift()
+    }
+    historyRevision += 1
+  }
+  try {
+    await renderDashboard(currentDashId)
+  } catch (err) {
+    showToast(`版面已${undoing ? '復原' : '重做'}，但畫面更新失敗：${err?.message || err || '未知原因'}`)
+  }
+  return true
 }
 
 /**
  * 復原上一步
  */
 export async function undo() {
-  if (undoStack.length === 0) return
-  const step = undoStack.pop()
-  if (!step.after) step.after = structuredClone((await getLayout()).dashboards)
-  redoStack.push(step)
-  await applyLayoutStep(step.after, step.before, await liveSeriesCheck())
-  await renderDashboard(currentDashId)
+  if (historyBusy || undoStack.length === 0) return
+  historyBusy = true
+  try {
+    await applyHistoryStep('undo', undoStack[undoStack.length - 1], currentDashId, historyRevision)
+  } finally {
+    historyBusy = false
+  }
 }
 
 /**
  * 重做下一步
  */
 export async function redo() {
-  if (redoStack.length === 0) return
-  const step = redoStack.pop()
-  undoStack.push(step)
-  if (undoStack.length > 50) {
-    undoStack.shift()
+  if (historyBusy || redoStack.length === 0) return
+  historyBusy = true
+  try {
+    await applyHistoryStep('redo', redoStack[redoStack.length - 1], currentDashId, historyRevision)
+  } finally {
+    historyBusy = false
   }
-  await applyLayoutStep(step.before, step.after, await liveSeriesCheck())
-  await renderDashboard(currentDashId)
 }
 
 /**
@@ -386,6 +423,7 @@ function setupEvents(grid) {
       if (!editing) {
         undoStack.length = 0
         redoStack.length = 0
+        historyRevision += 1
         renderDashboard(currentDashId).catch(() => {})
       }
       updateEditingUI()
@@ -928,6 +966,7 @@ function registerCardDropTarget(cardEl, card, ctx) {
         const historyIndex = undoStack.indexOf(historyEntry)
         if (historyIndex >= 0) undoStack.splice(historyIndex, 1)
         redoStack.splice(0, redoStack.length, ...redoBefore)
+        historyRevision += 1
         if (sourceCheckError) showToast('無法確認來源是否仍有效，請稍後再試')
         else if (sourceNoLongerLive) showToast('來源已不存在，請重新整理後再拖曳')
         else if (applied?.rejected) showToast(applied.reason)
@@ -1082,6 +1121,7 @@ export async function renderDashboard(dashId) {
   if (currentDashId && dash.id !== currentDashId) {
     undoStack.length = 0
     redoStack.length = 0
+    historyRevision += 1
   }
 
   currentDashId = dash.id

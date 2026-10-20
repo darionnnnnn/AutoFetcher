@@ -88,6 +88,61 @@ test('AC-C2:單值 multi 也可修復；同欄位連點只開一個 session，�
   assert.equal(row.querySelector('[data-field-repair]').disabled, false, '關閉來源頁後可恢復操作')
 })
 
+test('AC-C4:修復核對等待時開始的新試抓不可顯示舊來源結果，保留未存草稿並可恢復欄位', async () => {
+  const { c, picker, storage, doc } = await fresh()
+  const task = repairTask('task-repair-preview-race')
+  await storage.saveTask(task)
+  picker.render({ task, url: task.url })
+  doc.getElementById('name').value = '尚未儲存名稱'
+  doc.getElementById('time-input').value = '10:15'
+  doc.getElementById('time-add').click()
+
+  c.__setRuntimeResponder(message => {
+    if (message?.type === 'BEGIN_FIELD_REPAIR') return { ok: true, sessionId: 'repair-race-op', tabId: 188 }
+    if (message?.type === 'TEST_TASK') return previewGate
+    return undefined
+  })
+  doc.querySelector('[data-field-repair]').click()
+  await sleep(5)
+
+  const done = { ...doneMessage(task.id), operationId: 'repair-race-op', sessionId: 'repair-race-op' }
+  await persistRepairResult(storage, task.id, done)
+  let releaseTaskRead
+  let taskReadStarted
+  const taskReadGate = new Promise(resolve => { releaseTaskRead = resolve })
+  const taskReadStartedGate = new Promise(resolve => { taskReadStarted = resolve })
+  const realGet = c.storage.local.get.bind(c.storage.local)
+  let holdTaskRead = true
+  c.storage.local.get = async keys => {
+    if (holdTaskRead && keys === 'tasks') {
+      holdTaskRead = false
+      taskReadStarted()
+      await taskReadGate
+    }
+    return realGet(keys)
+  }
+  for (const listener of c.runtime.onMessage._listeners) listener(done)
+  await taskReadStartedGate
+
+  let releasePreview
+  const previewGate = new Promise(resolve => { releasePreview = resolve })
+  const previewPromise = picker.handleTestNow()
+  await sleep(5)
+  assert.equal(doc.getElementById('test-now').disabled, true, '較新的試抓確實在 repair reconciliation 等待期間開始')
+  releaseTaskRead()
+  await sleep(5)
+  releasePreview({ ok: true, fields: { 'field-a': { ok: true, value: 123, raw: '123' } } })
+  await previewPromise
+
+  assert.doesNotMatch(doc.getElementById('preview').textContent, /123/, '舊來源 A 的晚到值不會被當成目前結果')
+  assert.match(doc.getElementById('test-note').textContent, /來源或設定已變更|來源已更新/, '畫面說明需要以目前已儲存來源重新試抓')
+  assert.equal(doc.getElementById('name').value, '尚未儲存名稱', '未存名稱保留')
+  assert.match(doc.getElementById('times').value, /10:15/, '未存排程保留')
+  const row = doc.querySelector('[data-field-row]')
+  assert.equal(row._source.locator.css, '#new', '已核對的來源 B 同步到目前欄位')
+  assert.equal(row.querySelector('[data-field-repair]').disabled, false, '成功核對後欄位操作解除鎖定')
+})
+
 test('AC-D4:render 100 次只保留一個修復 listener；舊任務訊息不改目前欄位', async () => {
   const { c, picker, storage, doc } = await fresh()
   const savedTask = repairTask('task-b')

@@ -453,10 +453,17 @@ function applyCardStep(latestCard, fromCard, toCard, isLive) {
  * 復原／重做的唯一寫入（AF-21 終檢）：from、to 是這一步前後的 dashboards 快照，
  * 在 layout 鎖內以最新版面為底只套這一步的差異。isLive(序列 id) 判定序列是否還在任務清單裡。
  */
-export async function applyLayoutStep(from, to, isLive = () => true) {
+export async function applyLayoutStep(from, to, isLive = () => true, { loadIsLive } = {}) {
   const fromDashes = new Map((Array.isArray(from) ? from : []).map(d => [d?.id, d]))
   const toDashes = new Map((Array.isArray(to) ? to : []).map(d => [d?.id, d]))
-  return editLayout((layout) => {
+  return editLayout(async (layout) => {
+    // Undo/redo can load source validity only after acquiring the layout lock.
+    // Deletion writes tasks before pruning layout; reading here means a concurrent
+    // prune either precedes this check or follows this layout write.
+    if (typeof loadIsLive === 'function') {
+      isLive = await loadIsLive()
+      if (typeof isLive !== 'function') throw new TypeError('loadIsLive must return a predicate')
+    }
     let changed = false
     for (const dash of layout.dashboards) {
       const f = fromDashes.get(dash.id)

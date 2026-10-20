@@ -214,6 +214,18 @@ function liveFieldRepairOperations(rows, now = Date.now()) {
     (operation.status !== 'complete' || now - Number(operation.updatedAt || operation.createdAt || 0) < FIELD_REPAIR_OPERATION_TTL_MS))
 }
 
+/** Remove expired terminal receipts on recovery or another repair-journal write. */
+export async function pruneFieldRepairOperations(now = Date.now()) {
+  let removed = 0
+  await mutateKey(FIELD_REPAIR_OPERATIONS_KEY, current => {
+    const rows = asArray(current)
+    const live = liveFieldRepairOperations(rows, now)
+    removed = rows.length - live.length
+    return removed > 0 ? live : undefined
+  })
+  return removed
+}
+
 /**
  * Minimal bounded journal for single-field repair/replacement. The operation is
  * recorded before the task key changes, so worker recovery can recognize the

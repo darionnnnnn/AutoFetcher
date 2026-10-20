@@ -247,6 +247,53 @@ test('AC-A5 舊修復拒絕來源/stateActions 衝突；改名與排程保留最
   assert.deepEqual(await f.storage.getTask('af23-repair'), changed, 'stale submit does not overwrite newer source or actions')
 })
 
+test('AC-A5 共用 URL 或前置動作改變會使舊來源授權失效', async t => {
+  for (const change of ['url', 'preActions']) {
+    await t.test(change, async () => {
+      const f = await setup(t)
+      const grant = await begin(f)
+      await f.storage.updateTasks(['af23-repair'], task => {
+        if (change === 'url') task.url = 'https://a.test/new-prices'
+        else task.preActions = [{ type: 'click', locator: { css: '#accept-cookie' } }]
+        return task
+      })
+      const beforeSubmit = await f.storage.getTask('af23-repair')
+      const result = await picked(f, grant)
+      assert.equal(result.error, 'stale_field_repair')
+      assert.deepEqual(await f.storage.getTask('af23-repair'), beforeSubmit,
+        '舊頁面的來源不能覆蓋新的共用來源語意')
+    })
+  }
+})
+
+test('AC-A5 updateTasks 鎖內仍核對共用 URL 與前置動作快照', async t => {
+  for (const change of ['url', 'preActions']) {
+    await t.test(change, async () => {
+      const f = await setup(t)
+      const grant = await begin(f)
+      const realSet = f.chrome.storage.local.set.bind(f.chrome.storage.local)
+      let changedAfterJournal = false
+      f.chrome.storage.local.set = async items => {
+        await realSet(items)
+        if (!changedAfterJournal && Object.hasOwn(items, 'fieldRepairOperations')) {
+          changedAfterJournal = true
+          await f.storage.updateTasks(['af23-repair'], task => {
+            if (change === 'url') task.url = 'https://a.test/lock-race'
+            else task.preActions = [{ type: 'wait', ms: 250 }]
+            return task
+          })
+        }
+      }
+      const result = await picked(f, grant)
+      assert.equal(result.error, 'stale_field_repair')
+      const task = await f.storage.getTask('af23-repair')
+      assert.equal(change === 'url' ? task.url : task.preActions[0].type,
+        change === 'url' ? 'https://a.test/lock-race' : 'wait')
+      assert.equal(task.spec.fields[0].source.locator.css, '#old-1')
+    })
+  }
+})
+
 test('AC-A6 scalar same-value repair preserves strategy, multiplier, precision and final extracted value', async t => {
   const f = await setup(t)
   await f.storage.updateTasks(['af23-repair'], task => {
@@ -498,6 +545,36 @@ test('AC-A4 pending operation older than the completed TTL remains recoverable',
   assert.equal((await f.storage.listPendingFieldRepairOperations()).some(item => item.id === operation.id), true)
 })
 
+test('AC-A4 prune physically removes expired receipts but never removes old pending operations', async t => {
+  const f = await setup(t)
+  const now = Date.now()
+  const expired = { id: 'expired-receipt', taskId: 'af23-repair', fieldKey: 'f1', repairMode: 'repair',
+    status: 'complete', createdAt: now - 10 * 24 * 60 * 60 * 1000, updatedAt: now - 8 * 24 * 60 * 60 * 1000,
+    result: { ok: false, error: 'stale_field_repair' } }
+  const pending = { id: 'old-pending-for-prune', taskId: 'af23-repair', fieldKey: 'f1', repairMode: 'repair',
+    status: 'prepared', createdAt: now - 30 * 24 * 60 * 60 * 1000 }
+  await f.chrome.storage.local.set({ fieldRepairOperations: [expired, pending] })
+  assert.equal(await f.storage.pruneFieldRepairOperations(now), 1)
+  const raw = await f.chrome.storage.local.get('fieldRepairOperations')
+  assert.deepEqual(raw.fieldRepairOperations.map(item => item.id), [pending.id],
+    '驗收原始 storage 已實際刪除到期完成收據，並保留待恢復操作')
+  assert.equal(await f.storage.pruneFieldRepairOperations(now), 0, '重複清理沒有額外副作用')
+  assert.equal((await f.chrome.storage.local.get('fieldRepairOperations')).fieldRepairOperations[0].status, 'prepared')
+})
+
+test('AC-A4 worker recovery 惰性清除過期完成收據且連續恢復冪等', async t => {
+  const f = await setup(t)
+  await f.bg.fieldRepairWorkerRecovery
+  const now = Date.now()
+  await f.chrome.storage.local.set({ fieldRepairOperations: [{ id: 'expired-on-recovery', taskId: 'af23-repair',
+    fieldKey: 'f1', repairMode: 'repair', status: 'complete', createdAt: now - 10 * 24 * 60 * 60 * 1000,
+    updatedAt: now - 8 * 24 * 60 * 60 * 1000, result: { ok: true } }] })
+  assert.equal(await f.bg.recoverFieldRepairOperations(), 0)
+  assert.equal(await f.bg.recoverFieldRepairOperations(), 0)
+  assert.deepEqual((await f.chrome.storage.local.get('fieldRepairOperations')).fieldRepairOperations, [],
+    '兩次恢復後原始 storage 均不再保留過期完成收據')
+})
+
 test('AC-A4 recovery continues after one operation and its diagnostic write both fail', async t => {
   const f = await setup(t)
   await f.bg.fieldRepairWorkerRecovery
@@ -512,7 +589,8 @@ test('AC-A4 recovery continues after one operation and its diagnostic write both
     const entry = task.spec.fields.find(item => item.key === fieldKey)
     return {
       id, taskId: task.id, fieldKey, repairMode: 'repair', status: 'prepared', createdAt: Date.now(),
-      fieldSnapshot: stable({ key: field.key, mode: field.mode, fieldSource: field.source,
+      fieldSnapshot: stable({ taskUrl: task.url, preActions: task.preActions,
+        key: field.key, mode: field.mode, fieldSource: field.source,
         entrySource: entry.source, spec: entry.spec, fieldStateActions: field.stateActions,
         entryStateActions: entry.stateActions }),
       source: { locator: { css: source } }, nextSpec, selectedMode: field.mode,

@@ -207,3 +207,151 @@ test('比較資料載入錯誤顯示重試，重試成功後更新畫面', async
   assert.equal(doc.getElementById('history-load-error'), null)
 })
 
+async function prepareUncachedSummaryChart(date) {
+  const hash = `#view=history&from=${date}&to=${date}`
+  const { chrome, storage, win, doc, report } = await mount(hash)
+  await storage.appendRecord(date, {
+    taskId: 't1', capturedAt: `${date}T08:00:00.000Z`, slot: `${date}T08:00:00`,
+    value: 42, raw: '42', status: 'ok'
+  })
+  await delay(120)
+  await report.loadAndRenderPage(hash, { force: true })
+  assert.ok(doc.querySelector('#summary .task-link'))
+
+  // Invalidate the successful range while the route is hidden, then restore the
+  // route state without loading so the summary button starts a real storage read.
+  report.initFromHash(`#view=settings&from=${date}&to=${date}`)
+  await report.refreshCurrentView({ keys: new Set([`rec2:${date}:08`]), dates: new Set([date]) })
+  report.initFromHash(hash)
+
+  return { chrome, storage, win, doc, report, hash, date }
+}
+
+test('同範圍刷新失敗保留已成功畫面，重試後更新資料', async () => {
+  const date = '2026-12-04'
+  const { chrome, storage, doc, report, hash } = await prepareUncachedSummaryChart(date)
+  const table = doc.querySelector('#record-table tbody')
+  const summary = doc.querySelector('#summary tbody')
+  const calendar = doc.querySelector('#calendar')
+  const previous = {
+    table: table.innerHTML,
+    summary: summary.innerHTML,
+    calendar: calendar.innerHTML
+  }
+  assert.match(table.textContent, /42/)
+
+  report.initFromHash(`#view=settings&from=${date}&to=${date}`)
+  await storage.appendRecord(date, {
+    taskId: 't1', capturedAt: `${date}T09:00:00.000Z`, slot: `${date}T09:00:00`,
+    value: 43, raw: '43', status: 'ok'
+  })
+  await report.refreshCurrentView({ keys: new Set([`rec2:${date}:09`]), dates: new Set([date]) })
+  report.initFromHash(hash)
+
+  const realGet = chrome.storage.local.get.bind(chrome.storage.local)
+  let failNextRead = true
+  let retryLoaded
+  const retryLoadedPromise = new Promise(resolve => { retryLoaded = resolve })
+  chrome.storage.local.get = async (keys, ...rest) => {
+    if (Array.isArray(keys) && keys.includes(`rec2:${date}:09`)) {
+      if (failNextRead) {
+        failNextRead = false
+        throw new Error('controlled same-range refresh failure')
+      }
+      const result = await realGet(keys, ...rest)
+      retryLoaded()
+      return result
+    }
+    return realGet(keys, ...rest)
+  }
+
+  await report.loadAndRenderPage(hash, { force: true })
+  assert.equal(table.innerHTML, previous.table)
+  assert.equal(summary.innerHTML, previous.summary)
+  assert.equal(calendar.innerHTML, previous.calendar)
+  assert.match(doc.getElementById('history-load-error')?.textContent || '', /畫面保留上次資料/)
+  assert.match(doc.getElementById('history-load-error')?.textContent || '', /controlled same-range refresh failure/)
+
+  doc.querySelector('#history-load-error button').click()
+  await retryLoadedPromise
+  await delay(80)
+  assert.equal(doc.getElementById('history-load-error'), null)
+  assert.match(table.textContent, /43/)
+})
+
+test('摘要圖表的晚到歷史讀取不得覆寫新路由', async () => {
+  const date = '2026-12-02'
+  const { chrome, doc, report, hash } = await prepareUncachedSummaryChart(date)
+  const realGet = chrome.storage.local.get.bind(chrome.storage.local)
+  let entered
+  const enteredPromise = new Promise(resolve => { entered = resolve })
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  let held = false
+  chrome.storage.local.get = async (keys, ...rest) => {
+    const result = await realGet(keys, ...rest)
+    if (!held && Array.isArray(keys) && keys.includes(`rec2:${date}:08`)) {
+      held = true
+      entered()
+      await gate
+    }
+    return result
+  }
+
+  doc.querySelector('#summary .task-link').click()
+  await enteredPromise
+  await report.loadAndRenderPage(`#view=settings&from=${date}&to=${date}`, { force: true })
+  const chart = doc.getElementById('summary-chart')
+  assert.equal(chart.hidden, true)
+  release()
+  await delay(80)
+  assert.equal(chart.hidden, true, 'stale chart request cannot reveal chart on settings route')
+  assert.equal(chart.children.length, 0)
+  assert.equal(report.getState().view, 'settings')
+})
+
+test('摘要圖表的舊讀取拒絕會被處理且不寫入新路由', async t => {
+  const date = '2026-12-03'
+  const { chrome, doc, report } = await prepareUncachedSummaryChart(date)
+  const realGet = chrome.storage.local.get.bind(chrome.storage.local)
+  let entered
+  const enteredPromise = new Promise(resolve => { entered = resolve })
+  let release
+  const gate = new Promise((resolve, reject) => { release = reject })
+  let held = false
+  chrome.storage.local.get = async (keys, ...rest) => {
+    const result = await realGet(keys, ...rest)
+    if (!held && Array.isArray(keys) && keys.includes(`rec2:${date}:08`)) {
+      held = true
+      entered()
+      await gate
+    }
+    return result
+  }
+
+  let unhandled = false
+  const onUnhandled = () => { unhandled = true }
+  process.on('unhandledRejection', onUnhandled)
+  const originalError = console.error
+  let loggedStaleFailure = false
+  console.error = (...args) => {
+    if (String(args[0]).includes('繪製折線圖失敗')) loggedStaleFailure = true
+    originalError(...args)
+  }
+  t.after(() => {
+    process.off('unhandledRejection', onUnhandled)
+    console.error = originalError
+  })
+
+  doc.querySelector('#summary .task-link').click()
+  await enteredPromise
+  await report.loadAndRenderPage(`#view=settings&from=${date}&to=${date}`, { force: true })
+  const chart = doc.getElementById('summary-chart')
+  release(new Error('late summary chart read failure'))
+  await delay(80)
+  assert.equal(unhandled, false, 'the async click handler must catch the rejected read')
+  assert.equal(loggedStaleFailure, false, 'a stale error must not be surfaced on the new route')
+  assert.equal(chart.hidden, true)
+  assert.equal(chart.children.length, 0)
+})
+

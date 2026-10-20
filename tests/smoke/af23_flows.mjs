@@ -169,7 +169,7 @@ try {
       assert.ok(errors.length,'field error has visible textual explanation')
       await panel.locator('#name').fill('Fixture repair')
       await panel.keyboard.press('Tab')
-      for(const selector of ['#test-now','#save','#cancel']) {
+      for(const selector of ['#field-list [data-field-name]', '#field-list [data-field-repair]', '#field-list [data-field-replace]', '#test-now','#save','#cancel']) {
         await panel.$eval(selector,e=>e.scrollIntoView({block:'center'}))
         const visible=await panel.$eval(selector,e=>{
           const b=e.getBoundingClientRect(),x=Math.max(0,Math.min(innerWidth-1,b.x+b.width/2)),y=Math.max(0,Math.min(innerHeight-1,b.y+b.height/2))
@@ -178,6 +178,11 @@ try {
         })
         assert.ok(visible,`${selector} reachable at ${width}px / ${zoom*100}%`)
       }
+      assert.ok(await panel.$eval('#field-list',e=>e.scrollWidth<=e.clientWidth+1),
+        `field controls require no horizontal scrolling at ${width}px / ${zoom*100}%`)
+      assert.ok(await panel.$eval('#field-list [data-field-name]',e=>e.getBoundingClientRect().width>=70),
+        `field name stays editable at ${width}px / ${zoom*100}%`)
+      await panel.$eval('#field-list [data-field-name]',e=>e.scrollIntoView({block:'center'}))
       await panel.screenshot({path:join(directory,`picker-${width}-zoom${zoom}.png`),captureBeyondViewport:false})
       console.log(`[PASS] AC-F3 ${width}px / ${zoom*100}% visible actions and field errors`)
     }

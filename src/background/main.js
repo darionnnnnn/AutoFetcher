@@ -4,7 +4,7 @@ import {
   getPanelCtx, setPanelCtx, mergePanelCtx, clearPanelCtx,
   getSettings, subscribe, deleteLastValues, getSite,
   beginFieldRepairOperation, getFieldRepairOperation,
-  updateFieldRepairOperation, listPendingFieldRepairOperations
+  updateFieldRepairOperation, listPendingFieldRepairOperations, pruneFieldRepairOperations
 } from '../shared/storage.js'
 import { pruneSeries } from '../shared/layout-store.js'
 import { openPanel, closePanel } from '../shared/panel.js'
@@ -85,8 +85,10 @@ function repairFrameUrl(value) {
   } catch { return '' }
 }
 
-function fieldRepairSnapshot(field, entry) {
+function fieldRepairSnapshot(task, field, entry) {
   return stableRepairValue({
+    taskUrl: task?.url,
+    preActions: task?.preActions,
     key: field?.key,
     mode: field?.mode,
     fieldSource: field?.source,
@@ -182,7 +184,7 @@ async function beginFieldRepairOnce(msg) {
       sessionId, taskId: task.id, fieldKey: field.key, repairMode: msg.repairMode,
       tabId, frameId: loc.frameId, frameUrl,
       documentGeneration, routeIdentity,
-      fieldSnapshot: fieldRepairSnapshot(field, fieldSpec)
+      fieldSnapshot: fieldRepairSnapshot(task, field, fieldSpec)
     })
     const entered = await sendToFrame(tabId, {
       type: MSG.ENTER_PICK, purpose: 'repick', taskId: task.id, locator,
@@ -276,7 +278,7 @@ async function finishFieldRepairOperation(operation) {
     const [updated] = await updateTasks([operation.taskId], currentTask => {
       const { field, entry } = fieldAndEntryOf(currentTask, operation.fieldKey)
       if (!field || !entry || currentTask.mode !== 'multi') { missing = true; return null }
-      if (fieldRepairSnapshot(field, entry) !== operation.fieldSnapshot) { conflict = true; return null }
+      if (fieldRepairSnapshot(currentTask, field, entry) !== operation.fieldSnapshot) { conflict = true; return null }
       const previous = entry.spec || (entry.cell ? { cell: entry.cell } : entry.block ? { block: entry.block } : {})
       if (operation.repairMode === 'repair' &&
           (Boolean(previous.cell) !== Boolean(operation.nextSpec.cell) || Boolean(previous.block) !== Boolean(operation.nextSpec.block))) {
@@ -381,6 +383,11 @@ let fieldRepairRecoveryPromise = null
 export function recoverFieldRepairOperations() {
   if (fieldRepairRecoveryPromise) return fieldRepairRecoveryPromise
   fieldRepairRecoveryPromise = (async () => {
+    try {
+      await pruneFieldRepairOperations()
+    } catch {
+      // Receipt cleanup is best-effort; it must not block recovery of pending writes.
+    }
     const pending = await listPendingFieldRepairOperations()
     for (const operation of pending) {
       try {
@@ -485,7 +492,7 @@ async function applyFieldRepairNow(msg, sender) {
   const source = { locator, ...(frame?.url ? { frame: { url: frame.url } } : {}) }
   const previous = entry?.spec || (entry?.cell ? { cell: entry.cell } : entry?.block ? { block: entry.block } : {})
   if (!field || !entry || task?.mode !== 'multi') return { ok: false, error: 'field_not_found', message: '這個值已移除，沒有套用重選結果' }
-  if (fieldRepairSnapshot(field, entry) !== grant.fieldSnapshot) return { ok: false, error: 'stale_field_repair', message: '這個值的來源或狀態動作已變更，請重新開始' }
+  if (fieldRepairSnapshot(task, field, entry) !== grant.fieldSnapshot) return { ok: false, error: 'stale_field_repair', message: '這個值的來源或狀態動作已變更，請重新開始' }
   if (grant.repairMode === 'repair' && (Boolean(previous.cell) !== Boolean(spec.cell) || Boolean(previous.block) !== Boolean(spec.block))) {
     return { ok: false, error: 'field_not_found', message: '這個值的選取類型不同，沒有套用重選結果' }
   }

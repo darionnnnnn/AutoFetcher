@@ -1451,11 +1451,22 @@ async function applyFieldRepairDone(message) {
 
   const latestSession = repairSessionsByField.get(repairIdentity)
   if ((activeSession && latestSession !== activeSession) || (!activeSession && latestSession)) return undefined
+  // Another task/context owns the visible form now. Retire this in-memory lock;
+  // when the task is opened again it will be rehydrated from the saved task.
+  if (message.taskId !== currentCtx?.task?.id || contextAtStart !== currentCtx) {
+    repairSessionsByField.delete(repairIdentity)
+    recentlyCompletedFieldRepairs.set(repairIdentity, message.sessionId)
+    if (recentlyCompletedFieldRepairs.size > 128) recentlyCompletedFieldRepairs.delete(recentlyCompletedFieldRepairs.keys().next().value)
+    return undefined
+  }
+
+  // previewGeneration also advances when a newer preview starts. That must
+  // invalidate its old-source response, but it must not discard this repair:
+  // the same task form still needs the persisted source and a visible warning.
+  const supersededPreview = generationAtStart !== previewGeneration
   repairSessionsByField.delete(repairIdentity)
   recentlyCompletedFieldRepairs.set(repairIdentity, message.sessionId)
   if (recentlyCompletedFieldRepairs.size > 128) recentlyCompletedFieldRepairs.delete(recentlyCompletedFieldRepairs.keys().next().value)
-  if (message.taskId !== currentCtx?.task?.id) return undefined
-  if (contextAtStart !== currentCtx || generationAtStart !== previewGeneration) return undefined
 
   const draftKey = activeSession ? (replacing ? message.oldFieldKey : message.fieldKey) : savedFieldKey
   const row = Array.from(document.querySelectorAll('#field-list [data-field-row]'))
@@ -1510,6 +1521,18 @@ async function applyFieldRepairDone(message) {
     ? '不同指標已立即儲存為新歷史序列；舊紀錄保留，舊告警不會套用到新值'
     : '來源已立即儲存；這個值的名稱、告警與歷史序列保留')
   if (replacing) updateFieldListState()
+  if (supersededPreview) {
+    const message = '來源或設定已變更，這次結果未套用；請重新試抓確認目前草稿。'
+    showErrorText(message)
+    const previewEl = document.getElementById('preview')
+    if (previewEl) previewEl.textContent = '—'
+    setPreviewState('warn')
+    const note = document.getElementById('test-note')
+    if (note) {
+      note.textContent = message
+      note.dataset.state = 'warn'
+    }
+  }
   return undefined
 }
 

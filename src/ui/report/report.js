@@ -1072,9 +1072,15 @@ export function renderSummary(rows) {
     taskLink.dataset.taskId = r.taskId
     taskLink.textContent = r.taskName || r.taskId || '—'
     taskLink.addEventListener('click', async () => {
+      const generation = loadGeneration
+      const from = state.from
+      const to = state.to
+      const isCurrentRequest = () => isCurrentGeneration(generation)
+        && state.view === 'history' && state.from === from && state.to === to
       try {
-        const records = await recordsForRange(state.from, state.to)
-        const seriesList = buildSeries(records, [{ taskId: r.taskId }], { from: state.from, to: state.to })
+        const records = await recordsForRange(from, to)
+        if (!isCurrentRequest()) return
+        const seriesList = buildSeries(records, [{ taskId: r.taskId }], { from, to })
         const chartBox = document.getElementById('summary-chart')
         if (chartBox) {
           chartBox.textContent = ''
@@ -1083,6 +1089,7 @@ export function renderSummary(rows) {
           chartBox.hidden = false
         }
       } catch (err) {
+        if (!isCurrentRequest()) return
         console.error('繪製折線圖失敗:', err)
       }
     })
