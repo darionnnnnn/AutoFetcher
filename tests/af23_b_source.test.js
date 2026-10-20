@@ -38,6 +38,38 @@ async function pickCell(t, html, id, sessionId) {
   return { chrome, dom, picker, table, cell, identity, expected }
 }
 
+async function pickRepair(t, html, { id, sessionId, preselect } = {}) {
+  resetChromeMock()
+  const chrome = installChromeMock()
+  chrome.__setRuntimeResponder(message => message?.type === 'PICKED' ? { ok: true } : undefined)
+  const dom = new JSDOM(html, { url: 'https://a.test/table' })
+  const previous = Object.fromEntries(['window', 'document', 'location', 'Event', 'MouseEvent'].map(key => [key, globalThis[key]]))
+  Object.assign(globalThis, {
+    window: dom.window, document: dom.window.document, location: dom.window.location,
+    Event: dom.window.Event, MouseEvent: dom.window.MouseEvent
+  })
+  const picker = await import('../src/content/picker-mode.js?af23-repair-source=' + Math.random())
+  const table = document.querySelector('[role="grid"], table, .css-grid')
+  const identity = { purpose: 'repick', taskId: 'repair-task', repairSessionId: sessionId,
+    repairFieldKey: 'f1', repairMode: 'repair', documentGeneration: 'doc-1', initialTarget: table, preselect }
+  picker.enterPickMode(identity)
+  if (id) {
+    const cell = document.getElementById(id)
+    cell.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+    cell.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  }
+  t.after(() => {
+    picker.exitPickMode()
+    dom.window.close()
+    for (const key of Object.keys(previous)) {
+      if (previous[key] === undefined) delete globalThis[key]
+      else globalThis[key] = previous[key]
+    }
+    resetChromeMock()
+  })
+  return { chrome, dom, picker, table, identity }
+}
+
 const numericRows = `<table><thead><tr><th>項目</th><th>價格</th></tr></thead><tbody>
   <tr><th>1</th><td id="selected">123</td></tr><tr><th>2</th><td>200</td></tr>
   </tbody></table>`
@@ -149,4 +181,73 @@ test('AC-B1 repeated numeric row headers use identical validation under an ARIA 
   f.table.insertBefore(inserted, f.table.children[1])
   const result = await f.picker.drainPickQueue({ ...f.identity, validateSources: true, expectedSources: f.expected })
   assert.equal(result.error, 'stale_source')
+})
+
+test('AC-B1 repair submission checks the selected DOM anchor before sending PICKED', async t => {
+  const f = await pickRepair(t, `<table><thead><tr><th>項目</th><th>價格</th></tr></thead><tbody>
+    <tr><th>1</th><td id="selected">123</td></tr><tr><th>2</th><td>200</td></tr>
+    </tbody></table>`, { id: 'selected', sessionId: 'repair-stale-insert' })
+  const inserted = document.createElement('tr')
+  inserted.innerHTML = '<th>1</th><td>111</td>'
+  f.table.querySelector('tbody').prepend(inserted)
+  document.querySelector('[data-af-done]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.chrome.__calls.some(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICKED'), false,
+    'no repair request is sent after the coordinate would silently bind to another 1 row')
+  assert.match(document.querySelector('[data-af-panel]').textContent, /重新選取目前要抓的值/)
+})
+
+test('AC-B2 repair accepts a live value refresh on the same selected node', async t => {
+  const f = await pickRepair(t, `<table><thead><tr><th>項目</th><th>價格</th></tr></thead><tbody>
+    <tr><th>A</th><td id="selected">123</td></tr>
+    </tbody></table>`, { id: 'selected', sessionId: 'repair-live-refresh' })
+  document.getElementById('selected').textContent = '124'
+  document.querySelector('[data-af-done]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.ok(f.chrome.__calls.some(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICKED'),
+    'the live cell value can update while its source DOM node remains the same')
+})
+
+test('AC-B2 repair anchor honors dynamic first/last and unique-header table refresh', async t => {
+  for (const [position, changed] of [
+    ['first', body => { const row = document.createElement('tr'); row.innerHTML = '<th>0</th><td>111</td>'; body.prepend(row) }],
+    ['last', body => { body.lastElementChild.remove() }]
+  ]) {
+    const f = await pickRepair(t, `<table><thead><tr><th>項目</th><th>價格</th></tr></thead><tbody>
+      <tr><th>A</th><td>100</td></tr><tr><th>B</th><td>200</td></tr><tr><th>C</th><td>300</td></tr>
+      </tbody></table>`, { sessionId: `repair-pos-${position}`, preselect: [{ cell: {
+      row: { index: position === 'first' ? 0 : 2, header: position === 'first' ? 'A' : 'C', pos: position },
+      col: { index: 1, header: '價格' }
+    } }] })
+    changed(f.table.querySelector('tbody'))
+    document.querySelector('[data-af-done]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    await new Promise(resolve => setImmediate(resolve))
+    assert.ok(f.chrome.__calls.some(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICKED'),
+      `${position} position follows the current source after insert/delete`)
+  }
+
+  const unique = await pickRepair(t, `<table><thead><tr><th>項目</th><th>價格</th></tr></thead><tbody>
+    <tr><th>A</th><td>100</td></tr><tr><th>B</th><td>200</td></tr>
+    </tbody></table>`, { sessionId: 'repair-unique-column', preselect: [{ block: { axis: 'col', index: 1, headerText: '價格' } }] })
+  const tbody = unique.table.querySelector('tbody')
+  const replacement = document.createElement('tbody')
+  replacement.innerHTML = '<tr><th>A</th><td>101</td></tr><tr><th>B</th><td>201</td></tr>'
+  tbody.replaceWith(replacement)
+  document.querySelector('[data-af-done]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.ok(unique.chrome.__calls.some(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICKED'),
+    'a unique header keeps its column identity when tbody is refreshed')
+})
+
+test('AC-B1 repair rejects same-index neighbor after a duplicate numeric column is fully rerendered', async t => {
+  const f = await pickRepair(t, `<table><thead><tr><th>項目</th><th>1</th><th>1</th></tr></thead><tbody>
+    <tr><th>A</th><td>200</td><td>123</td></tr>
+    </tbody></table>`, { sessionId: 'repair-duplicate-column', preselect: [{ block: { axis: 'col', index: 2, headerText: '1' } }] })
+  const oldBody = f.table.querySelector('tbody')
+  const replacement = document.createElement('tbody')
+  replacement.innerHTML = '<tr><th>A</th><td>111</td><td>222</td></tr>'
+  oldBody.replaceWith(replacement)
+  document.querySelector('[data-af-done]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.chrome.__calls.some(call => call.api === 'runtime.sendMessage' && call.args[0]?.type === 'PICKED'), false)
 })
