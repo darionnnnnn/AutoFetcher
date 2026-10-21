@@ -347,6 +347,54 @@ async function clearNotFoundStreak(taskId) {
   })
 }
 
+// 一個排程槽最多跑幾次（第一次＋兩次重試，SPEC §4）
+const MAX_ATTEMPTS = 3
+// 重試幾次結果都一樣：立刻寫失敗紀錄（SPEC §4；multi 也一樣）
+const NO_RETRY_STATUSES = new Set(['login_failed', 'parse_error', 'invalid_multi'])
+
+/**
+ * 失敗收尾的唯一入口：排重試，或寫失敗紀錄並在正式排程用盡時通知。
+ * 手動抓取不重試、不通知但留紀錄（帳本略過）；試抓（dryRun）不得走到這裡。
+ * @param {object} run runTask 的執行情境（task/slot/attempt/isManual/isMulti/execution*）
+ * @param {string} status 紀錄狀態
+ * @param {string|undefined} error 失敗原因（白話）
+ * @param {{ retryable?: boolean, offline?: boolean, record?: object }} [opts]
+ */
+async function finishFailure(run, status, error, opts = {}) {
+  const { task, slot, attempt, isManual, isMulti } = run
+  const retryable = opts.retryable ?? !NO_RETRY_STATUSES.has(status)
+  if (retryable && !isManual && attempt < MAX_ATTEMPTS) {
+    await scheduleRetry(task.id, attempt, opts.offline === true, slot)
+    return null
+  }
+  const written = isMulti
+    ? await writeMultiFailureRecords(task, slot, status, error, {
+        skipLedger: isManual, executionId: run.executionId,
+        executionSnapshot: run.executionSnapshot, executionFingerprint: run.executionFingerprint
+      })
+    : await writeRecord({
+        taskId: task.id,
+        slot,
+        capturedAt: new Date().toISOString(),
+        status,
+        ...(error !== undefined ? { error } : {}),
+        ...(opts.record || {})
+      }, { parentId: task.id, skipLedger: isManual, executionId: run.executionId })
+  if (!isManual && written?.error !== TASK_CHANGED_RESULT.error) await notifyFinalFailure(task, status)
+  return written
+}
+
+// 正式排程這一格最終失敗：同任務同狀態 24 小時一次、同站台 5 分鐘內合併（notifySiteFailure）。
+// 登入失敗不在這裡通知：它的通知屬於站台（login.js 連續失敗停用站台時通知一次，SPEC §6）
+async function notifyFinalFailure(task, status) {
+  if (status === 'login_failed') return
+  try {
+    await notifySiteFailure(getOrigin(task.url), task, status)
+  } catch (err) {
+    try { await diag.log('notify_error', `stage=final_failure status=${status} result=error`) } catch {}
+  }
+}
+
 // 排定重試 alarm
 async function scheduleRetry(taskId, attempt, isOffline = false, slot = '') {
   const delayMs = isOffline ? 10 * 60 * 1000 : (attempt === 1 ? 2 * 60 * 1000 : 10 * 60 * 1000)
@@ -934,6 +982,7 @@ export async function runTask(task, opts = {}) {
   // 來源索引也要供 legacy `fields` 回覆的診斷使用；舊 block 任務不是
   // `isMulti`，但擷取結果仍可能帶 fields，不能讓診斷分支對 null 呼叫 find。
   const multiSources = normalizeTaskSources(task)
+  const failRun = { task, slot, attempt, isManual, isMulti, executionId, executionSnapshot, executionFingerprint }
 
   // multi 沒有任何宣告值是設定錯誤，不應為了最後才發現空欄位而開分頁、登入或
   // 寫入一筆看似抓取失敗的父紀錄。試抓仍回傳可供 UI 顯示的明確結果，正式
@@ -992,34 +1041,9 @@ export async function runTask(task, opts = {}) {
   // 2. 離線檢查：若離線則排 10 分鐘後重試，不得開分頁
   if (globalThis.navigator?.onLine === false) {
     if (dryRun) return isMulti ? multiFailureResult(task, 'offline', '目前離線') : { ok: false, error: 'offline' }
-    // 手動抓取一律不重試，但要留一筆看得到的紀錄，否則使用者按了沒有任何反應
-    if (isManual) {
-      if (isMulti) {
-        return await writeMultiFailureRecords(task, slot, 'error', '目前離線', { skipLedger: true, executionId, executionSnapshot, executionFingerprint })
-      }
-      return await writeRecord({
-        taskId: task.id,
-        slot,
-        capturedAt: new Date().toISOString(),
-        status: 'error',
-        error: '目前離線'
-      }, { parentId: task.id, skipLedger: true, executionId })
-    }
-    // 重試也有上限：沒有上限的話 alarm 會自己無限接力下去，一直離線就永遠不留紀錄
-    if (attempt < 3) {
-      await scheduleRetry(task.id, attempt, true, slot)
-      return null
-    }
-    if (isMulti) {
-      return await writeMultiFailureRecords(task, slot, 'error', '目前離線', { executionSnapshot, executionFingerprint })
-    }
-    return await writeRecord({
-      taskId: task.id,
-      slot,
-      capturedAt: new Date().toISOString(),
-      status: 'error',
-      error: '目前離線'
-    }, { parentId: task.id })
+    // 手動抓取不重試，但要留一筆看得到的紀錄（否則按了沒有任何反應）；
+    // 排程的離線重試也有上限：沒有上限的話 alarm 會自己無限接力下去，一直離線就永遠不留紀錄
+    return await finishFailure(failRun, 'error', '目前離線', { offline: true })
   }
 
   // 同站台串行佇列執行
@@ -1250,16 +1274,7 @@ export async function runTask(task, opts = {}) {
           // 登入途中被總時限截斷的，記成超過時限（走重試），不記成登入失敗
           checkDeadline()
           if (dryRun) return isMulti ? multiFailureResult(task, 'login_failed', login?.reason || '無法登入') : { ok: false, error: 'login_failed' }
-          if (isMulti) {
-            return await writeMultiFailureRecords(task, slot, 'login_failed', login?.reason || '無法登入', { skipLedger: isManual, executionId, executionSnapshot, executionFingerprint })
-          }
-          return await writeRecord({
-            taskId: task.id,
-            slot,
-            capturedAt: new Date().toISOString(),
-            status: 'login_failed',
-            error: login?.reason || '無法登入'
-          }, { parentId: task.id, skipLedger: isManual, executionId })
+          return await finishFailure(failRun, 'login_failed', login?.reason || '無法登入')
         }
 
         // 9. 注入 content script（必須在送訊息之前）
@@ -1411,7 +1426,7 @@ export async function runTask(task, opts = {}) {
             const anyFailure = fieldList.some(field => field?.ok !== true)
             const anyPartial = fieldList.some(field => field?.partial === true)
             res = { ok: true, fields, ...((anyFailure || anyPartial) ? { partial: true } : {}) }
-            if (!anySuccess && retryWholeTask && !isManual && attempt < 3) {
+            if (!anySuccess && retryWholeTask && !isManual && attempt < MAX_ATTEMPTS) {
               await scheduleRetry(task.id, attempt, false, slot)
               return null
             }
@@ -1447,13 +1462,7 @@ export async function runTask(task, opts = {}) {
           }
           if (!frameFound(loc)) {
             if (dryRun) return { ok: false, error: 'frame_not_found', debug: await buildDebug(task, tabId, loc, preActionTrace, { error: 'frame_not_found' }) }
-            return await writeRecord({
-              taskId: task.id,
-              slot,
-              capturedAt: new Date().toISOString(),
-              status: 'not_found',
-              error: '找不到目標所在的框架'
-            }, { parentId: task.id, skipLedger: isManual, executionId })
+            return await finishFailure(failRun, 'not_found', '找不到目標所在的框架', { retryable: false })
           }
           if (lastLiveErr !== null) {
             // 重試耗盡：標成「頁面沒了」，錯誤訊息在最外層的 catch 統一轉譯
@@ -1603,6 +1612,10 @@ export async function runTask(task, opts = {}) {
               executionFingerprint: isMulti ? executionFingerprint : undefined
             })
             if (finalized?.error === 'task_changed') return finalized
+            // 正式排程這一格每個值都沒抓到：與單值失敗同一套通知（部分成功不通知，畫面上已有黃燈）
+            if (!isManual && committedRecords.length > 0 && committedRecords.every(r => !isSuccess(r))) {
+              await notifyFinalFailure(task, committedRecords[0]?.status || 'error')
+            }
 
             // 設定頁的診斷要看得出這一次抓了幾個值、哪幾個沒抓到
             // 診斷頁是用字串串接顯示；環形緩衝只有 500 筆，全成功就不占位子（否則會把看門狗紀錄擠掉）
@@ -1664,21 +1677,12 @@ export async function runTask(task, opts = {}) {
         if (isMulti) {
           const error = contentErrorText(res) || res?.message || '擷取失敗'
           if (dryRun) return multiFailureResult(task, res?.error || 'error', error)
-          if (!isManual && attempt < 3) {
-            await scheduleRetry(task.id, attempt, false, slot)
-            return null
-          }
-          return await writeMultiFailureRecords(task, slot, res?.error || 'error', error, { skipLedger: isManual, executionId, executionSnapshot, executionFingerprint })
+          return await finishFailure(failRun, res?.error || 'error', error)
         }
 
         // 結果處理：元素未找到（可重試）
         if (res?.error === 'not_found') {
-          if (!isManual && attempt < 3) {
-            await scheduleRetry(task.id, attempt, false, slot)
-            return null
-          }
-
-          if (!isManual) {
+          if (!isManual && attempt >= MAX_ATTEMPTS) {
             // 重試用盡：更新 notFoundStreak，連兩次建議前台擷取
             await updateTasks([task.id], (t) => {
               const streak = (t.notFoundStreak || 0) + 1
@@ -1686,45 +1690,19 @@ export async function runTask(task, opts = {}) {
               if (streak >= 2) t.suggestForeground = true
               return t
             })
-
-            // 冷卻（同狀態 24 小時一次）＋同站台 5 分鐘內合併成一則（AF-21 批次 2 定案 8）
-            await notifySiteFailure(origin, task, 'not_found')
           }
-
-          return await writeRecord({
-            taskId: task.id,
-            slot,
-            capturedAt: new Date().toISOString(),
-            status: 'not_found',
-            // 「標題找不到，改用位置定位」這種訊息要留在紀錄裡，
-            // 只寫 not_found 的話使用者看到的永遠是同一句沒有解法的話
-            ...(res.message !== undefined ? { error: res.message } : {})
-          }, { parentId: task.id, skipLedger: isManual, executionId })
+          // 「標題找不到，改用位置定位」這種訊息要留在紀錄裡，
+          // 只寫 not_found 的話使用者看到的永遠是同一句沒有解法的話
+          return await finishFailure(failRun, 'not_found', res.message)
         }
 
         // 結果處理：解析錯誤（不重試，不得含 value 欄位）
         if (res?.error === 'parse_error') {
-          return await writeRecord({
-            taskId: task.id,
-            slot,
-            capturedAt: new Date().toISOString(),
-            status: 'parse_error',
-            raw: res.raw
-          }, { parentId: task.id, skipLedger: isManual, executionId })
+          return await finishFailure(failRun, 'parse_error', undefined, { record: { raw: res.raw } })
         }
 
         // 其他未知錯誤
-        if (!isManual && attempt < 3) {
-          await scheduleRetry(task.id, attempt, false, slot)
-          return null
-        }
-        return await writeRecord({
-          taskId: task.id,
-          slot,
-          capturedAt: new Date().toISOString(),
-          status: 'error',
-          error: contentErrorText(res) || '擷取失敗'
-        }, { parentId: task.id, skipLedger: isManual, executionId })
+        return await finishFailure(failRun, 'error', contentErrorText(res) || '擷取失敗')
 
       } catch (err) {
         // 存活重試耗盡才會走到這裡：把 Chrome 的英文原文換成說得出怎麼辦的中文，
@@ -1748,20 +1726,7 @@ export async function runTask(task, opts = {}) {
         if (isMulti && !(await multiExecutionStillValid(task, executionSnapshot))) {
           return { ...TASK_CHANGED_RESULT }
         }
-        if (!isManual && attempt < 3) {
-          await scheduleRetry(task.id, attempt, false, slot)
-          return null
-        }
-        if (isMulti) {
-          return await writeMultiFailureRecords(task, slot, 'error', shown, { skipLedger: isManual, executionId, executionSnapshot, executionFingerprint })
-        }
-        return await writeRecord({
-          taskId: task.id,
-          slot,
-          capturedAt: new Date().toISOString(),
-          status: 'error',
-          error: shown
-        }, { parentId: task.id, skipLedger: isManual, executionId })
+        return await finishFailure(failRun, 'error', shown)
       } finally {
         if (restoreForeground) {
           try {
