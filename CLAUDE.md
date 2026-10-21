@@ -22,7 +22,7 @@ src/
 │                          點一下加選／再點取消、Shift 拉範圍;單任務／repick 雙擊送出;AF-22 群組雙擊只加值、Ctrl/Cmd+Enter 完成;
 │                          巢狀小表升到外層;群組草稿由 Picker 管理)
 ├── ui/theme.css         ← **顏色的唯一來源**(亮/暗雙軌 + --chart-1~8 圖表調色盤)
-├── ui/theme-apply.js    ← **套用使用者主題設定的唯一一份**(`applyTheme`/`applySavedTheme`;Report、Picker、站台、popup、教學頁都用)
+├── ui/theme-apply.js    ← **套用使用者主題設定的唯一一份**(`applyTheme`/`applySavedTheme`;Report、Picker、站台、popup、教學頁都用;常駐頁另呼叫 `watchTheme` 即時跟著切)
 ├── ui/help/             ← 使用教學頁(help.html＋help.js;文案由 Claude 寫;寫法契約見 SPEC §2〈使用教學頁〉)
 ├── ui/ui.css            ← 擴充功能頁的**共用元件樣式**(按鈕四種/狀態 chip/橫幅/空狀態/就地回饋/表單/固定動作列/
 │                          還不能儲存/對話框/[hidden]/焦點/reduced-motion);只吃 theme.css 變數,零色碼。
@@ -147,7 +147,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/(歷史
 - **突變腳本的 `replace(old, new, 1)` 換的是第一個命中**:同一串字在檔案裡出現兩次(`SHARED_IDS` 與 `DRAFT_FIELDS`)時會打錯位置、誤判成「測試沒守到」;`old` 要寫到唯一。
 - **「在 A 之後讀 B」的情境要看 A 會不會清掉 B**:右鍵選單的 `closeMenu()` 會把 `menuTargetContext` 清成 null,
   排除分支在它之後才讀,右鍵排除永遠無效(AF-16)。新增選單動作要在關選單前取出情境。
-- **任務存回 storage 一律「展開既有任務再覆寫自己擁有的欄位」**(AF-19):整批啟停、改排程、改名都只換那一個欄位;
+- **任務存回 storage 一律「展開既有任務再覆寫自己擁有的欄位」**(AF-19;Picker 編輯存檔走 `updateTasks`＋`withLatestUnmanaged`,表單管不到的欄位與 `order`、`archivedFields` 取儲存當下的最新值,AF-24):整批啟停、改排程、改名都只換那一個欄位;
   Picker 的 `buildTask` 會重組整個任務,編輯時靠 `RUNTIME_FIELDS` 帶過 `enabled`／`foreground` 等表單管不到的欄位。
   以前寫死 `enabled: true`,停用中的任務一編輯就復活、前景抓取設定默默消失。新增一條改任務的路徑時,先問「表單管不到的欄位會不會被洗掉」。
 - **改多個任務一律走 `saveTasks`／`deleteTasks`**(AF-19):逐筆 `saveTask` 是 N 次讀寫整個 `tasks` 陣列;`REBUILD_ALARMS` 整批只送一次。
@@ -201,7 +201,9 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/(歷史
   失敗類通知走 `notifyFailure`(同 key 同狀態 24 小時一次),同站台失敗走 `notifySiteFailure` 合併。
 - **不要用 `executeScript({files})` 注入 content script**:它是 ES module,一律走 `background/inject.js`。
 - **background 不得直接呼叫 `chrome.tabs.sendMessage`**:一律經 `background/messaging.js` 的 `sendToFrame`(帶逾時、清計時器;a4 D13b 擋)。
-- **新的訊息型別預設不接受 content script 送**:`handleMessage` 只讓 content(有 `sender.tab` 且網址不是本擴充功能)送 `CONTENT_ALLOWED`(`PICKED`、`DESCEND_FRAME`)。
+- **新的訊息型別預設不接受 content script 送**:`handleMessage` 只讓 content(有 `sender.tab` 且網址不是本擴充功能)送 `CONTENT_ALLOWED`(`PICKED`、`PICK_GROUP_NAME_RESULT`、`PICK_DRAFT_FINISH_REQUEST`、`DESCEND_FRAME`)。
+  訊息分派是 `MESSAGE_ROUTES` 路由表(AF-24):新訊息加一個處理函式與一條表項,每個處理函式的所有路徑都要自己 return;
+  **content 直接廣播的訊息擴充功能頁也收得到**——面板只能信 background 核對後轉發的那一份(帶 `tabId`／`sourceTabId`,且 `sender.tab` 不是網頁)。
 - **`web_accessible_resources` 只列 content 端 import 閉包**:content 端新增 import 一個 shared 模組時要加進 manifest(a4 D16 以閉包比對)。
 - **不要讓 `chrome.tabs.sendMessage` 少掉第三個參數**:一個分頁可能有多個 frame,不指名 `{ frameId }`
   就是廣播,最上層會搶先回「找不到」而結案(`tests/a4_conventions.test.js` 的 D13 會擋)。
@@ -289,7 +291,9 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/(歷史
 - **面板重畫簽章要含每一種 ctx 的內容鍵**(AF-21 體檢):`bulk` 的 `taskIds` 有進簽章、`batch` 的 `items` 漏了,第二輪批次選取被當成沒變、存的是舊目標。新增 ctx 種類時把它的內容鍵加進 `sig`。
 - **「只加不減」的清單要有對帳的出口**(AF-21 體檢):錯過清單在格子真的跑完、任務被刪之後都留著。任何累積型的鍵,寫入點旁邊就要想好誰在什麼時候把它拿掉;以會變的欄位(gap 的 `slot`)當刪除鍵,畫面拿舊值就刪不到。
 - **同一份守衛寫在兩個兄弟函式時兩邊都要有**(AF-21 體檢):`computeIntervalGaps` 有 `createdAt` 守衛、`computeMissedSlots` 沒有,新任務一建立就被回溯 7 天錯過。
-- **每條失敗路徑的重試都要有上限**:離線分支少了 `attempt < 3`,alarm 每 10 分鐘自我延續。
+- **抓取的失敗收尾只有 `fetcher.js` 的 `finishFailure`**(AF-24):重試上限 `MAX_ATTEMPTS`、不重試的狀態 `NO_RETRY_STATUSES`、最終失敗的通知都在這一處;
+  新增失敗路徑一律呼叫它,不要再手寫「`attempt <` 幾就 `scheduleRetry`」(以前六處各寫一份,離線分支曾漏上限讓 alarm 無限接力、multi 分支曾排在不可重試判斷之前)。
+  **寫紀錄前核對 `ownsRunState`**(登記仍是自己的才寫),收尾只刪自己那一份登記(`dropOwnRunState`)——被看門狗接管後同一格可能已被重新登記。
 - **拖曳類的 pointer 監聽一定要接 `pointercancel`**;「忙碌中」旗標只在 `pointerup` 歸零的話,一次取消就讓之後的重畫永遠被延後。
 - **先寫入成功才關閉／才清草稿**(抽屜套用):順序反了,寫入失敗時畫面留著沒存的值而且零提示。
 - **在 MutationObserver 回呼裡做全文件掃描要合併**(擷取短等待:會自己重繪的頁面 3 秒內掃上百次)。
@@ -301,7 +305,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/(歷史
 - **不要用 HTML5 drag-and-drop**:拖曳一律 Pointer Events,且只讀 `clientX`/`clientY`/`pointerId`,
   `setPointerCapture` 要先檢查存在(jsdom 25 沒有 `PointerEvent` 也沒有這個方法)。
 - **新的拖曳一律走共用協定,不要再各自內嵌 pointer 監聽**:「拖到某個目標上放開」走 `ui/report/dnd.js`;
-  「同一個清單裡就地換順序」走 `ui/report/sortable.js`(AF-24;門檻、同一根手指、取消即還原且不寫回、順序沒變不寫入)。卡片移動縮放與頁籤兩處尚未搬,見 BACKLOG;
+  「同一個清單裡就地換順序」走 `ui/report/sortable.js`(AF-24;門檻、同一根手指、取消即還原且不寫回、順序沒變不寫入)。卡片移動縮放、儀表板頁籤與月曆拉範圍三處尚未搬(取消都不寫回),見 BACKLOG;
   **不要用 `document.elementFromPoint`**(jsdom 沒有,測不動)。命中與拒收往下找的規則見 SPEC §8.2。
   唯一例外是 `content/picker-mode.js` 的代理層讓路(只有真實命中測試答得出「底下是誰」),
   必須帶存在判斷,測試用替身注入。

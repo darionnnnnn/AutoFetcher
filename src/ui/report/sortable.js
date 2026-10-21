@@ -5,6 +5,8 @@
 // - pointercancel／Esc＝取消：DOM 回到拖前順序、不寫入
 // - 放開時順序真的變了才呼叫 onCommit
 // - 命中只看兄弟元素的矩形（不用 elementFromPoint，jsdom 測得動）
+// - 拖曳中清單被整份重畫過（舊元素已脫離容器）時取消不還原，避免把舊列塞回去變成重複列
+// - 真的拖過之後放開，吃掉緊接的那一下 click（label 的 click 會切換勾選框）
 
 const DRAG_THRESHOLD_PX = 4
 
@@ -51,7 +53,10 @@ export function makeSortable(item, { container, items, axis = 'y', ignore, onCom
       try { item.releasePointerCapture(pointerId) } catch {}
     }
     if (!active) return
+    swallowNextClick()
     if (!commit) {
+      // 拖曳中被重畫過：舊元素已不在這個容器裡，現在的 DOM 就是最新狀態，不動它
+      if (!box.isConnected || before.some(el => el.parentNode !== box)) return
       for (const el of before) box.appendChild(el)
       return
     }
@@ -62,6 +67,16 @@ export function makeSortable(item, { container, items, axis = 'y', ignore, onCom
   const onUp = (e) => finish(true, e)
   const onCancel = (e) => finish(false, e)
   const onKey = (e) => { if (e.key === 'Escape') finish(false) }
+
+  // 只吃「這次拖曳結束後」的第一下 click；下一個 task 之後就不再攔
+  const swallowNextClick = () => {
+    const onClick = (ev) => {
+      ev.preventDefault()
+      ev.stopPropagation()
+    }
+    item.addEventListener('click', onClick, { capture: true, once: true })
+    setTimeout(() => item.removeEventListener('click', onClick, { capture: true }), 0)
+  }
 
   item.addEventListener('pointerdown', (e) => {
     if (e.button !== undefined && e.button !== 0) return

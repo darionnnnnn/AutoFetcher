@@ -128,3 +128,36 @@ test('月曆拉到一半 pointercancel：範圍不變，之後再按下放開同
   assert.equal(rp.getState().from, '2026-09-07')
   assert.equal(rp.getState().to, '2026-09-07')
 })
+
+test('拖曳中清單被整份重畫過再取消：不把舊列塞回去', async () => {
+  const { d, ev, order } = listDom()
+  const commits = await sortableOn(d)
+  ev(d.getElementById('a'), 'pointerdown', { clientY: 5 })
+  ev(d, 'pointermove', { clientY: 55 })
+  // 抓取結果寫入讓任務頁整份重畫
+  const list = d.getElementById('list')
+  list.textContent = ''
+  for (const id of ['x', 'y']) { const li = d.createElement('li'); li.id = id; list.appendChild(li) }
+  ev(d, 'pointercancel', {})
+  await new Promise(r => setTimeout(r, 0))
+  assert.equal(order(), 'xy', '不得出現重複或舊的列')
+  assert.deepEqual(commits, [])
+})
+
+test('真的拖過之後放開，緊接的 click 被吃掉；只是點一下的 click 照常', async () => {
+  const { d, ev } = listDom()
+  await sortableOn(d)
+  const a = d.getElementById('a')
+  let clicks = 0
+  a.addEventListener('click', () => { clicks++ })
+  ev(a, 'pointerdown', { clientY: 5 })
+  ev(d, 'pointermove', { clientY: 55 })
+  ev(d, 'pointerup', { clientY: 55 })
+  a.click()
+  assert.equal(clicks, 0, '拖曳結束後那一下 click 不得觸發（label 會切換勾選框）')
+  await new Promise(r => setTimeout(r, 5))
+  ev(a, 'pointerdown', { clientY: 5 })
+  ev(d, 'pointerup', { clientY: 5 })
+  a.click()
+  assert.equal(clicks, 1)
+})

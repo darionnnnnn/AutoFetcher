@@ -4181,6 +4181,11 @@ function onKeyDown(event) {
             .filter(([r, c]) => targetAtGrid(dataRows[r], c, currentInner) !== null)
             .map(([r, c]) => makeCellPick(r, c, currentTargetEl, dataRows, currentInner))
           if (picks.length > 0) addDraftPickBatch(currentTargetEl, picks)
+          // 鍵盤加進去的最後一格也是「最後一個已選格」：之後 Shift＋點從這裡拉
+          const lastPick = picks[picks.length - 1]
+          if (lastPick?.cell && draftPickEntries.has(draftPickKey(currentTargetEl, lastPick))) {
+            draftRangeAnchor = { table: currentTargetEl, groupKey: pickGroupKey, cell: lastPick.cell }
+          }
           markCells(currentCellEl, dataRows, currentRowEl, pickMode, colIndex, currentInner)
           updatePanel(panelEl, currentTargetEl)
           return

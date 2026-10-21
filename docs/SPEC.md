@@ -245,7 +245,7 @@
     (數值 / 文字 / 表格 N 列 × M 欄 / 清單 N 項),判定來自 `shared/block-detect.js`。
   - **會改掉清單的動作都留一步反悔**(單步快照,`takeUndoSnapshot`):
     取代類——換表、單格升級成整欄／整欄每格／整列、去頭去尾、升到外層;
-    **移除類**——點一下／`Ctrl` 點取消已選、「整欄→每格」整組取消、chip 的 ×、`Backspace` 與「移除最後一項」、`Ctrl+A`(它其實是取代整批);
+    **移除類**——點一下／`Ctrl` 點取消已選、「整欄→每格」整組取消、chip 的 ×、`Backspace` 與「移除最後一項」、`Ctrl+A`(單任務與重選時它其實是取代整批;群組選取的 `Ctrl+A` 是加選,見下方〈群組選取的鍵盤〉);
     點一下改成加選之後,誤點取消是新的破壞性動作,沒有這一條的話 `Ctrl+Z` 會再刪掉另一個值。
     面板出現「復原」鈕(`data-af-undo`,沒有快照時 `hidden`),`Ctrl`/`⌘`+`Z` **先還原快照**,沒有才退回「移除最後一項」(那一步不存快照);
     加選與離開選取模式讓快照失效(留著會在幾步之後莫名其妙跳回舊的一批)。
@@ -723,7 +723,7 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
   `values` 是多值任務每個值的 `{name, ok, value, error}`(同一分鐘按兩次只留每個值最新的那筆),
   任務頁與 popup 逐值就地顯示。
 - **錯過清單**:`onStartup` 與看門狗每輪都呼叫 `refreshMissed`(不只在啟動時算,否則闔上筆電再打開不會列出)。只算 slot 早於「現在 − 20 分鐘」的格子(`MISSED_SETTLE_MS`,剛到點還在跑或重試中的不誤報),`lastSeenAt` 也只推進到那裡,而且**只增不減**(`advanceLastSeenAt` 鎖內比較);gap 合併只加「比既有 gap 記錄的最後一格還新」的格子——啟動與看門狗同時算到重疊的窗也不會重複累加。`computeMissedSlots` 不列早於任務 `createdAt` 的格子(新建任務不會被回溯成 7 天錯過);合併時丟掉「帳本已有該格」與「任務已不存在」的既有項目(清單不是只加不減)。`catchUpAll`／`catchUpOne` 略過 `gap`;gap 的 slot 每輪會延伸,所以 `skipOne` 對 gap 只比任務(UI 送 `kind:'gap'`),移除 0 筆時 `SKIP_ONE` 回 `ok:false`;gap 的白話只在 `shared/describe.js` 的 `gapTextOf`。任務帶 `createdAt`(`saveTasks` 對新 id 寫入、更新時保留),gap 不算建立之前的格子。
-- **失敗通知**:`background/notify.js` 的 `notifyFailure(key, status, options)`——同一 key、同一狀態 24 小時內只跳一次(帳本 `notifyLog`),恢復正常時 `clearNotifyLog`(連帶把它從同站台合併名單拿掉);用在找不到元素(key＝任務 id)、預檢(`<id>:precheck`)、站台檢查(`site:<origin>`)。同一站台 5 分鐘內的失敗合成一則(`notifySiteFailure`,通知 id `fail:<origin>`,累計放 `session.failMerge`)。燈號不受冷卻影響。
+- **失敗通知**:`background/notify.js` 的 `notifyFailure(key, status, options)`——同一 key、同一狀態 24 小時內只跳一次(帳本 `notifyLog`),恢復正常時 `clearNotifyLog`(連帶把它從同站台合併名單拿掉);用在預檢(`<id>:precheck`)、站台檢查(`site:<origin>`)。**正式排程抓取的最終失敗**一律走 `notifySiteFailure`(冷卻同上、以任務 id 為 key;同一站台 5 分鐘內的失敗合成一則,通知 id `fail:<origin>`,累計放 `session.failMerge`;規則見下方「通知策略」)。燈號不受冷卻影響。
 - **單次抓取總時限**:150 秒＋任務宣告的等待(`wait`、`hover` 停留、`waitFor` 逾時),上限 270 秒;每個步驟開始前檢查、每個等待取「自己的逾時」與「剩餘時間」較小者;超過就以既有逾時類失敗處理(錯誤「超過單次抓取時限」)。**不得用 `Promise.race` 把整段包起來**(被拋下的那段會晚一點再寫一筆)。純等待改用每 20 秒戳一次 `getPlatformInfo` 的續命等待;前置動作 `wait` 與 `hover` 停留執行時各以 60 秒為上限(紀錄註明,不改使用者存的值)。被總時限截短的登入失敗**不累加** `failStreak`。
 - **送訊息一律有逾時**:background 的 `chrome.tabs.sendMessage` 只准出現在 `background/messaging.js`(`sendToFrame`,a4 D13b 守);登入 `CHECK_ELEMENT` 10 秒、`FILL_LOGIN` 15 秒,框架探測 5 秒(`frames.js` 的 `PROBE_TIMEOUT_MS`),`main.js` 的選取模式轉送 10 秒。登入等載入也走 `waitTabReady`。
 - **content 端**:訊息路由在分派處統一 try/catch,例外回 `{ ok:false, error:'content_exception', detail }`(紀錄寫「頁面上的程式發生錯誤：…」);擷取找不到目標時用與 `waitFor` 同一份觀察實作等最多 3 秒再判 `not_found`(延遲渲染的頁面不必等 2 分鐘的重試);這段等待的重新解析**最多每 100 毫秒一次**(anchor 層是全文件掃描,會自己重繪的頁面不得被拖住),`EXTRACT` 可帶 `settleMs`,fetcher 對已知壞掉的任務(`notFoundStreak ≥ 1`)帶 0。

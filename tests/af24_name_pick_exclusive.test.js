@@ -74,7 +74,8 @@ test('面板：只有帶對 tabId 與 sessionId 的完成請求會按下「完�
   assert.equal(pk.consumeDraftFinishRequest({ type: 'PICK_DRAFT_FINISH_REQUEST', sessionId: 's1', groupKey: 'g1' }), false, '沒有 tabId（content 直接廣播的那份）不理')
   assert.equal(pk.consumeDraftFinishRequest({ type: 'PICK_DRAFT_FINISH_REQUEST', tabId: 99, sessionId: 's1' }), false)
   assert.equal(pk.consumeDraftFinishRequest({ type: 'PICK_DRAFT_FINISH_REQUEST', tabId: 31, sessionId: 's2' }), false)
-  assert.equal(pk.consumeDraftFinishRequest({ type: 'PICK_DRAFT_FINISH_REQUEST', tabId: 31, sessionId: 's1' }), true)
+  assert.equal(pk.consumeDraftFinishRequest({ type: 'PICK_DRAFT_FINISH_REQUEST', tabId: 31, sessionId: 's1' }, { tab: { id: 31, url: 'https://evil.test/' } }), false, '網頁自己塞 tabId 直接廣播的不理')
+  assert.equal(pk.consumeDraftFinishRequest({ type: 'PICK_DRAFT_FINISH_REQUEST', tabId: 31, sessionId: 's1' }, {}), true)
   assert.equal(clicks, 1)
 })
 

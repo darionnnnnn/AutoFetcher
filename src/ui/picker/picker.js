@@ -4754,9 +4754,11 @@ export function setPickDraftContext(draft, { render = true } = {}) {
 }
 
 // 頁面上的 Ctrl/⌘＋Enter（background 核對後轉來、帶 tabId）：等同按面板的「完成選取」，守門與按鈕相同
-export function consumeDraftFinishRequest(message) {
+export function consumeDraftFinishRequest(message, sender) {
   const draft = pickDraftState
   if (!draft || !message || message.type !== MSG.PICK_DRAFT_FINISH_REQUEST) return false
+  // 只接受 background 核對過後轉來的那一份；content 直接廣播的（sender 帶網頁分頁）一律不理
+  if (sender?.tab) return false
   if (!Number.isInteger(message.tabId) || message.tabId !== draft.tabId || message.sessionId !== draft.sessionId) return false
   const finishButton = document.getElementById('group-finish')
   if (!finishButton || finishButton.hidden || finishButton.disabled) return false
@@ -5457,9 +5459,9 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
     }
     window.addEventListener('pagehide', onPageHide, { once: true })
     document.addEventListener('af:pick-group-name-result', event => { consumeGroupNameResult(event.detail) })
-    chrome.runtime.onMessage?.addListener((message) => {
+    chrome.runtime.onMessage?.addListener((message, sender) => {
       if (message?.type === PICK_GROUP_NAME_RESULT) return consumeGroupNameResult(message)
-      if (message?.type === MSG.PICK_DRAFT_FINISH_REQUEST) { consumeDraftFinishRequest(message); return undefined }
+      if (message?.type === MSG.PICK_DRAFT_FINISH_REQUEST) { consumeDraftFinishRequest(message, sender); return undefined }
       return undefined
     })
     document.addEventListener('input', scheduleDraftSave, true)

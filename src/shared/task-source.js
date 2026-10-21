@@ -77,7 +77,7 @@ export function normalizeTaskSources(task) {
 
   const metadata = Array.isArray(task.fields) ? task.fields : []
   const specFields = Array.isArray(task.spec?.fields) ? task.spec.fields : []
-  const isMulti = task.mode === 'multi' || task.spec?.mode === 'multi'
+  const isMulti = isMultiTask(task)
 
   if (isMulti) {
     const byKey = new Map(metadata.map((field) => [field?.key, field]))
@@ -134,7 +134,7 @@ export function multiExecutionSnapshot(task) {
 export function changedExecutionSeriesOf(before, after) {
   const oldSources = normalizeTaskSources(before)
   const newSources = normalizeTaskSources(after)
-  if (!(after?.mode === 'multi' || after?.spec?.mode === 'multi')) {
+  if (!isMultiTask(after)) {
     return oldSources.map(field => field.key)
   }
   const common = (task) => stableExecutionJson({

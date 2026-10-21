@@ -42,12 +42,16 @@ test('擷取卡住 → 接管寫 interrupted → 原抓取跑完：該槽只有�
     return cur
   })
   await fe.recoverRunState()
+  // 接管之後同一格又被別的執行重新登記（例如補抓）：舊執行收尾時不得把它刪掉
+  const key = `${t1.id}@${slot}`
+  await st.updateRunState(cur => ({ ...cur, [key]: { state: 'queued', at: 1, boot: 'someone-else', attempt: 1, reason: 'late' } }))
   release()
   assert.equal(await run, null, '被接管的執行回 null')
 
   const recs = (await st.getRecordsByDate('2026-10-20')).filter(r => r.slot === slot)
   assert.deepEqual(recs.map(r => r.status), ['interrupted'])
   assert.equal(await st.getRunStatus(t1.id, slot), undefined, 'interrupted 不寫帳本，成功也不得補寫')
+  assert.equal((await st.getRunState())[key]?.at, 1, '新登記要還在')
   const diag = (await chrome.storage.local.get('diag')).diag || []
   assert.ok(diag.some(d => JSON.stringify(d).includes('run_taken_over')))
 })

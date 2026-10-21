@@ -109,9 +109,10 @@ export function parseNumber(text) {
     return null
   }
 
-  // 抓取第一個數值片段：負號與數字之間最多一個空白；允許前導小數點（.5）；
+  // 抓取第一個數值片段：負號與數字之間最多一個空白；
+  // 前導小數點（.5）只在前一個字元不是英數字或句點時成立（No.12、Vol.3 是編號，取 12、3，不是 0.12、0.3）；
   // 指數只在 e/E 後緊接（可選正負號與）至少一位數字時成立（1e、2024e、12 e3 都不算指數）
-  const match = str.match(/-?\s?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?/)
+  const match = str.match(/-?\s?(?:\d+(?:\.\d+)?|(?<![A-Za-z0-9.])\.\d+)(?:[eE][+-]?\d+)?/)
   if (!match) return null
 
   let num = Number(match[0].replace(/\s/g, ''))

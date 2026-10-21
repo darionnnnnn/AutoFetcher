@@ -209,6 +209,17 @@ async function markRunState(key, state) {
   })
 }
 
+// 只移除「我」那一份登記（同 boot、同進佇列時刻）：被接管後同一格可能已被別的執行重新登記，
+// 舊執行收尾時不得把新登記刪掉（刪了新執行會以為自己被接管而不寫紀錄）
+async function dropOwnRunState(key, at) {
+  await updateRunState((cur) => {
+    const entry = cur[key]
+    if (!entry || entry.boot !== BOOT || entry.at !== at) return undefined
+    delete cur[key]
+    return cur
+  })
+}
+
 // 移除自己那一項；本來就沒有就不寫
 async function dropRunState(key) {
   return takeRunState(key)
@@ -1704,7 +1715,8 @@ export async function runTask(task, opts = {}) {
 
         // 結果處理：元素未找到（可重試）
         if (res?.error === 'not_found') {
-          if (!isManual && attempt >= MAX_ATTEMPTS) {
+          // 被接管的執行不碰任務欄位（finishFailure 也會放棄寫入）
+          if (!isManual && attempt >= MAX_ATTEMPTS && (!ownsRun || await ownsRun())) {
             // 重試用盡：更新 notFoundStreak，連兩次建議前台擷取
             await updateTasks([task.id], (t) => {
               const streak = (t.notFoundStreak || 0) + 1
@@ -1761,7 +1773,7 @@ export async function runTask(task, opts = {}) {
     // 不論成功、失敗、提早 return 或丟例外都移除自己那一項；移除失敗不得蓋掉抓取結果
     if (runKey) {
       try {
-        await dropRunState(runKey)
+        await dropOwnRunState(runKey, startedMs)
       } catch (err) {
         try { await diag.log('run_state_error', `stage=run_state_cleanup result=error`) } catch {}
       }

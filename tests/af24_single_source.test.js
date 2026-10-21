@@ -13,12 +13,13 @@ function walk(dir) {
   })
 }
 
-test('「task.mode 或 spec.mode 是 multi」只寫在 task-source.js（describe.js 在 content 載入閉包內，例外）', () => {
+test('「spec.mode 是 multi」的判斷只寫在 task-source.js（不論順序、寫法；describe.js 在 content 載入閉包內、pick-draft 判的是選取結果的 spec，例外）', () => {
   const files = walk(SRC)
   assert.ok(files.length > 20, '掃描集合不得是空的')
-  const hits = files.filter(f => /mode === 'multi' \|\| [\w?.]*spec\??\.mode === 'multi'/.test(readFileSync(f, 'utf8')))
+  // 任何讀 spec.mode／spec?.mode 再比 multi 的寫法（任務的 multi 判斷一定會讀 spec.mode）
+  const hits = files.filter(f => /spec\??\.mode\s*===?\s*['"]multi['"]|['"]multi['"]\s*===?\s*[\w?.]*spec\??\.mode/.test(readFileSync(f, 'utf8')))
     .map(f => f.slice(SRC.length)).sort()
-  assert.deepEqual(hits, ['shared/describe.js', 'shared/task-source.js'])
+  assert.deepEqual(hits, ['shared/describe.js', 'shared/pick-draft.js', 'shared/task-source.js'])
 })
 
 test('popup 不自己解析 alarm 名稱：下次時間問 background', () => {

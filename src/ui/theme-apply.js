@@ -11,7 +11,7 @@ export function applyTheme(theme) {
   }
 }
 
-// 常駐的頁面（側邊面板、教學頁）要跟著設定即時換主題：只看 settings 這個鍵，同一頁只掛一次
+// 常駐的頁面（Picker 側邊面板、站台面板、教學頁）要跟著設定即時換主題：只看 settings 這個鍵，同一頁只掛一次
 let unwatchTheme = null
 export function watchTheme() {
   if (unwatchTheme) return unwatchTheme

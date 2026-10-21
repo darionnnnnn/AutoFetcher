@@ -104,3 +104,15 @@ test('取消一格之後 Shift+點：範圍從最後一個已選格拉，不是�
   const added = picked(f.sent).slice(before).flatMap(m => m.picks || []).map(p => `${p.cell.row.index},${p.cell.col.index}`).sort()
   assert.deepEqual(added, ['0,1', '1,0', '1,1'], `起點應是 (0,0)：矩形 (0,0)-(1,1) 扣掉已選的 (0,0)，實得 ${added}`)
 })
+
+test('群組 Shift+→ 加值之後，Shift+點從鍵盤加的最後一格拉', async t => {
+  const f = await fixture(t)
+  const cells = [...document.querySelectorAll('#a td')]
+  f.move(cells[0])
+  f.key('ArrowRight', { shiftKey: true }) // 加 (0,0)、(0,1)
+  await f.flush()
+  const before = picked(f.sent).length
+  f.move(cells[5]); f.click(cells[5], { shiftKey: true }); await f.flush() // Shift 到 (1,2)
+  const added = picked(f.sent).slice(before).flatMap(m => m.picks || []).map(p => `${p.cell.row.index},${p.cell.col.index}`).sort()
+  assert.deepEqual(added, ['0,2', '1,1', '1,2'], `起點應是 (0,1)：矩形 (0,1)-(1,2) 扣掉已選的 (0,1)，實得 ${added}`)
+})

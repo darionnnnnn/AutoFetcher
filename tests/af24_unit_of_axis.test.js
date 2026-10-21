@@ -4,8 +4,9 @@ import { readFileSync } from 'node:fs'
 import { unitOfAxis } from '../src/shared/describe.js'
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8')
-const LITERAL = "'格' : '列'"
-const count = (s) => s.split(LITERAL).length - 1
+// 不論引號、空白與順序：「? 格 : 列」或「? 列 : 格」都算一份單位選字
+const UNIT_PICK = /\?\s*['"`](格|列)['"`]\s*:\s*['"`](格|列)['"`]/g
+const count = (s) => [...s.matchAll(UNIT_PICK)].filter(m => m[1] !== m[2]).length
 
 test('unitOfAxis：整列數格、整欄數列', () => {
   assert.equal(unitOfAxis('row'), '格')
