@@ -2,7 +2,7 @@
 import { pruneCardsForTask } from './layout-store.js'
 import { encryptSecret } from './crypto.js'
 import { parentIdOf, SERIES_SEP } from './series-index.js'
-import { validateMultiTask, normalizeTaskSources, multiExecutionSnapshot, changedExecutionSeriesOf, executionFingerprintOf } from './task-source.js'
+import { validateMultiTask, isMultiTask, normalizeTaskSources, multiExecutionSnapshot, changedExecutionSeriesOf, executionFingerprintOf } from './task-source.js'
 import { withLock, lockNameOf } from './lock.js'
 import { isSuccess, isWarn, isRed } from './record-status.js'
 
@@ -197,9 +197,7 @@ function writeKey(key, value, area = 'local') {
   return mutateKey(key, () => value, area)
 }
 
-function isMultiExecutionTask(task) {
-  return task?.mode === 'multi' || task?.spec?.mode === 'multi'
-}
+const isMultiExecutionTask = isMultiTask
 
 const EXECUTION_INVALIDATIONS_KEY = 'executionInvalidations'
 const MAX_EXECUTION_INVALIDATIONS = 100
@@ -613,7 +611,7 @@ export function validateTask(task, index, { keptUrl } = {}) {
 
   // AF-22 新契約採 task.mode/spec.mode = multi；舊單值與舊 block fields
   // 仍沿用下面的寬鬆相容驗證，不會因讀取而被改寫。
-  if (task.mode === 'multi' || task.spec?.mode === 'multi') {
+  if (isMultiTask(task)) {
     try {
       validateMultiTask(task)
     } catch (cause) {

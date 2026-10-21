@@ -1,0 +1,213 @@
+{
+  "status": "passed",
+  "test": "AC-D2/D3 + F1 flow four",
+  "browser": "/Users/zhengmengwei/Desktop/Claude/AutoFetcher/.browsers/chrome/mac_arm-152.0.7977.82/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+  "browserVersion": "Chrome/152.0.7977.82",
+  "extensionPath": "/Users/zhengmengwei/Desktop/Claude/AutoFetcher/src",
+  "fixture": {
+    "taskId": "af23-d-route-flow",
+    "range": {
+      "from": "2026-10-15",
+      "to": "2026-10-22"
+    },
+    "datasetRecords": 1000
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "marker": "AF23_ROUTE_IMPORT_ROUND_1",
+      "recordsBeforeImport": 1000,
+      "recordsAfterImport": 1001,
+      "recordsAfterDelete": 1000,
+      "elapsedMs": 669.89,
+      "requiredClicks": 8,
+      "reportSettingsHistoryTrips": 4,
+      "filteredBefore": {
+        "rows": [
+          "2026-10-22T12:00:00AF23 報表流程任務900,001成功"
+        ],
+        "summary": "AF23 報表流程任務10900,001900,001900,001900,001900,0010"
+      },
+      "importedRawDetail": "原始值 (raw)：AF23_ROUTE_IMPORT_ROUND_1錯誤訊息 (error)：—使用策略 (strategyUsed)：—排定時間 (slot)：2026-10-22T12:00:00擷取時間 (capturedAt)：2026-10-22T12:00:00.000+08:00時間差 (diff)：+0s刪除此紀錄",
+      "exportAfterImport": {
+        "count": 1001,
+        "includesImported": true
+      },
+      "exportAfterDelete": {
+        "count": 1000,
+        "includesImported": false
+      },
+      "actions": [
+        {
+          "action": "open settings",
+          "kind": "click",
+          "selector": "#tab-settings",
+          "elapsedMs": 26.81
+        },
+        {
+          "action": "round 1 import history",
+          "kind": "file-control",
+          "selector": "#records-import-file",
+          "elapsedMs": 26.54,
+          "marker": "AF23_ROUTE_IMPORT_ROUND_1"
+        },
+        {
+          "action": "open history",
+          "kind": "click",
+          "selector": "#tab-history",
+          "elapsedMs": 95.77
+        },
+        {
+          "action": "filter history for AF23_ROUTE_IMPORT_ROUND_1",
+          "kind": "form-change",
+          "selector": "#filter-keyword",
+          "elapsedMs": 10.1
+        },
+        {
+          "action": "round 1 browser back to unfiltered history",
+          "kind": "history-back",
+          "elapsedMs": 57.02
+        },
+        {
+          "action": "round 1 browser forward restores filter",
+          "kind": "history-forward",
+          "elapsedMs": 9.78
+        },
+        {
+          "action": "open settings",
+          "kind": "click",
+          "selector": "#tab-settings",
+          "elapsedMs": 13.48
+        },
+        {
+          "action": "round 1 after import export",
+          "kind": "click",
+          "selector": "#export-run",
+          "elapsedMs": 41.56
+        },
+        {
+          "action": "open history",
+          "kind": "click",
+          "selector": "#tab-history",
+          "elapsedMs": 15.63
+        },
+        {
+          "action": "round 1 delete imported record through detail dialog",
+          "kind": "click-confirm",
+          "selector": "[data-action=\"delete-record\"] → dialog confirm",
+          "elapsedMs": 62.71
+        },
+        {
+          "action": "open settings",
+          "kind": "click",
+          "selector": "#tab-settings",
+          "elapsedMs": 18.85
+        },
+        {
+          "action": "round 1 after delete export",
+          "kind": "click",
+          "selector": "#export-run",
+          "elapsedMs": 42.74
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "marker": "AF23_ROUTE_IMPORT_ROUND_2",
+      "recordsBeforeImport": 1000,
+      "recordsAfterImport": 1001,
+      "recordsAfterDelete": 1000,
+      "elapsedMs": 699.13,
+      "requiredClicks": 8,
+      "reportSettingsHistoryTrips": 4,
+      "filteredBefore": {
+        "rows": [
+          "2026-10-22T12:00:00AF23 報表流程任務900,002成功"
+        ],
+        "summary": "AF23 報表流程任務10900,002900,002900,002900,002900,0020"
+      },
+      "importedRawDetail": "原始值 (raw)：AF23_ROUTE_IMPORT_ROUND_2錯誤訊息 (error)：—使用策略 (strategyUsed)：—排定時間 (slot)：2026-10-22T12:00:00擷取時間 (capturedAt)：2026-10-22T12:00:00.000+08:00時間差 (diff)：+0s刪除此紀錄",
+      "exportAfterImport": {
+        "count": 1001,
+        "includesImported": true
+      },
+      "exportAfterDelete": {
+        "count": 1000,
+        "includesImported": false
+      },
+      "actions": [
+        {
+          "action": "open settings",
+          "kind": "click",
+          "selector": "#tab-settings",
+          "elapsedMs": 27.64
+        },
+        {
+          "action": "round 2 import history",
+          "kind": "file-control",
+          "selector": "#records-import-file",
+          "elapsedMs": 27.41,
+          "marker": "AF23_ROUTE_IMPORT_ROUND_2"
+        },
+        {
+          "action": "open history",
+          "kind": "click",
+          "selector": "#tab-history",
+          "elapsedMs": 100.15
+        },
+        {
+          "action": "filter history for AF23_ROUTE_IMPORT_ROUND_2",
+          "kind": "form-change",
+          "selector": "#filter-keyword",
+          "elapsedMs": 9.29
+        },
+        {
+          "action": "round 2 browser back to unfiltered history",
+          "kind": "history-back",
+          "elapsedMs": 58.17
+        },
+        {
+          "action": "round 2 browser forward restores filter",
+          "kind": "history-forward",
+          "elapsedMs": 11.79
+        },
+        {
+          "action": "open settings",
+          "kind": "click",
+          "selector": "#tab-settings",
+          "elapsedMs": 24.74
+        },
+        {
+          "action": "round 2 after import export",
+          "kind": "click",
+          "selector": "#export-run",
+          "elapsedMs": 52.34
+        },
+        {
+          "action": "open history",
+          "kind": "click",
+          "selector": "#tab-history",
+          "elapsedMs": 14.87
+        },
+        {
+          "action": "round 2 delete imported record through detail dialog",
+          "kind": "click-confirm",
+          "selector": "[data-action=\"delete-record\"] → dialog confirm",
+          "elapsedMs": 62.99
+        },
+        {
+          "action": "open settings",
+          "kind": "click",
+          "selector": "#tab-settings",
+          "elapsedMs": 18.03
+        },
+        {
+          "action": "round 2 after delete export",
+          "kind": "click",
+          "selector": "#export-run",
+          "elapsedMs": 43.88
+        }
+      ]
+    }
+  ]
+}

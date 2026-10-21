@@ -2,6 +2,7 @@
 // 負責計算將任務拖放至儀表板卡片後的變更 patch（無 DOM、無相依）
 
 import { buildSeriesIndex, parentIdOf } from '../../shared/series-index.js';
+import { isMultiTask } from '../../shared/task-source.js';
 
 // 折線圖與長條圖的調色盤上限
 export const MAX_CHART_SERIES = 8;
@@ -265,7 +266,7 @@ export function cardTypeForTask(task) {
   if (!task) {
     return 'number';
   }
-  if (task.mode === 'multi' || task.spec?.mode === 'multi') {
+  if (isMultiTask(task)) {
     const index = buildSeriesIndex([task]);
     const children = index.childrenOf[task.id] || [];
     if (children.some(id => index.byId[id]?.mode === 'number' || index.byId[id]?.mode === 'block')) {

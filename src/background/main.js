@@ -53,7 +53,7 @@ import {
 } from '../shared/pick-protocol.js'
 import { getPickDraft, updatePickDraft } from '../shared/pick-draft.js'
 import { routeIdentityMatchesUrl, sameRouteIgnoringTracking } from '../shared/route.js'
-import { normalizeTaskSources, validateMultiTask } from '../shared/task-source.js'
+import { normalizeTaskSources, validateMultiTask, isMultiTask } from '../shared/task-source.js'
 
 // 面板 ctx 可能尚未寫入就收到 pagehide；用短命記號避免無 ctx 時重複清場，
 // 同時讓新一輪開啟能再次廣播 EXIT_PICK。
@@ -893,19 +893,6 @@ async function getValidTask(taskId) {
   return { task, active: task.enabled !== false }
 }
 
-// 解析任務 alarm 名稱（相容正式排程與測試名稱）
-function parseTaskAlarm(name) {
-  if (typeof name !== 'string') return null
-  if (name.startsWith('precheck:') || name.includes(':retry:')) return null
-  const parsed = parseAlarmName(name)
-  if (parsed) return parsed
-  const lastColon = name.lastIndexOf(':')
-  if (lastColon === -1) return null
-  const taskId = name.slice(0, lastColon)
-  const indexStr = name.slice(lastColon + 1)
-  if (!taskId || !/^\d+$/.test(indexStr)) return null
-  return { taskId, index: Number(indexStr) }
-}
 
 // 晚超過這麼久才觸發的 daily alarm 不執行（把今天的值寫進好幾天前那格沒有意義），那一格交給錯過清單
 const DAILY_STALE_MS = 24 * 60 * 60 * 1000
@@ -961,34 +948,45 @@ export function handleSettingsChanged(changes) {
   setupContextMenus()
 }
 
+// 啟動流程每一步各自接住並留診斷：前一步丟例外不得讓後面的步驟（尤其是看門狗）被跳過
+async function runStartupSteps(stage, steps) {
+  for (const [name, step] of steps) {
+    try {
+      await step()
+    } catch (err) {
+      await diag.log('startup_error', `stage=${stage} step=${name} result=error`).catch(() => {})
+    }
+  }
+}
+
 // 處理擴充功能安裝或更新事件
 export async function handleInstalled(details) {
-  try {
-    await initStorage()
-    await recoverFieldRepairOperations()
-    await disablePanelGlobally()
-    await setupContextMenus()
-    await rebuildAlarms()
-    await schedulePrechecks()
-    await scheduleSiteCheck()
-    await ensureWatchdog()
-    await refreshBadge()
-  } catch {}
+  await runStartupSteps('installed', [
+    ['init_storage', initStorage],
+    ['recover_repairs', recoverFieldRepairOperations],
+    ['disable_panel', disablePanelGlobally],
+    ['context_menus', setupContextMenus],
+    ['rebuild_alarms', rebuildAlarms],
+    ['prechecks', schedulePrechecks],
+    ['site_check', scheduleSiteCheck],
+    ['watchdog', ensureWatchdog],
+    ['badge', refreshBadge]
+  ])
 }
 
 // 處理瀏覽器啟動事件
 export async function handleStartup() {
-  try {
-    await initStorage()
-    await recoverFieldRepairOperations()
-    await disablePanelGlobally()
-    await rebuildAlarms()
-    await schedulePrechecks()
-    await scheduleSiteCheck()
-    await ensureWatchdog()
-    await refreshMissed(Date.now())
-    await refreshBadge()
-  } catch {}
+  await runStartupSteps('startup', [
+    ['init_storage', initStorage],
+    ['recover_repairs', recoverFieldRepairOperations],
+    ['disable_panel', disablePanelGlobally],
+    ['rebuild_alarms', rebuildAlarms],
+    ['prechecks', schedulePrechecks],
+    ['site_check', scheduleSiteCheck],
+    ['watchdog', ensureWatchdog],
+    ['missed', () => refreshMissed(Date.now())],
+    ['badge', refreshBadge]
+  ])
 }
 
 // 處理 Alarm 觸發事件
@@ -1040,7 +1038,7 @@ export async function handleAlarm(alarm, testOpts = {}) {
     }
 
     // 5. 正式抓取
-    const parsed = parseTaskAlarm(name)
+    const parsed = parseAlarmName(name)
     if (parsed !== null) {
       const { task, active } = await getValidTask(parsed.taskId)
       if (!task) return
@@ -1785,7 +1783,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
         return { ok: false, error: '任務設定不完整' }
       }
       try {
-        const isMulti = task.mode === 'multi' || task.spec.mode === 'multi'
+        const isMulti = isMultiTask(task)
         if (isMulti) {
           validateMultiTask(task)
         } else if (!task.locator || typeof task.locator !== 'object' || Array.isArray(task.locator) || Object.keys(task.locator).length === 0) {
@@ -1813,7 +1811,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       if (!task) {
         return { ok: false, outcome: 'failed', error: '找不到任務' }
       }
-      const multi = task.mode === 'multi' || task.spec?.mode === 'multi'
+      const multi = isMultiTask(task)
       if (multi && (!Array.isArray(task.fields) || task.fields.length === 0)) {
         return { ok: false, outcome: 'failed', status: 'error', error: '多來源任務沒有可執行欄位', values: [] }
       }
@@ -2285,7 +2283,7 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       const alarms = await chrome.alarms.getAll()
       const nextRuns = {}
       for (const alarm of alarms) {
-        const parsed = parseTaskAlarm(alarm.name)
+        const parsed = parseAlarmName(alarm.name)
         if (parsed?.taskId && typeof alarm.scheduledTime === 'number') {
           const prev = nextRuns[parsed.taskId]
           if (prev === undefined || alarm.scheduledTime < prev) {
@@ -2324,7 +2322,9 @@ export async function handleNotificationButton(notificationId, buttonIndex) {
       await refreshBadge()
       await chrome.notifications.clear(notificationId)
     }
-  } catch {}
+  } catch (err) {
+    await diag.log('notification_error', `stage=button result=error`).catch(() => {})
+  }
 }
 
 // 處理通知本體點擊事件
@@ -2347,7 +2347,9 @@ export async function handleNotificationClick(notificationId) {
 
     await chrome.tabs.create({ url })
     await chrome.notifications.clear(notificationId)
-  } catch {}
+  } catch (err) {
+    await diag.log('notification_error', `stage=click result=error`).catch(() => {})
+  }
 }
 
 // 為了重選而開的分頁：`taskId -> tabId`。使用者原本就開著的分頁不進這張表，也就不會被收掉。

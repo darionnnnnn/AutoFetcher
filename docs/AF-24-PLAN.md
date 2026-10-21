@@ -347,7 +347,17 @@
 | B1–B2 | Claude | ce232d5 | 新測試 26 條；突變兩處皆紅 | 突變實際由 `-  12`（兩個空白）案例抓到，非規劃寫的 `10 - 12` |
 | B3–B7 | Claude | e299f09 | 全量 3362 綠；四處突變皆紅 | 見下方設計修正 |
 
+| C1 | Claude | 6aecfce | 兩條並行測試；兩處突變皆紅 | 見設計修正 C1 |
+| C2 | Claude | 6b54169 | 五條政策測試；兩處突變皆紅 | 全量時抓到「寫帳本中斷後恢復成成功仍發失敗通知」，改為只在寫下的結果確實失敗時通知；`af22_e2_results` 一條把所有通知當告警在數，改成只數告警 id |
+| C3 | Claude | 7e68470 | 接管後只剩一筆 interrupted；突變紅 | — |
+| C4–C5 | Claude | （同作業 C 收尾 commit） | 啟動韌性兩條、單一來源四條；突變紅 | P16 不成立（見設計修正）；popup 改走 `GET_NEXT_RUNS` |
+
 ### 設計修正（實作中）
+
+- **C1**：規劃寫「`lastSeenAt` 與合併清單在同一把鎖內」，但 CLAUDE.md 規定一把鎖只寫一個鍵、不得巢狀。改為兩件事各自冪等：gap 合併只加「比已記錄最後一格還新」的格子；`lastSeenAt` 改用鎖內只增不減的 `advanceLastSeenAt`。效果相同、不違反鎖規則。
+- **C2**：通知不另分「離線全域一則」與「其他走 notifyFailure」，一律走既有的 `notifySiteFailure`（同任務同狀態 24 小時一次、同站台 5 分鐘合併），少一套規則。登入失敗不在這裡通知（站台連續失敗停用時 login.js 已通知一次）。`invalid_multi` 也列為不重試。框架找不到（frame not found）維持不重試，但改經同一入口、會通知。
+- **C4**：稽核 P16「重試後不更新徽章」不成立——fetcher 每次寫 health 都會 `refreshBadge`；撤回該改動與測試。
+- **C5**：popup 違反 CLAUDE.md「UI 不得自己解析 alarm 名稱」，改成問 background 的 `GET_NEXT_RUNS`（不是把解析函式搬到 shared）。很早期的 `<id>:<n>` alarm 由 `rebuildAlarms` 一併清掉，main.js 的相容解析刪除，背景只剩 `scheduler.parseAlarmName` 一份。`describe.js` 的 multi 判斷保留（它在 content 載入閉包內，引入 task-source 會牽動 manifest）。
 
 - **B3**：除了 `RUNTIME_FIELDS`，`order`、`archivedFields` 也由別處維護（Report 排序、background 修復封存），一併取儲存當下最新值；最新值沒有的鍵不得從快照長回來（`enabled` 例外，缺省即啟用）。編輯中的任務若已被刪除，存檔改為報錯、不再重新建立。
 - **B5**：不另加「將匯出 X～Y」提示——日期輸入框本身就顯示區間；改成留空時按下匯出把實際日期回填進輸入框。

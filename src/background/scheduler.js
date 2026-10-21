@@ -34,11 +34,19 @@ export function parseAlarmName(name) {
   return { taskId, index: Number(indexStr) }
 }
 
+// 很早期的任務 alarm 名稱 <id>:<n>（沒有 task: 前綴）。不再建立、也不再執行：重建時一併清掉。
+// 重試（<id>:retry:<n>）與預檢（<id>:pre:<i>）的名稱也是「冒號＋數字」結尾，必須排除
+export function isLegacyTaskAlarm(name) {
+  if (typeof name !== 'string' || name.startsWith('task:') || name.startsWith('__')) return false
+  if (name.includes(':retry:') || /:pre:\d+$/.test(name)) return false
+  return /^[^:].*:\d+$/.test(name)
+}
+
 // 重建所有任務的 alarms
 export async function rebuildAlarms() {
   const existing = await chrome.alarms.getAll()
   for (const alarm of existing) {
-    if (parseAlarmName(alarm.name) !== null) {
+    if (parseAlarmName(alarm.name) !== null || isLegacyTaskAlarm(alarm.name)) {
       await chrome.alarms.clear(alarm.name)
     }
   }

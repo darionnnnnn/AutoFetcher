@@ -1,0 +1,595 @@
+{
+  "id": "AF-23-F1-edit-flow",
+  "status": "PASS",
+  "timestamp": "2026-10-21T16:43:14.599Z",
+  "browser": "/Users/zhengmengwei/Desktop/Claude/AutoFetcher/.browsers/chrome/mac_arm-152.0.7977.82/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+  "browserMode": "headful",
+  "extensionPath": "/Users/zhengmengwei/Desktop/Claude/AutoFetcher/src",
+  "rounds": [
+    {
+      "round": 1,
+      "status": "PASS",
+      "entryRoute": "?taskId=af23-edit-flow-fixture",
+      "fixtureDataset": {
+        "url": "http://127.0.0.1:52407/",
+        "targetText": "42",
+        "seededTask": {
+          "id": "af23-edit-flow-fixture",
+          "name": "電表讀數",
+          "url": "http://127.0.0.1:52407/",
+          "mode": "number",
+          "enabled": false,
+          "locator": {
+            "css": "#target"
+          },
+          "spec": {
+            "strategy": "auto"
+          },
+          "schedule": {
+            "type": "daily",
+            "times": [
+              "09:30"
+            ],
+            "weekdays": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ]
+          },
+          "preActions": [
+            {
+              "type": "waitFor",
+              "locator": {
+                "css": "#never-ready"
+              },
+              "timeoutMs": 200
+            }
+          ]
+        }
+      },
+      "stages": {
+        "entryAndEditMs": 209.82,
+        "failedPreviewMs": 3536.12,
+        "successfulPreviewMs": 6112.92,
+        "saveMs": 22.59,
+        "totalMs": 9881.45
+      },
+      "controls": {
+        "mouseClicks": 8,
+        "formEdits": 4,
+        "visibleSteps": [
+          "未儲存表單編輯",
+          "失敗試抓",
+          "修正前置動作",
+          "成功試抓",
+          "儲存"
+        ]
+      },
+      "pageVisits": [
+        {
+          "url": "chrome-extension://cnhjaccbgbbakdbhpjbgfblokalpfcka/ui/picker/picker.html?taskId=af23-edit-flow-fixture",
+          "at": "2026-10-21T16:43:15.354Z"
+        }
+      ],
+      "fixtureRequests": [
+        {
+          "path": "/",
+          "at": "2026-10-21T16:43:15.468Z"
+        },
+        {
+          "path": "/favicon.ico",
+          "at": "2026-10-21T16:43:15.480Z"
+        },
+        {
+          "path": "/",
+          "at": "2026-10-21T16:43:19.118Z"
+        },
+        {
+          "path": "/favicon.ico",
+          "at": "2026-10-21T16:43:19.124Z"
+        }
+      ],
+      "navigationProxy": {
+        "pickerQueryEntryLoads": 1,
+        "sourceFixturePageLoads": 2,
+        "definition": "HTTP fixture GET / per TEST_TASK is one isolated source-page load/return; picker query entry is separately counted."
+      },
+      "evidence": {
+        "unsavedForm": {
+          "name": "電表未儲存名稱",
+          "scheduleType": "daily",
+          "times": "09:30, 10:15",
+          "preAction": {
+            "type": "waitFor",
+            "value": "0.2"
+          }
+        },
+        "failed": {
+          "message": "前置動作第 1 步（等元素出現）等不到元素出現（逾時） 請確認目前來源與設定後再試。",
+          "state": "error",
+          "name": "電表未儲存名稱"
+        },
+        "correctedAction": {
+          "type": "wait",
+          "seconds": "0.02"
+        },
+        "successful": {
+          "preview": "42",
+          "state": "ok",
+          "name": "電表未儲存名稱"
+        },
+        "persistedBeforeSave": {
+          "id": "af23-edit-flow-fixture",
+          "name": "電表讀數",
+          "url": "http://127.0.0.1:52407/",
+          "mode": "number",
+          "locator": {
+            "css": "#target"
+          },
+          "spec": {
+            "strategy": "auto"
+          },
+          "schedule": {
+            "times": [
+              "09:30"
+            ],
+            "type": "daily",
+            "weekdays": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ]
+          },
+          "preActions": [
+            {
+              "locator": {
+                "css": "#never-ready"
+              },
+              "timeoutMs": 200,
+              "type": "waitFor"
+            }
+          ]
+        },
+        "persistedAfterFailedPreview": {
+          "id": "af23-edit-flow-fixture",
+          "name": "電表讀數",
+          "url": "http://127.0.0.1:52407/",
+          "mode": "number",
+          "locator": {
+            "css": "#target"
+          },
+          "spec": {
+            "strategy": "auto"
+          },
+          "schedule": {
+            "times": [
+              "09:30"
+            ],
+            "type": "daily",
+            "weekdays": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ]
+          },
+          "preActions": [
+            {
+              "locator": {
+                "css": "#never-ready"
+              },
+              "timeoutMs": 200,
+              "type": "waitFor"
+            }
+          ]
+        },
+        "persistedAfterSuccessfulPreview": {
+          "id": "af23-edit-flow-fixture",
+          "name": "電表讀數",
+          "url": "http://127.0.0.1:52407/",
+          "mode": "number",
+          "locator": {
+            "css": "#target"
+          },
+          "spec": {
+            "strategy": "auto"
+          },
+          "schedule": {
+            "times": [
+              "09:30"
+            ],
+            "type": "daily",
+            "weekdays": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ]
+          },
+          "preActions": [
+            {
+              "locator": {
+                "css": "#never-ready"
+              },
+              "timeoutMs": 200,
+              "type": "waitFor"
+            }
+          ]
+        },
+        "previewsUnchangedPersisted": true,
+        "persistedAfterSave": {
+          "id": "af23-edit-flow-fixture",
+          "name": "電表未儲存名稱",
+          "url": "http://127.0.0.1:52407/",
+          "mode": "number",
+          "locator": {
+            "css": "#target"
+          },
+          "spec": {
+            "strategy": "auto"
+          },
+          "schedule": {
+            "times": [
+              "09:30",
+              "10:15"
+            ],
+            "type": "daily",
+            "weekdays": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ]
+          },
+          "preActions": [
+            {
+              "sec": 0.02,
+              "type": "wait"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "round": 2,
+      "status": "PASS",
+      "entryRoute": "?taskId=af23-edit-flow-fixture",
+      "fixtureDataset": {
+        "url": "http://127.0.0.1:52407/",
+        "targetText": "42",
+        "seededTask": {
+          "id": "af23-edit-flow-fixture",
+          "name": "電表讀數",
+          "url": "http://127.0.0.1:52407/",
+          "mode": "number",
+          "enabled": false,
+          "locator": {
+            "css": "#target"
+          },
+          "spec": {
+            "strategy": "auto"
+          },
+          "schedule": {
+            "type": "daily",
+            "times": [
+              "09:30"
+            ],
+            "weekdays": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ]
+          },
+          "preActions": [
+            {
+              "type": "waitFor",
+              "locator": {
+                "css": "#never-ready"
+              },
+              "timeoutMs": 200
+            }
+          ]
+        }
+      },
+      "stages": {
+        "entryAndEditMs": 134.63,
+        "failedPreviewMs": 3318.76,
+        "successfulPreviewMs": 6102.72,
+        "saveMs": 21.96,
+        "totalMs": 9578.07
+      },
+      "controls": {
+        "mouseClicks": 8,
+        "formEdits": 4,
+        "visibleSteps": [
+          "未儲存表單編輯",
+          "失敗試抓",
+          "修正前置動作",
+          "成功試抓",
+          "儲存"
+        ]
+      },
+      "pageVisits": [
+        {
+          "url": "chrome-extension://cnhjaccbgbbakdbhpjbgfblokalpfcka/ui/picker/picker.html?taskId=af23-edit-flow-fixture",
+          "at": "2026-10-21T16:43:25.236Z"
+        }
+      ],
+      "fixtureRequests": [
+        {
+          "path": "/",
+          "at": "2026-10-21T16:43:25.316Z"
+        },
+        {
+          "path": "/favicon.ico",
+          "at": "2026-10-21T16:43:25.322Z"
+        },
+        {
+          "path": "/",
+          "at": "2026-10-21T16:43:28.693Z"
+        },
+        {
+          "path": "/favicon.ico",
+          "at": "2026-10-21T16:43:28.697Z"
+        }
+      ],
+      "navigationProxy": {
+        "pickerQueryEntryLoads": 1,
+        "sourceFixturePageLoads": 2,
+        "definition": "HTTP fixture GET / per TEST_TASK is one isolated source-page load/return; picker query entry is separately counted."
+      },
+      "evidence": {
+        "unsavedForm": {
+          "name": "電表未儲存名稱",
+          "scheduleType": "daily",
+          "times": "09:30, 10:15",
+          "preAction": {
+            "type": "waitFor",
+            "value": "0.2"
+          }
+        },
+        "failed": {
+          "message": "前置動作第 1 步（等元素出現）等不到元素出現（逾時） 請確認目前來源與設定後再試。",
+          "state": "error",
+          "name": "電表未儲存名稱"
+        },
+        "correctedAction": {
+          "type": "wait",
+          "seconds": "0.02"
+        },
+        "successful": {
+          "preview": "42",
+          "state": "ok",
+          "name": "電表未儲存名稱"
+        },
+        "persistedBeforeSave": {
+          "id": "af23-edit-flow-fixture",
+          "name": "電表讀數",
+          "url": "http://127.0.0.1:52407/",
+          "mode": "number",
+          "locator": {
+            "css": "#target"
+          },
+          "spec": {
+            "strategy": "auto"
+          },
+          "schedule": {
+            "times": [
+              "09:30"
+            ],
+            "type": "daily",
+            "weekdays": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ]
+          },
+          "preActions": [
+            {
+              "locator": {
+                "css": "#never-ready"
+              },
+              "timeoutMs": 200,
+              "type": "waitFor"
+            }
+          ]
+        },
+        "persistedAfterFailedPreview": {
+          "id": "af23-edit-flow-fixture",
+          "name": "電表讀數",
+          "url": "http://127.0.0.1:52407/",
+          "mode": "number",
+          "locator": {
+            "css": "#target"
+          },
+          "spec": {
+            "strategy": "auto"
+          },
+          "schedule": {
+            "times": [
+              "09:30"
+            ],
+            "type": "daily",
+            "weekdays": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ]
+          },
+          "preActions": [
+            {
+              "locator": {
+                "css": "#never-ready"
+              },
+              "timeoutMs": 200,
+              "type": "waitFor"
+            }
+          ]
+        },
+        "persistedAfterSuccessfulPreview": {
+          "id": "af23-edit-flow-fixture",
+          "name": "電表讀數",
+          "url": "http://127.0.0.1:52407/",
+          "mode": "number",
+          "locator": {
+            "css": "#target"
+          },
+          "spec": {
+            "strategy": "auto"
+          },
+          "schedule": {
+            "times": [
+              "09:30"
+            ],
+            "type": "daily",
+            "weekdays": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ]
+          },
+          "preActions": [
+            {
+              "locator": {
+                "css": "#never-ready"
+              },
+              "timeoutMs": 200,
+              "type": "waitFor"
+            }
+          ]
+        },
+        "previewsUnchangedPersisted": true,
+        "persistedAfterSave": {
+          "id": "af23-edit-flow-fixture",
+          "name": "電表未儲存名稱",
+          "url": "http://127.0.0.1:52407/",
+          "mode": "number",
+          "locator": {
+            "css": "#target"
+          },
+          "spec": {
+            "strategy": "auto"
+          },
+          "schedule": {
+            "times": [
+              "09:30",
+              "10:15"
+            ],
+            "type": "daily",
+            "weekdays": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ]
+          },
+          "preActions": [
+            {
+              "sec": 0.02,
+              "type": "wait"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "extensionId": "cnhjaccbgbbakdbhpjbgfblokalpfcka",
+  "browserVersion": "Chrome/152.0.7977.82",
+  "finishedAt": "2026-10-21T16:43:34.808Z",
+  "pageVisits": [
+    {
+      "url": "chrome-extension://cnhjaccbgbbakdbhpjbgfblokalpfcka/ui/report/report.html",
+      "at": "2026-10-21T16:43:15.236Z"
+    },
+    {
+      "url": "chrome-extension://cnhjaccbgbbakdbhpjbgfblokalpfcka/ui/picker/picker.html?taskId=af23-edit-flow-fixture",
+      "at": "2026-10-21T16:43:15.354Z"
+    },
+    {
+      "url": "chrome-extension://cnhjaccbgbbakdbhpjbgfblokalpfcka/ui/picker/picker.html?taskId=af23-edit-flow-fixture",
+      "at": "2026-10-21T16:43:25.236Z"
+    }
+  ],
+  "fixtureRequests": [
+    {
+      "path": "/",
+      "at": "2026-10-21T16:43:15.468Z"
+    },
+    {
+      "path": "/favicon.ico",
+      "at": "2026-10-21T16:43:15.480Z"
+    },
+    {
+      "path": "/",
+      "at": "2026-10-21T16:43:19.118Z"
+    },
+    {
+      "path": "/favicon.ico",
+      "at": "2026-10-21T16:43:19.124Z"
+    },
+    {
+      "path": "/",
+      "at": "2026-10-21T16:43:25.316Z"
+    },
+    {
+      "path": "/favicon.ico",
+      "at": "2026-10-21T16:43:25.322Z"
+    },
+    {
+      "path": "/",
+      "at": "2026-10-21T16:43:28.693Z"
+    },
+    {
+      "path": "/favicon.ico",
+      "at": "2026-10-21T16:43:28.697Z"
+    }
+  ],
+  "requiredClickCount": [
+    {
+      "round": 1,
+      "mouseClicks": 8,
+      "formEdits": 4
+    },
+    {
+      "round": 2,
+      "mouseClicks": 8,
+      "formEdits": 4
+    }
+  ]
+}

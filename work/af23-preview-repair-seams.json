@@ -1,0 +1,25 @@
+{
+  "status": "PASS",
+  "evidence": [
+    {
+      "case": "legacy-block",
+      "preview": "123",
+      "formalDataUnchanged": true,
+      "status": "PASS"
+    },
+    {
+      "case": "one-multi",
+      "preview": "值: 42",
+      "formalDataUnchanged": true,
+      "status": "PASS"
+    },
+    {
+      "case": "delayed-submit-and-competing-editor",
+      "pendingVisible": true,
+      "unchangedBeforeACK": true,
+      "staleRejected": true,
+      "newerSourcePreserved": true,
+      "status": "PASS"
+    }
+  ]
+}

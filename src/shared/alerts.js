@@ -1,10 +1,6 @@
 import { isSuccess } from './record-status.js';
 import { fieldKeyOf } from './series-index.js';
-import { normalizeTaskSources } from './task-source.js';
-
-function isMultiTask(task) {
-  return task?.mode === 'multi' || task?.spec?.mode === 'multi';
-}
+import { normalizeTaskSources, isMultiTask } from './task-source.js';
 
 // 多值任務的 mode 屬於子序列，不可拿父 task.mode（multi）判斷。
 // key 的拆解一律經 series-index，避免告警邏輯自行處理保留字元。

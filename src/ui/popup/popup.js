@@ -594,22 +594,12 @@ export async function init() {
   ])
   const health = computeHealth(tasks, healthMap, missed)
 
-  // 取得 alarms 下次執行時間
-  const nextRuns = {}
-  if (chrome.alarms?.getAll) {
-    const alarms = await chrome.alarms.getAll()
-    for (const a of alarms || []) {
-      if (a.name?.startsWith('task:')) {
-        const parts = a.name.slice(5).split(':')
-        const taskId = parts.slice(0, -1).join(':') || parts[0]
-        if (taskId && a.scheduledTime) {
-          if (!nextRuns[taskId] || a.scheduledTime < nextRuns[taskId]) {
-            nextRuns[taskId] = a.scheduledTime
-          }
-        }
-      }
-    }
-  }
+  // 下次執行時間問 background（GET_NEXT_RUNS 已排除預檢與重試 alarm）；UI 不自己解析 alarm 名稱
+  let nextRuns = {}
+  try {
+    const res = await chrome.runtime?.sendMessage?.({ type: MSG.GET_NEXT_RUNS })
+    if (res?.nextRuns && typeof res.nextRuns === 'object') nextRuns = res.nextRuns
+  } catch {}
 
   render({ health, tasks, lastValues, nextRuns, healthMap, missed, sites })
 }

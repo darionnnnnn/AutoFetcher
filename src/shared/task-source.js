@@ -67,6 +67,11 @@ function legacyField(task, field, specField, index) {
  * 則補上共用的 task.locator/frame，並把 cell/block 包成單目標 spec。
  * 回傳值與輸入完全獨立，呼叫端可安全修改回傳值。
  */
+// 「這是不是 multi 任務」只有這一份（task.mode 或 spec.mode 任一為 multi）
+export function isMultiTask(task) {
+  return task?.mode === 'multi' || task?.spec?.mode === 'multi'
+}
+
 export function normalizeTaskSources(task) {
   if (!isPlainObject(task)) return []
 

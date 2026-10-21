@@ -14,7 +14,7 @@ import { ensureLoggedIn } from './login.js'
 import { locateFrame, sameOriginPath, PROBE_TIMEOUT_MS } from './frames.js'
 import { acquireFetchTab, openForegroundTab, enqueueForOrigin, waitTabReady, BOOT } from './fetch-tab.js'
 import { sendToFrame, timeoutError } from './messaging.js'
-import { normalizeTaskSources, multiExecutionSnapshot, executionFingerprintOf } from '../shared/task-source.js'
+import { normalizeTaskSources, multiExecutionSnapshot, executionFingerprintOf, isMultiTask } from '../shared/task-source.js'
 
 // 保留測試與既有 background 呼叫端的匯出面；canonical 實作在 shared/task-source。
 export { executionFingerprintOf }
@@ -126,7 +126,7 @@ export function runBudgetMsOf(task, opts = {}) {
     else if (includeMessageTimeout && ['click', 'scroll'].includes(action?.type)) declared += messageTimeoutMs(action)
   }
   for (const action of Array.isArray(task?.preActions) ? task.preActions : []) includeDeclaredTime(action)
-  const isMulti = task?.mode === 'multi' || task?.spec?.mode === 'multi'
+  const isMulti = isMultiTask(task)
   if (isMulti) {
     for (const field of normalizeTaskSources(task)) {
       for (const action of Array.isArray(field.stateActions) ? field.stateActions : []) includeDeclaredTime(action, true)
@@ -301,7 +301,7 @@ export async function recoverRunState(runOpts = {}, { detach = false } = {}) {
         status: 'interrupted',
         error: '上一次執行被瀏覽器中斷'
       }
-      const isMulti = task.mode === 'multi' || task.spec?.mode === 'multi'
+      const isMulti = isMultiTask(task)
       if (isMulti) {
         // 即使 worker 在執行期間被回收，multi 的每個宣告值都要留下可見的
         // interrupted 子紀錄。共用失敗入口會依 field key 補齊結果並更新父 health；
@@ -394,7 +394,10 @@ async function finishFailure(run, status, error, opts = {}) {
         ...(error !== undefined ? { error } : {}),
         ...(opts.record || {})
       }, { parentId: task.id, skipLedger: isManual, executionId: run.executionId })
-  if (!isManual && written?.error !== TASK_CHANGED_RESULT.error) await notifyFinalFailure(task, status)
+  // 只在寫下的結果確實是失敗時通知：寫入中斷後的恢復可能對到已耐久的成功紀錄
+  if (!isManual && written && written.error !== TASK_CHANGED_RESULT.error && !isSuccess(written)) {
+    await notifyFinalFailure(task, written.status || status)
+  }
   return written
 }
 
@@ -987,7 +990,7 @@ export async function runTask(task, opts = {}) {
     executionId: requestedExecutionId
   } = opts
   const isManual = reason === 'manual'
-  const isMulti = task?.mode === 'multi' || task?.spec?.mode === 'multi'
+  const isMulti = isMultiTask(task)
   const executionId = isManual
     ? (typeof requestedExecutionId === 'string' && requestedExecutionId.trim() ? requestedExecutionId : manualExecutionId())
     : undefined

@@ -6,6 +6,7 @@ import {
   validateTask, taskUrlProtocolOf, snapshotImportKeys, restoreImportKeys, SCHEMA_VERSION
 } from './storage.js'
 import { encryptSecret, decryptSecret } from './crypto.js'
+import { isMultiTask } from './task-source.js'
 import { getLayout, saveLayout } from './layout-store.js'
 import { rebuildAlarms } from '../background/scheduler.js'
 
@@ -234,7 +235,7 @@ export async function previewSettingsImport(json, { passphrase } = {}) {
       } catch (err) {
         // multi 是一筆不可拆的值集合；任何欄位契約錯誤都拒絕整份匯入，
         // 避免把同一份設定拆成半個群組後靜默寫入。
-        if (t?.mode === 'multi' || t?.spec?.mode === 'multi') {
+        if (isMultiTask(t)) {
           throw new Error(`multi 任務匯入失敗：${err?.message || '格式錯誤'}`)
         }
         summary.tasks.skipped.push({ name, reason: err.message })
