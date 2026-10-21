@@ -2,7 +2,7 @@
 import { getSite, saveSite, getPanelCtx, deleteHealthEntry } from '../../shared/storage.js'
 import { encryptSecret } from '../../shared/crypto.js'
 import { MSG } from '../../shared/messages.js'
-import { applySavedTheme } from '../theme-apply.js'
+import { applySavedTheme, watchTheme } from '../theme-apply.js'
 import { createSaveGuard, setFieldError } from '../save-guard.js'
 import { icon } from '../icons.js'
 
@@ -341,9 +341,10 @@ export async function render() {
     testBtn0.textContent = TEST_LOGIN_LABEL
     testBtn0.removeAttribute('aria-busy')
   }
-  // 判斷不出目前分頁時不能讓人存：存出去的是鍵為空字串的站台，永遠不會被任何網址命中
+  // 判斷不出目前分頁時不能存（鍵為空字串的站台永遠不會被任何網址命中）；儲存鈕照樣可按，
+  // 按了在「還不能儲存」原因區說明（與 Picker 同一套守門，儲存鈕不 disabled）
   const saveBtn = document.getElementById('site-save')
-  if (saveBtn) saveBtn.disabled = !currentOrigin
+  if (saveBtn) saveBtn.disabled = false
   const noteEl0 = document.getElementById('site-note')
   if (!currentOrigin && noteEl0) {
     noteEl0.style.color = 'var(--danger)'
@@ -416,6 +417,7 @@ export async function handleSave({ closeDelayMs = 1500 } = {}) {
       noteEl.style.color = 'var(--danger)'
       noteEl.textContent = '無法判斷目前的分頁，沒有存檔'
     }
+    saveGuard()?.show([{ id: 'origin', text: '無法判斷目前的分頁：請關掉面板，在目標網頁上重新按右鍵「設定此站台登入」' }])
     return
   }
 
@@ -477,6 +479,7 @@ export async function handleSave({ closeDelayMs = 1500 } = {}) {
 
 if (typeof document !== 'undefined' && document.getElementById('site-save') && globalThis.chrome?.runtime?.id) {
   applySavedTheme()
+  watchTheme()
   // 面板文件在切換分頁後會被重載，而且載入當下解析得到的分頁可能是舊的：
   // 每次轉為可見都重畫一次（自癒）
   if (globalThis.chrome?.sidePanel) {

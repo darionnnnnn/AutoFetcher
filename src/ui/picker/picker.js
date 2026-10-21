@@ -1,14 +1,14 @@
 import { saveTask, getTask, getTasks, saveTasks, getSettings, saveSettings, getPanelCtx, setPanelCtx, mergePanelCtx, subscribe, deleteLastValues, updateTasks
 } from '../../shared/storage.js'
-import { applySavedTheme } from '../theme-apply.js'
+import { applySavedTheme, watchTheme } from '../theme-apply.js'
 import { DEFAULT_HOVER_HOLD_MS, DEFAULT_WAIT_TIMEOUT_MS } from '../../shared/preaction.js'
 import { MSG, MAX_BATCH_TASKS } from '../../shared/messages.js'
 import { getLayout, addCard, pruneSeries } from '../../shared/layout-store.js'
 import { seriesIdOf } from '../../shared/series-index.js'
-import { describeSchedule, describeTarget, describeDashboard, numericHeaderAxis, POS_TEXT, withInnerLabel, skipNote, unitOfAxis, TERMS } from '../../shared/describe.js'
+import { describeSchedule, describeTarget, describeDashboard, numericHeaderAxis, POS_TEXT, POS_NAME, posSuffix, anchorOnly, defaultFieldName, withInnerLabel, skipNote, unitOfAxis, TERMS } from '../../shared/describe.js'
 import { icon } from '../icons.js'
 import { nextIntervalRun } from '../../shared/schedule-math.js'
-import { isAnchorText, putInner, skipOf, putSkip, excludeOf, putExclude } from '../../shared/table.js'
+import { putInner, skipOf, putSkip, excludeOf, putExclude } from '../../shared/table.js'
 import { reconcileFields } from '../../shared/field-match.js'
 import { download } from '../../shared/export.js'
 import { statusTextOf } from '../../shared/record-status.js'
@@ -439,7 +439,6 @@ export function getFormData() {
 // 表格每天在最前或最後新增一筆時，「第幾筆」比會變動的標題可靠。
 // 位置是任務層級的設定，寫進規格時每個值的同一軸各帶一份。
 const POS_VALUES = ['first', 'last', 'last-1']
-const POS_LABELS = { first: '第一', last: '最後一', 'last-1': '倒數第二' }
 
 function posValueOf(id) {
   const v = document.getElementById(id)?.value || ''
@@ -976,6 +975,7 @@ export function render(ctx) {
   // （與 AF-7 的 pickedTableEl、AF-9 的 undoSnapshot 同型的狀態殘留）
   setDiagAvailable(null)
   resetTestDetail()
+  resetTestNote()
   const previewEl = document.getElementById('preview')
   if (previewEl) {
     // 比較要正規化成字串：preview 是文字、previewValue 是數字，直接比永遠不相等，
@@ -1858,37 +1858,13 @@ function singleCellName(cell) {
   const rowH = rowPos ? '' : anchorOnly(cell?.row?.header)
   const base = withInnerLabel(colH || rowH, cell?.inner)
   if (!base) return ''
-  const suffix = [
-    rowPos ? `${POS_LABELS[rowPos]}列` : '',
-    colPos ? `${POS_LABELS[colPos]}欄` : ''
-  ].filter(Boolean).join('、')
+  const suffix = posSuffix({ rowPos, colPos })
   return suffix ? `${base}（${suffix}）` : base
 }
 
-// 多值任務裡每個值的預設名稱；用位置定位的那一軸不放會變動的標題
-// 能當定位錨點的標題才能拿來命名；純數值退回下一層
-function anchorOnly(header) {
-  const text = typeof header === 'string' ? header.trim() : ''
-  return isAnchorText(text) ? text : ''
-}
-
+// 多值任務裡每個值的預設名稱：與 background 重選同一份（shared/describe.js），位置定位取表單目前的值
 function defaultPickName(pick, index) {
-  if (pick?.cell) {
-    const rowPos = posValueOf('row-pos')
-    const colPos = posValueOf('col-pos')
-    // 純數值的標題不進名稱（判準與定位同一份）——這是命名鏈的第四個消費端
-    const rowH = rowPos ? '' : anchorOnly(pick.cell.row?.header)
-    const colH = colPos ? '' : anchorOnly(pick.cell.col?.header)
-    const suffix = [
-      rowPos ? `${POS_LABELS[rowPos]}列` : '',
-      colPos ? `${POS_LABELS[colPos]}欄` : ''
-    ].filter(Boolean).join('、')
-    let base = withInnerLabel([rowH, colH].filter(Boolean).join(' · '), pick.cell.inner)
-    if (!base) base = suffix ? '值' : `值 ${index + 1}`
-    return suffix ? `${base}（${suffix}）` : base
-  }
-  if (pick?.block) return withInnerLabel(anchorOnly(pick.block.headerText), pick.block.inner) || `值 ${index + 1}`
-  return `值 ${index + 1}`
+  return defaultFieldName(pick, index + 1, { rowPos: posValueOf('row-pos'), colPos: posValueOf('col-pos') })
 }
 
 // 卡片型別對應的預設尺寸
@@ -1959,8 +1935,8 @@ function positionSummaryText() {
   const colPos = posValueOf('col-pos')
   if (!rowPos && !colPos) return posSuggestion
   const parts = []
-  if (rowPos) parts.push(`${POS_LABELS[rowPos]}列`)
-  if (colPos) parts.push(`${POS_LABELS[colPos]}欄`)
+  if (rowPos) parts.push(`${POS_NAME[rowPos]}列`)
+  if (colPos) parts.push(`${POS_NAME[colPos]}欄`)
   return `每次抓取取${parts.join('的')}，不看標題`
 }
 
@@ -3919,6 +3895,14 @@ const USE_TEXT = {
 // 明細表歸零：藏起、收合、清空。三個入口共用——測試開始、換目標重畫、畫表之前。
 // 換目標那一處不能漏：上一個目標的整欄明細留在畫面上、旁邊卻是新目標的預覽，
 // 與 AF-7 pickedTableEl、AF-9 undoSnapshot 同型的跨目標殘留
+// 試抓的說明句也屬於上一個目標：換目標（render）與重新試抓時一起清（AF-24，原 BACKLOG）
+function resetTestNote() {
+  const note = document.getElementById('test-note')
+  if (!note) return
+  note.textContent = ''
+  delete note.dataset.state
+}
+
 function resetTestDetail() {
   const detailEl = document.getElementById('test-detail')
   if (!detailEl) return null
@@ -4059,11 +4043,7 @@ export async function handleTestNow() {
     previewEl.textContent = ''
   }
   showErrorText('')
-  const noteAtStart = document.getElementById('test-note')
-  if (noteAtStart) {
-    noteAtStart.textContent = ''
-    delete noteAtStart.dataset.state
-  }
+  resetTestNote()
   resetTestDetail()
   setTestPreActionHint(false)
   // 這一次的結果還沒出來，上一次的診斷先收起來
@@ -5356,6 +5336,7 @@ export async function initFromQuery(search) {
 
 if (typeof document !== 'undefined' && document.getElementById('save') && globalThis.chrome?.runtime?.id) {
   applySavedTheme()
+  watchTheme()
   document.getElementById('save')?.addEventListener('click', () => handleSave())
   document.getElementById('cancel')?.addEventListener('click', () => {
     // 面板沒有 window.close()：請 background 關它，順便把草稿清掉

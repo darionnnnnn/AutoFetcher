@@ -229,6 +229,38 @@ export function describeFields(fields, limit = 4) {
   return shown.join('、')
 }
 
+// 位置定位用在「名稱後綴」的說法（「最後一列」）；與 POS_TEXT（「最後一筆」）是同一組位置的兩種說法
+export const POS_NAME = Object.freeze({ first: '第一', last: '最後一', 'last-1': '倒數第二' })
+
+// 名稱後綴：「最後一列、第一欄」；沒用位置定位回空字串
+export function posSuffix({ rowPos, colPos } = {}) {
+  return [rowPos ? `${POS_NAME[rowPos]}列` : '', colPos ? `${POS_NAME[colPos]}欄` : ''].filter(Boolean).join('、')
+}
+
+// 能當定位錨點的標題才能拿來命名；純數值（4318 這種每天會變的值）回空字串，由呼叫端退回下一層
+export function anchorOnly(header) {
+  const text = typeof header === 'string' ? header.trim() : ''
+  return isAnchorText(text) ? text : ''
+}
+
+/**
+ * 多值任務裡第 n 個值的預設名稱（Picker 收集與 background 重選共用這一份）。
+ * 用位置定位的那一軸不放標題（每天會變），純數值標題也不放（判準與定位同一份，shared/table.js）。
+ * @param {object} pick 選取結果（cell 或 block）
+ * @param {number} n 從 1 起算的序號（名稱退到「值 n」時用）
+ * @param {{ rowPos?: string, colPos?: string }} pos 目前的位置定位
+ */
+export function defaultFieldName(pick, n, pos = {}) {
+  if (pick?.cell) {
+    const r = pos.rowPos ? '' : anchorOnly(pick.cell.row?.header)
+    const c = pos.colPos ? '' : anchorOnly(pick.cell.col?.header)
+    const suffix = posSuffix(pos)
+    const base = withInnerLabel([r, c].filter(Boolean).join(' · '), pick.cell.inner) || (suffix ? '值' : `值 ${n}`)
+    return suffix ? `${base}（${suffix}）` : base
+  }
+  return withInnerLabel(anchorOnly(pick?.block?.headerText), pick?.block?.inner) || `值 ${n}`
+}
+
 // 位置定位的白話（Picker 的值清單也用這一份，不要再抄一張）
 export const POS_TEXT = {
   first: '第一筆',

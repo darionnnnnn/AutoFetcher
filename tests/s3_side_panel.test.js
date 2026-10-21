@@ -542,7 +542,10 @@ test('體檢-6 站台面板切到沒有站台設定的分頁時，不得沿用�
   tab = 99 // 切到一個沒有站台設定的分頁
   await sp.render()
   assert.equal(doc.getElementById('origin').textContent, '', 'B 分頁沒有站台設定，不能還顯示 A 站')
-  assert.equal(doc.getElementById('site-save').disabled, true, '判斷不出分頁時不能讓人存')
+  // AF-24：儲存鈕不 disabled，按了由「還不能儲存」原因區說明（體檢-7 驗零寫入）
+  assert.equal(doc.getElementById('site-save').disabled, false)
+  await sp.handleSave({ closeDelayMs: 0 })
+  assert.match(doc.getElementById('site-errors').textContent, /無法判斷目前的分頁/)
   void c
 })
 

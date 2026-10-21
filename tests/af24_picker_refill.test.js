@@ -64,3 +64,14 @@ test('block A（max）之後 render block B（沒寫合計方式）：合計方�
   pk.render({ task: blockB, url: blockB.url, locator: LOCATOR })
   assert.equal(doc.getElementById('block-aggregate').value, 'sum')
 })
+
+test('F6 換目標重畫時清掉上一個目標的試抓說明', async () => {
+  const { pk, doc } = await setup()
+  pk.render({ task: taskA, url: taskA.url, locator: LOCATOR })
+  const note = doc.getElementById('test-note')
+  note.textContent = '上一個目標的試抓說明'
+  note.dataset.state = 'warn'
+  pk.render({ task: taskB, url: taskB.url, locator: LOCATOR })
+  assert.equal(doc.getElementById('test-note').textContent, '')
+  assert.equal('state' in doc.getElementById('test-note').dataset, false)
+})

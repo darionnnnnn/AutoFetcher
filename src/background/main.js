@@ -32,10 +32,10 @@ import {
 import { injectContent } from './inject.js'
 import { sendToFrame } from './messaging.js'
 import { locateFrame, listFrames, matchFrameByUrl, sameOriginPath } from './frames.js'
-import { isAnchorText, putSkip } from '../shared/table.js'
+import { putSkip } from '../shared/table.js'
 import { pickSpecOf, pickSourceOf, reconcileFields, sameSpec, stripPos } from '../shared/field-match.js'
 import { parseNumber } from '../shared/extract.js'
-import { withInnerLabel } from '../shared/describe.js'
+import { withInnerLabel, defaultFieldName } from '../shared/describe.js'
 import { scheduleSiteCheck, runSiteCheck } from './sitecheck.js'
 import { testLogin } from './login.js'
 import { decryptSecret } from '../shared/crypto.js'
@@ -744,27 +744,7 @@ function pickTransitionError(hint, candidates = []) {
 
 // 重選時把選好的值寫回任務：沒動的值保留原本的 key 與名稱（紀錄靠 key），新值配新 key。
 // 「是不是同一個值」的判定在 shared/field-match.js（Picker 換目標也用同一份）
-const POS_NAMES = { first: '第一', last: '最後一', 'last-1': '倒數第二' }
-// 能當定位錨點的標題才能拿來命名；純數值（4318 這種每天會變的值）退回下一層
-function anchorOnly(header) {
-  const text = typeof header === 'string' ? header.trim() : ''
-  return isAnchorText(text) ? text : ''
-}
-function defaultFieldName(pick, n, pos = {}) {
-  if (pick?.cell) {
-    // 用位置定位的軸不能把標題寫進名稱：每天取最後一列的話，那個日期明天就變了；
-    // 純數值的標題同理（判準與定位同一份，`shared/table.js`）
-    const r = pos.rowPos ? '' : anchorOnly(pick.cell.row?.header)
-    const c = pos.colPos ? '' : anchorOnly(pick.cell.col?.header)
-    const suffix = [
-      pos.rowPos ? `${POS_NAMES[pos.rowPos]}列` : '',
-      pos.colPos ? `${POS_NAMES[pos.colPos]}欄` : ''
-    ].filter(Boolean).join('、')
-    const base = withInnerLabel([r, c].filter(Boolean).join(' · '), pick.cell.inner) || (suffix ? '值' : `值 ${n}`)
-    return suffix ? `${base}（${suffix}）` : base
-  }
-  return withInnerLabel(anchorOnly(pick?.block?.headerText), pick?.block?.inner) || `值 ${n}`
-}
+// 值的預設名稱只有 shared/describe.js 一份（Picker 收集表單也用它）
 
 // 任務目前用的定位方式（重選新增的值要跟著它命名）
 function posOfTask(task) {

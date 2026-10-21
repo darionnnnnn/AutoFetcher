@@ -437,11 +437,16 @@ export function render(ctx) {
   // 3. 綁定按鈕事件
   const toggleAllBtn = document.getElementById('toggle-all')
   if (toggleAllBtn) {
+    // 按鈕說出這一下會做什麼（以前是「全部暫停 / 恢復」，看不出按下去是哪一個）；判準與 handleToggleAll 同一條
+    const anyActive = (tasks || []).some(t => t.enabled !== false)
+    toggleAllBtn.textContent = anyActive ? '全部暫停' : '全部恢復'
+    toggleAllBtn.hidden = !tasks || tasks.length === 0
     toggleAllBtn.onclick = async () => {
       await handleToggleAll()
       if (currentCtx) {
         const updatedTasks = await getTasks()
-        render({ ...currentCtx, tasks: updatedTasks })
+        // 燈號跟著重算：全部暫停之後 chip 要變「已暫停」，不能沿用暫停前的 health
+        render({ ...currentCtx, tasks: updatedTasks, health: computeHealth(updatedTasks, currentCtx.healthMap, currentCtx.missed) })
       }
     }
   }
@@ -493,15 +498,7 @@ export function render(ctx) {
   const openReportBtn = document.getElementById('open-report')
   if (openReportBtn) {
     if (!openReportBtn.querySelector('svg')) setIcon(openReportBtn, 'external', { text: '開啟報表' })
-    openReportBtn.onclick = () => {
-      let url = typeof chrome?.runtime?.getURL === 'function'
-        ? chrome.runtime.getURL('ui/report/report.html')
-        : 'ui/report/report.html'
-      if (url && typeof url.then === 'function') {
-        url.toString = () => 'chrome-extension://autofetcher/ui/report/report.html'
-      }
-      chrome.tabs.create({ url })
-    }
+    openReportBtn.onclick = () => { void openExtPage('ui/report/report.html') }
   }
 }
 
