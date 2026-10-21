@@ -51,3 +51,22 @@ test('開啟報表走 openExtPage，正式碼沒有測試替身用的固定網�
   assert.equal(src.includes('chrome-extension://autofetcher'), false)
   assert.equal(/url\.toString\s*=/.test(src), false)
 })
+
+test('體檢：全部暫停後各列不顯示舊的「下次」；全部恢復後重新問 background 拿新的下次', async () => {
+  const { c, st, pp, doc } = await fresh()
+  await st.saveTasks([task('n1')])
+  let calls = 0
+  c.__setRuntimeResponder(m => {
+    if (m.type === 'GET_NEXT_RUNS') { calls++; return { nextRuns: { n1: new Date(2030, 0, 2, calls === 1 ? 8 : 10, 13).getTime() } } }
+    if (m.type === 'REBUILD_ALARMS') return { ok: true }
+    return undefined
+  })
+  await pp.init()
+  assert.match(doc.getElementById('task-list').textContent, /下次 08:13/)
+  doc.getElementById('toggle-all').click()
+  await new Promise(r => setTimeout(r, 30))
+  assert.match(doc.getElementById('task-list').textContent, /下次 —/, '停用中的任務不得顯示舊 alarm 的時刻')
+  doc.getElementById('toggle-all').click()
+  await new Promise(r => setTimeout(r, 30))
+  assert.match(doc.getElementById('task-list').textContent, /下次 10:13/, '恢復後要拿到重建後的下次')
+})

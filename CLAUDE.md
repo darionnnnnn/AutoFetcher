@@ -147,7 +147,9 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/(歷史
 - **突變腳本的 `replace(old, new, 1)` 換的是第一個命中**:同一串字在檔案裡出現兩次(`SHARED_IDS` 與 `DRAFT_FIELDS`)時會打錯位置、誤判成「測試沒守到」;`old` 要寫到唯一。
 - **「在 A 之後讀 B」的情境要看 A 會不會清掉 B**:右鍵選單的 `closeMenu()` 會把 `menuTargetContext` 清成 null,
   排除分支在它之後才讀,右鍵排除永遠無效(AF-16)。新增選單動作要在關選單前取出情境。
-- **任務存回 storage 一律「展開既有任務再覆寫自己擁有的欄位」**(AF-19;Picker 編輯存檔走 `updateTasks`＋`withLatestUnmanaged`,表單管不到的欄位與 `order`、`archivedFields` 取儲存當下的最新值,AF-24):整批啟停、改排程、改名都只換那一個欄位;
+- **任務存回 storage 一律「展開既有任務再覆寫自己擁有的欄位」**(AF-19;Picker 編輯存檔走 `updateTasks`＋`withLatestUnmanaged`,表單管不到的欄位與 `order`、`archivedFields` 取儲存當下的最新值,AF-24)。
+  **「表單管不到、本機維護的任務欄位」只有 `shared/task-source.js` 的 `LOCAL_TASK_FIELDS` 一份**(Picker 的 `RUNTIME_FIELDS` 與 settings-io 匯入時「沒帶就沿用本機」都引用它;AF-24 體檢抓到兩份已漂移)。
+  storage 的「任務在讀與寫之間被改過」錯誤帶 `code: TASK_CHANGED_ERROR`,呼叫端認 code 重試,不比對訊息文字:整批啟停、改排程、改名都只換那一個欄位;
   Picker 的 `buildTask` 會重組整個任務,編輯時靠 `RUNTIME_FIELDS` 帶過 `enabled`／`foreground` 等表單管不到的欄位。
   以前寫死 `enabled: true`,停用中的任務一編輯就復活、前景抓取設定默默消失。新增一條改任務的路徑時,先問「表單管不到的欄位會不會被洗掉」。
 - **改多個任務一律走 `saveTasks`／`deleteTasks`**(AF-19):逐筆 `saveTask` 是 N 次讀寫整個 `tasks` 陣列;`REBUILD_ALARMS` 整批只送一次。
@@ -181,6 +183,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/(歷史
   再算一次位置或自己去重就是兩份邏輯。
 - **每個 UI 頁的樣式表都要有 `[hidden] { display: none !important; }`**:
   區塊自己的 `display: flex/grid` 會壓過 `hidden` 屬性,空的橫幅會露出一條空殼。
+- **圖表序列上限＝調色盤大小,只有 `charts.js` 的 `CHART_PALETTE_SIZE` 一份**(`drop-rules.MAX_CHART_SERIES` 取它;`theme.css` 的 `--chart-N` 有幾個就是幾)。
 - **圖表 SVG 只設 `viewBox`**,外層用 `width: 100%` 縮放;`viewBox` 的長寬比要跟著卡片的格數走,
   否則等比縮放後會縮在角落。`padding.left` 48 / `bottom` 24 是座標軸標籤的保留區。
 - **`theme.css` 的亮色變數全部要留在檔案最前面那個 `:root` 區塊**:
@@ -293,6 +296,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/(歷史
 - **同一份守衛寫在兩個兄弟函式時兩邊都要有**(AF-21 體檢):`computeIntervalGaps` 有 `createdAt` 守衛、`computeMissedSlots` 沒有,新任務一建立就被回溯 7 天錯過。
 - **抓取的失敗收尾只有 `fetcher.js` 的 `finishFailure`**(AF-24):重試上限 `MAX_ATTEMPTS`、不重試的狀態 `NO_RETRY_STATUSES`、最終失敗的通知都在這一處;
   新增失敗路徑一律呼叫它,不要再手寫「`attempt <` 幾就 `scheduleRetry`」(以前六處各寫一份,離線分支曾漏上限讓 alarm 無限接力、multi 分支曾排在不可重試判斷之前)。
+  唯一例外是 multi「每個值都失敗且可重試」的整批重試(`retryWholeTask`):用盡時要寫真實的逐值結果,不是整批失敗紀錄,所以它自己排重試,但一樣先核對 `ownsRun`。
   **寫紀錄前核對 `ownsRunState`**(登記仍是自己的才寫),收尾只刪自己那一份登記(`dropOwnRunState`)——被看門狗接管後同一格可能已被重新登記。
 - **拖曳類的 pointer 監聽一定要接 `pointercancel`**;「忙碌中」旗標只在 `pointerup` 歸零的話,一次取消就讓之後的重畫永遠被延後。
 - **先寫入成功才關閉／才清草稿**(抽屜套用):順序反了,寫入失敗時畫面留著沒存的值而且零提示。

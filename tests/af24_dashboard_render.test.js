@@ -94,3 +94,24 @@ test('E5 在名稱輸入框裡按方向鍵不切頁籤', async () => {
   await new Promise(r => setTimeout(r, 30))
   assert.equal(d.querySelector('#dashboard-tabs [aria-selected="true"]').dataset.dashId, first.id)
 })
+
+test('體檢：過期的繪製（A）讀取失敗時，不得在已畫好的 B 上掛失敗橫幅', async () => {
+  const { c, dom, dashboard, first, second, cardB } = await setup()
+  const realGet = c.storage.local.get.bind(c.storage.local)
+  let rejectA
+  const gate = new Promise((_, reject) => { rejectA = reject })
+  let gated = false
+  c.storage.local.get = async (keys) => {
+    const wantsLayout = keys === 'layout' || (Array.isArray(keys) && keys.includes('layout'))
+    if (wantsLayout && !gated) { gated = true; await gate }
+    return realGet(keys)
+  }
+  const runA = dashboard.renderDashboard(first.id).catch(dashboard.showDashboardLoadError)
+  await dashboard.renderDashboard(second.id)
+  rejectA(new Error('A 慢速失敗'))
+  await runA
+  c.storage.local.get = realGet
+  assert.equal(dom.window.document.getElementById('dashboard-load-error'), null, '過期的失敗不得影響新畫面')
+  const ids = [...dom.window.document.querySelectorAll('#dashboard-grid [data-card-id]')].map(el => el.dataset.cardId)
+  assert.deepEqual(ids, [cardB.id])
+})

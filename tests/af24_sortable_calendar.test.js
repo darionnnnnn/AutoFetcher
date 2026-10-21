@@ -161,3 +161,18 @@ test('真的拖過之後放開，緊接的 click 被吃掉；只是點一下的 
   a.click()
   assert.equal(clicks, 1)
 })
+
+test('體檢：拖曳中清單被整份重畫後繼續拖：舊列不得被塞回新 DOM，也不寫入', async () => {
+  const { d, ev, order } = listDom()
+  const commits = await sortableOn(d)
+  ev(d.getElementById('a'), 'pointerdown', { clientY: 5 })
+  ev(d, 'pointermove', { clientY: 55 })
+  const list = d.getElementById('list')
+  list.textContent = ''
+  for (const id of ['x', 'y', 'z']) { const li = d.createElement('li'); li.id = id; list.appendChild(li) }
+  ev(d, 'pointermove', { clientY: 65 })
+  ev(d, 'pointerup', { clientY: 65 })
+  await new Promise(r => setTimeout(r, 0))
+  assert.equal(order(), 'xyz')
+  assert.deepEqual(commits, [])
+})

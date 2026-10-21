@@ -1,4 +1,4 @@
-import { saveTask, getTask, getTasks, saveTasks, getSettings, saveSettings, getPanelCtx, setPanelCtx, mergePanelCtx, subscribe, deleteLastValues, updateTasks
+import { saveTask, getTask, getTasks, saveTasks, getSettings, saveSettings, getPanelCtx, setPanelCtx, mergePanelCtx, subscribe, deleteLastValues, updateTasks, TASK_CHANGED_ERROR
 } from '../../shared/storage.js'
 import { applySavedTheme, watchTheme } from '../theme-apply.js'
 import { DEFAULT_HOVER_HOLD_MS, DEFAULT_WAIT_TIMEOUT_MS } from '../../shared/preaction.js'
@@ -10,6 +10,7 @@ import { icon } from '../icons.js'
 import { nextIntervalRun } from '../../shared/schedule-math.js'
 import { putInner, skipOf, putSkip, excludeOf, putExclude } from '../../shared/table.js'
 import { reconcileFields } from '../../shared/field-match.js'
+import { LOCAL_TASK_FIELDS } from '../../shared/task-source.js'
 import { download } from '../../shared/export.js'
 import { statusTextOf } from '../../shared/record-status.js'
 import { createSaveGuard, setFieldError } from '../save-guard.js'
@@ -804,7 +805,8 @@ export function buildSchedule(values) {
 // 表單管不到、但任務執行時要用的欄位：編輯既有任務時原樣帶過去。
 // 少了這一份清單，停用中的任務一改就復活、按過「改用前景抓取」的設定也會默默消失。
 // 與 tasks.js 的 duplicateTask（複製時要丟掉哪些）是同一份口徑的兩面。
-const RUNTIME_FIELDS = ['enabled', 'foreground', 'suggestForeground', 'notFoundStreak', 'precheckLeadMinutes']
+// 清單只有 shared/task-source.js 一份（匯入與複製任務也用它）
+const RUNTIME_FIELDS = LOCAL_TASK_FIELDS
 
 export function buildTask(values, locator, existing, frame) {
   const id = existing?.id || crypto.randomUUID()
@@ -3246,7 +3248,7 @@ export async function saveTaskFromForm(values, ctx, { taskId, preparedTask } = {
       break
     } catch (error) {
       // 讀到與寫入之間被別人改過：重讀一次；第二次仍衝突就交給呼叫端顯示
-      if (attempt === 1 || !/changed while updating/.test(String(error?.message))) throw error
+      if (attempt === 1 || error?.code !== TASK_CHANGED_ERROR) throw error
     }
   }
   if (editing) throw new Error('這個任務已被刪除，修改沒有儲存；請關閉面板後重新建立')
@@ -4766,8 +4768,10 @@ export function consumeDraftFinishRequest(message, sender) {
   return true
 }
 
-export async function consumeGroupNameResult(message) {
+export async function consumeGroupNameResult(message, sender) {
   if (!message || message.type !== PICK_GROUP_NAME_RESULT) return false
+  // 只接受 background 核對過後轉來的那一份；content 直接廣播的（sender 帶網頁分頁）一律不理
+  if (sender?.tab) return false
   const draft = pickDraftState
   const group = activePickGroup()
   const request = pickDraftNameRequest
@@ -5460,7 +5464,8 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
     window.addEventListener('pagehide', onPageHide, { once: true })
     document.addEventListener('af:pick-group-name-result', event => { consumeGroupNameResult(event.detail) })
     chrome.runtime.onMessage?.addListener((message, sender) => {
-      if (message?.type === PICK_GROUP_NAME_RESULT) return consumeGroupNameResult(message)
+      // 這個監聽只觀察，不得回傳 Promise：async 回傳值會被當成 sendMessage 的回覆，搶先 background 的 ACK
+      if (message?.type === PICK_GROUP_NAME_RESULT) { void consumeGroupNameResult(message, sender); return undefined }
       if (message?.type === MSG.PICK_DRAFT_FINISH_REQUEST) { consumeDraftFinishRequest(message, sender); return undefined }
       return undefined
     })

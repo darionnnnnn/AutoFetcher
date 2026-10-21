@@ -22,6 +22,8 @@ export function makeSortable(item, { container, items, axis = 'y', ignore, onCom
 
   const onMove = (e) => {
     if (!drag || (e.pointerId !== undefined && e.pointerId !== drag.pointerId)) return
+    // 清單在拖曳中被整份重畫（storage 變動觸發）：這一列已脫離容器，不得再把它塞回新 DOM
+    if (!item.isConnected) { void finish(false, e); return }
     const pos = axis === 'x' ? e.clientX : e.clientY
     if (!drag.active) {
       if (Math.abs(pos - drag.start) <= DRAG_THRESHOLD_PX) return

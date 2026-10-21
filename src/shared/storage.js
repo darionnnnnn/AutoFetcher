@@ -197,7 +197,6 @@ function writeKey(key, value, area = 'local') {
   return mutateKey(key, () => value, area)
 }
 
-const isMultiExecutionTask = isMultiTask
 
 const EXECUTION_INVALIDATIONS_KEY = 'executionInvalidations'
 const MAX_EXECUTION_INVALIDATIONS = 100
@@ -287,8 +286,8 @@ export async function listPendingFieldRepairOperations() {
 }
 
 function executionSpecChanged(before, after) {
-  if (!isMultiExecutionTask(before)) return false
-  if (!isMultiExecutionTask(after)) return true
+  if (!isMultiTask(before)) return false
+  if (!isMultiTask(after)) return true
   return multiExecutionSnapshot(before) !== multiExecutionSnapshot(after)
 }
 
@@ -418,7 +417,7 @@ async function replayExecutionInvalidationsForMarker(marker) {
   const eligible = []
   for (const change of marker?.changes || []) {
     const current = tasks.find(task => task?.id === change?.taskId)
-    const stillOld = current && isMultiExecutionTask(current) &&
+    const stillOld = current && isMultiTask(current) &&
       await executionFingerprintOf(current) === change.executionFingerprint
     if (!stillOld) eligible.push(change)
   }
@@ -442,7 +441,7 @@ async function currentTaskMatchesExecution(taskId, executionFingerprint) {
   if (typeof taskId !== 'string' || typeof executionFingerprint !== 'string') return false
   const result = await chrome.storage.local.get('tasks')
   const task = (Array.isArray(result?.tasks) ? result.tasks : []).find(item => item?.id === taskId)
-  if (!task || !isMultiExecutionTask(task)) return false
+  if (!task || !isMultiTask(task)) return false
   return await executionFingerprintOf(task) === executionFingerprint
 }
 
@@ -488,6 +487,14 @@ function migrateSitesToV2(sites, encrypted) {
 
 // 初始化儲存空間（冪等：已存在值不得覆蓋；順便做一次性的 schema 遷移）
 // 逐鍵依序取鎖：settings → sites → runs:<date>／runs → schemaVersion（版本號最後寫，遷移中斷時重跑還會再遷移一次）
+// 任務在「讀到」與「鎖內寫入」之間被別人改過：呼叫端可重讀一次再試（以 code 判斷，不比對訊息文字）
+export const TASK_CHANGED_ERROR = 'task_changed_while_writing'
+function taskChangedError(stage) {
+  const err = new Error(`task changed while ${stage}; retry the update`)
+  err.code = TASK_CHANGED_ERROR
+  return err
+}
+
 // 缺 schemaVersion 一律視為 1（init 與 getSchemaVersion 共用這一份）：每一步遷移都冪等，
 // 新安裝走一遍是空操作；以前 init 把缺省當現行版本，缺版本號的舊資料會跳過密碼加密
 function schemaVersionOf(value) {
@@ -671,7 +678,7 @@ export async function saveTasks(list) {
       const before = beforeById.get(change.taskId)
       const currentTask = tasks.find(task => task?.id === change.taskId)
       if (!currentTask || JSON.stringify(currentTask) !== JSON.stringify(before)) {
-        throw new Error('task changed while saving; retry the update')
+        throw taskChangedError('saving')
       }
     }
     savedTasks = mergeTasksUnlocked(tasks, list)
@@ -747,7 +754,7 @@ export async function updateTasks(ids, mutator) {
     for (const { before } of prepared) {
       const found = tasks.find(task => task?.id === before.id)
       if (!found || JSON.stringify(found) !== JSON.stringify(before)) {
-        throw new Error('task changed while updating; retry the update')
+        throw taskChangedError('updating')
       }
     }
     if (!prepared.length) return undefined
@@ -783,7 +790,7 @@ export async function deleteTasks(ids) {
   const beforeTasks = await getTasks()
   const invalidated = []
   for (const task of beforeTasks) {
-    if (targetIds.has(task?.id) && isMultiExecutionTask(task)) {
+    if (targetIds.has(task?.id) && isMultiTask(task)) {
       const change = await invalidationOf(task, null)
       if (change) invalidated.push(change)
     }
@@ -796,7 +803,7 @@ export async function deleteTasks(ids) {
       const before = beforeTasks.find(task => task?.id === taskId)
       const currentTask = tasks.find(task => task?.id === taskId)
       if (currentTask && JSON.stringify(currentTask) !== JSON.stringify(before)) {
-        throw new Error('task changed while deleting; retry the update')
+        throw taskChangedError('deleting')
       }
     }
     return tasks.filter(t => !targetIds.has(t.id))

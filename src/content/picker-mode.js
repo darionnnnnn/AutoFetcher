@@ -4000,7 +4000,8 @@ function onKeyDown(event) {
   }
   // 頁面輸入欄／contenteditable 的快捷鍵交回網站；尤其不能攔 Enter、Delete
   // 來誤完成或移除選取值（群組命名輸入在擴充功能頁，不會走這裡）。
-  const keyTarget = event.target
+  // shadow DOM 裡的輸入框（站內搜尋框常見）：document 上拿到的 target 已被改成 host，要看 composedPath 的真正目標
+  const keyTarget = (typeof event.composedPath === 'function' ? event.composedPath()[0] : null) || event.target
   if (keyTarget && (keyTarget.matches?.('input, textarea, select') || keyTarget.isContentEditable ||
       keyTarget.closest?.('[contenteditable="true"]'))) return
   if (event.key === 'Escape') {

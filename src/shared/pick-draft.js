@@ -20,8 +20,6 @@ export const MAX_DRAFT_STRING_LENGTH = MAX_MULTI_STRING_LENGTH
 export const MAX_PICK_DRAFT_BYTES = MAX_MULTI_TASK_BYTES
 const MAX_PICK_DRAFT_DEPTH = 8
 
-// 相容的別名，讓消費端不必複製這些界限。
-
 // 保存階段的狀態會跨面板重載保留；舊值 saving/saved/failed 仍相容，
 // 新批次流程另外使用能表達結果不明的 inflight/uncertain。
 export const PICK_SAVE_STATES = Object.freeze([

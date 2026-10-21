@@ -1140,6 +1140,16 @@ let dashboardRenderGeneration = 0
 
 export async function renderDashboard(dashId) {
   const generation = ++dashboardRenderGeneration
+  try {
+    return await renderDashboardGeneration(dashId, generation)
+  } catch (err) {
+    // 過期的那一次繪製（之後已有新的繪製）失敗，不得把錯誤橫幅掛到新畫面上
+    if (generation !== dashboardRenderGeneration) return
+    throw err
+  }
+}
+
+async function renderDashboardGeneration(dashId, generation) {
   pendingRefresh = null
   const layout = await getLayout()
   if (generation !== dashboardRenderGeneration) return

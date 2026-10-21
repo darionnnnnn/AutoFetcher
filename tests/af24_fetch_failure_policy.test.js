@@ -109,3 +109,35 @@ test('同一站台三個任務最後一次都離線：合併成一則通知（�
   const last = notes(c).at(-1).args[1]
   assert.match(last.message, /3 個任務/)
 })
+
+// ---- 體檢輪：multi 每個值都失敗且狀態可重試時，與單值同一套重試規則 ----
+const framesResponder = () => (injection) => Array.isArray(injection?.args) ? [] : [{ frameId: 0, result: 'https://a.test/m' }]
+
+test('體檢：multi 每個值都 error（逾時類）→ 前兩次排重試不寫紀錄不通知，第三次寫每值紀錄並通知一次', async () => {
+  const { c, st, fe } = await fresh()
+  c.__setScriptResponder(framesResponder())
+  c.__setTabResponder((_t, msg) => msg.type === 'EXTRACT' ? { ok: false, error: 'error', message: '頁面回了奇怪的東西' } : { ok: true })
+  const t = multi('me')
+  await st.saveTask(t)
+  const slot = '2026-10-20T09:00'
+  assert.equal(await fe.runTask(t, { slot, attempt: 1, ...FAST }), null)
+  assert.equal(retries(c).length, 1)
+  assert.equal((await st.getRecordsByDate('2026-10-20')).length, 0, '還在重試不寫紀錄')
+  assert.equal(notes(c).length, 0)
+  await fe.runTask(t, { slot, attempt: 3, ...FAST })
+  const recs = await st.getRecordsByDate('2026-10-20')
+  assert.deepEqual(recs.map(r => r.taskId).sort(), ['me#x', 'me#y'])
+  assert.equal(notes(c).length, 1)
+})
+
+test('體檢：multi 每個值都 parse_error → 不重試，第一次就寫紀錄', async () => {
+  const { c, st, fe } = await fresh()
+  c.__setScriptResponder(framesResponder())
+  c.__setTabResponder((_t, msg) => msg.type === 'EXTRACT' ? { ok: false, error: 'parse_error', raw: 'N/A' } : { ok: true })
+  const t = multi('mp')
+  await st.saveTask(t)
+  const r = await fe.runTask(t, { slot: '2026-10-20T09:00', attempt: 1, ...FAST })
+  assert.ok(r, '要寫紀錄')
+  assert.equal(retries(c).length, 0)
+  assert.equal((await st.getRecordsByDate('2026-10-20')).length, 2)
+})

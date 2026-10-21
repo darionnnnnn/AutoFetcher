@@ -73,3 +73,18 @@ test('D-c 作用中那段 aria-pressed=true、其餘 false；面板說明區 ari
   assert.equal(doc.querySelector('[data-af-panel-body]')?.getAttribute('aria-live'), 'polite')
   pm.exitPickMode()
 })
+
+test('體檢：焦點在 shadow DOM 裡的輸入框時，數字鍵與 Backspace 都放給頁面', async () => {
+  const { pm, doc, active } = await enter()
+  const host = doc.createElement('div')
+  doc.body.appendChild(host)
+  const root = host.attachShadow({ mode: 'open' })
+  const input = doc.createElement('input')
+  root.appendChild(input)
+  input.focus()
+  const ev = new doc.defaultView.KeyboardEvent('keydown', { key: '2', bubbles: true, cancelable: true, composed: true })
+  input.dispatchEvent(ev)
+  assert.equal(ev.defaultPrevented, false, '輸入框裡打 2 不得被攔')
+  assert.equal(active(), 'cell')
+  pm.exitPickMode()
+})

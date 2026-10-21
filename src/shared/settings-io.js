@@ -6,7 +6,7 @@ import {
   validateTask, taskUrlProtocolOf, snapshotImportKeys, restoreImportKeys, SCHEMA_VERSION
 } from './storage.js'
 import { encryptSecret, decryptSecret } from './crypto.js'
-import { isMultiTask } from './task-source.js'
+import { isMultiTask, LOCAL_TASK_FIELDS } from './task-source.js'
 import { getLayout, saveLayout } from './layout-store.js'
 import { rebuildAlarms } from '../background/scheduler.js'
 
@@ -106,7 +106,8 @@ export async function exportSettings({ includePasswords = false, passphrase } = 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 
 // 匯入同 id 任務時，匯入檔沒帶就沿用本機既有值的執行期欄位（表單／匯出檔管不到的那些）
-const PRESERVED_TASK_FIELDS = ['enabled', 'foreground', 'suggestForeground', 'notFoundStreak', 'createdAt']
+// 匯入檔沒帶就沿用本機的欄位：本機維護的執行期欄位（唯一一份在 task-source）＋建立時間
+const PRESERVED_TASK_FIELDS = [...LOCAL_TASK_FIELDS, 'createdAt']
 
 // 設定白名單與數值域：鍵＝storage.js 的 DEFAULT_SETTINGS 鍵＋程式裡實際有讀的其他設定鍵；
 // 值回傳空字串＝合格，否則是拒絕原因

@@ -1445,8 +1445,9 @@ export async function runTask(task, opts = {}) {
               const raw = String(fieldLiveErr?.message || fieldLiveErr || '擷取失敗')
               fieldRes = { ok: false, error: 'error', message: raw }
             }
-            // all-field not_found 仍沿用任務層的有限 alarm retry；已有成功值時先完整寫下部分結果。
-            if (fieldRes.ok !== true && fieldRes.error === 'not_found') retryWholeTask = true
+            // 每個值都失敗、且狀態是可重試的（找不到、逾時、未知錯誤）→ 沿用任務層的有限 alarm retry，與單值同一套規則；
+            // 已有成功值時先完整寫下部分結果。parse_error 這類重試也一樣的狀態不觸發
+            if (fieldRes.ok !== true && !NO_RETRY_STATUSES.has(fieldRes.error)) retryWholeTask = true
             fields[key] = fieldRes
           }
           const fieldList = Object.values(fields)
@@ -1457,7 +1458,10 @@ export async function runTask(task, opts = {}) {
             const anyFailure = fieldList.some(field => field?.ok !== true)
             const anyPartial = fieldList.some(field => field?.partial === true)
             res = { ok: true, fields, ...((anyFailure || anyPartial) ? { partial: true } : {}) }
+            // 整組都找不到 → 整個任務重試（不經 finishFailure：用盡時要寫下方真實的逐值結果，不是整批失敗紀錄）；
+            // 被接管的執行一樣不得再排重試
             if (!anySuccess && retryWholeTask && !isManual && attempt < MAX_ATTEMPTS) {
+              if (ownsRun && !(await ownsRun())) return runTakenOver(task)
               await scheduleRetry(task.id, attempt, false, slot)
               return null
             }

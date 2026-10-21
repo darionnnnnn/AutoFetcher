@@ -1,6 +1,6 @@
 # AF-24 第 24 輪規劃：體驗、重構、除錯、文件同步
 
-> 狀態：**實作輪完成（分支 `feature/af-24` 已推），待收尾（換模型體檢、併 dev、PLAN 歸檔）**
+> 狀態：**體檢完成（Fable 5.1），待併 dev 與歸檔**
 > 基準：dev@eabe46f（`npm test` 3323 綠、約 30 秒；manifest／package 0.22.0，schema 4）
 > 來源：使用者要求的四個方向——(1) 使用者體驗 (2) 不過度設計下符合 SOLID／KISS／DRY (3) 盤點並清 bug (4) 文件與程式碼同步。
 > 日期：2026-10-21 稽核與草案／2026-10-22 定案與複檢（Asia/Taipei）
@@ -411,6 +411,30 @@
 - **煙霧測試**：在 6a198b4 上 `./run_smoke.sh` 15 套全部 PASS（exit 0，含新增的 `af24_keyboard_pick`）；Edge 本機未安裝而略過。
 - **版本**：0.23.0（manifest 與 package.json 一致），schema 維持 4。
 - **給收尾體檢的重點**：fetcher 失敗收尾與接管擁有權（C2／C3／終檢 #4）、選取模式群組鍵盤（D1）、sortable 與月曆（E2）、路由表（G，純搬移已逐行比對）。委派給 sonnet 的三段（D-d、G1a、H）都經 Claude 獨立驗收，但沒有換模型體檢過。
+
+## 體檢輪修正（2026-10-22，體檢方 Fable 5.1；實作方 Opus 5.5）
+
+體檢方法：Fable 親讀 `dev...HEAD` 的 src diff（main.js 路由表搬移先前已逐行比對，這次看新增邏輯）；另派兩個 sonnet／medium 子代理各從「使用者走查（jsdom 探針實測，8 條流程）」與「架構上帝視角」掃一遍，每條發現由 Fable 核實後才修。子代理模型依使用者本輪指定（sonnet／medium）。
+
+| # | 哪裡 | 症狀 | 怎麼修 | 迴歸測試 |
+|---|---|---|---|---|
+| 1 | `fetcher.js` multi 逐值擷取 | multi 每個值都逾時／未知錯誤時**不重試**、第一次就寫兩筆失敗並通知；單值同情境會重試兩次。本輪之前就如此，但本輪 SPEC 寫成「所有失敗路徑同一套」 | `retryWholeTask` 從「全部 not_found」改成「全部失敗且狀態不在 `NO_RETRY_STATUSES`」；SPEC §4 補寫 | `af24_fetch_failure_policy` ＋2（error 重試、parse_error 不重試）；突變（改回只認 not_found）紅 |
+| 2 | `picker-mode.js` `onKeyDown` | shadow DOM 裡的輸入框：document 上的 `event.target` 已被改成 host，輸入框守門判不到，打數字會切模式 | 守門改看 `event.composedPath()[0]` | `af24_pick_tab_focus` ＋1；突變紅 |
+| 3 | `popup.js` | 全部暫停後各列仍顯示舊的「下次 08:13」；恢復後要重開 popup 才有新時刻 | 停用的任務顯示「下次 —」；切換後 `await` 排程重建再重問 `GET_NEXT_RUNS`（抽成 `fetchNextRuns`） | `af24_popup` ＋1 |
+| 4 | `dashboard.js` `renderDashboard` | 過期的繪製 A 讀取**失敗**時，序號守門擋不到例外，失敗橫幅掛到已畫好的 B 上 | 外層 try：過期的那一次失敗直接吞掉、不是最新才往外丟 | `af24_dashboard_render` ＋1；突變紅 |
+| 5 | `sortable.js` `onMove` | 拖曳中清單被整份重畫後**繼續拖**，舊列被 `insertBefore` 回新 DOM 變重複列，放開時使用者的移動被丟掉（終檢只修了「重畫後取消」） | `onMove` 開頭 `!item.isConnected` 就結束這次拖曳 | `af24_sortable_calendar` ＋1 |
+| 6 | `charts.js`／`drop-rules.js` | 規劃 E4 驗收「`% 8` 為 0」其實沒達成：`getChartColor` 仍寫死 8，與 `MAX_CHART_SERIES` 是兩個獨立字面值 | `CHART_PALETTE_SIZE` 一份在 charts.js，`MAX_CHART_SERIES` 取它 | `af24_chart_limits` 斷言兩者相等、charts.js 無 `% 8` |
+| 7 | `picker.js`／`settings-io.js` | 「表單管不到的任務欄位」三份清單已漂移：匯入那份漏了 `precheckLeadMinutes`（匯入檔沒帶就被洗掉） | `shared/task-source.js` 的 `LOCAL_TASK_FIELDS` 一份，兩處引用；SPEC §5、CLAUDE.md 同步 | 新 `af24_local_task_fields`（含匯入沿用本機） |
+| 8 | `picker.js` `saveTaskFromForm` | 重試靠比對 storage 的英文錯誤訊息，改一個字就靜默失效 | storage 丟 `code: TASK_CHANGED_ERROR`，UI 認 code | `af24_picker_save_merge` ＋1 |
+| 9 | `fetcher.js` multi 整批重試 | 這條沒經 `finishFailure`，被看門狗接管的執行仍會多排一條重試 alarm | 排重試前核對 `ownsRun`；CLAUDE.md 註明這是唯一例外與理由 | 讀碼核對（與 #1 同一段） |
+| 10 | `picker.js` `consumeGroupNameResult` | 兄弟函式 `consumeDraftFinishRequest` 有 `sender.tab` 守衛、它沒有；且監聽回傳 async 函式的 Promise，會被當成 sendMessage 回覆搶先 background 的 ACK（檔內註解本來就警告這件事） | 補同一個守衛；監聽改 `void …; return undefined` | 既有 `af22_d1a`／`af24_name_pick_exclusive` 綠 |
+| 11 | 多處 | 孤兒註解兩處、`isMultiExecutionTask` 多餘別名、popup 暫停判準兩份 | 清掉；`anyTaskActive` 一份 | — |
+
+**走查確認通過（已實測、不修）**：數字鍵在非表格上有說明、一般輸入框內按鍵不攔、群組 Ctrl+A 超量拒絕、面板依序 render A→B 再存 B 不殘留、編輯中任務被刪不重建、站台面板判不出分頁按儲存零寫入、無 schemaVersion＋明文密碼升級、舊格式 alarm 清掉、multi 被接管只剩 interrupted、同站台合併通知、重試成功後再失敗會再通知。
+
+**體檢發現但不修（理由）**：把 sortable／月曆／dnd 併成一個拖曳器（語意不同，E2 已否決）；兩個 load-error 橫幅抽共用（只有兩處）；路由表每個處理函式帶 `ctx` 參數（風格）；`POS_NAME` 與 `POS_TEXT` 兩張表（兩種說法）；「與另一天比較」同一分鐘排程與手動紀錄互蓋（本輪之前就是如此，進 BACKLOG）；登入失敗前兩次不通知（C2 設計修正已載明）。
+
+**體檢後驗證**：全量 3436 綠（體檢前 3427，+9 條迴歸測試）；煙霧 15 套 PASS（Edge 本機未裝略過）；三處關鍵修正（multi 重試規則、shadow 輸入框守門、過期橫幅）突變皆紅。
 
 ## 7. 規劃逐條核對（2026-10-22，實作輪收官後）
 

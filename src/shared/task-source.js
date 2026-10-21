@@ -60,6 +60,16 @@ function legacyField(task, field, specField, index) {
   }
 }
 
+// 「這是不是 multi 任務」只有這一份（task.mode 或 spec.mode 任一為 multi）
+export function isMultiTask(task) {
+  return task?.mode === 'multi' || task?.spec?.mode === 'multi'
+}
+
+// 由本機執行期維護、Picker 表單管不到的任務欄位（popup 啟停、fetcher 的找不到計數與前景建議、預檢提前量）。
+// 編輯存檔以 storage 當下的值為準（picker.js）、匯入檔沒帶就沿用本機（settings-io.js）——
+// 兩處共用這一份，不得各抄一張（AF-24 之前兩份已漂移：匯入那份漏了 precheckLeadMinutes）
+export const LOCAL_TASK_FIELDS = Object.freeze(['enabled', 'foreground', 'suggestForeground', 'notFoundStreak', 'precheckLeadMinutes'])
+
 /**
  * 讀取任務的擷取來源為統一的 field 陣列。
  *
@@ -67,11 +77,6 @@ function legacyField(task, field, specField, index) {
  * 則補上共用的 task.locator/frame，並把 cell/block 包成單目標 spec。
  * 回傳值與輸入完全獨立，呼叫端可安全修改回傳值。
  */
-// 「這是不是 multi 任務」只有這一份（task.mode 或 spec.mode 任一為 multi）
-export function isMultiTask(task) {
-  return task?.mode === 'multi' || task?.spec?.mode === 'multi'
-}
-
 export function normalizeTaskSources(task) {
   if (!isPlainObject(task)) return []
 
@@ -102,8 +107,6 @@ export function normalizeTaskSources(task) {
   // 單值任務以空 key 表示「父序列本身」，以維持既有 task.id 序列 id。
   return [legacyField(task, { key: '', name: task.name || task.id || '' }, task.spec, 0)]
 }
-
-// 便於不需要記住模組內部命名的呼叫端；兩者是同一個純函式契約。
 
 // 執行身分只包含會改變擷取結果的規格；名稱與欄位顯示順序不在其中。
 // 這份 canonical snapshot 供 background 的 publish gate 與 storage 的條件寫入共用。

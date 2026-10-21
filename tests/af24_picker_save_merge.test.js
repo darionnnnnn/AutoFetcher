@@ -86,3 +86,14 @@ test('批次路徑（沒有 ctx.task、帶 taskId）存到已存在的任務：r
   assert.equal(n.name, '全新')
   assert.equal(n.enabled, true)
 })
+
+test('體檢：storage 的「任務被改過」錯誤帶 code，Picker 靠 code 重試一次而不是比對英文訊息', async () => {
+  const { st } = await setup(stored())
+  await assert.rejects(
+    () => st.updateTasks(['edit-1'], async t => { await st.saveTask({ ...t, name: '別人改的' }); return { ...t, name: '我的' } }),
+    err => err.code === st.TASK_CHANGED_ERROR
+  )
+  const src = readFileSync(new URL('../src/ui/picker/picker.js', import.meta.url), 'utf8')
+  assert.equal(/changed while updating/.test(src), false, 'UI 不得比對 storage 的錯誤訊息文字')
+  assert.ok(src.includes('TASK_CHANGED_ERROR'))
+})

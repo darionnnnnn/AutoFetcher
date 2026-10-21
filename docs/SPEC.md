@@ -802,6 +802,8 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
   錯過清單只把最近 7 天內的槽算進去;既有項目不會自動過期(見 BACKLOG)。
 - 重試:所有失敗路徑(單值與 multi、離線、逾時、例外、找不到、未知錯誤)都經 fetcher 的單一失敗收尾入口 `finishFailure`;
   一格最多跑 `MAX_ATTEMPTS`＝3 次(第一次＋2 分鐘後＋10 分鐘後;離線一律 10 分鐘後),仍失敗才寫失敗紀錄。手動抓取不重試、留紀錄不寫帳本。
+  multi 的逐值擷取:**每個值都失敗、且狀態都可重試**(找不到、逾時、未知錯誤)→ 整個任務走同一套有限重試(`retryWholeTask`,用盡時寫真實的逐值結果);
+  有任何一個值成功就先完整寫下部分結果、不重試;`parse_error` 這類不重試的狀態不觸發。
   `login_failed` 與 `parse_error` **不重試**(重試幾次結果都一樣)。
 - 同一時刻多任務同站台 → 串行,共用分頁。**沿用前依前置動作決定要不要重載**:上一個任務跑過前置動作(**中途失敗也算**,頁面可能已被改動)、
   或這個任務自己有前置動作 → 先重載(網址完全相同 `tabs.reload`,否則導覽到任務網址);兩者皆否且是同一頁 → 直接沿用。
@@ -942,7 +944,7 @@ content 端與 background 端都以「有沒有值失敗」判斷,只看整體 `
 - 設定匯出/匯入(換機):
   - 匯出 `autofetcher-settings.json`:`tasks`、`sites`(密碼**預設不含**;勾「含密碼」時以匯出時輸入的密語 AES-GCM 加密,見 §6)、
     Report 版面(§8)。不含 `records`(歷史另有日檔)。
-  - 匯入**先驗後寫**:`previewSettingsImport` 零寫入地解析、解密、驗證並回摘要(新增／覆寫／略過與原因／要重輸密碼的站台／被拒的設定與原因),設定頁以對話框顯示,使用者確認後 `applySettingsImport` 才寫;任一步失敗把已寫的鍵還原成快照。同 `taskId` 覆蓋(匯入檔沒帶的 `enabled`／`foreground`／`suggestForeground`／`notFoundStreak`／`createdAt` 沿用本機)、新 id 新增;成功後重建 alarms、重畫設定頁並套用主題。密語錯誤說「密語錯誤或加密資料已損毀」。
+  - 匯入**先驗後寫**:`previewSettingsImport` 零寫入地解析、解密、驗證並回摘要(新增／覆寫／略過與原因／要重輸密碼的站台／被拒的設定與原因),設定頁以對話框顯示,使用者確認後 `applySettingsImport` 才寫;任一步失敗把已寫的鍵還原成快照。同 `taskId` 覆蓋(匯入檔沒帶的本機維護欄位——`shared/task-source.js` 的 `LOCAL_TASK_FIELDS`:`enabled`／`foreground`／`suggestForeground`／`notFoundStreak`／`precheckLeadMinutes`——與 `createdAt` 沿用本機)、新 id 新增;成功後重建 alarms、重畫設定頁並套用主題。密語錯誤說「密語錯誤或加密資料已損毀」。
     - 任務網址只收 `http`／`https`(**匯入不收 `file:`**);`settings` 走白名單與數值域(`NUMERIC_SETTING_RANGES`,與設定頁欄位共用一份);外來 `passwordEnc` 一律丟棄,`secrets` 解得開才以本機金鑰重新加密,設定檔沒帶密碼但本機已有該站台密碼時沿用;匯入檔 `schemaVersion` 比程式新 → 拒絕。
   - 歷史匯入:Report 頁可選多個日檔 JSON 併回 `records`(同 taskId + capturedAt 去重,既有紀錄不被覆蓋);
     也接受打包格式 `{days: [...]}`;回報 `{added, skipped, invalid?}`;任一日檔形狀不合則整批不寫入。逐筆驗 `taskId`(保留分隔字元至多一個)、`capturedAt`(可解析)、`status`(帶了就要是已知狀態;沒有 `status` 的照收),不合格計入 skipped 並列出前 5 筆原因。
