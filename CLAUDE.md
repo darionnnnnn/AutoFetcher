@@ -52,14 +52,18 @@ src/
                            schedule-math(排程數學,background 與 Picker 共用)
                            describe(目標／排程／去處的白話句,全站唯一一份)
                            field-match(「這個 pick 是不是既有那個值」:重選與換目標共用)
-docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
+                           task-source(舊單值／舊 block／multi 正規化成每值一個 source+spec,純函式不回寫)
+                           pick-draft(群組選取草稿 `pickDraft:<tabId>` 的鎖內讀寫)
+                           pick-protocol(content／面板／background 之間的草稿訊息契約)
+                           route(選取期間的網址路由核對,只給選取用)
+docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/(歷史,按需讀)、evidence/(輪次驗收原始證據,勿全掃)
 ```
 
 
 - **唯一排程入口**:background 的 alarm handler;content script 不得自己排程。
 - **唯一寫入入口**:`shared/storage`;JSON 匯出也從這裡走。`chrome.storage.` 只准出現在 `shared/storage.js`、`shared/diag.js`、`shared/crypto.js`、`background/fetch-tab.js`(`za1` 守)。
 - **讀-改-寫一律在那個鍵的鎖內**(AF-21,`shared/lock.js`):`withLock(lockNameOf(key))`,**鎖不可重入、不得巢狀**——鎖內只呼叫 `*Unlocked` 內部版本、一次 `set` 只寫一個鍵;需要通知或寫 diag 的放到鎖外。新增一個讀-改-寫就用 storage 的 `update*`／`mutateKey`,不要自己 get 再 set。**跨兩次呼叫的「讀任務 → 改 → 存」一律 `updateTasks(ids, mutator)`**(fetcher 回寫 `notFoundStreak`、任務頁整批啟停都曾用舊副本蓋掉別人剛寫的欄位)。
-- **紀錄鍵是 `rec2:<日期>:<時>`、帳本是 `runs:<日期>`**(schemaVersion 3):解析紀錄鍵只在 `storage.js`;任何直接讀 storage 的腳本(煙霧測試曾讀舊的 `rec:<日期>` 而誤報「沒有紀錄」)都要認兩種前綴。抓取路徑的範圍讀不得經 `listDates`／`get(null)`。
+- **紀錄鍵是 `rec2:<日期>:<時>`、帳本是 `runs:<日期>`**(schemaVersion 4):解析紀錄鍵只在 `storage.js`;任何直接讀 storage 的腳本(煙霧測試曾讀舊的 `rec:<日期>` 而誤報「沒有紀錄」)都要認兩種前綴。抓取路徑的範圍讀不得經 `listDates`／`get(null)`。
 - **排程槽一律取 `alarm.scheduledTime`**(daily 也是);遲到由呼叫端以 `isLateStart` 算好傳 `markLate`,`runTask` 自己不看時鐘(看了會讓所有直接呼叫 runTask 的路徑被時鐘影響)。
 - **`session.runState` 是「到點但還沒做完」的唯一登記**:進佇列前登記、結束(含例外)移除;復原 `recoverRunState` 先在鎖內**拿走**才處理(啟動與看門狗會同時跑)。`interrupted` 紀錄不寫帳本(寫了補抓會被冪等擋掉)。
 - **不要把會掃整個 storage 的操作(`get(null)`)放在抓取寫入路徑上**:紀錄會累積到 MB 級;這類清理放看門狗並自帶一天一次的守衛。
@@ -109,7 +113,9 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/
 ## 慣例
 
 - 語言:文件與 UI 繁體中文;程式碼識別字英文;無框架、原生 JS(ES module)+ 少量 CSS。
-- 測試:`npm test`（Node 內建 test runner + jsdom）；最新數字與限制見 `docs/archive/AF-23-ACCEPTANCE.md`。維持有效覆蓋，不以測試數量取代行為驗證。
+- 測試:`npm test`（Node 內建 test runner + jsdom）；維持有效覆蓋，不以測試數量取代行為驗證。
+  **測試檔命名**:前綴是輪次／段落代號——`a4`、`m2`、`za1`、`zh1` 這類短前綴多是早期建立、至今仍有效的守門(慣例、鎖、色碼…),
+  `af22_`／`af23_` 是該輪新增。**新測試一律 `af<輪次>_<主題>.test.js`**;守門類規則補進原本那個守門檔,不另開。
   真實瀏覽器端到端:`./run_smoke.sh`。
 - Bug 驗收先重現錯誤再驗修正；關鍵守門有疑似假綠時做定點突變確認，不為每次文件整理重跑大型測試。
   併回前另做兩份獨立終檢(程式碼 + 文件)。

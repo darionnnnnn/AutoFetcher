@@ -6,3 +6,5 @@ dist/
 .browsers/
 publish/
 .local-backups/
+# Finder 複製殘留(「檔名 2.js」)
+* [0-9].*

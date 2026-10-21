@@ -802,7 +802,7 @@ function applyRepick(task, picks) {
   if (picks.length === 0) return []
   const hadFields = Array.isArray(task.fields) && task.fields.length > 0
   if (!hadFields && picks.length === 1) {
-    // 單值任務只換定位與規格，聚合方式沿用
+    // 單值任務只換定位與規格，合計方式沿用
     const spec = pickSpecOf(picks[0])
     if (!spec) return []
     task.mode = 'block'
