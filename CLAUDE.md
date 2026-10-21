@@ -108,7 +108,7 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/(歷史
 
 - 改任何行為 → `docs/SPEC.md`(現況規格,§編號會被程式碼註解引用,勿拆檔)
 - 想做但刻意沒做 → `docs/BACKLOG.md`(每項附觸發條件)
-- 本輪規劃 → `docs/AF-<N>-PLAN.md`;完工搬 `docs/archive/`(按需讀,勿全掃)。AF-1~AF-23 已歸檔；AF-23 的驗收／效能索引亦位於 archive，原始證據在 `docs/evidence/af23/`。
+- 本輪規劃 → `docs/AF-<N>-PLAN.md`;完工搬 `docs/archive/`(按需讀,勿全掃)。AF-1~AF-24 已歸檔；AF-23 的驗收／效能索引亦位於 archive，原始證據在 `docs/evidence/af23/`。
 
 ## 慣例
 
