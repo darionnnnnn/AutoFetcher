@@ -1,6 +1,6 @@
 # AF-24 第 24 輪規劃：體驗、重構、除錯、文件同步
 
-> 狀態：**規劃完成，待使用者確認後開分支實作**
+> 狀態：**實作輪完成（分支 `feature/af-24` 已推），待收尾（換模型體檢、併 dev、PLAN 歸檔）**
 > 基準：dev@eabe46f（`npm test` 3323 綠、約 30 秒；manifest／package 0.22.0，schema 4）
 > 來源：使用者要求的四個方向——(1) 使用者體驗 (2) 不過度設計下符合 SOLID／KISS／DRY (3) 盤點並清 bug (4) 文件與程式碼同步。
 > 日期：2026-10-21 稽核與草案／2026-10-22 定案與複檢（Asia/Taipei）
@@ -362,7 +362,27 @@
 | F | Claude | ff3e5a6 | 全量 3416 綠；popup 燈號重算突變紅 | 教學頁守門 `y5` 抓到「全部暫停 / 恢復」改名後沒同步，補上 |
 | G | sonnet medium 子代理（路由表）＋ Claude（死碼） | 53161ce | 新舊 main.js 去縮排逐行比對只差分派結構；全量 3416 綠；煙霧 15 套 PASS | 見設計修正 G |
 
+| 終檢 | 程式碼（sonnet medium）＋文件（sonnet medium）兩份獨立審查；Claude 逐條核實 | 6a198b4 | 全量 3424 綠 | 見下方「終檢處理」 |
+| H | sonnet medium 子代理（§2 拆節、流水帳改寫）＋ Claude（本輪行為條文） | edc6195 | SPEC 反引號識別字前後比對零遺失；`AF-` 133→1、「以前」14→3 | 發現 `work/`（煙霧輸出）被先前兩個 commit 的 `git add -A` 帶進版控，移出並加進 `.gitignore`；之後一律明列路徑 commit |
+
+### 終檢處理
+
+| 來源 | 發現 | 處置 |
+|---|---|---|
+| 程式碼 #1 | `parseNumber` 新增前導小數點後「No.12」變 0.12（本輪引入的回歸，原測試反例沒涵蓋） | 修：前一字元不是英數或句點才成立；補 5 條反例 |
+| 程式碼 #2 | sortable 取消時若清單已被重畫，會把舊列塞回去 | 修：舊元素不在容器裡就不還原；補測試 |
+| 程式碼 #3 | 欄位設定拖完放開後 label 的 click 切換勾選框（沿用的舊缺陷） | 修：拖過之後吃掉緊接的 click；補測試 |
+| 程式碼 #4 | 被接管的舊執行收尾會刪掉同格的新登記 | 修：`dropOwnRunState` 只刪自己那一份；補測試、突變紅 |
+| 程式碼 #5 | 被接管的 not_found 執行仍累加 `notFoundStreak` | 修：先核對擁有權 |
+| 程式碼 #9 | 群組 Shift+方向鍵加值後沒更新 Shift 起點 | 修；補測試 |
+| 程式碼 #10 | 面板端完成請求只靠 `tabId` 判斷，網頁自己塞 `tabId` 也會被接受 | 修：`sender.tab` 是網頁就不理；補斷言 |
+| 程式碼 #6/#7/#8、#10 後半 | popup 沒接 `watchTheme`；離線通知每站台一則；批次重試期間任務被刪會重建；`ENTER_PICK` 拆取名不通知面板 | 接受：popup 短命；C2 設計修正已說明；情境極窄；`ENTER_PICK` 本來就由面板發起 |
+| 程式碼 測試 A/B | `af24_unit_of_axis`、`af24_single_source` 只比對固定字面，換順序或引號就繞過 | 改成不論順序、引號、空白都抓得到；突變（反序寫法、雙引號寫法）皆紅 |
+| 文件 | CLAUDE.md 的 `CONTENT_ALLOWED` 清單與 `attempt < 3` 規則過時；SPEC 的 `notifyFailure` 用途過時；BACKLOG 三條已完成、四條前提已變 | 全部修；BACKLOG 補「群組鍵盤移除單一值」 |
+
 ### 設計修正（實作中）
+
+- **規劃驗收數字沒達成、刻意不追的**：D6「`applyPickedMarks(pickedTableEl)` 直接呼叫 ≤ 2」——完全相同的五行樣式 11 處已收成 `refreshMarks()`，其餘呼叫是不同形狀（只標某一張表、或 if／else if 鏈），硬收會改語意；D6 的 `cellsOnAxis` 沒做（進 BACKLOG）；G「main.js < 1200 行」——不搬領域檔之後不成立（路由表後 `handleMessage` 只剩 25 行）；C5「`Array.isArray(task.fields)` 在 background 為 0」——剩下的是讀欄位清單，不是判斷 multi；F4 popup 不接 `watchTheme`（短命頁）。
 
 - **E2**：不把三處拖曳搬進 `dnd.js`。它是「來源→投放目標」協定（幽靈元素、命中判定、儀表板重畫時全域 `resetDnd` 會清掉所有目標），清單就地排序與月曆拉範圍都不是投放；硬套會過度設計，還可能被儀表板重畫清掉任務頁的目標。改為新增 `ui/report/sortable.js`（任務列、欄位設定兩處共用，順便拿掉欄位設定的 `elementFromPoint`），月曆就地修收尾。作業 A 寫進 BACKLOG 的「已搬進 dnd.js」一行已更正。
 - **E5**：頁籤只做鍵盤可達（tablist、←／→、焦點跟隨），名稱輸入框維持常駐、不改成改名鈕（改動面大、牽動多條既有測試，收益只是外觀一致）。稽核 P31 對月曆的部分不成立：月曆日期格內本來就是可聚焦的按鈕，教學頁的說法是對的。
@@ -387,4 +407,7 @@
 
 ## 6. 體檢交接
 
-（實作輪收官時填：全量測試數、全綠與否、與基線 3323 的差、煙霧測試結果。）
+- **全量單元測試**：3424 條全綠（基線 dev@eabe46f 3323 條，+101；新增 `tests/af24_*.test.js` 23 檔與煙霧腳本 `af24_keyboard_pick.mjs`，另改寫既有測試 17 檔，皆為刻意的行為變更——Tab 改數字鍵、站台儲存鈕、CONTENT_ALLOWED、TSV 讀法、舊詞保留清單——每處在對應 commit 說明）。
+- **煙霧測試**：在 6a198b4 上 `./run_smoke.sh` 15 套全部 PASS（exit 0，含新增的 `af24_keyboard_pick`）；Edge 本機未安裝而略過。
+- **版本**：0.23.0（manifest 與 package.json 一致），schema 維持 4。
+- **給收尾體檢的重點**：fetcher 失敗收尾與接管擁有權（C2／C3／終檢 #4）、選取模式群組鍵盤（D1）、sortable 與月曆（E2）、路由表（G，純搬移已逐行比對）。委派給 sonnet 的三段（D-d、G1a、H）都經 Claude 獨立驗收，但沒有換模型體檢過。
