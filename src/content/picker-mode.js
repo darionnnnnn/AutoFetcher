@@ -1769,6 +1769,8 @@ function updateToolbar() {
       btn.style.cursor = 'pointer'
     }
 
+    // 輔助科技要知道哪一段是目前的模式（顏色以外的訊號）
+    btn.setAttribute('aria-pressed', key === pickMode ? 'true' : 'false')
     if (key === pickMode) {
       btn.setAttribute('data-af-active', '')
       btn.style.backgroundColor = COLORS.primary
@@ -4283,26 +4285,14 @@ function onKeyDown(event) {
         handleTableMouseMove(lastHover)
       }
     }
-  } else if (event.key === 'Tab') {
-    if (currentTargetEl && isTableMode(currentTargetEl)) {
-      event.preventDefault()
-      const modes = ['cell', 'col', 'colEach', 'row']
-      const availableModes = isMultiPickPurpose() ? modes : ['cell']
-      if (availableModes.length > 1) {
-        const curIdx = availableModes.indexOf(pickMode)
-        const nextIdx = (curIdx + 1) % availableModes.length
-        pickMode = availableModes[nextIdx]
-        cellIndex = pickMode === 'row' ? rowIndex : colIndex
-        updateToolbar()
-        markCells(currentCellEl, currentDataRows, currentRowEl, pickMode, colIndex, currentInner)
-        if (selectedList.length > 0 && pickedTableEl) {
-          applyPickedMarks(pickedTableEl)
-        } else {
-          applyPickedMarks(currentTargetEl)
-        }
-        updatePanel(panelEl, currentTargetEl)
-      }
-    }
+  } else if (/^[1-4]$/.test(event.key) && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    // 數字鍵 1～4 等同點工具列的第 N 段（停用的段一樣會說明原因、整欄／整列意圖一樣會記住）。
+    // Tab 不再拿來切模式：它要留給瀏覽器移動焦點，鍵盤使用者才走得到「完成／取消」（AF-24）
+    const def = TOOLS_DEF[Number(event.key) - 1]
+    const btn = def && toolbarEl ? toolbarEl.querySelector(`[data-af-tool="${def.key}"]`) : null
+    if (!btn) return
+    event.preventDefault()
+    btn.click()
   }
 }
 
@@ -5405,7 +5395,13 @@ export function enterPickMode(opts) {
     const btn = document.createElement('button')
     btn.type = 'button'
     btn.setAttribute('data-af-tool', def.key)
-    btn.textContent = def.label
+    // 數字是鍵盤快捷鍵提示（1～4 對應這四段）；螢幕閱讀器改讀 aria-keyshortcuts
+    const keyHint = document.createElement('span')
+    keyHint.setAttribute('aria-hidden', 'true')
+    keyHint.textContent = `${TOOLS_DEF.indexOf(def) + 1} `
+    keyHint.style.opacity = '0.7'
+    btn.append(keyHint, def.label)
+    btn.setAttribute('aria-keyshortcuts', String(TOOLS_DEF.indexOf(def) + 1))
     if (def.title) btn.setAttribute('title', def.title)
     btn.style.padding = '4px 10px'
     btn.style.fontSize = '12px'
@@ -5443,6 +5439,8 @@ export function enterPickMode(opts) {
   panelEl.style.flexDirection = 'column'
   panelBodyEl = document.createElement('div')
   panelBodyEl.setAttribute('data-af-panel-body', '')
+  // 面板說明會隨操作改變（選了幾個值、點不動的原因）：讓螢幕閱讀器讀得到
+  panelBodyEl.setAttribute('aria-live', 'polite')
   panelBodyEl.style.whiteSpace = 'pre-line'
   panelBodyEl.style.flex = '1 1 auto'
   panelBodyEl.style.minHeight = '0'

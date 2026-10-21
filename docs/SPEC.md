@@ -263,7 +263,8 @@
     **滑鼠正在面板上、或面板裡有焦點時不動**(移動會讓按到一半的按鈕從指尖跑掉)。
   - **選取單位由畫面右上角的工具列決定**(`pickMode`,overlay 內、`pointer-events: auto`):
     四段「單格 / 整欄→一個值 / 整欄→每格 / 整列→一個值」(AF-18 加第三段),屬性 `data-af-tool="cell|col|colEach|row"`,
-    各帶 `title`,目前那一段帶 `data-af-active`,**預設是單格**;容器 `flex-wrap: wrap`,窄視窗換行。`Tab` 在四段之間循環(停用的跳過)。
+    各帶 `title`,目前那一段帶 `data-af-active`,**預設是單格**;容器 `flex-wrap: wrap`,窄視窗換行。**數字鍵 `1`～`4` 等同點第 N 段**(停用的段一樣說明原因、記住整欄／整列意圖;按鈕前綴顯示數字並帶 `aria-keyshortcuts`);
+    `Ctrl`／`Alt`／`⌘` 組合鍵不攔。**`Tab` 不攔**,留給瀏覽器在頁面與面板的「完成／取消」之間移動焦點。
     對外的 `currentAxis()` 維持相容:非表格回 `null`、`row` 回 `'row'`、`cell`／`col`／`colEach` 都回 `'col'`。
     **「整欄→每格」與右鍵「這一欄：每格各一個值」共用同一份展開**(`resolveColEachCells`／`expandColEach`):
     點資料格或表頭列的格＝**整組切換**(該欄解析得到的每一格全都已選 → 整組移除並存快照;否則補上缺的、不重複、受上限截斷);

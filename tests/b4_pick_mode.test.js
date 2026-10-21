@@ -230,7 +230,7 @@ test('第二個資料列的索引是 1(列索引與欄索引一樣 0-based)', as
   const { doc, pm } = await setup()
   pm.enterPickMode({ purpose: 'task', initialTarget: $(doc, '#t') })
   move(doc, $(doc, '#c22'))
-  key(doc, 'Tab')
+  key(doc, '2') // 整欄（AF-24：數字鍵取代 Tab）
   assert.equal(pm.currentCellIndex(), 1)
 })
 
@@ -267,19 +267,19 @@ test('換到另一欄時,上一欄的標示要先清掉', async () => {
   assert.equal(pm.currentCellIndex(), 0)
 })
 
-test('Tab 在單格→整欄→整欄每格→整列之間循環（AF-18 四段）', async () => {
+test('數字鍵 1～4 直接切到工具列對應的那一段（AF-24 取代 Tab 循環）', async () => {
   const { doc, pm } = await setup()
   pm.enterPickMode({ purpose: 'task', initialTarget: $(doc, '#t') })
   move(doc, $(doc, '#c12'))
-  key(doc, 'Tab')
-  assert.equal(tool(doc, 'col').hasAttribute('data-af-active'), true, '第一次 Tab 到整欄')
-  key(doc, 'Tab')
-  assert.equal(tool(doc, 'colEach').hasAttribute('data-af-active'), true, '第二次 Tab 到整欄每格')
-  key(doc, 'Tab')
+  key(doc, '2')
+  assert.equal(tool(doc, 'col').hasAttribute('data-af-active'), true, '2 是整欄')
+  key(doc, '3')
+  assert.equal(tool(doc, 'colEach').hasAttribute('data-af-active'), true, '3 是整欄每格')
+  key(doc, '4')
   assert.equal(pm.currentAxis(), 'row')
   assert.equal(pm.currentCellIndex(), 0, '第一個資料列的索引是 0,與欄索引一樣是 0-based')
-  key(doc, 'Tab')
-  assert.equal(tool(doc, 'cell').hasAttribute('data-af-active'), true, '再一次回到單格')
+  key(doc, '1')
+  assert.equal(tool(doc, 'cell').hasAttribute('data-af-active'), true, '1 回到單格')
 })
 
 test('在表格格子上雙擊 → 送出 blockInfo 的軸、索引與表頭文字', async () => {

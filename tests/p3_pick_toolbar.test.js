@@ -72,19 +72,19 @@ test('C-1 整列模式標整列', async () => {
 
 // ---------- C-2 切換不清空 ----------
 
-test('C-2 Tab 在四段之間循環（AF-18 工具列四段）', async () => {
+test('C-2 數字鍵 1～4 對應工具列四段（AF-24 取代 Tab 循環）', async () => {
   const { doc, pm, win } = await enter()
   move(win, doc.getElementById('a1'))
   const activeKey = () => tools(doc).find(el => el.hasAttribute('data-af-active'))?.getAttribute('data-af-tool')
   assert.equal(activeKey(), 'cell')
-  key(doc, win, 'Tab')
+  key(doc, win, '2')
   assert.equal(activeKey(), 'col')
-  key(doc, win, 'Tab')
+  key(doc, win, '3')
   assert.equal(activeKey(), 'colEach')
-  key(doc, win, 'Tab')
+  key(doc, win, '4')
   assert.equal(activeKey(), 'row')
-  key(doc, win, 'Tab')
-  assert.equal(activeKey(), 'cell', '循環回單格')
+  key(doc, win, '1')
+  assert.equal(activeKey(), 'cell', '回單格')
   pm.exitPickMode()
 })
 
