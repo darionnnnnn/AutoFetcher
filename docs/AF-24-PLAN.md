@@ -411,3 +411,29 @@
 - **煙霧測試**：在 6a198b4 上 `./run_smoke.sh` 15 套全部 PASS（exit 0，含新增的 `af24_keyboard_pick`）；Edge 本機未安裝而略過。
 - **版本**：0.23.0（manifest 與 package.json 一致），schema 維持 4。
 - **給收尾體檢的重點**：fetcher 失敗收尾與接管擁有權（C2／C3／終檢 #4）、選取模式群組鍵盤（D1）、sortable 與月曆（E2）、路由表（G，純搬移已逐行比對）。委派給 sonnet 的三段（D-d、G1a、H）都經 Claude 獨立驗收，但沒有換模型體檢過。
+
+## 7. 規劃逐條核對（2026-10-22，實作輪收官後）
+
+依 §2 每個作業的定案逐條對照程式碼。能機器判定的驗收寫成檢查腳本跑過一次（38 項），其餘人工讀碼核對。結果：
+
+| 作業 | 結果 | 說明 |
+|---|---|---|
+| A1–A7 | ✅ | 殘留檔、`.gitignore`、CLAUDE.md 結構圖、README、BACKLOG、SPEC §5、版本 0.23.0 皆在 |
+| B1–B7 | ✅ | B5 的提示改成回填日期、B7 擴及 Picker 前置動作（見設計修正） |
+| C1–C5 | ✅ | C1 改冪等合併、C2 改走 `notifySiteFailure`、C4 的徽章項不成立（見設計修正） |
+| D1–D6 | ✅ | D1 鍵盤移除改說明出口、D6 不做 `rerender`／`resetState`／`cellsOnAxis`（見設計修正與 BACKLOG） |
+| E1–E5 | ✅ | E2 改用 `sortable.js` 不搬 `dnd.js`、E5 名稱輸入框保留（見設計修正） |
+| F1–F7 | ✅ | F4 popup 不接 `watchTheme`、F7 收進 `describe.js`（見設計修正） |
+| G1–G4 | ✅ | 只做路由表與死碼；不搬領域檔、不搬 `form.js`（見設計修正與 BACKLOG） |
+| H1–H3 | ✅ | §2 拆四子節、`AF-` 1 處、「以前」3 處、本輪行為條文已寫入 |
+
+**這次核對補上的缺口**（規劃有寫、先前漏做）：
+
+- **F3**：驗收要求 `src/` 裡沒有寫死的 `chrome-extension://autofetcher`。popup 那處已移除，但 `background/main.js` 的 `extensionDraftSender` 還留著同型的退路網址；改成直接用 `chrome.runtime.getURL`（`isFromContentScript` 本來就無條件依賴它）。
+- **B3**：驗收寫「批次路徑同樣斷言」，先前只測了單任務。把共用的存檔核心 `saveTaskFromForm` export，用批次的呼叫形狀（沒有 `ctx.task`、帶 `taskId`）補測：已存在的任務保留最新 runtime 欄位、不存在的照常新建。
+- **C2 (d)**：同站台三個任務最後一次都離線時合併成一則通知，先前沒有測試；補上（同一個通知 id、名單三個任務）。
+- **D3**：CLAUDE.md 規定新的跨模組訊息要補進 `tests/m2_chain.test.js`；補了「頁面 Ctrl/⌘＋Enter → background 核對 → 面板按完成選取」的整條鏈結測試（真的選取模式發訊、真的 background 轉發、真的面板消費）。
+
+**無法以測試觀察、記錄在案**：D6 的「exit 補清 `draftRangeAnchor`」——每次 `enterPickMode` 也會重設它，exit 後沒有任何讀取路徑看得到差異，只能讀碼確認（`picker-mode.js` exit 尾段）。
+
+**待辦**：無。規劃條目全部實作或已在設計修正中說明不做與理由；剩下的後續工作只在 BACKLOG（附觸發條件）。全量 3427 綠。

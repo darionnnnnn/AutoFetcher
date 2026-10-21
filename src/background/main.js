@@ -1151,11 +1151,9 @@ function draftValueOf(payload, pick, sender, msg, index = 0) {
   return value
 }
 
+// 草稿操作以「擴充功能頁」的身分送出（與 isFromContentScript 同一個判準：網址在本擴充功能底下）
 async function extensionDraftSender(tabId) {
-  let url = 'chrome-extension://autofetcher/ui/picker/picker.html'
-  try {
-    if (typeof chrome?.runtime?.getURL === 'function') url = await chrome.runtime.getURL('ui/picker/picker.html')
-  } catch {}
+  const url = await chrome.runtime.getURL('ui/picker/picker.html')
   return { url, tab: { id: tabId }, frameId: 0 }
 }
 

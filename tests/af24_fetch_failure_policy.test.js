@@ -97,3 +97,15 @@ test('失敗路徑都經同一個入口：fetcher 不再有手寫的 attempt < 3
   assert.equal(/attempt < 3/.test(src), false)
   assert.ok((src.match(/scheduleRetry\(/g) || []).length <= 3, '定義＋入口＋multi 整組 not_found 一處')
 })
+
+test('同一站台三個任務最後一次都離線：合併成一則通知（同一個通知 id，名單三個任務）', async () => {
+  const { c, st, fe } = await fresh()
+  globalThis.navigator.onLine = false
+  const tasks = ['o1', 'o2', 'o3'].map(id => single(id))
+  await st.saveTasks(tasks)
+  for (const t of tasks) await fe.runTask(t, { slot: '2026-10-20T09:00', attempt: 3, ...FAST })
+  const ids = new Set(notes(c).map(x => x.args[0]))
+  assert.deepEqual([...ids], ['fail:https://a.test'], '同站台只有一個通知 id（後到的更新同一則）')
+  const last = notes(c).at(-1).args[1]
+  assert.match(last.message, /3 個任務/)
+})

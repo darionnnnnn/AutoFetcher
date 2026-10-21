@@ -3235,7 +3235,7 @@ function showLoginSettingsAction(note, url) {
  * @param {Object} ctx 目前 render 的 ctx
  * @returns {Promise<Object>} 存好的 task
  */
-async function saveTaskFromForm(values, ctx, { taskId, preparedTask } = {}) {
+export async function saveTaskFromForm(values, ctx, { taskId, preparedTask } = {}) {
   const task = preparedTask || taskFromForm(values, ctx, taskId)
   const editing = Boolean(ctx?.task?.id) && ctx.task.id === task.id
   // 已在 storage 的任務走 updateTasks：鎖內拿最新副本，表單管不到的欄位以「儲存當下」為準

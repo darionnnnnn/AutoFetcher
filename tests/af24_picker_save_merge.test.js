@@ -70,3 +70,19 @@ test('編輯中的任務已被刪除：不得重新建立，畫面說明原因',
   assert.equal(await st.getTask('edit-1'), null, '已刪除的任務不得被編輯面板復活')
   assert.match(doc.getElementById('errors')?.textContent || doc.body.textContent, /已被刪除/)
 })
+
+test('批次路徑（沒有 ctx.task、帶 taskId）存到已存在的任務：runtime 欄位同樣取最新值；任務不存在就照常新建', async () => {
+  const { st, pk } = await setup(stored({ id: 'batch-1', enabled: false, notFoundStreak: 4, order: 9 }))
+  const values = { ...pk.getFormData(), name: '批次改名' }
+  const saved = await pk.saveTaskFromForm(values, { url: 'https://a.test/p', locator: LOCATOR }, { taskId: 'batch-1' })
+  const t = await st.getTask('batch-1')
+  assert.equal(saved.id, 'batch-1')
+  assert.equal(t.name, '批次改名')
+  assert.equal(t.enabled, false, '批次路徑也不得把停用的任務改回啟用')
+  assert.equal(t.notFoundStreak, 4)
+  assert.equal(t.order, 9)
+  await pk.saveTaskFromForm({ ...values, name: '全新' }, { url: 'https://a.test/p', locator: LOCATOR }, { taskId: 'batch-new' })
+  const n = await st.getTask('batch-new')
+  assert.equal(n.name, '全新')
+  assert.equal(n.enabled, true)
+})
