@@ -93,11 +93,7 @@ const task = (over = {}) => ({
 // 保留的只剩白名單外或「只換通知／錯誤文字」檔案裡的程式註解（歷史說明，不是使用者看得到的字）。
 const OLD_TERMS = /聚合方式|合成方式|立即測試|先試抓看看/g
 const KEPT = {
-  'background/fetcher.js': 6, // 註解：失敗時保留立即測試軌跡的說明，其餘為既有診斷包與 raw 截斷層
-  'background/frames.js': 1, // 註解：立即測試核對分頁網址走 sameOriginPath
-  'background/main.js': 1, // 註解：重選時聚合方式沿用
-  'shared/aggregate.js': 2, // 註解：純函式的參數說明（檔案不在本段白名單）
-  'ui/save-guard.js': 1 // JSDoc：純文字那一條（檔案不在本段白名單）
+  // AF-24：最後幾處註解也改成現行詞彙，保留清單歸零
 }
 
 test('舊詞在 src/ 的出現數＝保留清單（其餘為 0），而且保留處都只在註解裡', () => {

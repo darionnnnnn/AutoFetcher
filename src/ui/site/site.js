@@ -45,9 +45,12 @@ function updateFieldDisplay(field) {
   }
 }
 
-function handlePickedMessage(msg) {
+function handlePickedMessage(msg, sender) {
   if (!msg || msg.type !== MSG.PICKED) return
   if (msg.cancelled === true) return
+  // 只收自己這個分頁的選取：背景轉發的帶 sourceTabId，content 直接送來的看 sender.tab
+  const fromTab = msg.sourceTabId ?? sender?.tab?.id
+  if (currentTabId === null || currentTabId === undefined || fromTab !== currentTabId) return
   if (typeof msg.purpose !== 'string' || !msg.purpose.startsWith('login-')) return
 
   const field = msg.purpose.slice('login-'.length)
@@ -429,18 +432,20 @@ export async function handleSave({ closeDelayMs = 1500 } = {}) {
   const form = readForm()
   const passwordEnc = form.password ? await encryptSecret(form.password) : existingSite.passwordEnc
 
-  // 3. 組出完整的 site 物件；使用者改好了就重新啟用、失敗計數歸零
+  // 3. 展開既有站台再覆寫表單管的欄位（匯入帶來的 loginCheck 等表單沒有的欄位不得一編輯就消失）；
+  //    使用者改好了就重新啟用、失敗計數歸零
   const site = {
+    ...(existingSite && typeof existingSite === 'object' ? existingSite : {}),
     loginUrl: form.loginUrl,
     selectors: {
       user: currentSelectors.user,
       pass: currentSelectors.pass,
       submit: currentSelectors.submit
     },
-    loginCheck: {
-      type: 'urlPrefix',
-      value: form.loginUrl
-    },
+    // 表單沒有登入頁判定的欄位：既有的照留，沒有才用登入頁網址前綴
+    loginCheck: existingSite?.loginCheck?.type && existingSite.loginCheck.type !== 'urlPrefix'
+      ? existingSite.loginCheck
+      : { type: 'urlPrefix', value: form.loginUrl },
     successCheck: {
       type: form.successType,
       value: form.successValue

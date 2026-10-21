@@ -32,7 +32,7 @@ function stableActionJson(value) {
   return JSON.stringify(value)
 }
 
-// 「立即測試」失敗時給使用者匯出的診斷包（SPEC §3）。
+// 「試抓」失敗時給使用者匯出的診斷包（SPEC §3）。
 // **只在 dryRun 走這裡**：正式抓取不組（不寫紀錄、不進 diag 環形緩衝）。
 async function buildDebug(task, tabId, loc, preActionTrace, err, page) {
   let tabUrl = ''
@@ -71,7 +71,7 @@ function sleep(ms) {
 }
 
 // 文件在抓取途中被換掉時，使用者看到的是這一句——**唯一一份**，
-// 立即測試、紀錄、任務頁、popup 都吃它。
+// 試抓、紀錄、任務頁、popup 都吃它。
 // Chrome 的原文只說了「送不到」，沒說發生什麼、也沒說能怎麼辦；原文留給診斷。
 const PAGE_GONE_MESSAGE =
   '頁面在抓取途中換頁或重新載入，來不及取值。若有前置動作，請在會換頁的那一步後面加一個「等待」動作（建議 3 秒）；也請確認目標就在換頁後的那一頁。'
@@ -585,7 +585,7 @@ async function updateHealth(taskId, healthObj, executionFingerprint) {
   return true
 }
 
-// 紀錄裡 raw 的上限（AF-21 定案 5）：只在寫紀錄這一層截，擷取端與立即測試預覽照舊回全文
+// 紀錄裡 raw 的上限（AF-21 定案 5）：只在寫紀錄這一層截，擷取端與試抓預覽照舊回全文
 const RECORD_RAW_MAX = 500
 
 // 寫紀錄前的瘦身：snippet 不進紀錄；raw 字串超過上限截斷並標 rawTruncated
@@ -936,7 +936,7 @@ export async function runTask(task, opts = {}) {
   const multiSources = normalizeTaskSources(task)
 
   // multi 沒有任何宣告值是設定錯誤，不應為了最後才發現空欄位而開分頁、登入或
-  // 寫入一筆看似抓取失敗的父紀錄。立即測試仍回傳可供 UI 顯示的明確結果，正式
+  // 寫入一筆看似抓取失敗的父紀錄。試抓仍回傳可供 UI 顯示的明確結果，正式
   // 執行則維持「不寫紀錄、不動帳本」的拒絕語意。
   if (isMulti && multiSources.length === 0) {
     return {
@@ -1033,7 +1033,7 @@ export async function runTask(task, opts = {}) {
   if (runKey) await putRunState(runKey, { state: 'queued', at: startedMs, boot: BOOT, attempt, reason })
   try {
     return await enqueueForOrigin(origin, async (queueCtx) => {
-      // 前置動作的逐步軌跡：立即測試要說得出「hover 有做、是 click 沒點到」，
+      // 前置動作的逐步軌跡：試抓要說得出「hover 有做、是 click 沒點到」，
       // 只回一句「成功」的話，使用者在調 hover 選單時完全沒有線索
       const preActionTrace = []
       // 單步上限的註明：成功的紀錄也要帶（排程抓取沒有軌跡可看）
@@ -1736,7 +1736,7 @@ export async function runTask(task, opts = {}) {
           shown = PAGE_GONE_MESSAGE
           try { await diag.log('fetch_page_gone', `group=${diagnosticLabel(task.name)} stage=fetch result=page_gone`) } catch {}
         }
-        // 立即測試失敗時也要帶軌跡：使用者最需要知道的是「hover 有做、卡在第幾步」，
+        // 試抓失敗時也要帶軌跡：使用者最需要知道的是「hover 有做、卡在第幾步」，
         // 只回一句錯誤訊息就是把軌跡丟掉
         if (dryRun) {
           if (isMulti) return multiFailureResult(task, 'error', shown)

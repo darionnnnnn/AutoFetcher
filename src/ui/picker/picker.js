@@ -1,4 +1,4 @@
-import { saveTask, getTask, getTasks, saveTasks, getSettings, saveSettings, getPanelCtx, setPanelCtx, mergePanelCtx, subscribe, deleteLastValues
+import { saveTask, getTask, getTasks, saveTasks, getSettings, saveSettings, getPanelCtx, setPanelCtx, mergePanelCtx, subscribe, deleteLastValues, updateTasks
 } from '../../shared/storage.js'
 import { applySavedTheme } from '../theme-apply.js'
 import { DEFAULT_HOVER_HOLD_MS, DEFAULT_WAIT_TIMEOUT_MS } from '../../shared/preaction.js'
@@ -936,8 +936,9 @@ function fillSchedule(schedule) {
   // 每一欄都要寫（沒有的鍵寫成「沒有」），不能只寫有的：同一份面板文件從編輯 A 切到整批改排程不會重載，
   // 只寫有的會把 A 的時段或星期殘留下來，再一次套用到所有被選的任務（AF-19 終檢）
   document.getElementById('schedule-type').value = schedule.type || 'daily'
-  if (Array.isArray(schedule.times)) document.getElementById('times').value = schedule.times.join(', ')
-  if (schedule.everyMinutes !== undefined) document.getElementById('every-minutes').value = schedule.everyMinutes
+  const times = Array.isArray(schedule.times) && schedule.times.length > 0 ? schedule.times : BUILTIN_DEFAULTS.times
+  document.getElementById('times').value = times.join(', ')
+  document.getElementById('every-minutes').value = schedule.everyMinutes ?? BUILTIN_DEFAULTS.everyMinutes
   // 星期缺省或空陣列：一律回到唯一一份預設 BUILTIN_DEFAULTS.weekdays（每天；interval 的缺值本來就是每天）。
   // 重點是「確定地寫」：留著不動會沿用上一個任務的勾選
   const wds = Array.isArray(schedule.weekdays) && schedule.weekdays.length > 0
@@ -1016,6 +1017,14 @@ export function render(ctx) {
       urlEl.textContent = t.url
     }
     if (t.mode !== undefined) document.getElementById('mode').value = t.mode
+    // 每一欄都確定地寫（同一份面板文件會 render 第二個任務）：沒有的值回預設，上一個任務的舊策略選項拿掉
+    {
+      const sel = document.getElementById('strategy')
+      if (sel) {
+        for (const o of [...sel.options]) if (o.dataset.legacy === 'true') o.remove()
+        sel.value = 'auto'
+      }
+    }
     if (t.spec?.strategy) {
       const sel = document.getElementById('strategy')
       const legacy = !['auto', 'regex'].includes(t.spec.strategy)
@@ -1024,6 +1033,7 @@ export function render(ctx) {
         const opt = document.createElement('option')
         opt.value = t.spec.strategy
         opt.textContent = `${t.spec.strategy}（舊策略，保留）`
+        opt.dataset.legacy = 'true'
         sel.appendChild(opt)
       }
       if (sel) sel.value = t.spec.strategy
@@ -1037,7 +1047,7 @@ export function render(ctx) {
         ? `這個任務用的抓取策略是「${t.spec.strategy}」，下拉已不再提供，但設定會原樣保留;改選其他策略就會換掉。`
         : ''
     }
-    if (t.spec?.regex !== undefined) document.getElementById('regex').value = t.spec.regex
+    document.getElementById('regex').value = t.spec?.regex ?? ''
     fillSchedule(t.schedule)
     if (t.spec?.block) {
       if (t.spec.block.cell) {
@@ -1045,9 +1055,9 @@ export function render(ctx) {
       } else {
         currentBlock = { ...t.spec.block }
       }
-      const aggEl = document.getElementById('block-aggregate')
-      if (aggEl && t.spec.block.aggregate) aggEl.value = t.spec.block.aggregate
     }
+    const aggEl = document.getElementById('block-aggregate')
+    if (aggEl) aggEl.value = t.spec?.block?.aggregate || BUILTIN_DEFAULTS.aggregate
     const skipSource = t.spec?.block?.skip
       || t.spec?.fields?.find(f => f.block?.skip)?.block?.skip
     const { head, tail, blank } = skipOf(skipSource)
@@ -3104,8 +3114,12 @@ function bindPreActionMessageListener() {
     // the response channel for ordinary task picks. An async listener implicitly
     // returns a Promise<undefined> for unrelated messages, which can win the
     // content script's sendMessage ACK race before the background persists PICKED.
-    chrome.runtime.onMessage.addListener((msg) => {
+    chrome.runtime.onMessage.addListener((msg, sender) => {
       if (msg?.type !== MSG.PICKED || msg.purpose !== 'preaction') return false
+      // 只收這個面板所屬分頁的選取（另一個視窗的面板同時在選前置動作時不得互相寫到）
+      const expectedTab = currentCtx?.tabId ?? panelTabId
+      const fromTab = msg.sourceTabId ?? sender?.tab?.id
+      if (Number.isInteger(expectedTab) && Number.isInteger(fromTab) && fromTab !== expectedTab) return false
       void (async () => {
         // 那一列可能已經被刪掉、或整份清單被重畫過（編輯既有任務時會 replaceChildren）：
         // 寫進孤兒節點的話，使用者會看到「選好了卻沒反應」
@@ -3247,8 +3261,34 @@ function showLoginSettingsAction(note, url) {
  */
 async function saveTaskFromForm(values, ctx, { taskId, preparedTask } = {}) {
   const task = preparedTask || taskFromForm(values, ctx, taskId)
+  const editing = Boolean(ctx?.task?.id) && ctx.task.id === task.id
+  // 已在 storage 的任務走 updateTasks：鎖內拿最新副本，表單管不到的欄位以「儲存當下」為準
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const [saved] = await updateTasks([task.id], latest => withLatestUnmanaged(task, latest))
+      if (saved) return saved
+      break
+    } catch (error) {
+      // 讀到與寫入之間被別人改過：重讀一次；第二次仍衝突就交給呼叫端顯示
+      if (attempt === 1 || !/changed while updating/.test(String(error?.message))) throw error
+    }
+  }
+  if (editing) throw new Error('這個任務已被刪除，修改沒有儲存；請關閉面板後重新建立')
   await saveTask(task)
   return task
+}
+
+// 表單管不到、由別處維護的欄位（popup 啟停、fetcher 的 notFoundStreak、Report 排序、修復封存）：
+// 面板開著期間它們可能被改，存檔一律取 storage 內的最新值；最新值沒有的鍵也不得從開面板時的快照長回來
+const UNMANAGED_FIELDS = [...RUNTIME_FIELDS, 'order', 'archivedFields']
+
+function withLatestUnmanaged(task, latest) {
+  const next = { ...task }
+  for (const k of UNMANAGED_FIELDS) {
+    if (latest[k] !== undefined) next[k] = structuredClone(latest[k])
+    else if (k !== 'enabled') delete next[k] // enabled 缺省本來就視為啟用
+  }
+  return next
 }
 
 /**

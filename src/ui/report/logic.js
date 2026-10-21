@@ -1,5 +1,6 @@
 // AutoFetcher 報表查詢邏輯：日期範圍、篩選、摘要、月曆、排序、網址狀態 (SPEC §8.3)
 import { isSuccess } from '../../shared/record-status.js'
+import { effectiveTimeOf } from './series.js'
 
 // 將 Date 物件轉為 YYYY-MM-DD 本地時間字串
 function toDateString(date) {
@@ -215,19 +216,16 @@ export function compareDays(recordsA = [], recordsB = [], taskIds = []) {
   const recsA = Array.isArray(recordsA) ? recordsA : []
   const recsB = Array.isArray(recordsB) ? recordsB : []
 
-  const extractTime = (slot) => {
-    if (!slot || typeof slot !== 'string') return ''
-    const match = slot.match(/(\d{2}:\d{2})/)
-    return match ? match[1] : slot.slice(0, 5)
-  }
+  // 時刻一律經 series.effectiveTimeOf：沒有 slot 的手動／立即抓取紀錄退到 capturedAt 換回本地時刻，不得丟掉
+  const timeOf = (r) => effectiveTimeOf(r).slice(11, 16)
 
   const timeSet = new Set()
   const mapA = new Map()
   const mapB = new Map()
 
   for (const r of recsA) {
-    if (!r || !r.slot) continue
-    const time = extractTime(r.slot)
+    if (!r) continue
+    const time = timeOf(r)
     if (!time) continue
     timeSet.add(time)
     if (!mapA.has(time)) mapA.set(time, new Map())
@@ -235,8 +233,8 @@ export function compareDays(recordsA = [], recordsB = [], taskIds = []) {
   }
 
   for (const r of recsB) {
-    if (!r || !r.slot) continue
-    const time = extractTime(r.slot)
+    if (!r) continue
+    const time = timeOf(r)
     if (!time) continue
     timeSet.add(time)
     if (!mapB.has(time)) mapB.set(time, new Map())

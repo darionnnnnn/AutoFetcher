@@ -1940,7 +1940,8 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       // （AF-10 修正：原本 cancelled 在轉發之前就 return 了）
       if (msg.purpose === 'preaction' || (typeof msg.purpose === 'string' && msg.purpose.startsWith('login-'))) {
         try {
-          await chrome.runtime.sendMessage({ ...msg, ...frameIdentityOf(sender) })
+          // 帶上來源分頁：面板只收自己那個分頁的選取（兩個視窗各開一個面板時不得互相改到）
+          await chrome.runtime.sendMessage({ ...msg, ...frameIdentityOf(sender), sourceTabId: sender?.tab?.id ?? null })
         } catch {}
         return { ok: true }
       }

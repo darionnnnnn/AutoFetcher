@@ -563,7 +563,7 @@ test('體檢-8 站台面板存好之後要像任務面板一樣關掉（連同�
   await sp.render()
   const listener = [...c.runtime.onMessage._listeners][0]
   for (const [purpose, css] of [['login-user', '#u'], ['login-pass', '#p'], ['login-submit', '#go']]) {
-    listener({ type: 'PICKED', purpose, locator: { css } }, {}, () => {})
+    listener({ type: 'PICKED', purpose, locator: { css } }, { tab: { id: 7 } }, () => {})
   }
   doc.getElementById('username').value = 'wayne'
   doc.getElementById('password').value = 'hunter2'

@@ -7,7 +7,7 @@ import { sendToFrame } from './messaging.js'
 export const PROBE_TIMEOUT_MS = 5000
 
 // 兩個網址是不是同一個目標頁：query 常帶 token 或時戳，只比 origin + pathname。
-// frame 定位的第二層與「立即測試」核對分頁網址都走這一份，不得各寫一次。
+// frame 定位的第二層與「試抓」核對分頁網址都走這一份，不得各寫一次。
 export function sameOriginPath(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false
   try {

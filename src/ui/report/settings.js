@@ -19,6 +19,7 @@ import { MSG } from '../../shared/messages.js'
 import { statusTextOf, isRed } from '../../shared/record-status.js'
 import { applyTheme, applySavedTheme } from '../theme-apply.js'
 import { icon } from '../icons.js'
+import { slotOf } from '../../shared/schedule-math.js'
 
 function showStorageStatsPrompt() {
   const statsBox = document.getElementById('storage-stats')
@@ -235,7 +236,10 @@ function setupExportAndImportListeners() {
       const fromEl = document.getElementById('export-from')
       const toEl = document.getElementById('export-to')
       const formatEl = document.getElementById('export-format')
-      const today = new Date().toISOString().slice(0, 10)
+      // 留空就用本地的今天，並回填進欄位讓使用者看得到實際匯出的區間（UTC 會在台灣早上 8 點前變成昨天）
+      const today = slotOf(Date.now()).slice(0, 10)
+      if (fromEl && !fromEl.value) fromEl.value = today
+      if (toEl && !toEl.value) toEl.value = today
       const from = fromEl?.value || today
       const to = toEl?.value || today
       const format = formatEl?.value || 'json'
@@ -516,7 +520,7 @@ function setupPreferenceListeners(settings) {
 function setupDefaultExportDates() {
   const rangeFromEl = document.getElementById('range-from')
   const rangeToEl = document.getElementById('range-to')
-  const today = new Date().toISOString().slice(0, 10)
+  const today = slotOf(Date.now()).slice(0, 10)
   const defaultFrom = rangeFromEl?.value || today
   const defaultTo = rangeToEl?.value || today
 

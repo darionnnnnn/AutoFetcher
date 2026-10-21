@@ -42,7 +42,7 @@ test('收到選取結果後填進對應欄位', async () => {
   const { c, sp, doc } = await sitePage()
   await sp.render()
   const listener = [...c.runtime.onMessage._listeners][0]
-  listener({ type: 'PICKED', purpose: 'login-pass', locator: { css: '#pwd', path: '', anchor: null, xpath: '' } }, {}, () => {})
+  listener({ type: 'PICKED', purpose: 'login-pass', locator: { css: '#pwd', path: '', anchor: null, xpath: '' } }, { tab: { id: 9 } }, () => {})
   await new Promise(r => setTimeout(r, 20))
   const shown = doc.querySelector('[data-field="pass"]').textContent
   assert.ok(shown.includes('#pwd'), `要顯示選到的元素,實得:${shown}`)
@@ -52,8 +52,8 @@ test('取消的選取不得清掉已經選好的欄位', async () => {
   const { c, sp, doc } = await sitePage()
   await sp.render()
   const listener = [...c.runtime.onMessage._listeners][0]
-  listener({ type: 'PICKED', purpose: 'login-user', locator: { css: '#u' } }, {}, () => {})
-  listener({ type: 'PICKED', purpose: 'login-user', cancelled: true }, {}, () => {})
+  listener({ type: 'PICKED', purpose: 'login-user', locator: { css: '#u' } }, { tab: { id: 9 } }, () => {})
+  listener({ type: 'PICKED', purpose: 'login-user', cancelled: true }, { tab: { id: 9 } }, () => {})
   await new Promise(r => setTimeout(r, 20))
   assert.ok(doc.querySelector('[data-field="user"]').textContent.includes('#u'))
 })
@@ -63,7 +63,7 @@ test('存檔:密碼加密後才寫進 storage,明文不得留下', async () => {
   await sp.render()
   const listener = [...c.runtime.onMessage._listeners][0]
   for (const [purpose, css] of [['login-user', '#u'], ['login-pass', '#p'], ['login-submit', '#go']]) {
-    listener({ type: 'PICKED', purpose, locator: { css } }, {}, () => {})
+    listener({ type: 'PICKED', purpose, locator: { css } }, { tab: { id: 9 } }, () => {})
   }
   doc.getElementById('username').value = 'wayne'
   doc.getElementById('password').value = 'hunter2'

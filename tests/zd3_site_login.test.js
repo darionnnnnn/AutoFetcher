@@ -46,13 +46,14 @@ async function sitePage({ tabUrl } = {}) {
   globalThis.window = jd.window
   globalThis.document = jd.window.document
   const sp = await import('../src/ui/site/site.js?t=' + Math.random())
+  c.__siteTabId = tabId
   return { c, st, cr, sp, doc: jd.window.document }
 }
 
 function pickAll(c) {
   const listener = [...c.runtime.onMessage._listeners][0]
   for (const [purpose, css] of [['login-user', '#u'], ['login-pass', '#p'], ['login-submit', '#go']]) {
-    listener({ type: 'PICKED', purpose, locator: { css } }, {}, () => {})
+    listener({ type: 'PICKED', purpose, locator: { css } }, { tab: { id: c.__siteTabId } }, () => {})
   }
 }
 
