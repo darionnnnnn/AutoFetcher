@@ -1,13 +1,13 @@
 // 任務來源契約：把舊單值、舊同表多值與 AF-22 multi 讀成同一種 field 形狀。
 // 這個模組只做純資料轉換與驗證；不會回寫 storage，也不會修改呼叫端物件。
 
-export const TASK_FIELD_MODES = Object.freeze(['number', 'text', 'block'])
+const TASK_FIELD_MODES = Object.freeze(['number', 'text', 'block'])
 
 // AF-22 R15: use the same per-task budget as the resumable picker draft.
 export const MAX_MULTI_FIELDS = 100
 export const MAX_MULTI_STRING_LENGTH = 4096
 export const MAX_MULTI_TASK_BYTES = 512 * 1024
-export const MAX_MULTI_DEPTH = 8
+const MAX_MULTI_DEPTH = 8
 
 const MODE_SET = new Set(TASK_FIELD_MODES)
 
@@ -60,6 +60,16 @@ function legacyField(task, field, specField, index) {
   }
 }
 
+// 「這是不是 multi 任務」只有這一份（task.mode 或 spec.mode 任一為 multi）
+export function isMultiTask(task) {
+  return task?.mode === 'multi' || task?.spec?.mode === 'multi'
+}
+
+// 由本機執行期維護、Picker 表單管不到的任務欄位（popup 啟停、fetcher 的找不到計數與前景建議、預檢提前量）。
+// 編輯存檔以 storage 當下的值為準（picker.js）、匯入檔沒帶就沿用本機（settings-io.js）——
+// 兩處共用這一份，不得各抄一張（AF-24 之前兩份已漂移：匯入那份漏了 precheckLeadMinutes）
+export const LOCAL_TASK_FIELDS = Object.freeze(['enabled', 'foreground', 'suggestForeground', 'notFoundStreak', 'precheckLeadMinutes'])
+
 /**
  * 讀取任務的擷取來源為統一的 field 陣列。
  *
@@ -72,7 +82,7 @@ export function normalizeTaskSources(task) {
 
   const metadata = Array.isArray(task.fields) ? task.fields : []
   const specFields = Array.isArray(task.spec?.fields) ? task.spec.fields : []
-  const isMulti = task.mode === 'multi' || task.spec?.mode === 'multi'
+  const isMulti = isMultiTask(task)
 
   if (isMulti) {
     const byKey = new Map(metadata.map((field) => [field?.key, field]))
@@ -97,9 +107,6 @@ export function normalizeTaskSources(task) {
   // 單值任務以空 key 表示「父序列本身」，以維持既有 task.id 序列 id。
   return [legacyField(task, { key: '', name: task.name || task.id || '' }, task.spec, 0)]
 }
-
-// 便於不需要記住模組內部命名的呼叫端；兩者是同一個純函式契約。
-export const taskSourcesOf = normalizeTaskSources
 
 // 執行身分只包含會改變擷取結果的規格；名稱與欄位顯示順序不在其中。
 // 這份 canonical snapshot 供 background 的 publish gate 與 storage 的條件寫入共用。
@@ -130,7 +137,7 @@ export function multiExecutionSnapshot(task) {
 export function changedExecutionSeriesOf(before, after) {
   const oldSources = normalizeTaskSources(before)
   const newSources = normalizeTaskSources(after)
-  if (!(after?.mode === 'multi' || after?.spec?.mode === 'multi')) {
+  if (!isMultiTask(after)) {
     return oldSources.map(field => field.key)
   }
   const common = (task) => stableExecutionJson({

@@ -2,9 +2,16 @@
 // 負責計算將任務拖放至儀表板卡片後的變更 patch（無 DOM、無相依）
 
 import { buildSeriesIndex, parentIdOf } from '../../shared/series-index.js';
+import { isMultiTask } from '../../shared/task-source.js';
+import { CHART_PALETTE_SIZE } from './charts.js';
 
-// 折線圖與長條圖的調色盤上限
-export const MAX_CHART_SERIES = 8;
+// 折線圖與長條圖最多幾條序列＝調色盤有幾色（唯一一份在 charts.js）
+export const MAX_CHART_SERIES = CHART_PALETTE_SIZE;
+
+// 加入 idsToAdd 之後會不會超過折線／長條圖的序列上限（儀表板投放的兩條路共用）
+export function exceedsSeriesLimit(source, idsToAdd) {
+  return idsToAdd.length > 0 && (source || []).length + idsToAdd.length > MAX_CHART_SERIES;
+}
 
 const TEXT_CHART_REASON = '文字值不能加入數字圖表';
 
@@ -265,7 +272,7 @@ export function cardTypeForTask(task) {
   if (!task) {
     return 'number';
   }
-  if (task.mode === 'multi' || task.spec?.mode === 'multi') {
+  if (isMultiTask(task)) {
     const index = buildSeriesIndex([task]);
     const children = index.childrenOf[task.id] || [];
     if (children.some(id => index.byId[id]?.mode === 'number' || index.byId[id]?.mode === 'block')) {

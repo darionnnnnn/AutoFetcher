@@ -6,3 +6,7 @@ dist/
 .browsers/
 publish/
 .local-backups/
+# Finder 複製殘留(「檔名 2.js」)
+* [0-9].*
+# 煙霧測試輸出的證據檔(每次執行都會覆寫;正式證據歸檔在 docs/evidence/)
+work/

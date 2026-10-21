@@ -4,6 +4,7 @@ import { getTasks, getRecordsByDate, getRecordsInRange, getHealthMap, getMissedL
 import { getLayout } from './layout-store.js'
 import { renderCard } from '../ui/report/cards.js'
 import { isSuccess } from './record-status.js'
+import { slotOf } from './schedule-math.js'
 import { effectiveTimeOf } from '../ui/report/series.js'
 import { buildSeriesIndex, nameOf, parentIdOf, fieldKeyOf } from './series-index.js'
 import { describeTaskIdentities } from './describe.js'
@@ -204,7 +205,7 @@ export async function buildHtmlReport({ from, to, dashId }) {
     nextRuns: {},
     missed,
     range: { from, to },
-    today: to || new Date().toISOString().slice(0, 10),
+    today: to || slotOf(Date.now()).slice(0, 10),
     onPointClick: null
   }
 

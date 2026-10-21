@@ -95,10 +95,25 @@ test('沒開差異欄時完全不出現', async () => {
   assert.equal(el.querySelector('[data-delta]'), null)
 })
 
+
+// 按下卡片的「複製 TSV」，從剪貼簿替身讀出實際複製的內容（AF-24 起 TSV 不再掛在 dataset 上）
+function copiedTsv(render) {
+  let copied = ''
+  const prev = globalThis.navigator
+  globalThis.navigator = { clipboard: { writeText: async (t) => { copied = t } } }
+  try {
+    const el = render()
+    el.querySelector('[data-action="copy-tsv"]').click()
+    return { el, tsv: copied }
+  } finally {
+    globalThis.navigator = prev
+  }
+}
+
 test('複製為 TSV 時不含差值', async () => {
   const { CR } = await fresh()
-  const el = CR.renderCard(pivotCard({ options: { mode: 'pivot', bucketMinutes: 1440, showDelta: true } }), ctxOf())
-  const tsv = el.dataset.tsv || ''
+  const { tsv } = copiedTsv(() => CR.renderCard(pivotCard({ options: { mode: 'pivot', bucketMinutes: 1440, showDelta: true } }), ctxOf()))
+  assert.ok(tsv.length > 0, '前置：要真的複製到內容')
   assert.ok(!tsv.includes('↑') && !tsv.includes('↓'), '貼進試算表的是值，不是箭頭')
 })
 

@@ -323,7 +323,7 @@
             <dt>面板說「<span class="ui" data-ui-label="content/picker-mode.js">這個區塊在網頁元件裡，只能整塊抓，選不到裡面的格子</span>」？</dt><dd>有些網站把內容包在獨立的元件裡，選取模式看不進去，只能抓那一整塊的文字。</dd>
             <dt>中鍵點到連結？</dt><dd>選取時中鍵點連結不會有反應，不怕被帶離這一頁。</dd>
             <dt>點到另一張表了？</dt><dd>單任務選取一次只抓同一張表；按「<span class="ui" data-ui-label="content/picker-mode.js">復原</span>」可還原。要在同一組抓兩張表，改用「一次建立多個任務」並把兩邊的值選進同一組。</dd>
-            <dt>鍵盤操作</dt><dd>單任務與重選時，Enter 完成（只送已選的值）、Esc 取消、Backspace 或 Delete 移除最後一個、Ctrl＋A 全選這張表。多任務群組時，雙擊只加入一次；按「完成選取」或 Ctrl／⌘＋Enter 完成。</dd>
+            <dt>鍵盤操作</dt><dd>數字鍵 1～4 切換工具列的四段（單格、整欄→一個值、整欄→每格、整列→一個值），Tab 在頁面與「完成／取消」之間移動焦點。單任務與重選時，Enter 完成（只送已選的值）、Esc 取消、Backspace 或 Delete 移除最後一個、Ctrl＋A 全選這張表。多任務群組時，雙擊只加入一次；要取消某一格就再點它一次或在面板上移除；按「完成選取」或 Ctrl／⌘＋Enter 完成（在頁面上或面板上按都可以）。</dd>
             <dt>選了很多格，認不出哪個是哪格？</dt><dd>滑鼠移到面板上的名稱，頁面上那一格會加粗標出來；點名稱會捲到那一格。</dd>
             <dt>其實想分成好幾個任務？</dt><dd>按「<span class="ui" data-ui-label="content/picker-mode.js">完成</span>」之後，在面板按「<span class="ui" data-ui-label="ui/picker/picker.html">拆成每個值一個任務</span>」，每個值會各自成為一個任務。</dd>
           </dl>
@@ -536,7 +536,7 @@
             <dt>設定改了有沒有存？</dt><dd>設定頁改完就生效，欄位旁會出現「<span class="ui" data-ui-label="ui/report/settings.js">已儲存</span>」和一個勾。空白或超出範圍的值不會存，離開欄位後恢復原值。把紀錄保留天數調低時會先問一次，因為更早的紀錄會被刪掉、無法復原。</dd>
             <dt>不想在右鍵看到「使用教學」？</dt><dd>在「<span class="ui" data-ui-label="ui/report/report.html">設定</span>」的「<span class="ui" data-ui-label="ui/report/report.html">診斷</span>」區關掉；那裡也留著開啟教學的連結。</dd>
             <dt>設定頁的東西在哪一區？</dt><dd>分成五區：「<span class="ui" data-ui-label="ui/report/report.html">排程與抓取</span>」（頁面開在哪、載入等多久）、「<span class="ui" data-ui-label="ui/report/report.html">通知與告警</span>」、「<span class="ui" data-ui-label="ui/report/report.html">資料與備份</span>」（匯出匯入、保留天數、用量）、「<span class="ui" data-ui-label="ui/report/report.html">站台</span>」（登入檢查時間與帳號）、「<span class="ui" data-ui-label="ui/report/report.html">診斷</span>」（排程健康、外觀主題、隱私說明）。</dd>
-            <dt>只用鍵盤操作報表？</dt><dd>上方四個分頁用 ← → 切換。歷史紀錄的日曆日期、紀錄列最前面的展開鈕都可以用 Tab 移過去，按 Enter 或空白鍵選日期、展開明細（用滑鼠點整列一樣會展開）。</dd>
+            <dt>只用鍵盤操作報表？</dt><dd>上方四個分頁用 ← → 切換；儀表板的頁籤也一樣，用 Tab 移到目前那個頁籤後按 ← →。歷史紀錄的日曆日期、紀錄列最前面的展開鈕都可以用 Tab 移過去，按 Enter 或空白鍵選日期、展開明細（用滑鼠點整列一樣會展開）。</dd>
           </dl>
         </details>
       </section>
@@ -570,7 +570,7 @@
             <dt>清單最上面有一列網址？</dt><dd>那是站台列：這個網站登不進去，底下的任務都會跟著失敗。照它寫的「<span class="ui" data-ui-label="ui/popup/popup.js">在登入頁按右鍵 → AutoFetcher → 設定此站台登入</span>」重設，或按「<span class="ui" data-ui-label="ui/popup/popup.js">前往登入頁</span>」；看過了一樣可以按「<span class="ui" data-ui-label="ui/popup/popup.js">知道了</span>」。</dd>
             <dt>紅燈要怎麼修？</dt><dd>找不到元素或解析不出數字，按「<span class="ui" data-ui-label="ui/popup/popup.js">重選目標</span>」到任務管理重選；登入失敗按「<span class="ui" data-ui-label="ui/popup/popup.js">前往登入頁</span>」，在登入頁按右鍵選「<span class="ui" data-ui-label="background/main.js">設定此站台登入</span>」；其他狀況先按「<span class="ui" data-ui-label="ui/popup/popup.js">立即重試</span>」。</dd>
             <dt>找不到這份教學？</dt><dd>點工具列圖示，最下面一列有「<span class="ui" data-ui-label="ui/popup/popup.html">開啟報表</span>」、「<span class="ui" data-ui-label="ui/popup/popup.html">使用教學</span>」。</dd>
-            <dt>想全部先停下來？</dt><dd>點圖示，按最下面一列的「<span class="ui" data-ui-label="ui/popup/popup.html">全部暫停 / 恢復</span>」。</dd>
+            <dt>想全部先停下來？</dt><dd>點圖示，按最下面一列的「<span class="ui" data-ui-label="ui/popup/popup.html">全部暫停</span>」；全部停下之後同一顆會變成「全部恢復」。</dd>
           </dl>
         </details>
       </section>

@@ -1,5 +1,5 @@
 // 錯過清單：比對與補抓離線期間應執行但未執行的排程槽
-import { getTasks, getMissedList, updateMissedList, getLastSeenAt, setLastSeenAt, getLedgerRange } from '../shared/storage.js'
+import { getTasks, getMissedList, updateMissedList, getLastSeenAt, advanceLastSeenAt, getLedgerRange } from '../shared/storage.js'
 import { slotOf } from './scheduler.js'
 import { intervalRunsBetween } from '../shared/schedule-math.js'
 import { notify } from './notify.js'
@@ -110,7 +110,9 @@ export function computeIntervalGaps(tasks, ledger, fromMs, toMs) {
       kind: 'gap',
       count: slots.length,
       from: slots[0],
-      slot: slots[slots.length - 1]
+      slot: slots[slots.length - 1],
+      // 逐格清單只給合併用（算「比已記錄的最後一格還新」的有幾格），不寫進錯過清單
+      slots
     })
   }
   return gaps
@@ -158,19 +160,22 @@ export async function refreshMissed(nowMs = Date.now(), sinceMs) {
         newCount++
       }
     }
-    // gap：同任務已有 gap 就把 count 加上去、slot 延到新的最後一格，不新增第二筆；gap 不另外通知
-    for (const gap of gaps) {
+    // gap：同任務已有 gap 就只加「比它記錄的最後一格還新」的格子、slot 延到新的最後一格，不新增第二筆；gap 不另外通知。
+    // 只數比較新的格子讓合併冪等：啟動與看門狗同時算到重疊的窗，同一格不會被加兩次
+    for (const { slots, ...gap } of gaps) {
       const idx = next.findIndex((m) => isGap(m) && m.taskId === gap.taskId)
       if (idx === -1) {
         next.push(gap)
       } else {
         const prev = next[idx]
+        const fresh = slots.filter((s) => !prev.slot || s > prev.slot)
+        if (fresh.length === 0) continue
         next[idx] = {
           ...prev,
           taskName: gap.taskName,
-          count: (Number(prev.count) || 0) + gap.count,
+          count: (Number(prev.count) || 0) + fresh.length,
           from: prev.from || gap.from,
-          slot: gap.slot > prev.slot ? gap.slot : prev.slot
+          slot: fresh[fresh.length - 1]
         }
       }
     }
@@ -186,7 +191,7 @@ export async function refreshMissed(nowMs = Date.now(), sinceMs) {
     })
   }
 
-  await setLastSeenAt(toMs)
+  await advanceLastSeenAt(toMs)
 }
 
 // 取得當前錯過清單

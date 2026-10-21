@@ -5,7 +5,7 @@ import {
   skipOf, excludeOf
 } from './table.js'
 import { aggregateCells } from './aggregate.js'
-import { innerLabel } from './describe.js'
+import { innerLabel, unitOfAxis } from './describe.js'
 
 const STRATEGY_ORDER = ['auto', 'regex', 'attr', 'child', 'label']
 
@@ -83,8 +83,11 @@ export function parseNumber(text) {
   let str = text.trim()
   if (!str) return null
 
-  // 全形數字 ０-９ 轉半形
+  // 全形數字 ０-９ 轉半形；全形逗號／小數點、Unicode 減號（U+2212）與全形負號一併正規化
   str = str.replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    .replace(/[−－]/g, '-')
+    .replace(/，/g, ',')
+    .replace(/．/g, '.')
 
   // 會計負數判斷：整串被小括號包覆（繁中財務頁面常用全形括號，一併認）
   let isAccountingNegative = false
@@ -106,11 +109,13 @@ export function parseNumber(text) {
     return null
   }
 
-  // 抓取第一個數值片段
-  const match = str.match(/-?\d+(?:\.\d+)?/)
+  // 抓取第一個數值片段：負號與數字之間最多一個空白；
+  // 前導小數點（.5）只在前一個字元不是英數字或句點時成立（No.12、Vol.3 是編號，取 12、3，不是 0.12、0.3）；
+  // 指數只在 e/E 後緊接（可選正負號與）至少一位數字時成立（1e、2024e、12 e3 都不算指數）
+  const match = str.match(/-?\s?(?:\d+(?:\.\d+)?|(?<![A-Za-z0-9.])\.\d+)(?:[eE][+-]?\d+)?/)
   if (!match) return null
 
-  let num = Number(match[0])
+  let num = Number(match[0].replace(/\s/g, ''))
   if (Number.isNaN(num)) return null
 
   if (isAccountingNegative) {
@@ -523,7 +528,7 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
 
   // 略過開頭／結尾後沒有剩
   if (head + tail >= strippedList.length) {
-    const unit = isRow ? '格' : '列'
+    const unit = unitOfAxis(isRow ? 'row' : 'col')
     const subject = isRow ? '這一列' : '這一欄'
     const message = blankCount > 0
       ? `略過開頭 ${head} ${unit}、結尾 ${tail} ${unit}後沒有剩下的格子（${subject}去掉頭尾 ${blankCount} ${unit}空白後只有 ${strippedList.length} ${unit}）`
@@ -580,7 +585,7 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
       ok: false,
       error: 'not_found',
       // excluded 含 skip 移掉的：只寫「排除」會比使用者設的排除清單還大
-      message: `略過與排除共 ${excluded} ${isRow ? '格' : '列'}後沒有剩下的格子`,
+      message: `略過與排除共 ${excluded} ${unitOfAxis(isRow ? 'row' : 'col')}後沒有剩下的格子`,
       items: buildItems()
     }
   }

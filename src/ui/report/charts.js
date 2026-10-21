@@ -42,11 +42,14 @@ function createEmptyChartSvg(width, height) {
   return svg;
 }
 
+// theme.css 定義了 --chart-1～--chart-8 八個序列色；折線／長條圖的序列上限就是調色盤大小（drop-rules 的 MAX_CHART_SERIES 取這裡）
+export const CHART_PALETTE_SIZE = 8;
+
 /**
- * 依序列索引取得 CSS 變數圖表色彩（1~8 循環）
+ * 依序列索引取得 CSS 變數圖表色彩（調色盤循環；圖例與圖表共用這一份）
  */
-function getChartColor(index) {
-  return `var(--chart-${(index % 8) + 1})`;
+export function getChartColor(index) {
+  return `var(--chart-${(index % CHART_PALETTE_SIZE) + 1})`;
 }
 
 /**

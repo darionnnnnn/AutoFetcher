@@ -2,7 +2,7 @@
 import { getSite, saveSite, getPanelCtx, deleteHealthEntry } from '../../shared/storage.js'
 import { encryptSecret } from '../../shared/crypto.js'
 import { MSG } from '../../shared/messages.js'
-import { applySavedTheme } from '../theme-apply.js'
+import { applySavedTheme, watchTheme } from '../theme-apply.js'
 import { createSaveGuard, setFieldError } from '../save-guard.js'
 import { icon } from '../icons.js'
 
@@ -45,9 +45,12 @@ function updateFieldDisplay(field) {
   }
 }
 
-function handlePickedMessage(msg) {
+function handlePickedMessage(msg, sender) {
   if (!msg || msg.type !== MSG.PICKED) return
   if (msg.cancelled === true) return
+  // 只收自己這個分頁的選取：背景轉發的帶 sourceTabId，content 直接送來的看 sender.tab
+  const fromTab = msg.sourceTabId ?? sender?.tab?.id
+  if (currentTabId === null || currentTabId === undefined || fromTab !== currentTabId) return
   if (typeof msg.purpose !== 'string' || !msg.purpose.startsWith('login-')) return
 
   const field = msg.purpose.slice('login-'.length)
@@ -338,9 +341,10 @@ export async function render() {
     testBtn0.textContent = TEST_LOGIN_LABEL
     testBtn0.removeAttribute('aria-busy')
   }
-  // 判斷不出目前分頁時不能讓人存：存出去的是鍵為空字串的站台，永遠不會被任何網址命中
+  // 判斷不出目前分頁時不能存（鍵為空字串的站台永遠不會被任何網址命中）；儲存鈕照樣可按，
+  // 按了在「還不能儲存」原因區說明（與 Picker 同一套守門，儲存鈕不 disabled）
   const saveBtn = document.getElementById('site-save')
-  if (saveBtn) saveBtn.disabled = !currentOrigin
+  if (saveBtn) saveBtn.disabled = false
   const noteEl0 = document.getElementById('site-note')
   if (!currentOrigin && noteEl0) {
     noteEl0.style.color = 'var(--danger)'
@@ -413,6 +417,7 @@ export async function handleSave({ closeDelayMs = 1500 } = {}) {
       noteEl.style.color = 'var(--danger)'
       noteEl.textContent = '無法判斷目前的分頁，沒有存檔'
     }
+    saveGuard()?.show([{ id: 'origin', text: '無法判斷目前的分頁：請關掉面板，在目標網頁上重新按右鍵「設定此站台登入」' }])
     return
   }
 
@@ -429,18 +434,20 @@ export async function handleSave({ closeDelayMs = 1500 } = {}) {
   const form = readForm()
   const passwordEnc = form.password ? await encryptSecret(form.password) : existingSite.passwordEnc
 
-  // 3. 組出完整的 site 物件；使用者改好了就重新啟用、失敗計數歸零
+  // 3. 展開既有站台再覆寫表單管的欄位（匯入帶來的 loginCheck 等表單沒有的欄位不得一編輯就消失）；
+  //    使用者改好了就重新啟用、失敗計數歸零
   const site = {
+    ...(existingSite && typeof existingSite === 'object' ? existingSite : {}),
     loginUrl: form.loginUrl,
     selectors: {
       user: currentSelectors.user,
       pass: currentSelectors.pass,
       submit: currentSelectors.submit
     },
-    loginCheck: {
-      type: 'urlPrefix',
-      value: form.loginUrl
-    },
+    // 表單沒有登入頁判定的欄位：既有的照留，沒有才用登入頁網址前綴
+    loginCheck: existingSite?.loginCheck?.type && existingSite.loginCheck.type !== 'urlPrefix'
+      ? existingSite.loginCheck
+      : { type: 'urlPrefix', value: form.loginUrl },
     successCheck: {
       type: form.successType,
       value: form.successValue
@@ -472,6 +479,7 @@ export async function handleSave({ closeDelayMs = 1500 } = {}) {
 
 if (typeof document !== 'undefined' && document.getElementById('site-save') && globalThis.chrome?.runtime?.id) {
   applySavedTheme()
+  watchTheme()
   // 面板文件在切換分頁後會被重載，而且載入當下解析得到的分頁可能是舊的：
   // 每次轉為可見都重畫一次（自癒）
   if (globalThis.chrome?.sidePanel) {

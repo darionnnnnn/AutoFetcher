@@ -288,7 +288,8 @@ function renderTaskRow(task, { lastValues, nextRuns, healthMap, sites, identitie
 
   const nextSpan = document.createElement('span')
   nextSpan.className = 'task-next'
-  nextSpan.textContent = `下次 ${formatTime(nextRuns?.[task.id])}`
+  // 停用的任務沒有下一次：不顯示舊 alarm 留下的時刻
+  nextSpan.textContent = `下次 ${task.enabled === false ? '—' : formatTime(nextRuns?.[task.id])}`
   // 只寫一個時刻，久沒用回來看不出這是每天還是每十分鐘一次；
   // 排程白話走 shared/describe.js（與 Picker 摘要卡、任務頁同一份）
   nextSpan.title = describeSchedule(task.schedule)
@@ -437,11 +438,15 @@ export function render(ctx) {
   // 3. 綁定按鈕事件
   const toggleAllBtn = document.getElementById('toggle-all')
   if (toggleAllBtn) {
+    // 按鈕說出這一下會做什麼（以前是「全部暫停 / 恢復」，看不出按下去是哪一個）；判準與 handleToggleAll 同一條
+    toggleAllBtn.textContent = anyTaskActive(tasks) ? '全部暫停' : '全部恢復'
+    toggleAllBtn.hidden = !tasks || tasks.length === 0
     toggleAllBtn.onclick = async () => {
       await handleToggleAll()
       if (currentCtx) {
         const updatedTasks = await getTasks()
-        render({ ...currentCtx, tasks: updatedTasks })
+        // 燈號與下次時間都跟著重算：全部暫停之後 chip 要變「已暫停」、恢復之後要有新的下次，不能沿用切換前的
+        render({ ...currentCtx, tasks: updatedTasks, nextRuns: await fetchNextRuns(), health: computeHealth(updatedTasks, currentCtx.healthMap, currentCtx.missed) })
       }
     }
   }
@@ -493,15 +498,7 @@ export function render(ctx) {
   const openReportBtn = document.getElementById('open-report')
   if (openReportBtn) {
     if (!openReportBtn.querySelector('svg')) setIcon(openReportBtn, 'external', { text: '開啟報表' })
-    openReportBtn.onclick = () => {
-      let url = typeof chrome?.runtime?.getURL === 'function'
-        ? chrome.runtime.getURL('ui/report/report.html')
-        : 'ui/report/report.html'
-      if (url && typeof url.then === 'function') {
-        url.toString = () => 'chrome-extension://autofetcher/ui/report/report.html'
-      }
-      chrome.tabs.create({ url })
-    }
+    openReportBtn.onclick = () => { void openExtPage('ui/report/report.html') }
   }
 }
 
@@ -552,13 +549,27 @@ function renderGaps(anchorEl, gaps, tasks) {
 }
 
 // 全部暫停 / 恢復
+// 有沒有任何啟用中的任務（按鈕文字與按下去做什麼都看這一條）
+function anyTaskActive(tasks) {
+  return (tasks || []).some(t => t.enabled !== false)
+}
+
 export async function handleToggleAll() {
   const tasks = await getTasks()
-  const hasActive = tasks.some(t => t.enabled !== false)
-  const nextEnabled = !hasActive
+  const nextEnabled = !anyTaskActive(tasks)
   // 只換 enabled：鎖內對最新任務改，不拿讀到的舊副本整份蓋回去
   await updateTasks(tasks.map(t => t.id), t => ({ ...t, enabled: nextEnabled }))
-  chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS })
+  // 等排程重建完再回去問下次時間，否則拿到的是切換前的 alarm
+  try { await chrome.runtime.sendMessage({ type: MSG.REBUILD_ALARMS }) } catch {}
+}
+
+// 下次執行時間問 background（GET_NEXT_RUNS 已排除預檢與重試 alarm）；UI 不自己解析 alarm 名稱
+async function fetchNextRuns() {
+  try {
+    const res = await chrome.runtime?.sendMessage?.({ type: MSG.GET_NEXT_RUNS })
+    if (res?.nextRuns && typeof res.nextRuns === 'object') return res.nextRuns
+  } catch {}
+  return {}
 }
 
 // 畫面上尚未知悉的異常項目（任務列與站台列），「全部知道了」標的就是這些
@@ -594,22 +605,7 @@ export async function init() {
   ])
   const health = computeHealth(tasks, healthMap, missed)
 
-  // 取得 alarms 下次執行時間
-  const nextRuns = {}
-  if (chrome.alarms?.getAll) {
-    const alarms = await chrome.alarms.getAll()
-    for (const a of alarms || []) {
-      if (a.name?.startsWith('task:')) {
-        const parts = a.name.slice(5).split(':')
-        const taskId = parts.slice(0, -1).join(':') || parts[0]
-        if (taskId && a.scheduledTime) {
-          if (!nextRuns[taskId] || a.scheduledTime < nextRuns[taskId]) {
-            nextRuns[taskId] = a.scheduledTime
-          }
-        }
-      }
-    }
-  }
+  const nextRuns = await fetchNextRuns()
 
   render({ health, tasks, lastValues, nextRuns, healthMap, missed, sites })
 }

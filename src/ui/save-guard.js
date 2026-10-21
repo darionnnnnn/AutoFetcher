@@ -112,7 +112,7 @@ export function createSaveGuard({ container, saveButton = null, countEl = null, 
   }
 
   /**
-   * 一條純文字（存檔失敗、立即測試的錯誤、進行中說明）：不跳轉、不算「還差幾項」。
+   * 一條純文字（存檔失敗、試抓的錯誤、進行中說明）：不跳轉、不算「還差幾項」。
    * 文字為空等同 clear()。
    * @param {string} text
    */

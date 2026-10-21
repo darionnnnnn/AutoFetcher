@@ -361,7 +361,8 @@ test('E2c：multi append 未耐久時不發送成功值告警', async () => {
   assert.equal(result.status, 'error')
   assert.equal((await st.getRecordsByDate('2026-09-21')).length, 2)
   assert.equal((await st.getRecordsByDate('2026-09-21')).some(record => record.alert === true), false)
-  assert.equal(c.__calls.filter(x => x.api === 'notifications.create').length, 0)
+  // 只數告警通知：最後一次排程仍失敗時另有一則失敗通知（AF-24 C2），那不是成功值告警
+  assert.equal(c.__calls.filter(x => x.api === 'notifications.create' && String(x.args[0]).includes(':alert:')).length, 0)
 })
 
 test('E2c：告警通知在 multi record append 成功後才發送，恢復重入不重送', async () => {

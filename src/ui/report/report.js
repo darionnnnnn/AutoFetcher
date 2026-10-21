@@ -16,7 +16,7 @@ import { buildTsv } from './cards.js'
 import { confirmDialog } from '../modal.js'
 import { renderTasks, focusTaskRow } from './tasks.js'
 import { renderSettings } from './settings.js'
-import { renderDashboard, refreshDashboard, dashboardDataRange } from './dashboard.js'
+import { renderDashboard, refreshDashboard, dashboardDataRange, showDashboardLoadError } from './dashboard.js'
 import { closeDrawer, isDrawerOpen } from './drawer.js'
 import { isSuccess, statusTextOf } from '../../shared/record-status.js'
 import { MSG } from '../../shared/messages.js'
@@ -24,6 +24,7 @@ import { buildSeriesIndex, nameOf } from '../../shared/series-index.js'
 import { describeTaskIdentities } from '../../shared/describe.js'
 import { computeHealth } from '../../background/health.js'
 import { icon, setIcon, levelChipOf } from '../icons.js'
+import { makeSortable } from './sortable.js'
 
 // 頁籤順序（方向鍵在這四個之間移動）
 const TABS = ['dashboard', 'history', 'tasks', 'settings']
@@ -68,6 +69,7 @@ let currentCalMonth = 9
 let isCalDragging = false
 let calDragStart = null
 let calDragCurrent = null
+let calDragCleanup = null
 let loadGeneration = 0
 let lastRouteKey = null
 let settingsLoadPromise = null
@@ -1220,30 +1222,14 @@ export function renderCalendar(year, month, statsByDate = {}) {
         routeCurrentState()
       })
 
-      td.addEventListener('pointerdown', () => {
-        isCalDragging = true
-        calDragStart = day.date
-        calDragCurrent = day.date
+      td.addEventListener('pointerdown', (e) => {
+        if (e.button !== undefined && e.button !== 0) return
+        beginCalendarDrag(day.date, e.pointerId)
       })
 
       td.addEventListener('pointerover', () => {
         if (isCalDragging) {
           calDragCurrent = day.date
-        }
-      })
-
-      td.addEventListener('pointerup', () => {
-        if (isCalDragging) {
-          isCalDragging = false
-          const end = day.date || calDragCurrent
-          if (calDragStart && end) {
-            const norm = normalizeRange(calDragStart, end)
-            state.from = norm.from
-            state.to = norm.to
-            routeCurrentState()
-          }
-          calDragStart = null
-          calDragCurrent = null
         }
       })
 
@@ -1253,6 +1239,46 @@ export function renderCalendar(year, month, statsByDate = {}) {
   }
   table.appendChild(tbody)
   container.appendChild(table)
+}
+
+// 月曆拖曳選範圍：放開與取消都在 document 上收（拖到月曆外放開、觸控被瀏覽器接管都要收尾，
+// 否則旗標卡住、下一次放開會用舊起點算出範圍）。只拉到同一天＝單點，交給格子的 click 處理（不載入兩次）；
+// pointercancel／Esc 一律放棄，不套用範圍
+function beginCalendarDrag(date, pointerId) {
+  endCalendarDrag()
+  isCalDragging = true
+  calDragStart = date
+  calDragCurrent = date
+  const finish = (apply, e) => {
+    if (e && e.pointerId !== undefined && pointerId !== undefined && e.pointerId !== pointerId) return
+    const start = calDragStart
+    const end = calDragCurrent
+    endCalendarDrag()
+    if (!apply || !start || !end || start === end) return
+    const norm = normalizeRange(start, end)
+    state.from = norm.from
+    state.to = norm.to
+    routeCurrentState()
+  }
+  const onUp = (e) => finish(true, e)
+  const onCancel = (e) => finish(false, e)
+  const onKey = (e) => { if (e.key === 'Escape') finish(false) }
+  document.addEventListener('pointerup', onUp)
+  document.addEventListener('pointercancel', onCancel)
+  document.addEventListener('keydown', onKey)
+  calDragCleanup = () => {
+    document.removeEventListener('pointerup', onUp)
+    document.removeEventListener('pointercancel', onCancel)
+    document.removeEventListener('keydown', onKey)
+  }
+}
+
+function endCalendarDrag() {
+  if (calDragCleanup) calDragCleanup()
+  calDragCleanup = null
+  isCalDragging = false
+  calDragStart = null
+  calDragCurrent = null
 }
 
 export function renderColumnConfig(columns) {
@@ -1285,40 +1311,14 @@ export function renderColumnConfig(columns) {
     label.appendChild(input)
     label.appendChild(document.createTextNode(` ${col.label || col.key}`))
 
-    // 支援 Pointer Events 拖曳排序
-    label.addEventListener('pointerdown', (e) => {
-      if (typeof label.setPointerCapture === 'function') {
-        try { label.setPointerCapture(e.pointerId) } catch {}
-      }
-      label.dataset.dragging = 'true'
+    // 拖曳排序（共用 sortable，橫向；點勾選框本身不啟動拖曳）
+    makeSortable(label, {
+      container: () => container,
+      items: (box) => [...box.querySelectorAll(':scope > label')],
+      axis: 'x',
+      ignore: (e) => e.target?.tagName === 'INPUT',
+      onCommit: (order) => applyColumnOrder(order.map(el => el.querySelector('input')?.value).filter(Boolean))
     })
-
-    label.addEventListener('pointermove', (e) => {
-      if (label.dataset.dragging !== 'true') return
-      const target = document.elementFromPoint?.(e.clientX, e.clientY)?.closest('#column-config label')
-      if (target && target !== label && target.parentNode === container) {
-        const rect = target.getBoundingClientRect()
-        const midX = rect.left + rect.width / 2
-        if (e.clientX < midX) {
-          container.insertBefore(label, target)
-        } else {
-          container.insertBefore(label, target.nextSibling)
-        }
-      }
-    })
-
-    const onPointerUp = async (e) => {
-      if (label.dataset.dragging !== 'true') return
-      label.dataset.dragging = 'false'
-      if (typeof label.releasePointerCapture === 'function') {
-        try { label.releasePointerCapture(e.pointerId) } catch {}
-      }
-      const newKeys = [...container.querySelectorAll('input')].map(inp => inp.value)
-      await applyColumnOrder(newKeys)
-    }
-
-    label.addEventListener('pointerup', onPointerUp)
-    label.addEventListener('pointercancel', onPointerUp)
 
     container.appendChild(label)
   }
@@ -1542,7 +1542,9 @@ export async function loadAndRenderPage(hash = (typeof window !== 'undefined' ? 
       if (!isCurrentGeneration(generation)) return
       const targetId = state.dash || layout?.lastDashboardId || layout?.dashboards?.[0]?.id
       await renderDashboard(targetId)
-    } catch {}
+    } catch (err) {
+      if (isCurrentGeneration(generation)) showDashboardLoadError(err)
+    }
   } else if (state.view === 'settings') {
     renderSettings()
   }

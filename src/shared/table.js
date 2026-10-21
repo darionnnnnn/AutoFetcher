@@ -35,7 +35,7 @@ function getSpan(cell, attr) {
 /** 儲存格選擇器（HTML 與 ARIA 兩種寫法） */
 export const CELL_SELECTOR = 'td, th, [role="cell"], [role="gridcell"], [role="columnheader"], [role="rowheader"]'
 /** 表格選擇器（HTML 與 ARIA 兩種寫法） */
-export const TABLE_SELECTOR = 'table, [role="grid"], [role="table"]'
+const TABLE_SELECTOR = 'table, [role="grid"], [role="table"]'
 const ROW_SELECTOR = 'tr, [role="row"]'
 
 /**

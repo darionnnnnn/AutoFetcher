@@ -3,7 +3,7 @@
 // 各寫一份會讓「同一個失敗在三個畫面上長得不一樣」。
 
 /** 前置動作型別的中文名稱（下拉選項與失敗訊息共用同一份） */
-export const PRE_ACTION_LABELS = {
+const PRE_ACTION_LABELS = {
   hover: '移到元素上',
   waitFor: '等元素出現',
   click: '點擊元素',

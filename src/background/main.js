@@ -32,10 +32,10 @@ import {
 import { injectContent } from './inject.js'
 import { sendToFrame } from './messaging.js'
 import { locateFrame, listFrames, matchFrameByUrl, sameOriginPath } from './frames.js'
-import { isAnchorText, putSkip } from '../shared/table.js'
+import { putSkip } from '../shared/table.js'
 import { pickSpecOf, pickSourceOf, reconcileFields, sameSpec, stripPos } from '../shared/field-match.js'
 import { parseNumber } from '../shared/extract.js'
-import { withInnerLabel } from '../shared/describe.js'
+import { withInnerLabel, defaultFieldName } from '../shared/describe.js'
 import { scheduleSiteCheck, runSiteCheck } from './sitecheck.js'
 import { testLogin } from './login.js'
 import { decryptSecret } from '../shared/crypto.js'
@@ -53,7 +53,7 @@ import {
 } from '../shared/pick-protocol.js'
 import { getPickDraft, updatePickDraft } from '../shared/pick-draft.js'
 import { routeIdentityMatchesUrl, sameRouteIgnoringTracking } from '../shared/route.js'
-import { normalizeTaskSources, validateMultiTask } from '../shared/task-source.js'
+import { normalizeTaskSources, validateMultiTask, isMultiTask } from '../shared/task-source.js'
 
 // 面板 ctx 可能尚未寫入就收到 pagehide；用短命記號避免無 ctx 時重複清場，
 // 同時讓新一輪開啟能再次廣播 EXIT_PICK。
@@ -744,27 +744,7 @@ function pickTransitionError(hint, candidates = []) {
 
 // 重選時把選好的值寫回任務：沒動的值保留原本的 key 與名稱（紀錄靠 key），新值配新 key。
 // 「是不是同一個值」的判定在 shared/field-match.js（Picker 換目標也用同一份）
-const POS_NAMES = { first: '第一', last: '最後一', 'last-1': '倒數第二' }
-// 能當定位錨點的標題才能拿來命名；純數值（4318 這種每天會變的值）退回下一層
-function anchorOnly(header) {
-  const text = typeof header === 'string' ? header.trim() : ''
-  return isAnchorText(text) ? text : ''
-}
-function defaultFieldName(pick, n, pos = {}) {
-  if (pick?.cell) {
-    // 用位置定位的軸不能把標題寫進名稱：每天取最後一列的話，那個日期明天就變了；
-    // 純數值的標題同理（判準與定位同一份，`shared/table.js`）
-    const r = pos.rowPos ? '' : anchorOnly(pick.cell.row?.header)
-    const c = pos.colPos ? '' : anchorOnly(pick.cell.col?.header)
-    const suffix = [
-      pos.rowPos ? `${POS_NAMES[pos.rowPos]}列` : '',
-      pos.colPos ? `${POS_NAMES[pos.colPos]}欄` : ''
-    ].filter(Boolean).join('、')
-    const base = withInnerLabel([r, c].filter(Boolean).join(' · '), pick.cell.inner) || (suffix ? '值' : `值 ${n}`)
-    return suffix ? `${base}（${suffix}）` : base
-  }
-  return withInnerLabel(anchorOnly(pick?.block?.headerText), pick?.block?.inner) || `值 ${n}`
-}
+// 值的預設名稱只有 shared/describe.js 一份（Picker 收集表單也用它）
 
 // 任務目前用的定位方式（重選新增的值要跟著它命名）
 function posOfTask(task) {
@@ -802,7 +782,7 @@ function applyRepick(task, picks) {
   if (picks.length === 0) return []
   const hadFields = Array.isArray(task.fields) && task.fields.length > 0
   if (!hadFields && picks.length === 1) {
-    // 單值任務只換定位與規格，聚合方式沿用
+    // 單值任務只換定位與規格，合計方式沿用
     const spec = pickSpecOf(picks[0])
     if (!spec) return []
     task.mode = 'block'
@@ -893,19 +873,6 @@ async function getValidTask(taskId) {
   return { task, active: task.enabled !== false }
 }
 
-// 解析任務 alarm 名稱（相容正式排程與測試名稱）
-function parseTaskAlarm(name) {
-  if (typeof name !== 'string') return null
-  if (name.startsWith('precheck:') || name.includes(':retry:')) return null
-  const parsed = parseAlarmName(name)
-  if (parsed) return parsed
-  const lastColon = name.lastIndexOf(':')
-  if (lastColon === -1) return null
-  const taskId = name.slice(0, lastColon)
-  const indexStr = name.slice(lastColon + 1)
-  if (!taskId || !/^\d+$/.test(indexStr)) return null
-  return { taskId, index: Number(indexStr) }
-}
 
 // 晚超過這麼久才觸發的 daily alarm 不執行（把今天的值寫進好幾天前那格沒有意義），那一格交給錯過清單
 const DAILY_STALE_MS = 24 * 60 * 60 * 1000
@@ -961,34 +928,45 @@ export function handleSettingsChanged(changes) {
   setupContextMenus()
 }
 
+// 啟動流程每一步各自接住並留診斷：前一步丟例外不得讓後面的步驟（尤其是看門狗）被跳過
+async function runStartupSteps(stage, steps) {
+  for (const [name, step] of steps) {
+    try {
+      await step()
+    } catch (err) {
+      await diag.log('startup_error', `stage=${stage} step=${name} result=error`).catch(() => {})
+    }
+  }
+}
+
 // 處理擴充功能安裝或更新事件
 export async function handleInstalled(details) {
-  try {
-    await initStorage()
-    await recoverFieldRepairOperations()
-    await disablePanelGlobally()
-    await setupContextMenus()
-    await rebuildAlarms()
-    await schedulePrechecks()
-    await scheduleSiteCheck()
-    await ensureWatchdog()
-    await refreshBadge()
-  } catch {}
+  await runStartupSteps('installed', [
+    ['init_storage', initStorage],
+    ['recover_repairs', recoverFieldRepairOperations],
+    ['disable_panel', disablePanelGlobally],
+    ['context_menus', setupContextMenus],
+    ['rebuild_alarms', rebuildAlarms],
+    ['prechecks', schedulePrechecks],
+    ['site_check', scheduleSiteCheck],
+    ['watchdog', ensureWatchdog],
+    ['badge', refreshBadge]
+  ])
 }
 
 // 處理瀏覽器啟動事件
 export async function handleStartup() {
-  try {
-    await initStorage()
-    await recoverFieldRepairOperations()
-    await disablePanelGlobally()
-    await rebuildAlarms()
-    await schedulePrechecks()
-    await scheduleSiteCheck()
-    await ensureWatchdog()
-    await refreshMissed(Date.now())
-    await refreshBadge()
-  } catch {}
+  await runStartupSteps('startup', [
+    ['init_storage', initStorage],
+    ['recover_repairs', recoverFieldRepairOperations],
+    ['disable_panel', disablePanelGlobally],
+    ['rebuild_alarms', rebuildAlarms],
+    ['prechecks', schedulePrechecks],
+    ['site_check', scheduleSiteCheck],
+    ['watchdog', ensureWatchdog],
+    ['missed', () => refreshMissed(Date.now())],
+    ['badge', refreshBadge]
+  ])
 }
 
 // 處理 Alarm 觸發事件
@@ -1040,7 +1018,7 @@ export async function handleAlarm(alarm, testOpts = {}) {
     }
 
     // 5. 正式抓取
-    const parsed = parseTaskAlarm(name)
+    const parsed = parseAlarmName(name)
     if (parsed !== null) {
       const { task, active } = await getValidTask(parsed.taskId)
       if (!task) return
@@ -1173,11 +1151,9 @@ function draftValueOf(payload, pick, sender, msg, index = 0) {
   return value
 }
 
+// 草稿操作以「擴充功能頁」的身分送出（與 isFromContentScript 同一個判準：網址在本擴充功能底下）
 async function extensionDraftSender(tabId) {
-  let url = 'chrome-extension://autofetcher/ui/picker/picker.html'
-  try {
-    if (typeof chrome?.runtime?.getURL === 'function') url = await chrome.runtime.getURL('ui/picker/picker.html')
-  } catch {}
+  const url = await chrome.runtime.getURL('ui/picker/picker.html')
   return { url, tab: { id: tabId }, frameId: 0 }
 }
 
@@ -1616,6 +1592,743 @@ async function handleTestLogin(msg, runOpts = {}) {
   return await testLogin(site, password, runOpts)
 }
 
+async function onPickGroupName(msg, sender, runOpts, ctx) {
+  return await requestGroupNamePick(msg)
+}
+
+async function onBeginFieldRepair(msg, sender, runOpts, ctx) {
+  return await beginFieldRepair(msg)
+}
+
+async function onPickGroupNameResult(msg, sender, runOpts, ctx) {
+  const tabId = sender?.tab?.id
+  const active = Number.isInteger(tabId) ? frameStateOf(tabId) : null
+  const request = Number.isInteger(tabId) ? groupNamePickRequests.get(tabId) : null
+  let currentTabUrl = ''
+  try { currentTabUrl = Number.isInteger(tabId) ? ((await chrome.tabs.get(tabId))?.url || '') : '' } catch {}
+  if (!Number.isInteger(tabId) || typeof msg.sessionId !== 'string' || typeof msg.groupKey !== 'string' ||
+      typeof msg.requestId !== 'string' || !request || request.requestId !== msg.requestId ||
+      request.sessionId !== msg.sessionId || request.groupKey !== msg.groupKey ||
+      !draftIdentityMatches(msg, request) ||
+      (request.expectedUrl && currentTabUrl && request.expectedUrl !== currentTabUrl) ||
+      (active && (active.sessionId !== msg.sessionId || (active.groupKey && active.groupKey !== msg.groupKey) ||
+        active.frameId !== (sender?.frameId ?? 0) || !draftIdentityMatches(msg, active))) ||
+      (!active && (sender?.frameId ?? 0) !== 0)) {
+    return { ok: false, error: 'stale_frame', message: '取名回報來自已失效的選取階段' }
+  }
+  const draft = await getPickDraft(tabId, { sessionId: msg.sessionId })
+  if (!draft || draft.activeGroupKey !== msg.groupKey || !draft.groups.some(group => group.key === msg.groupKey) || !draftIdentityMatches(msg, draft)) {
+    return { ok: false, error: 'group_not_found', message: '目前群組已不存在' }
+  }
+  try {
+    await chrome.runtime.sendMessage({
+      type: MSG.PICK_GROUP_NAME_RESULT,
+      tabId,
+      requestId: msg.requestId,
+      sessionId: msg.sessionId,
+      groupKey: msg.groupKey,
+      documentGeneration: draft.documentGeneration,
+      routeIdentity: draft.routeIdentity,
+      text: typeof msg.text === 'string' ? msg.text : '',
+      ...(msg.cancelled === true ? { cancelled: true } : {})
+    })
+  } catch {}
+  groupNamePickRequests.delete(tabId)
+  return { ok: true }
+}
+
+// 頁面上的 Ctrl/⌘＋Enter：只核對是不是這個分頁目前的選取階段，再轉給面板（面板按下自己的「完成選取」）
+async function onPickDraftFinishRequest(msg, sender, runOpts, ctx) {
+  const tabId = sender?.tab?.id
+  const active = Number.isInteger(tabId) ? frameStateOf(tabId) : null
+  if (!Number.isInteger(tabId) || !active || typeof msg.sessionId !== 'string' ||
+      active.sessionId !== msg.sessionId || active.frameId !== (sender?.frameId ?? 0)) {
+    return { ok: false, error: 'stale_frame', message: '完成請求來自已失效的選取階段' }
+  }
+  try {
+    await chrome.runtime.sendMessage({ type: MSG.PICK_DRAFT_FINISH_REQUEST, tabId, sessionId: msg.sessionId, groupKey: msg.groupKey })
+  } catch {}
+  return { ok: true }
+}
+
+// C1b：草稿訊息只由 extension page 送出，所有變更都在 pick-protocol
+// 的 session 鎖內完成。這條路與舊 PICKED／repick 路徑分開，保留舊單任務相容性。
+async function onPickDraftBegin(msg, sender, runOpts, ctx) {
+  return await beginPickDraft(msg, sender)
+}
+
+async function onPickDraftRead(msg, sender, runOpts, ctx) {
+  return await readPickDraftMessage(msg, sender)
+}
+
+async function onPickDraftOperation(msg, sender, runOpts, ctx) {
+  const { contentMs } = ctx
+  const operation = msg.operation || msg
+  if (operation.type === 'set-active' || operation.op === 'set-active') {
+    const tabId = msg.tabId ?? sender?.tab?.id
+    const draft = await getPickDraft(tabId, { sessionId: msg.sessionId })
+    if (!draft || draft.sessionId !== msg.sessionId) return { ok: false, error: 'stale_session', message: '選取階段已變更，請重新整理後重試' }
+    const drained = await drainPickDraft(tabId, draft, contentMs)
+    if (!drained.ok) return { ok: false, error: 'drain_failed', retryable: true, message: drained.message }
+    const latest = await getPickDraft(tabId, { sessionId: draft.sessionId })
+    if (!latest || latest.sessionId !== draft.sessionId) return { ok: false, error: 'stale_session', message: '選取階段已變更，請重新整理後重試' }
+    try {
+      const result = await handlePickDraftOperation({ ...msg, expectedRevision: latest.revision }, sender)
+      if (!result?.ok) await drainPickDraft(tabId, latest, contentMs, true)
+      return result
+    } catch (error) {
+      await drainPickDraft(tabId, latest, contentMs, true)
+      throw error
+    }
+  }
+  return await handlePickDraftOperation(msg, sender)
+}
+
+async function onPickDraftComplete(msg, sender, runOpts, ctx) {
+  const { contentMs } = ctx
+  const tabId = msg.tabId ?? sender?.tab?.id
+  const before = await getPickDraft(tabId, { sessionId: msg.sessionId })
+  if (!before || before.sessionId !== msg.sessionId) return { ok: false, error: 'stale_session', message: '選取階段已變更，請重新整理後重試' }
+  if (!before.groups?.length || before.groups.some(group => !Array.isArray(group.values) || group.values.length === 0)) {
+    return { ok: false, synchronized: false, error: 'empty_group', message: '每個群組完成前都必須至少有一個值' }
+  }
+  const drained = await drainPickDraft(tabId, before, contentMs)
+  if (!drained.ok) return { ok: false, error: 'drain_failed', retryable: true, message: drained.message }
+  const latest = await getPickDraft(tabId, { sessionId: before.sessionId })
+  if (!latest || latest.sessionId !== before.sessionId) return { ok: false, error: 'stale_session', message: '選取階段已變更，請重新整理後重試' }
+  if (!latest.groups?.length || latest.groups.some(group => !Array.isArray(group.values) || group.values.length === 0)) {
+    await drainPickDraft(tabId, latest, contentMs, true)
+    return { ok: false, synchronized: false, error: 'empty_group', message: '每個群組完成前都必須至少有一個值' }
+  }
+  const sourcesChecked = await drainPickDraft(tabId, latest, contentMs, false, true)
+  if (!sourcesChecked.ok) return { ok: false, error: 'drain_failed', retryable: true, message: sourcesChecked.message }
+  let completed
+  try {
+    completed = await completePickDraft({ ...msg, expectedRevision: latest.revision }, sender)
+  } catch (error) {
+    await drainPickDraft(tabId, latest, contentMs, true)
+    throw error
+  }
+  if (!completed?.ok) await drainPickDraft(tabId, latest, contentMs, true)
+  if (completed?.ok && completed.snapshot) {
+    const groups = Array.isArray(completed.snapshot.groups) ? completed.snapshot.groups : []
+    if (groups.length === 0 || groups.some(group => !Array.isArray(group?.values) || group.values.length === 0)) {
+      return {
+        ...completed,
+        ok: false,
+        synchronized: false,
+        error: 'empty_group',
+        message: '每個群組完成前都必須至少有一個值'
+      }
+    }
+    const previousPanel = await getPanelCtx(completed.tabId)
+    const stagedDraft = await markPickSnapshotSettings(completed.snapshot)
+    const ctx = await pickerContextOfSnapshot(completed.snapshot)
+    const batch = previousPanel?.batch === true
+    const items = batch ? pickerBatchItemsOfSnapshot(completed.snapshot, ctx) : null
+    const batchNames = batch
+      ? Object.fromEntries(groups.map((group, index) => [group.key, typeof group.name === 'string' && group.name.trim() ? group.name : `值 ${index + 1}`]))
+      : null
+    const panelContext = batch
+      ? {
+          kind: 'batch',
+          batch: true,
+          items,
+          draft: { ...(completed.snapshot.form || {}), batchNames },
+          pickSessionId: completed.snapshot.sessionId,
+          pickGroupKey: null
+        }
+      : {
+          kind: 'new',
+          ctx,
+          draft: { name: groups[0]?.name || '', ...(completed.snapshot.form || {}) },
+          pickSessionId: completed.snapshot.sessionId,
+          pickGroupKey: groups[0]?.key
+        }
+    // 完成後把設定階段寫回同一個分頁 ctx；面板重載時仍會進設定頁，
+    // 而不是再次顯示「等待設定畫面」或重新建立欄位。
+    await setPanelCtx(completed.tabId, panelContext)
+    await releasePickDraftSources(completed.tabId, completed.snapshot.sessionId, completed.snapshot)
+    return { ...completed, draft: stagedDraft, context: ctx, panelContext }
+  }
+  return completed
+}
+
+async function onPickDraftAbandon(msg, sender, runOpts, ctx) {
+  const result = await abandonPickDraft(msg, sender)
+  if (result?.ok) {
+    const tabId = msg.tabId ?? sender?.tab?.id
+    await releasePickDraftSources(tabId, msg.sessionId)
+    pickParticipantFrames.delete(tabId)
+    forgetPickFrame(tabId)
+  }
+  return result
+}
+
+async function onPickDraftPause(msg, sender, runOpts, ctx) {
+  const tabId = Number.isInteger(sender?.tab?.id) ? sender.tab.id : msg.tabId
+  if (msg.operationId !== undefined || msg.expectedRevision !== undefined || msg.operation) {
+    return await handlePickDraftOperation({ ...msg, operation: msg.operation || { type: 'pause' } }, sender)
+  }
+  const draft = await pausePickDraft(tabId)
+  return { ok: true, paused: Boolean(draft), draft }
+}
+
+async function onTestTask(msg, sender, runOpts, ctx) {
+  const task = msg.task
+  if (!task || typeof task !== 'object' || typeof task.url !== 'string' || !task.url.trim() ||
+      !task.spec || typeof task.spec !== 'object' || Array.isArray(task.spec)) {
+    return { ok: false, error: '任務設定不完整' }
+  }
+  try {
+    const isMulti = isMultiTask(task)
+    if (isMulti) {
+      validateMultiTask(task)
+    } else if (!task.locator || typeof task.locator !== 'object' || Array.isArray(task.locator) || Object.keys(task.locator).length === 0) {
+      throw new Error('locator 必須是非空物件')
+    }
+    const sources = normalizeTaskSources(task)
+    if (sources.length === 0 || sources.some(field =>
+      !field.source?.locator || typeof field.source.locator !== 'object' ||
+      Array.isArray(field.source.locator) || Object.keys(field.source.locator).length === 0
+    )) throw new Error('每個值都必須有合法來源定位')
+  } catch (error) {
+    return { ok: false, error: '任務設定不完整', message: String(error?.message || error) }
+  }
+  return await runTask(task, {
+    ...runOpts,
+    dryRun: true,
+    reason: 'manual',
+    tabId: msg.tabId,
+    interactivePreview: true
+  })
+}
+
+async function onRunTask(msg, sender, runOpts, ctx) {
+  const { task } = await getValidTask(msg.taskId)
+  if (!task) {
+    return { ok: false, outcome: 'failed', error: '找不到任務' }
+  }
+  const multi = isMultiTask(task)
+  if (multi && (!Array.isArray(task.fields) || task.fields.length === 0)) {
+    return { ok: false, outcome: 'failed', status: 'error', error: '多來源任務沒有可執行欄位', values: [] }
+  }
+  const hasDeclaredFields = Array.isArray(task.fields) && task.fields.length > 0
+  const executionId = globalThis.crypto?.randomUUID?.() || `manual-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const record = await runTask(task, {
+    slot: slotOf(Date.now()),
+    ...runOpts,
+    reason: 'manual',
+    ...(hasDeclaredFields ? { executionId } : {})
+  })
+  if (!record) {
+    return { ok: true, outcome: 'failed', status: 'error', error: '沒有結果' }
+  }
+  // 多值任務要逐值回報，只回第一筆使用者看不出另外幾個值怎麼了
+  let values
+  if (hasDeclaredFields && typeof record.slot === 'string') {
+    const recordsById = new Map()
+    for (const r of await getRecordsByDate(record.slot.slice(0, 10))) {
+      if (r.slot !== record.slot || r.executionId !== executionId || parentIdOf(r.taskId) !== task.id) continue
+      recordsById.set(r.taskId, r)
+    }
+    const idx = buildSeriesIndex([task])
+    values = task.fields.map(field => {
+      const r = recordsById.get(seriesIdOf(task.id, field.key))
+      return r ? ({
+        // 按鈕就在那個任務旁邊，用值名就夠，不必每個都重複任務名
+        name: idx.byId[r.taskId]?.shortName || nameOf(idx, r.taskId),
+        ok: isSuccess(r),
+        value: isSuccess(r) ? r.value : undefined,
+        error: isSuccess(r) ? undefined : (r.error || statusTextOf(r.status))
+      }) : ({ name: field.name || field.key, ok: false, error: '本次沒有結果' })
+    })
+    const successes = values.filter(value => value.ok).length
+    // 新 multi 協定公開整批完成度；舊 block 呼叫端沿用父紀錄的成功語意。
+    const outcome = multi
+      ? (successes === values.length ? 'done' : successes > 0 ? 'partial' : 'failed')
+      : (isSuccess(record) ? 'done' : 'failed')
+    return { ok: true, outcome, status: record.status, values }
+  }
+
+  if (isSuccess(record)) {
+    return { ok: true, outcome: 'done', status: record.status, value: record.value, values }
+  }
+  return { ok: true, outcome: 'failed', status: record.status, error: record.error || '', values }
+}
+
+async function onRebuildAlarms(msg, sender, runOpts, ctx) {
+  await rebuildAlarms()
+  await schedulePrechecks()
+  // 任務清單變了,燈號要跟著更新(否則 popup 上的燈號會停在舊狀態)
+  await refreshBadge()
+  return { ok: true }
+}
+
+async function onCatchUpOne(msg, sender, runOpts, ctx) {
+  await catchUpOne(msg.taskId, msg.slot, (task, opts) => runTask(task, opts))
+  await refreshBadge()
+  return { ok: true }
+}
+
+async function onSkipOne(msg, sender, runOpts, ctx) {
+  const removed = await skipOne(msg.taskId, msg.slot)
+  await refreshBadge()
+  // 比不到就不能靜默成功：畫面上那一筆已經過期（gap 的 slot 每輪會延），要請使用者重新整理
+  if (removed === 0) return { ok: false, error: '這一筆已經不在清單裡，請重新整理' }
+  return { ok: true, removed }
+}
+
+// 面板無法自己判斷歸屬：它的 sender.tab 永遠是 null、網址參數重載後會被丟掉，
+// 載入當下查 active tab 又會在切換競態中拿到舊分頁（B-0 #11、#12）。
+// 面板改成拿得到的 windowId 來問，由這裡回答那個視窗現在的作用分頁。
+async function onResolvePanelTab(msg, sender, runOpts, ctx) {
+  const windowId = msg.windowId
+  if (windowId === undefined || windowId === null) return { ok: false }
+  // 查不到就回 null：猜一個別的視窗的作用分頁，會讓面板拿別人的 ctx 去讀寫。
+  // 面板下一次轉為可見時會自己再問一次（自癒）
+  const tabs = await chrome.tabs.query({ active: true, windowId })
+  const tabId = tabs?.[0]?.id ?? null
+  return { ok: tabId !== null, tabId }
+}
+
+async function onPanelClosing(msg, sender, runOpts, ctx) {
+  await closePanelFor(msg.tabId)
+  return { ok: true }
+}
+
+async function onClosePanel(msg, sender, runOpts, ctx) {
+  await closePanel(msg.tabId)
+  await closePanelFor(msg.tabId)
+  return { ok: true }
+}
+
+async function onPickedMessage(msg, sender, runOpts, ctx) {
+  if (msg.repairSessionId !== undefined) return await applyFieldRepair(msg, sender)
+  const pickedTabId = sender?.tab?.id
+  const activeFrame = Number.isInteger(pickedTabId) ? frameStateOf(pickedTabId) : null
+  const participant = Number.isInteger(pickedTabId) ? pickParticipantFrames.get(pickedTabId) : null
+  // Legacy PICKED has no sessionId. Do not match two absent ids and then
+  // dereference a participant frame map; only C2b session messages may use
+  // the per-session participant document guard.
+  const knownParticipant = participant && msg.sessionId !== undefined &&
+    participant.sessionId === msg.sessionId
+    ? participant.frames.get(sender?.frameId ?? 0)
+    : null
+  if (knownParticipant?.documentId && sender?.documentId && knownParticipant.documentId !== sender.documentId) {
+    return { ok: false, error: 'stale_document', retryable: true, message: '這個框架的文件已重新載入，請重新進入後再選取' }
+  }
+  // 進入下一個 frame 後，舊文件晚到的完成回報不可覆蓋新階段。
+  // 沒有 C2a session 欄位的舊單任務仍沿用既有相容路徑。
+  if (activeFrame && msg.sessionId !== undefined) {
+    if (activeFrame.sessionId !== msg.sessionId || activeFrame.frameId !== (sender?.frameId ?? 0)) {
+      await logForbidden(sender, 'PICKED:stale-frame', `選取回報來自非作用中的框架 ${sender?.frameId ?? 0}`)
+      return { ok: false, error: 'stale_frame', retryable: true, message: '這個框架的選取階段已經變更，請重試' }
+    }
+    if (activeFrame.groupKey !== undefined && msg.groupKey !== undefined && activeFrame.groupKey !== msg.groupKey) {
+      return { ok: false, error: 'group_conflict', retryable: true, message: '目前作用中的群組已變更，請重新選取' }
+    }
+    if (!draftIdentityMatches(msg, activeFrame)) {
+      return { ok: false, error: 'stale_document', retryable: true, message: '頁面已變更，請重新整理後再選取' }
+    }
+  }
+  // 取消也要轉發給面板：不轉的話「在頁面上選取」那顆按鈕會一直卡在等待狀態
+  // （AF-10 修正：原本 cancelled 在轉發之前就 return 了）
+  if (msg.purpose === 'preaction' || (typeof msg.purpose === 'string' && msg.purpose.startsWith('login-'))) {
+    try {
+      // 帶上來源分頁：面板只收自己那個分頁的選取（兩個視窗各開一個面板時不得互相改到）
+      await chrome.runtime.sendMessage({ ...msg, ...frameIdentityOf(sender), sourceTabId: sender?.tab?.id ?? null })
+    } catch {}
+    return { ok: true }
+  }
+
+  if (msg.cancelled === true) {
+    // 取消也要收掉「為了重選而開的那個分頁」，否則每取消一次殘留一個
+    // 只有那個重選分頁自己送的取消才收掉它（任何網頁送一個取消就能關掉我們開的分頁，AF-21 終檢）
+    if (msg.purpose === 'repick' && msg.taskId !== undefined) {
+      const expected = (await getRepickTabs())[msg.taskId]
+      if (!sender?.tab || sender.tab.id === expected) await closeRepickTab(msg.taskId)
+    }
+    return { ok: true }
+  }
+
+  // AF-22 C2a：有 C1b session/group 的選取結果，先在鎖內寫回 draft；
+  // 舊的無 session PICKED 才走下面相容的 panel ctx 路徑。
+  if (msg.purpose === 'task' && msg.sessionId !== undefined &&
+      (msg.groupKey !== undefined || msg.activeGroupKey !== undefined)) {
+    const draftResult = await appendPickedToDraft(msg, sender)
+    if (draftResult?.ok === true) rememberPickParticipant(sender?.tab?.id, msg.sessionId, sender)
+    if (draftResult) return draftResult
+  }
+
+  if (msg.purpose === 'task') {
+    const tabId = sender?.tab?.id
+    // 批次（一次建立多個任務）：每一組補上與單任務相同的欄位，另給穩定鍵；不帶舊草稿、不算換目標
+    if (Array.isArray(msg.batch)) {
+      const items = msg.batch.map((one, i) => ({ key: `b${i + 1}`, ...taskPayloadOf(one, sender) }))
+      await setPanelCtx(tabId, { kind: 'batch', items })
+      return { ok: true }
+    }
+    let payload = taskPayloadOf(msg, sender, msg)
+    // 面板已經開著、使用者也填了一半的表單時，**只換目標**：
+    // 名稱、排程、儀表板、進階設定全部留著（右鍵重選一個目標不該把表單清空）
+    const existing = await getPanelCtx(tabId)
+    // 面板已經關掉（暫存被清），頁面卻還在選取模式：值選好了沒有人接。
+    // 使用者看到的是「選完什麼都沒發生」，沒有這一筆就查不出原因
+    if (!existing) {
+      await diag.log('panel_missing_on_pick', { tabId, purpose: msg.purpose })
+    }
+    const keepDraft = existing && (existing.kind === 'new' || existing.kind === 'edit')
+    const sameFrameDraft = existing && existing.pickSessionId !== undefined &&
+      msg.sessionId !== undefined && existing.pickSessionId === msg.sessionId &&
+      (existing.pickGroupKey === undefined || msg.groupKey === undefined || existing.pickGroupKey === msg.groupKey)
+    if (sameFrameDraft) {
+      payload = mergeFramePickPayload(existing.ctx, payload)
+    }
+    await mergePanelCtx(tabId, {
+      kind: 'new',
+      ctx: payload,
+      ...(msg.sessionId !== undefined ? { pickSessionId: msg.sessionId } : {}),
+      ...(msg.groupKey !== undefined ? { pickGroupKey: msg.groupKey } : {}),
+      retarget: Boolean(keepDraft && existing.ctx),
+      // 淺層合併：被擋時留下的說明與等待態的多任務旗標不得跟到新表單上（AF-18 終檢）
+      notice: undefined,
+      batch: undefined
+    })
+    return { ok: true }
+  }
+
+  if (msg.purpose === 'repick') {
+    // 只認「為了重選而開的那個分頁」送來的（AF-21 終檢）：別的網頁的 content script 也送得出 PICKED，
+    // 不核對分頁的話任何頁面都能改掉任意任務的定位
+    const expectedTab = (await getRepickTabs())[msg.taskId]
+    const senderTab = sender?.tab?.id
+    if (typeof expectedTab !== 'number' || senderTab !== expectedTab) {
+      await logForbidden(sender, 'PICKED:repick', `重選 ${msg.taskId} 來自分頁 ${senderTab}（${sender?.url}），不是重選開的分頁 ${expectedTab}`)
+      return { ok: false, error: 'forbidden' }
+    }
+    // 鎖內讀最新的任務再套用重選，不會把同時寫入的 notFoundStreak 之類洗掉
+    let orphanSeries = []
+    const [task] = await updateTasks([msg.taskId], (t) => {
+      t.locator = msg.locator
+      orphanSeries = applyRepick(t, Array.isArray(msg.picks) ? msg.picks : [])
+      return t
+    })
+    if (!task) {
+      return { ok: true }
+    }
+    // 被移除的值：清掉它們在儀表板上的來源與最後一次的值，紀錄留到保留天數自然到期。
+    // 不清的話卡片會一直指著不存在的序列，使用者只看得到一張永遠空白的卡
+    if (Array.isArray(orphanSeries) && orphanSeries.length > 0) {
+      await pruneSeries(orphanSeries)
+      await deleteLastValues(orphanSeries)
+      await diag.log('fields_pruned', { taskId: task.id, series: orphanSeries })
+    }
+    // 定位換了會影響抓取：排程與燈號要跟著重算（其他改任務的路徑都有做，這裡漏了）
+    await rebuildAlarms()
+    await refreshBadge()
+    // 為了重選而開的分頁由我們收掉（使用者原本就開著的那個不動）
+    await closeRepickTab(msg.taskId)
+    return { ok: true }
+  }
+
+  return { ok: true }
+}
+
+async function onDescendFrame(msg, sender, runOpts, ctx) {
+  const { contentMs } = ctx
+  const tabId = sender?.tab?.id
+  if (!tabId) return { ok: true }
+  const fromFrameId = sender?.frameId ?? 0
+  const activeFrame = frameStateOf(tabId)
+  if (msg.sessionId !== undefined && activeFrame &&
+      (activeFrame.sessionId !== msg.sessionId || activeFrame.frameId !== fromFrameId)) {
+    return { ok: false, error: 'stale_frame', retryable: true, message: '這個框架的選取階段已經變更，請重試' }
+  }
+  if (msg.direction === 'ascend') {
+    if (!activeFrame || activeFrame.frameId !== fromFrameId || !Number.isInteger(activeFrame.parentFrameId)) {
+      return { ok: false, error: 'frame_parent_unknown', retryable: true, message: '找不到這個框架的上一層，請重新進入選取' }
+    }
+    const parentId = activeFrame.parentFrameId
+    const enterParent = {
+      type: MSG.ENTER_PICK,
+      purpose: msg.purpose,
+      taskId: msg.taskId,
+      ...pickIdentityOf(msg),
+      ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
+      ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {}),
+      ...(msg.draftValues !== undefined ? { draftValues: structuredClone(msg.draftValues) } : {}),
+      ...(msg.draftRevision !== undefined ? { draftRevision: msg.draftRevision } : {}),
+      ...(activeFrame.parentFrame ? { frame: activeFrame.parentFrame } : {})
+    }
+    try { await sendToFrame(tabId, { type: MSG.EXIT_PICK, ...pickIdentityOf(msg) }, fromFrameId, contentMs, 'Exit child pick frame') } catch {}
+    try {
+      await injectContent(tabId, { frameId: parentId })
+      const entered = await sendToFrame(tabId, enterParent, parentId, contentMs, 'Enter parent pick frame')
+      const expectedGroup = msg.activeGroupKey ?? msg.groupKey
+      if (expectedGroup !== undefined && entered?.activeGroupKey !== expectedGroup) {
+        const err = new Error('active_group_not_confirmed')
+        err.code = 'group_conflict'
+        throw err
+      }
+      rememberPickFrame(tabId, {
+        frameId: parentId,
+        sessionId: msg.sessionId,
+        groupKey: msg.groupKey,
+        ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
+        ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {}),
+        ...(activeFrame.parentFrame ? { frame: activeFrame.parentFrame } : {})
+      })
+      return { ok: true, frameId: parentId, activeGroupKey: msg.activeGroupKey ?? msg.groupKey }
+    } catch (err) {
+      try {
+        await injectContent(tabId, { frameId: fromFrameId })
+        await sendToFrame(tabId, { ...enterParent, hint: 'frame_not_found', frameError: 'parent_inject_denied' }, fromFrameId, contentMs, 'Resume child pick frame')
+      } catch {}
+      return { ...pickTransitionError('frame_unavailable'), detail: String(err?.message || err) }
+    }
+  }
+  const enter = {
+    type: MSG.ENTER_PICK,
+    purpose: msg.purpose,
+    taskId: msg.taskId,
+    preselect: msg.preselect,
+    ...pickIdentityOf(msg),
+    ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
+    ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {}),
+    ...(msg.draftValues !== undefined ? { draftValues: structuredClone(msg.draftValues) } : {}),
+    ...(msg.frameAnchor ? { frameAnchor: msg.frameAnchor } : {}),
+    ...(msg.draftRevision !== undefined ? { draftRevision: msg.draftRevision } : {})
+  }
+  // 鑽進 iframe 之後仍是同一輪批次選取
+  if (msg.batch === true) enter.batch = true
+  // 選取當下沒有目標的 locator 可以驗證，所以只用網址比對；
+  // 不是唯一命中就退回原本那一層，硬猜會鑽錯 iframe
+  let frames = []
+  try { frames = await listFrames(tabId) } catch {}
+  const matched = matchFrameByUrl(frames, msg.src)
+  if (matched?.frameId !== undefined) {
+    // 舊 frame 先停掉；失敗時會在同一層重新進入並帶明確可重試原因。
+    try { await sendToFrame(tabId, { type: MSG.EXIT_PICK, ...pickIdentityOf(msg) }, fromFrameId, contentMs, 'Exit old pick frame') } catch {}
+    try {
+      await injectContent(tabId, { frameId: matched.frameId })
+      const entered = await sendToFrame(tabId, {
+        ...enter,
+        parentFrameId: fromFrameId,
+        frame: { url: frames.find(f => f.frameId === matched.frameId)?.url || msg.src,
+          ...(msg.frameAnchor ? { anchor: msg.frameAnchor } : {}) }
+      }, matched.frameId, contentMs, 'Enter pick')
+      const expectedGroup = msg.activeGroupKey ?? msg.groupKey
+      if (expectedGroup !== undefined && entered?.activeGroupKey !== expectedGroup) {
+        const err = new Error('active_group_not_confirmed')
+        err.code = 'group_conflict'
+        throw err
+      }
+      rememberPickFrame(tabId, {
+        frameId: matched.frameId,
+        sessionId: msg.sessionId,
+        groupKey: msg.groupKey,
+        ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
+        ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {}),
+        parentFrameId: fromFrameId,
+        ...(fromFrameId !== 0 && typeof sender?.url === 'string' ? { parentFrame: { url: sender.url } } : {}),
+        frame: { url: frames.find(f => f.frameId === matched.frameId)?.url || msg.src,
+          ...(msg.frameAnchor ? { anchor: structuredClone(msg.frameAnchor) } : {}) }
+      })
+      return { ok: true, frameId: matched.frameId, frame: frameStateOf(tabId).frame, activeGroupKey: msg.activeGroupKey ?? msg.groupKey }
+    } catch (err) {
+      // 目的 frame 可能拒絕注入（權限／文件剛換）；不退回頂層靜默繼續。
+      rememberPickFrame(tabId, {
+        frameId: fromFrameId,
+        sessionId: msg.sessionId,
+        groupKey: msg.groupKey,
+        ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
+        ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {})
+      })
+      try {
+        await injectContent(tabId, { frameId: fromFrameId })
+        await sendToFrame(tabId, { ...enter, hint: 'frame_not_found', frameError: 'inject_denied' }, fromFrameId, contentMs, 'Resume old pick frame')
+      } catch {}
+      return { ...pickTransitionError('frame_unavailable', frames), detail: String(err?.message || err) }
+    }
+  }
+  // 舊 content 只認 frame_not_found；詳細的 ambiguous/unavailable 留在回傳狀態，
+  // 讓既有頁面仍能顯示可重試提示而不誤當成成功。
+  const hint = 'frame_not_found'
+  const transitionHint = matched?.ambiguous ? 'frame_ambiguous' : (frames.length === 0 ? 'frame_unavailable' : hint)
+  const backTo = fromFrameId
+  // 只退回發出要求的那一層，並保留 session／group；絕不猜成 top frame。
+  try {
+    await sendToFrame(tabId, { ...enter, hint, frameError: transitionHint }, backTo, contentMs, 'Resume pick frame')
+  } catch {}
+  return { ...pickTransitionError(transitionHint, matched?.ambiguous || frames), frameId: backTo }
+}
+
+async function onEnterPick(msg, sender, runOpts, ctx) {
+  const { contentMs } = ctx
+  if (msg.tabId) {
+    if (msg.sessionId !== undefined && msg.routeIdentity !== undefined) {
+      const currentTab = await chrome.tabs.get(msg.tabId).catch(() => null)
+      if (!draftRouteMatchesTab(msg.routeIdentity, currentTab?.url)) {
+        return { ok: false, error: 'stale_route', retryable: true, message: '目前頁面路徑已變更，請重新確認選取來源' }
+      }
+    }
+    groupNamePickRequests.delete(msg.tabId)
+    let frameId = msg.frameId ?? null
+    let frameCandidates = []
+    if (frameId === null && msg.frame?.url) {
+      try { frameCandidates = await listFrames(msg.tabId) } catch {}
+      const matched = matchFrameByUrl(frameCandidates, msg.frame.url)
+      if (matched?.frameId === undefined) {
+        const hint = matched?.ambiguous ? 'frame_ambiguous' : 'frame_unavailable'
+        return pickTransitionError(hint, matched?.ambiguous || frameCandidates)
+      }
+      frameId = matched.frameId
+    }
+    if (frameId === null) frameId = 0
+    // popup 的「選取要抓的內容」走這裡：面板已由 popup 自己開好，
+    // 但沒有表單時要先顯示等待態（同右鍵入口），否則面板是一張空白表單
+    const batch = msg.batch === true
+    // popup 送完就關視窗：被擋時一定要把說明留在面板上，不能只回 ok:false（靜默無事）
+    if (msg.purpose === 'task' && !(await applyPickEntry(
+      msg.tabId, batch, msg.sessionId, msg.groupKey, msg.documentGeneration, msg.routeIdentity
+    ))) {
+      return { ok: false, error: 'pick_entry_blocked', retryable: true,
+        message: '多值草稿無法進入頁面選取；請確認目前作用組，再重試' }
+    }
+    const previousFrame = frameStateOf(msg.tabId)
+    if (previousFrame && previousFrame.frameId !== frameId) {
+      try { await sendToFrame(msg.tabId, { type: MSG.EXIT_PICK, ...pickIdentityOf(msg) }, previousFrame.frameId, contentMs, 'Exit old pick frame') } catch {}
+    }
+    await injectContent(msg.tabId, { frameId })
+    const known = msg.taskId ? await getTask(msg.taskId) : null
+    const enter = {
+      type: MSG.ENTER_PICK,
+      purpose: msg.purpose,
+      taskId: msg.taskId,
+      // 重選開的是新分頁，那裡沒有「上次右鍵的元素」可用；
+      // 要靠任務自己的 locator 才找得到目標，也才勾得回既有的值
+      locator: msg.locator || known?.locator,
+      preselect: msg.preselect || preselectOf(known)
+    }
+    Object.assign(enter, pickIdentityOf(msg))
+    if (msg.documentGeneration !== undefined) enter.documentGeneration = structuredClone(msg.documentGeneration)
+    if (msg.routeIdentity !== undefined) enter.routeIdentity = structuredClone(msg.routeIdentity)
+    if (msg.draftValues !== undefined) enter.draftValues = structuredClone(msg.draftValues)
+    if (msg.frameAnchor) enter.frameAnchor = msg.frameAnchor
+    if (batch) enter.batch = true
+    await sendToFrame(msg.tabId, enter, frameId, contentMs, 'Enter pick')
+    const frameUrl = frameCandidates.find(f => f.frameId === frameId)?.url || msg.frame?.url
+    rememberPickFrame(msg.tabId, {
+      frameId,
+      sessionId: msg.sessionId,
+      groupKey: msg.groupKey,
+      ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
+      ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {}),
+      ...(frameUrl ? { frame: { url: frameUrl, ...(msg.frameAnchor ? { anchor: structuredClone(msg.frameAnchor) } : {}) } } : {})
+    })
+    return { ok: true, frameId, activeGroupKey: msg.activeGroupKey ?? msg.groupKey }
+  }
+
+  const task = await getTask(msg.taskId)
+  if (!task) {
+    return { ok: false }
+  }
+  const tab = await chrome.tabs.create({ url: task.url, active: true })
+  if (!tab?.id) return { ok: false }
+  // 這個分頁是我們為了重選開的，選完（或取消）要收掉，不然每重選一次留一個
+  await rememberRepickTab(msg.taskId, tab.id)
+  const pollMs = msg.pollMs ?? 250
+  const loadTimeoutMs = msg.loadTimeoutMs ?? 30000
+  let tabInfo = await chrome.tabs.get(tab.id)
+  const loadStart = Date.now()
+  while (tabInfo?.status !== 'complete' && Date.now() - loadStart < loadTimeoutMs) {
+    await sleep(pollMs)
+    tabInfo = await chrome.tabs.get(tab.id)
+  }
+
+  const loc = await locateFrame(tab.id, task.frame, task.locator, { pollMs })
+  // 失敗時回的是帶候選清單的物件（診斷用），判定看有沒有 frameId
+  if (!loc || typeof loc.frameId !== 'number') {
+    return { ok: false, error: 'frame_not_found' }
+  }
+
+  const frameId = loc.frameId
+  await injectContent(tab.id, { frameId })
+  await sendToFrame(tab.id, {
+    type: MSG.ENTER_PICK,
+    purpose: msg.purpose || 'repick',
+    taskId: msg.taskId,
+    // 這是重選最常走的那條路（任務頁不帶 tabId）：新分頁沒有「上次右鍵的元素」，
+    // 不帶這兩個欄位就沒有預選對象，既有的值也勾不回來
+    locator: msg.locator || task.locator,
+    preselect: msg.preselect || preselectOf(task)
+  }, frameId, contentMs, 'Enter pick')
+  return { ok: true }
+}
+
+async function onTestLogin(msg, sender, runOpts, ctx) {
+  return await handleTestLogin(msg, runOpts)
+}
+
+async function onMarkRead(msg, sender, runOpts, ctx) {
+  if (Array.isArray(msg.taskIds)) {
+    for (const id of msg.taskIds) await markRead(id)
+  }
+  await refreshBadge()
+  return { ok: true }
+}
+
+async function onGetNextRuns(msg, sender, runOpts, ctx) {
+  const alarms = await chrome.alarms.getAll()
+  const nextRuns = {}
+  for (const alarm of alarms) {
+    const parsed = parseAlarmName(alarm.name)
+    if (parsed?.taskId && typeof alarm.scheduledTime === 'number') {
+      const prev = nextRuns[parsed.taskId]
+      if (prev === undefined || alarm.scheduledTime < prev) {
+        nextRuns[parsed.taskId] = alarm.scheduledTime
+      }
+    }
+  }
+  return { nextRuns }
+}
+
+async function onSelfCheck(msg, sender, runOpts, ctx) {
+  await selfCheck()
+  return { ok: true }
+}
+
+// 訊息型別 → 處理函式。型別只會對到一個值，所以每個處理函式的所有路徑都要自己 return
+const MESSAGE_ROUTES = {
+  [MSG.PICK_GROUP_NAME]: onPickGroupName,
+  [MSG.BEGIN_FIELD_REPAIR]: onBeginFieldRepair,
+  [MSG.PICK_GROUP_NAME_RESULT]: onPickGroupNameResult,
+  [MSG.PICK_DRAFT_FINISH_REQUEST]: onPickDraftFinishRequest,
+  [MSG.PICK_DRAFT_BEGIN]: onPickDraftBegin,
+  [MSG.PICK_DRAFT_READ]: onPickDraftRead,
+  [MSG.PICK_DRAFT_OPERATION]: onPickDraftOperation,
+  [MSG.PICK_DRAFT_COMPLETE]: onPickDraftComplete,
+  [MSG.PICK_DRAFT_ABANDON]: onPickDraftAbandon,
+  [MSG.PICK_DRAFT_FINALIZE]: onPickDraftAbandon,
+  [MSG.PICK_DRAFT_PAUSE]: onPickDraftPause,
+  [MSG.TEST_TASK]: onTestTask,
+  [MSG.RUN_TASK]: onRunTask,
+  [MSG.REBUILD_ALARMS]: onRebuildAlarms,
+  [MSG.CATCH_UP_ONE]: onCatchUpOne,
+  [MSG.SKIP_ONE]: onSkipOne,
+  [MSG.RESOLVE_PANEL_TAB]: onResolvePanelTab,
+  [MSG.PANEL_CLOSING]: onPanelClosing,
+  [MSG.CLOSE_PANEL]: onClosePanel,
+  [MSG.PICKED]: onPickedMessage,
+  [MSG.DESCEND_FRAME]: onDescendFrame,
+  [MSG.ENTER_PICK]: onEnterPick,
+  [MSG.TEST_LOGIN]: onTestLogin,
+  [MSG.MARK_READ]: onMarkRead,
+  [MSG.GET_NEXT_RUNS]: onGetNextRuns,
+  [MSG.SELF_CHECK]: onSelfCheck
+}
+
 export async function handleMessage(msg, sender, runOpts = {}) {
   const contentMs = runOpts.contentTimeoutMs ?? CONTENT_MESSAGE_TIMEOUT_MS
   try {
@@ -1628,679 +2341,10 @@ export async function handleMessage(msg, sender, runOpts = {}) {
       return { ok: false, error: 'forbidden' }
     }
 
-    if (msg.type === MSG.PICK_GROUP_NAME) return await requestGroupNamePick(msg)
-    if (msg.type === MSG.BEGIN_FIELD_REPAIR) return await beginFieldRepair(msg)
-    if (msg.type === MSG.PICK_GROUP_NAME_RESULT) {
-      const tabId = sender?.tab?.id
-      const active = Number.isInteger(tabId) ? frameStateOf(tabId) : null
-      const request = Number.isInteger(tabId) ? groupNamePickRequests.get(tabId) : null
-      let currentTabUrl = ''
-      try { currentTabUrl = Number.isInteger(tabId) ? ((await chrome.tabs.get(tabId))?.url || '') : '' } catch {}
-      if (!Number.isInteger(tabId) || typeof msg.sessionId !== 'string' || typeof msg.groupKey !== 'string' ||
-          typeof msg.requestId !== 'string' || !request || request.requestId !== msg.requestId ||
-          request.sessionId !== msg.sessionId || request.groupKey !== msg.groupKey ||
-          !draftIdentityMatches(msg, request) ||
-          (request.expectedUrl && currentTabUrl && request.expectedUrl !== currentTabUrl) ||
-          (active && (active.sessionId !== msg.sessionId || (active.groupKey && active.groupKey !== msg.groupKey) ||
-            active.frameId !== (sender?.frameId ?? 0) || !draftIdentityMatches(msg, active))) ||
-          (!active && (sender?.frameId ?? 0) !== 0)) {
-        return { ok: false, error: 'stale_frame', message: '取名回報來自已失效的選取階段' }
-      }
-      const draft = await getPickDraft(tabId, { sessionId: msg.sessionId })
-      if (!draft || draft.activeGroupKey !== msg.groupKey || !draft.groups.some(group => group.key === msg.groupKey) || !draftIdentityMatches(msg, draft)) {
-        return { ok: false, error: 'group_not_found', message: '目前群組已不存在' }
-      }
-      try {
-        await chrome.runtime.sendMessage({
-          type: MSG.PICK_GROUP_NAME_RESULT,
-          tabId,
-          requestId: msg.requestId,
-          sessionId: msg.sessionId,
-          groupKey: msg.groupKey,
-          documentGeneration: draft.documentGeneration,
-          routeIdentity: draft.routeIdentity,
-          text: typeof msg.text === 'string' ? msg.text : ''
-        })
-      } catch {}
-      groupNamePickRequests.delete(tabId)
-      return { ok: true }
-    }
-
-    // C1b：草稿訊息只由 extension page 送出，所有變更都在 pick-protocol
-    // 的 session 鎖內完成。這條路與舊 PICKED／repick 路徑分開，保留舊單任務相容性。
-    if (msg.type === MSG.PICK_DRAFT_BEGIN) return await beginPickDraft(msg, sender)
-    if (msg.type === MSG.PICK_DRAFT_READ) return await readPickDraftMessage(msg, sender)
-    if (msg.type === MSG.PICK_DRAFT_OPERATION) {
-      const operation = msg.operation || msg
-      if (operation.type === 'set-active' || operation.op === 'set-active') {
-        const tabId = msg.tabId ?? sender?.tab?.id
-        const draft = await getPickDraft(tabId, { sessionId: msg.sessionId })
-        if (!draft || draft.sessionId !== msg.sessionId) return { ok: false, error: 'stale_session', message: '選取階段已變更，請重新整理後重試' }
-        const drained = await drainPickDraft(tabId, draft, contentMs)
-        if (!drained.ok) return { ok: false, error: 'drain_failed', retryable: true, message: drained.message }
-        const latest = await getPickDraft(tabId, { sessionId: draft.sessionId })
-        if (!latest || latest.sessionId !== draft.sessionId) return { ok: false, error: 'stale_session', message: '選取階段已變更，請重新整理後重試' }
-        try {
-          const result = await handlePickDraftOperation({ ...msg, expectedRevision: latest.revision }, sender)
-          if (!result?.ok) await drainPickDraft(tabId, latest, contentMs, true)
-          return result
-        } catch (error) {
-          await drainPickDraft(tabId, latest, contentMs, true)
-          throw error
-        }
-      }
-      return await handlePickDraftOperation(msg, sender)
-    }
-    if (msg.type === MSG.PICK_DRAFT_COMPLETE) {
-      const tabId = msg.tabId ?? sender?.tab?.id
-      const before = await getPickDraft(tabId, { sessionId: msg.sessionId })
-      if (!before || before.sessionId !== msg.sessionId) return { ok: false, error: 'stale_session', message: '選取階段已變更，請重新整理後重試' }
-      if (!before.groups?.length || before.groups.some(group => !Array.isArray(group.values) || group.values.length === 0)) {
-        return { ok: false, synchronized: false, error: 'empty_group', message: '每個群組完成前都必須至少有一個值' }
-      }
-      const drained = await drainPickDraft(tabId, before, contentMs)
-      if (!drained.ok) return { ok: false, error: 'drain_failed', retryable: true, message: drained.message }
-      const latest = await getPickDraft(tabId, { sessionId: before.sessionId })
-      if (!latest || latest.sessionId !== before.sessionId) return { ok: false, error: 'stale_session', message: '選取階段已變更，請重新整理後重試' }
-      if (!latest.groups?.length || latest.groups.some(group => !Array.isArray(group.values) || group.values.length === 0)) {
-        await drainPickDraft(tabId, latest, contentMs, true)
-        return { ok: false, synchronized: false, error: 'empty_group', message: '每個群組完成前都必須至少有一個值' }
-      }
-      const sourcesChecked = await drainPickDraft(tabId, latest, contentMs, false, true)
-      if (!sourcesChecked.ok) return { ok: false, error: 'drain_failed', retryable: true, message: sourcesChecked.message }
-      let completed
-      try {
-        completed = await completePickDraft({ ...msg, expectedRevision: latest.revision }, sender)
-      } catch (error) {
-        await drainPickDraft(tabId, latest, contentMs, true)
-        throw error
-      }
-      if (!completed?.ok) await drainPickDraft(tabId, latest, contentMs, true)
-      if (completed?.ok && completed.snapshot) {
-        const groups = Array.isArray(completed.snapshot.groups) ? completed.snapshot.groups : []
-        if (groups.length === 0 || groups.some(group => !Array.isArray(group?.values) || group.values.length === 0)) {
-          return {
-            ...completed,
-            ok: false,
-            synchronized: false,
-            error: 'empty_group',
-            message: '每個群組完成前都必須至少有一個值'
-          }
-        }
-        const previousPanel = await getPanelCtx(completed.tabId)
-        const stagedDraft = await markPickSnapshotSettings(completed.snapshot)
-        const ctx = await pickerContextOfSnapshot(completed.snapshot)
-        const batch = previousPanel?.batch === true
-        const items = batch ? pickerBatchItemsOfSnapshot(completed.snapshot, ctx) : null
-        const batchNames = batch
-          ? Object.fromEntries(groups.map((group, index) => [group.key, typeof group.name === 'string' && group.name.trim() ? group.name : `值 ${index + 1}`]))
-          : null
-        const panelContext = batch
-          ? {
-              kind: 'batch',
-              batch: true,
-              items,
-              draft: { ...(completed.snapshot.form || {}), batchNames },
-              pickSessionId: completed.snapshot.sessionId,
-              pickGroupKey: null
-            }
-          : {
-              kind: 'new',
-              ctx,
-              draft: { name: groups[0]?.name || '', ...(completed.snapshot.form || {}) },
-              pickSessionId: completed.snapshot.sessionId,
-              pickGroupKey: groups[0]?.key
-            }
-        // 完成後把設定階段寫回同一個分頁 ctx；面板重載時仍會進設定頁，
-        // 而不是再次顯示「等待設定畫面」或重新建立欄位。
-        await setPanelCtx(completed.tabId, panelContext)
-        await releasePickDraftSources(completed.tabId, completed.snapshot.sessionId, completed.snapshot)
-        return { ...completed, draft: stagedDraft, context: ctx, panelContext }
-      }
-      return completed
-    }
-    if (msg.type === MSG.PICK_DRAFT_ABANDON || msg.type === MSG.PICK_DRAFT_FINALIZE) {
-      const result = await abandonPickDraft(msg, sender)
-      if (result?.ok) {
-        const tabId = msg.tabId ?? sender?.tab?.id
-        await releasePickDraftSources(tabId, msg.sessionId)
-        pickParticipantFrames.delete(tabId)
-        forgetPickFrame(tabId)
-      }
-      return result
-    }
-    if (msg.type === MSG.PICK_DRAFT_PAUSE) {
-      const tabId = Number.isInteger(sender?.tab?.id) ? sender.tab.id : msg.tabId
-      if (msg.operationId !== undefined || msg.expectedRevision !== undefined || msg.operation) {
-        return await handlePickDraftOperation({ ...msg, operation: msg.operation || { type: 'pause' } }, sender)
-      }
-      const draft = await pausePickDraft(tabId)
-      return { ok: true, paused: Boolean(draft), draft }
-    }
-
-    if (msg.type === MSG.TEST_TASK) {
-      const task = msg.task
-      if (!task || typeof task !== 'object' || typeof task.url !== 'string' || !task.url.trim() ||
-          !task.spec || typeof task.spec !== 'object' || Array.isArray(task.spec)) {
-        return { ok: false, error: '任務設定不完整' }
-      }
-      try {
-        const isMulti = task.mode === 'multi' || task.spec.mode === 'multi'
-        if (isMulti) {
-          validateMultiTask(task)
-        } else if (!task.locator || typeof task.locator !== 'object' || Array.isArray(task.locator) || Object.keys(task.locator).length === 0) {
-          throw new Error('locator 必須是非空物件')
-        }
-        const sources = normalizeTaskSources(task)
-        if (sources.length === 0 || sources.some(field =>
-          !field.source?.locator || typeof field.source.locator !== 'object' ||
-          Array.isArray(field.source.locator) || Object.keys(field.source.locator).length === 0
-        )) throw new Error('每個值都必須有合法來源定位')
-      } catch (error) {
-        return { ok: false, error: '任務設定不完整', message: String(error?.message || error) }
-      }
-      return await runTask(task, {
-        ...runOpts,
-        dryRun: true,
-        reason: 'manual',
-        tabId: msg.tabId,
-        interactivePreview: true
-      })
-    }
-
-    if (msg.type === MSG.RUN_TASK) {
-      const { task } = await getValidTask(msg.taskId)
-      if (!task) {
-        return { ok: false, outcome: 'failed', error: '找不到任務' }
-      }
-      const multi = task.mode === 'multi' || task.spec?.mode === 'multi'
-      if (multi && (!Array.isArray(task.fields) || task.fields.length === 0)) {
-        return { ok: false, outcome: 'failed', status: 'error', error: '多來源任務沒有可執行欄位', values: [] }
-      }
-      const hasDeclaredFields = Array.isArray(task.fields) && task.fields.length > 0
-      const executionId = globalThis.crypto?.randomUUID?.() || `manual-${Date.now()}-${Math.random().toString(36).slice(2)}`
-      const record = await runTask(task, {
-        slot: slotOf(Date.now()),
-        ...runOpts,
-        reason: 'manual',
-        ...(hasDeclaredFields ? { executionId } : {})
-      })
-      if (!record) {
-        return { ok: true, outcome: 'failed', status: 'error', error: '沒有結果' }
-      }
-      // 多值任務要逐值回報，只回第一筆使用者看不出另外幾個值怎麼了
-      let values
-      if (hasDeclaredFields && typeof record.slot === 'string') {
-        const recordsById = new Map()
-        for (const r of await getRecordsByDate(record.slot.slice(0, 10))) {
-          if (r.slot !== record.slot || r.executionId !== executionId || parentIdOf(r.taskId) !== task.id) continue
-          recordsById.set(r.taskId, r)
-        }
-        const idx = buildSeriesIndex([task])
-        values = task.fields.map(field => {
-          const r = recordsById.get(seriesIdOf(task.id, field.key))
-          return r ? ({
-            // 按鈕就在那個任務旁邊，用值名就夠，不必每個都重複任務名
-            name: idx.byId[r.taskId]?.shortName || nameOf(idx, r.taskId),
-            ok: isSuccess(r),
-            value: isSuccess(r) ? r.value : undefined,
-            error: isSuccess(r) ? undefined : (r.error || statusTextOf(r.status))
-          }) : ({ name: field.name || field.key, ok: false, error: '本次沒有結果' })
-        })
-        const successes = values.filter(value => value.ok).length
-        // 新 multi 協定公開整批完成度；舊 block 呼叫端沿用父紀錄的成功語意。
-        const outcome = multi
-          ? (successes === values.length ? 'done' : successes > 0 ? 'partial' : 'failed')
-          : (isSuccess(record) ? 'done' : 'failed')
-        return { ok: true, outcome, status: record.status, values }
-      }
-
-      if (isSuccess(record)) {
-        return { ok: true, outcome: 'done', status: record.status, value: record.value, values }
-      }
-      return { ok: true, outcome: 'failed', status: record.status, error: record.error || '', values }
-    }
-
-    if (msg.type === MSG.REBUILD_ALARMS) {
-      await rebuildAlarms()
-      await schedulePrechecks()
-      // 任務清單變了,燈號要跟著更新(否則 popup 上的燈號會停在舊狀態)
-      await refreshBadge()
-      return { ok: true }
-    }
-
-    if (msg.type === MSG.CATCH_UP_ONE) {
-      await catchUpOne(msg.taskId, msg.slot, (task, opts) => runTask(task, opts))
-      await refreshBadge()
-      return { ok: true }
-    }
-
-    if (msg.type === MSG.SKIP_ONE) {
-      const removed = await skipOne(msg.taskId, msg.slot)
-      await refreshBadge()
-      // 比不到就不能靜默成功：畫面上那一筆已經過期（gap 的 slot 每輪會延），要請使用者重新整理
-      if (removed === 0) return { ok: false, error: '這一筆已經不在清單裡，請重新整理' }
-      return { ok: true, removed }
-    }
-
-    // 面板無法自己判斷歸屬：它的 sender.tab 永遠是 null、網址參數重載後會被丟掉，
-    // 載入當下查 active tab 又會在切換競態中拿到舊分頁（B-0 #11、#12）。
-    // 面板改成拿得到的 windowId 來問，由這裡回答那個視窗現在的作用分頁。
-    if (msg.type === MSG.RESOLVE_PANEL_TAB) {
-      const windowId = msg.windowId
-      if (windowId === undefined || windowId === null) return { ok: false }
-      // 查不到就回 null：猜一個別的視窗的作用分頁，會讓面板拿別人的 ctx 去讀寫。
-      // 面板下一次轉為可見時會自己再問一次（自癒）
-      const tabs = await chrome.tabs.query({ active: true, windowId })
-      const tabId = tabs?.[0]?.id ?? null
-      return { ok: tabId !== null, tabId }
-    }
-
-    if (msg.type === MSG.PANEL_CLOSING) {
-      await closePanelFor(msg.tabId)
-      return { ok: true }
-    }
-
-    if (msg.type === MSG.CLOSE_PANEL) {
-      await closePanel(msg.tabId)
-      await closePanelFor(msg.tabId)
-      return { ok: true }
-    }
-
-    if (msg.type === MSG.PICKED) {
-      if (msg.repairSessionId !== undefined) return await applyFieldRepair(msg, sender)
-      const pickedTabId = sender?.tab?.id
-      const activeFrame = Number.isInteger(pickedTabId) ? frameStateOf(pickedTabId) : null
-      const participant = Number.isInteger(pickedTabId) ? pickParticipantFrames.get(pickedTabId) : null
-      // Legacy PICKED has no sessionId. Do not match two absent ids and then
-      // dereference a participant frame map; only C2b session messages may use
-      // the per-session participant document guard.
-      const knownParticipant = participant && msg.sessionId !== undefined &&
-        participant.sessionId === msg.sessionId
-        ? participant.frames.get(sender?.frameId ?? 0)
-        : null
-      if (knownParticipant?.documentId && sender?.documentId && knownParticipant.documentId !== sender.documentId) {
-        return { ok: false, error: 'stale_document', retryable: true, message: '這個框架的文件已重新載入，請重新進入後再選取' }
-      }
-      // 進入下一個 frame 後，舊文件晚到的完成回報不可覆蓋新階段。
-      // 沒有 C2a session 欄位的舊單任務仍沿用既有相容路徑。
-      if (activeFrame && msg.sessionId !== undefined) {
-        if (activeFrame.sessionId !== msg.sessionId || activeFrame.frameId !== (sender?.frameId ?? 0)) {
-          await logForbidden(sender, 'PICKED:stale-frame', `選取回報來自非作用中的框架 ${sender?.frameId ?? 0}`)
-          return { ok: false, error: 'stale_frame', retryable: true, message: '這個框架的選取階段已經變更，請重試' }
-        }
-        if (activeFrame.groupKey !== undefined && msg.groupKey !== undefined && activeFrame.groupKey !== msg.groupKey) {
-          return { ok: false, error: 'group_conflict', retryable: true, message: '目前作用中的群組已變更，請重新選取' }
-        }
-        if (!draftIdentityMatches(msg, activeFrame)) {
-          return { ok: false, error: 'stale_document', retryable: true, message: '頁面已變更，請重新整理後再選取' }
-        }
-      }
-      // 取消也要轉發給面板：不轉的話「在頁面上選取」那顆按鈕會一直卡在等待狀態
-      // （AF-10 修正：原本 cancelled 在轉發之前就 return 了）
-      if (msg.purpose === 'preaction' || (typeof msg.purpose === 'string' && msg.purpose.startsWith('login-'))) {
-        try {
-          await chrome.runtime.sendMessage({ ...msg, ...frameIdentityOf(sender) })
-        } catch {}
-        return { ok: true }
-      }
-
-      if (msg.cancelled === true) {
-        // 取消也要收掉「為了重選而開的那個分頁」，否則每取消一次殘留一個
-        // 只有那個重選分頁自己送的取消才收掉它（任何網頁送一個取消就能關掉我們開的分頁，AF-21 終檢）
-        if (msg.purpose === 'repick' && msg.taskId !== undefined) {
-          const expected = (await getRepickTabs())[msg.taskId]
-          if (!sender?.tab || sender.tab.id === expected) await closeRepickTab(msg.taskId)
-        }
-        return { ok: true }
-      }
-
-      // AF-22 C2a：有 C1b session/group 的選取結果，先在鎖內寫回 draft；
-      // 舊的無 session PICKED 才走下面相容的 panel ctx 路徑。
-      if (msg.purpose === 'task' && msg.sessionId !== undefined &&
-          (msg.groupKey !== undefined || msg.activeGroupKey !== undefined)) {
-        const draftResult = await appendPickedToDraft(msg, sender)
-        if (draftResult?.ok === true) rememberPickParticipant(sender?.tab?.id, msg.sessionId, sender)
-        if (draftResult) return draftResult
-      }
-
-      if (msg.purpose === 'task') {
-        const tabId = sender?.tab?.id
-        // 批次（一次建立多個任務）：每一組補上與單任務相同的欄位，另給穩定鍵；不帶舊草稿、不算換目標
-        if (Array.isArray(msg.batch)) {
-          const items = msg.batch.map((one, i) => ({ key: `b${i + 1}`, ...taskPayloadOf(one, sender) }))
-          await setPanelCtx(tabId, { kind: 'batch', items })
-          return { ok: true }
-        }
-        let payload = taskPayloadOf(msg, sender, msg)
-        // 面板已經開著、使用者也填了一半的表單時，**只換目標**：
-        // 名稱、排程、儀表板、進階設定全部留著（右鍵重選一個目標不該把表單清空）
-        const existing = await getPanelCtx(tabId)
-        // 面板已經關掉（暫存被清），頁面卻還在選取模式：值選好了沒有人接。
-        // 使用者看到的是「選完什麼都沒發生」，沒有這一筆就查不出原因
-        if (!existing) {
-          await diag.log('panel_missing_on_pick', { tabId, purpose: msg.purpose })
-        }
-        const keepDraft = existing && (existing.kind === 'new' || existing.kind === 'edit')
-        const sameFrameDraft = existing && existing.pickSessionId !== undefined &&
-          msg.sessionId !== undefined && existing.pickSessionId === msg.sessionId &&
-          (existing.pickGroupKey === undefined || msg.groupKey === undefined || existing.pickGroupKey === msg.groupKey)
-        if (sameFrameDraft) {
-          payload = mergeFramePickPayload(existing.ctx, payload)
-        }
-        await mergePanelCtx(tabId, {
-          kind: 'new',
-          ctx: payload,
-          ...(msg.sessionId !== undefined ? { pickSessionId: msg.sessionId } : {}),
-          ...(msg.groupKey !== undefined ? { pickGroupKey: msg.groupKey } : {}),
-          retarget: Boolean(keepDraft && existing.ctx),
-          // 淺層合併：被擋時留下的說明與等待態的多任務旗標不得跟到新表單上（AF-18 終檢）
-          notice: undefined,
-          batch: undefined
-        })
-        return { ok: true }
-      }
-
-      if (msg.purpose === 'repick') {
-        // 只認「為了重選而開的那個分頁」送來的（AF-21 終檢）：別的網頁的 content script 也送得出 PICKED，
-        // 不核對分頁的話任何頁面都能改掉任意任務的定位
-        const expectedTab = (await getRepickTabs())[msg.taskId]
-        const senderTab = sender?.tab?.id
-        if (typeof expectedTab !== 'number' || senderTab !== expectedTab) {
-          await logForbidden(sender, 'PICKED:repick', `重選 ${msg.taskId} 來自分頁 ${senderTab}（${sender?.url}），不是重選開的分頁 ${expectedTab}`)
-          return { ok: false, error: 'forbidden' }
-        }
-        // 鎖內讀最新的任務再套用重選，不會把同時寫入的 notFoundStreak 之類洗掉
-        let orphanSeries = []
-        const [task] = await updateTasks([msg.taskId], (t) => {
-          t.locator = msg.locator
-          orphanSeries = applyRepick(t, Array.isArray(msg.picks) ? msg.picks : [])
-          return t
-        })
-        if (!task) {
-          return { ok: true }
-        }
-        // 被移除的值：清掉它們在儀表板上的來源與最後一次的值，紀錄留到保留天數自然到期。
-        // 不清的話卡片會一直指著不存在的序列，使用者只看得到一張永遠空白的卡
-        if (Array.isArray(orphanSeries) && orphanSeries.length > 0) {
-          await pruneSeries(orphanSeries)
-          await deleteLastValues(orphanSeries)
-          await diag.log('fields_pruned', { taskId: task.id, series: orphanSeries })
-        }
-        // 定位換了會影響抓取：排程與燈號要跟著重算（其他改任務的路徑都有做，這裡漏了）
-        await rebuildAlarms()
-        await refreshBadge()
-        // 為了重選而開的分頁由我們收掉（使用者原本就開著的那個不動）
-        await closeRepickTab(msg.taskId)
-        return { ok: true }
-      }
-
-      return { ok: true }
-    }
-
-    if (msg.type === MSG.DESCEND_FRAME) {
-      const tabId = sender?.tab?.id
-      if (!tabId) return { ok: true }
-      const fromFrameId = sender?.frameId ?? 0
-      const activeFrame = frameStateOf(tabId)
-      if (msg.sessionId !== undefined && activeFrame &&
-          (activeFrame.sessionId !== msg.sessionId || activeFrame.frameId !== fromFrameId)) {
-        return { ok: false, error: 'stale_frame', retryable: true, message: '這個框架的選取階段已經變更，請重試' }
-      }
-      if (msg.direction === 'ascend') {
-        if (!activeFrame || activeFrame.frameId !== fromFrameId || !Number.isInteger(activeFrame.parentFrameId)) {
-          return { ok: false, error: 'frame_parent_unknown', retryable: true, message: '找不到這個框架的上一層，請重新進入選取' }
-        }
-        const parentId = activeFrame.parentFrameId
-        const enterParent = {
-          type: MSG.ENTER_PICK,
-          purpose: msg.purpose,
-          taskId: msg.taskId,
-          ...pickIdentityOf(msg),
-          ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
-          ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {}),
-          ...(msg.draftValues !== undefined ? { draftValues: structuredClone(msg.draftValues) } : {}),
-          ...(msg.draftRevision !== undefined ? { draftRevision: msg.draftRevision } : {}),
-          ...(activeFrame.parentFrame ? { frame: activeFrame.parentFrame } : {})
-        }
-        try { await sendToFrame(tabId, { type: MSG.EXIT_PICK, ...pickIdentityOf(msg) }, fromFrameId, contentMs, 'Exit child pick frame') } catch {}
-        try {
-          await injectContent(tabId, { frameId: parentId })
-          const entered = await sendToFrame(tabId, enterParent, parentId, contentMs, 'Enter parent pick frame')
-          const expectedGroup = msg.activeGroupKey ?? msg.groupKey
-          if (expectedGroup !== undefined && entered?.activeGroupKey !== expectedGroup) {
-            const err = new Error('active_group_not_confirmed')
-            err.code = 'group_conflict'
-            throw err
-          }
-          rememberPickFrame(tabId, {
-            frameId: parentId,
-            sessionId: msg.sessionId,
-            groupKey: msg.groupKey,
-            ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
-            ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {}),
-            ...(activeFrame.parentFrame ? { frame: activeFrame.parentFrame } : {})
-          })
-          return { ok: true, frameId: parentId, activeGroupKey: msg.activeGroupKey ?? msg.groupKey }
-        } catch (err) {
-          try {
-            await injectContent(tabId, { frameId: fromFrameId })
-            await sendToFrame(tabId, { ...enterParent, hint: 'frame_not_found', frameError: 'parent_inject_denied' }, fromFrameId, contentMs, 'Resume child pick frame')
-          } catch {}
-          return { ...pickTransitionError('frame_unavailable'), detail: String(err?.message || err) }
-        }
-      }
-      const enter = {
-        type: MSG.ENTER_PICK,
-        purpose: msg.purpose,
-        taskId: msg.taskId,
-        preselect: msg.preselect,
-        ...pickIdentityOf(msg),
-        ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
-        ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {}),
-        ...(msg.draftValues !== undefined ? { draftValues: structuredClone(msg.draftValues) } : {}),
-        ...(msg.frameAnchor ? { frameAnchor: msg.frameAnchor } : {}),
-        ...(msg.draftRevision !== undefined ? { draftRevision: msg.draftRevision } : {})
-      }
-      // 鑽進 iframe 之後仍是同一輪批次選取
-      if (msg.batch === true) enter.batch = true
-      // 選取當下沒有目標的 locator 可以驗證，所以只用網址比對；
-      // 不是唯一命中就退回原本那一層，硬猜會鑽錯 iframe
-      let frames = []
-      try { frames = await listFrames(tabId) } catch {}
-      const matched = matchFrameByUrl(frames, msg.src)
-      if (matched?.frameId !== undefined) {
-        // 舊 frame 先停掉；失敗時會在同一層重新進入並帶明確可重試原因。
-        try { await sendToFrame(tabId, { type: MSG.EXIT_PICK, ...pickIdentityOf(msg) }, fromFrameId, contentMs, 'Exit old pick frame') } catch {}
-        try {
-          await injectContent(tabId, { frameId: matched.frameId })
-          const entered = await sendToFrame(tabId, {
-            ...enter,
-            parentFrameId: fromFrameId,
-            frame: { url: frames.find(f => f.frameId === matched.frameId)?.url || msg.src,
-              ...(msg.frameAnchor ? { anchor: msg.frameAnchor } : {}) }
-          }, matched.frameId, contentMs, 'Enter pick')
-          const expectedGroup = msg.activeGroupKey ?? msg.groupKey
-          if (expectedGroup !== undefined && entered?.activeGroupKey !== expectedGroup) {
-            const err = new Error('active_group_not_confirmed')
-            err.code = 'group_conflict'
-            throw err
-          }
-          rememberPickFrame(tabId, {
-            frameId: matched.frameId,
-            sessionId: msg.sessionId,
-            groupKey: msg.groupKey,
-            ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
-            ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {}),
-            parentFrameId: fromFrameId,
-            ...(fromFrameId !== 0 && typeof sender?.url === 'string' ? { parentFrame: { url: sender.url } } : {}),
-            frame: { url: frames.find(f => f.frameId === matched.frameId)?.url || msg.src,
-              ...(msg.frameAnchor ? { anchor: structuredClone(msg.frameAnchor) } : {}) }
-          })
-          return { ok: true, frameId: matched.frameId, frame: frameStateOf(tabId).frame, activeGroupKey: msg.activeGroupKey ?? msg.groupKey }
-        } catch (err) {
-          // 目的 frame 可能拒絕注入（權限／文件剛換）；不退回頂層靜默繼續。
-          rememberPickFrame(tabId, {
-            frameId: fromFrameId,
-            sessionId: msg.sessionId,
-            groupKey: msg.groupKey,
-            ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
-            ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {})
-          })
-          try {
-            await injectContent(tabId, { frameId: fromFrameId })
-            await sendToFrame(tabId, { ...enter, hint: 'frame_not_found', frameError: 'inject_denied' }, fromFrameId, contentMs, 'Resume old pick frame')
-          } catch {}
-          return { ...pickTransitionError('frame_unavailable', frames), detail: String(err?.message || err) }
-        }
-      }
-      // 舊 content 只認 frame_not_found；詳細的 ambiguous/unavailable 留在回傳狀態，
-      // 讓既有頁面仍能顯示可重試提示而不誤當成成功。
-      const hint = 'frame_not_found'
-      const transitionHint = matched?.ambiguous ? 'frame_ambiguous' : (frames.length === 0 ? 'frame_unavailable' : hint)
-      const backTo = fromFrameId
-      // 只退回發出要求的那一層，並保留 session／group；絕不猜成 top frame。
-      try {
-        await sendToFrame(tabId, { ...enter, hint, frameError: transitionHint }, backTo, contentMs, 'Resume pick frame')
-      } catch {}
-      return { ...pickTransitionError(transitionHint, matched?.ambiguous || frames), frameId: backTo }
-    }
-
-    if (msg.type === MSG.ENTER_PICK) {
-      if (msg.tabId) {
-        if (msg.sessionId !== undefined && msg.routeIdentity !== undefined) {
-          const currentTab = await chrome.tabs.get(msg.tabId).catch(() => null)
-          if (!draftRouteMatchesTab(msg.routeIdentity, currentTab?.url)) {
-            return { ok: false, error: 'stale_route', retryable: true, message: '目前頁面路徑已變更，請重新確認選取來源' }
-          }
-        }
-        groupNamePickRequests.delete(msg.tabId)
-        let frameId = msg.frameId ?? null
-        let frameCandidates = []
-        if (frameId === null && msg.frame?.url) {
-          try { frameCandidates = await listFrames(msg.tabId) } catch {}
-          const matched = matchFrameByUrl(frameCandidates, msg.frame.url)
-          if (matched?.frameId === undefined) {
-            const hint = matched?.ambiguous ? 'frame_ambiguous' : 'frame_unavailable'
-            return pickTransitionError(hint, matched?.ambiguous || frameCandidates)
-          }
-          frameId = matched.frameId
-        }
-        if (frameId === null) frameId = 0
-        // popup 的「選取要抓的內容」走這裡：面板已由 popup 自己開好，
-        // 但沒有表單時要先顯示等待態（同右鍵入口），否則面板是一張空白表單
-        const batch = msg.batch === true
-        // popup 送完就關視窗：被擋時一定要把說明留在面板上，不能只回 ok:false（靜默無事）
-        if (msg.purpose === 'task' && !(await applyPickEntry(
-          msg.tabId, batch, msg.sessionId, msg.groupKey, msg.documentGeneration, msg.routeIdentity
-        ))) {
-          return { ok: false, error: 'pick_entry_blocked', retryable: true,
-            message: '多值草稿無法進入頁面選取；請確認目前作用組，再重試' }
-        }
-        const previousFrame = frameStateOf(msg.tabId)
-        if (previousFrame && previousFrame.frameId !== frameId) {
-          try { await sendToFrame(msg.tabId, { type: MSG.EXIT_PICK, ...pickIdentityOf(msg) }, previousFrame.frameId, contentMs, 'Exit old pick frame') } catch {}
-        }
-        await injectContent(msg.tabId, { frameId })
-        const known = msg.taskId ? await getTask(msg.taskId) : null
-        const enter = {
-          type: MSG.ENTER_PICK,
-          purpose: msg.purpose,
-          taskId: msg.taskId,
-          // 重選開的是新分頁，那裡沒有「上次右鍵的元素」可用；
-          // 要靠任務自己的 locator 才找得到目標，也才勾得回既有的值
-          locator: msg.locator || known?.locator,
-          preselect: msg.preselect || preselectOf(known)
-        }
-        Object.assign(enter, pickIdentityOf(msg))
-        if (msg.documentGeneration !== undefined) enter.documentGeneration = structuredClone(msg.documentGeneration)
-        if (msg.routeIdentity !== undefined) enter.routeIdentity = structuredClone(msg.routeIdentity)
-        if (msg.draftValues !== undefined) enter.draftValues = structuredClone(msg.draftValues)
-        if (msg.frameAnchor) enter.frameAnchor = msg.frameAnchor
-        if (batch) enter.batch = true
-        await sendToFrame(msg.tabId, enter, frameId, contentMs, 'Enter pick')
-        const frameUrl = frameCandidates.find(f => f.frameId === frameId)?.url || msg.frame?.url
-        rememberPickFrame(msg.tabId, {
-          frameId,
-          sessionId: msg.sessionId,
-          groupKey: msg.groupKey,
-          ...(msg.documentGeneration !== undefined ? { documentGeneration: structuredClone(msg.documentGeneration) } : {}),
-          ...(msg.routeIdentity !== undefined ? { routeIdentity: structuredClone(msg.routeIdentity) } : {}),
-          ...(frameUrl ? { frame: { url: frameUrl, ...(msg.frameAnchor ? { anchor: structuredClone(msg.frameAnchor) } : {}) } } : {})
-        })
-        return { ok: true, frameId, activeGroupKey: msg.activeGroupKey ?? msg.groupKey }
-      }
-
-      const task = await getTask(msg.taskId)
-      if (!task) {
-        return { ok: false }
-      }
-      const tab = await chrome.tabs.create({ url: task.url, active: true })
-      if (!tab?.id) return { ok: false }
-      // 這個分頁是我們為了重選開的，選完（或取消）要收掉，不然每重選一次留一個
-      await rememberRepickTab(msg.taskId, tab.id)
-      const pollMs = msg.pollMs ?? 250
-      const loadTimeoutMs = msg.loadTimeoutMs ?? 30000
-      let tabInfo = await chrome.tabs.get(tab.id)
-      const loadStart = Date.now()
-      while (tabInfo?.status !== 'complete' && Date.now() - loadStart < loadTimeoutMs) {
-        await sleep(pollMs)
-        tabInfo = await chrome.tabs.get(tab.id)
-      }
-
-      const loc = await locateFrame(tab.id, task.frame, task.locator, { pollMs })
-      // 失敗時回的是帶候選清單的物件（診斷用），判定看有沒有 frameId
-      if (!loc || typeof loc.frameId !== 'number') {
-        return { ok: false, error: 'frame_not_found' }
-      }
-
-      const frameId = loc.frameId
-      await injectContent(tab.id, { frameId })
-      await sendToFrame(tab.id, {
-        type: MSG.ENTER_PICK,
-        purpose: msg.purpose || 'repick',
-        taskId: msg.taskId,
-        // 這是重選最常走的那條路（任務頁不帶 tabId）：新分頁沒有「上次右鍵的元素」，
-        // 不帶這兩個欄位就沒有預選對象，既有的值也勾不回來
-        locator: msg.locator || task.locator,
-        preselect: msg.preselect || preselectOf(task)
-      }, frameId, contentMs, 'Enter pick')
-      return { ok: true }
-    }
-
-    if (msg.type === MSG.TEST_LOGIN) {
-      return await handleTestLogin(msg, runOpts)
-    }
-
-    if (msg.type === MSG.MARK_READ) {
-      if (Array.isArray(msg.taskIds)) {
-        for (const id of msg.taskIds) await markRead(id)
-      }
-      await refreshBadge()
-      return { ok: true }
-    }
-
-    if (msg.type === MSG.GET_NEXT_RUNS) {
-      const alarms = await chrome.alarms.getAll()
-      const nextRuns = {}
-      for (const alarm of alarms) {
-        const parsed = parseTaskAlarm(alarm.name)
-        if (parsed?.taskId && typeof alarm.scheduledTime === 'number') {
-          const prev = nextRuns[parsed.taskId]
-          if (prev === undefined || alarm.scheduledTime < prev) {
-            nextRuns[parsed.taskId] = alarm.scheduledTime
-          }
-        }
-      }
-      return { nextRuns }
-    }
-
-    if (msg.type === MSG.SELF_CHECK) {
-      await selfCheck()
-      return { ok: true }
-    }
-
-    return undefined
+    // hasOwn：避免 msg.type 為 constructor 等原型鏈名稱時誤取到內建函式
+    const route = Object.hasOwn(MESSAGE_ROUTES, msg.type) ? MESSAGE_ROUTES[msg.type] : undefined
+    if (!route) return undefined
+    return await route(msg, sender, runOpts, { contentMs })
   } catch (err) {
     const protocolError = protocolErrorResponse(err)
     if (protocolError) return protocolError
@@ -2323,7 +2367,9 @@ export async function handleNotificationButton(notificationId, buttonIndex) {
       await refreshBadge()
       await chrome.notifications.clear(notificationId)
     }
-  } catch {}
+  } catch (err) {
+    await diag.log('notification_error', `stage=button result=error`).catch(() => {})
+  }
 }
 
 // 處理通知本體點擊事件
@@ -2346,7 +2392,9 @@ export async function handleNotificationClick(notificationId) {
 
     await chrome.tabs.create({ url })
     await chrome.notifications.clear(notificationId)
-  } catch {}
+  } catch (err) {
+    await diag.log('notification_error', `stage=click result=error`).catch(() => {})
+  }
 }
 
 // 為了重選而開的分頁：`taskId -> tabId`。使用者原本就開著的分頁不進這張表，也就不會被收掉。

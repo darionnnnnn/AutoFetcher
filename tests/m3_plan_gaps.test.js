@@ -80,11 +80,26 @@ test('折線圖例套用同一條短名規則', async () => {
   assert.ok(labels.some(l => l === '美金買入'), `圖例：${labels.join(' / ')}`)
 })
 
+
+// 按下卡片的「複製 TSV」，從剪貼簿替身讀出實際複製的內容（AF-24 起 TSV 不再掛在 dataset 上）
+function copiedTsv(render) {
+  let copied = ''
+  const prev = globalThis.navigator
+  globalThis.navigator = { clipboard: { writeText: async (t) => { copied = t } } }
+  try {
+    const el = render()
+    el.querySelector('[data-action="copy-tsv"]').click()
+    return { el, tsv: copied }
+  } finally {
+    globalThis.navigator = prev
+  }
+}
+
 test('複製 TSV 用完整名（貼進試算表要看得懂）', async () => {
   domReady()
   const CR = await import('../src/ui/report/cards.js?t=' + Math.random())
-  const el = CR.renderCard(pivot(['bank#k1', 'bank#k2']), ctxOf())
-  assert.ok((el.dataset.tsv || '').includes('臺銀 · 美金買入'))
+  const { tsv } = copiedTsv(() => CR.renderCard(pivot(['bank#k1', 'bank#k2']), ctxOf()))
+  assert.ok(tsv.includes('臺銀 · 美金買入'), tsv)
 })
 
 // ---- B5-2：只用得到第一個值時要說 ----

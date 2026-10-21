@@ -141,6 +141,7 @@ test('開啟報表:用 tabs.create 開 report.html', async () => {
   const { c, pp, doc } = await fresh()
   pp.render({ health: { level: 'green', redCount: 0, yellowCount: 0, summary: '' }, tasks: [], lastValues: {}, nextRuns: {}, healthMap: {} })
   doc.getElementById('open-report').click()
+  await new Promise(r => setTimeout(r, 0))
   const call = c.__calls.find(x => x.api === 'tabs.create')
   assert.match(String(call.args[0].url), /report\.html/)
 })

@@ -17,7 +17,7 @@ export function aggregateCells(values, aggregate = 'sum') {
     }
   }
 
-  // 如果沒有任何有效的數字，或聚合方式不合法，回傳 null
+  // 如果沒有任何有效的數字，或合計方式不合法，回傳 null
   const validAggregates = ['max', 'min', 'avg', 'sum', 'count'];
   if (used === 0 || !validAggregates.includes(aggregate)) {
     return { value: null, used, skipped };
@@ -25,7 +25,7 @@ export function aggregateCells(values, aggregate = 'sum') {
 
   let resultValue;
 
-  // 根據指定的聚合方式計算結果
+  // 根據指定的合計方式計算結果
   switch (aggregate) {
     case 'sum':
       resultValue = parsedNumbers.reduce((acc, curr) => acc + curr, 0);

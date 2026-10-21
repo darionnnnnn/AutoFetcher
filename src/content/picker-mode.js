@@ -554,6 +554,23 @@ function queueDraftPick(target, pick, remove = false) {
   return run
 }
 
+function showGroupRemoveNotice() {
+  toolbarNotice = '群組選取中：要取消某一格就再點它一次，或在面板的清單上移除'
+  if (panelEl) updatePanel(panelEl, currentTargetEl)
+}
+
+// 頁面上按 Ctrl/⌘＋Enter：請面板執行「完成選取」（面板是唯一的完成入口，這裡只送請求）
+function requestDraftFinish() {
+  try {
+    const pending = chrome.runtime.sendMessage({
+      type: MSG.PICK_DRAFT_FINISH_REQUEST,
+      sessionId: pickSessionId,
+      groupKey: pickGroupKey
+    })
+    if (pending?.catch) pending.catch(() => {})
+  } catch {}
+}
+
 function toggleDraftPick(target, pick, suppressRemove = false) {
   const key = draftPickKey(target, pick)
   const remove = draftPickEntries.has(key)
@@ -624,13 +641,6 @@ function draftGesturePicks(target, candidate) {
   if (!candidate) return []
   if (pickMode === 'colEach' && candidate.cell) {
     return resolveColEachCells(target, candidate.cell.col.index, candidate.cell.inner, currentHoverEl || currentCellEl)?.picks || []
-  }
-  if (pickMode === 'rowEach' && candidate.cell) {
-    const rows = resolveDataRows(target), row = rows[candidate.cell.row.index]
-    return getRowCells(row).filter(cell => !isHeaderCell(cell)).map(cell => {
-      const c = gridIndexOf(row, cell)
-      return c >= 0 ? makeCellPick(candidate.cell.row.index, c, target, rows) : null
-    }).filter(Boolean)
   }
   return [candidate]
 }
@@ -1453,6 +1463,15 @@ function otherBatchGroups() {
   return batchGroupsView().filter(g => g.picks !== selectedList)
 }
 
+// 已選清單非空時標在已選屬於的那張表，否則標在目前目標
+function refreshMarks() {
+  if (selectedList.length > 0 && pickedTableEl) {
+    applyPickedMarks(pickedTableEl)
+  } else {
+    applyPickedMarks(currentTargetEl)
+  }
+}
+
 // 重新在表格上貼回已選標記（批次模式時每一組都畫）。
 // 只對「上一次畫的」與「這一次該畫的」差集增刪（AF-21 批次 7）：hover 換欄時已選的 20 格不會全拆再全畫
 function applyPickedMarks(tableEl) {
@@ -1752,6 +1771,8 @@ function updateToolbar() {
       btn.style.cursor = 'pointer'
     }
 
+    // 輔助科技要知道哪一段是目前的模式（顏色以外的訊號）
+    btn.setAttribute('aria-pressed', key === pickMode ? 'true' : 'false')
     if (key === pickMode) {
       btn.setAttribute('data-af-active', '')
       btn.style.backgroundColor = COLORS.primary
@@ -2455,11 +2476,7 @@ function handleTableMouseMove(target) {
     } else {
       markCells(null, dataRows, dataRows[head.index], 'row', null, null)
     }
-    if (selectedList.length > 0 && pickedTableEl) {
-      applyPickedMarks(pickedTableEl)
-    } else {
-      applyPickedMarks(currentTargetEl)
-    }
+    refreshMarks()
     const updated = syncNestedNotice()
     if (!updated && prevCell !== currentCellEl) {
       if (panelEl) updatePanel(panelEl, currentTargetEl)
@@ -2477,11 +2494,7 @@ function handleTableMouseMove(target) {
     rowIndex = null; colIndex = null; cellIndex = null; currentRowEl = null
     rememberBatchHover()
     clearMarkedCells(document)
-    if (selectedList.length > 0 && pickedTableEl) {
-      applyPickedMarks(pickedTableEl)
-    } else {
-      applyPickedMarks(currentTargetEl)
-    }
+    refreshMarks()
     const updated = syncNestedNotice()
     if (!updated && prevCell !== currentCellEl) {
       if (panelEl) updatePanel(panelEl, currentTargetEl)
@@ -2509,11 +2522,7 @@ function handleTableMouseMove(target) {
         const fullInner = innerPathOf(oCell, subEl)
         clearMarkedCells(document)
         markCells(null, oInfo.dataRows, null, 'col', C, fullInner)
-        if (selectedList.length > 0 && pickedTableEl) {
-          applyPickedMarks(pickedTableEl)
-        } else {
-          applyPickedMarks(currentTargetEl)
-        }
+        refreshMarks()
         const updated = syncNestedNotice()
         if (!updated && prevCell !== currentCellEl) {
           if (panelEl) updatePanel(panelEl, currentTargetEl)
@@ -2523,11 +2532,7 @@ function handleTableMouseMove(target) {
     }
   }
   markCells(currentCellEl, info.dataRows, info.row, pickMode, colIndex, currentInner)
-  if (selectedList.length > 0 && pickedTableEl) {
-    applyPickedMarks(pickedTableEl)
-  } else {
-    applyPickedMarks(currentTargetEl)
-  }
+  refreshMarks()
   const updated = syncNestedNotice()
   if (!updated && prevCell !== currentCellEl) {
     if (panelEl) updatePanel(panelEl, currentTargetEl)
@@ -3995,7 +4000,8 @@ function onKeyDown(event) {
   }
   // 頁面輸入欄／contenteditable 的快捷鍵交回網站；尤其不能攔 Enter、Delete
   // 來誤完成或移除選取值（群組命名輸入在擴充功能頁，不會走這裡）。
-  const keyTarget = event.target
+  // shadow DOM 裡的輸入框（站內搜尋框常見）：document 上拿到的 target 已被改成 host，要看 composedPath 的真正目標
+  const keyTarget = (typeof event.composedPath === 'function' ? event.composedPath()[0] : null) || event.target
   if (keyTarget && (keyTarget.matches?.('input, textarea, select') || keyTarget.isContentEditable ||
       keyTarget.closest?.('[contenteditable="true"]'))) return
   if (event.key === 'Escape') {
@@ -4006,13 +4012,29 @@ function onKeyDown(event) {
   }
   cancelConfirmPending = null
   if (event.key === 'Backspace' || event.key === 'Delete') {
+    // 群組選取的值存在背景草稿裡（重新整理後也還在、不一定有頁面元素），不能只改本地清單：
+    // 鍵盤移除改成說明出口，不靜默（AF-24）
+    if (isImmediateDraftGroupMode()) {
+      if (draftPickEntries.size > 0) {
+        event.preventDefault()
+        showGroupRemoveNotice()
+      }
+      return
+    }
     // 沒有東西可移除就放給頁面：選取模式可能開在有輸入框的頁面上（例如站台登入設定）
     if (selectedList.length > 0) {
       event.preventDefault()
       removeLastPick()
     }
   } else if (event.key === 'Enter') {
-    if (isDraftGroupMode()) return
+    if (isDraftGroupMode()) {
+      // 群組選取：普通 Enter 交給焦點控制項；Ctrl/⌘＋Enter 等同面板的「完成選取」
+      if ((event.ctrlKey || event.metaKey) && !event.repeat) {
+        event.preventDefault()
+        requestDraftFinish()
+      }
+      return
+    }
     // 焦點在面板的按鈕上時，Enter 是「按那顆按鈕」，不是「送出」——
     // 焦點停在「取消」上卻送出，是鍵盤使用者最容易踩到的陷阱
     // 「完成／取消」與位置移位鈕要讓 Enter 交給按鈕（前兩顆會結束流程，移位鈕要切換位置）；
@@ -4094,13 +4116,17 @@ function onKeyDown(event) {
     selectAllNotice = scanned > selectedList.length ? { scanned, taken: selectedList.length } : null
     undoSnapshot = previous
     clearPendingConfirms()
-    if (selectedList.length > 0 && pickedTableEl) {
-      applyPickedMarks(pickedTableEl)
-    } else {
-      applyPickedMarks(currentTargetEl)
-    }
+    refreshMarks()
     updatePanel(panelEl, currentTargetEl)
   } else if ((event.ctrlKey || event.metaKey) && (event.key === 'z' || event.key === 'Z')) {
+    // 群組選取不維護復原快照（值在背景草稿裡）：與 Backspace 同一個說明出口
+    if (isImmediateDraftGroupMode()) {
+      if (draftPickEntries.size > 0) {
+        event.preventDefault()
+        showGroupRemoveNotice()
+      }
+      return
+    }
     // Ctrl／⌘＋Z：**先還原上一次取代**（那是最容易誤觸、損失最大的動作），
     // 沒有可還原的取代才退回「移除最後一項」；兩者都沒有就把按鍵放給頁面
     if (undoSnapshot) {
@@ -4134,7 +4160,8 @@ function onKeyDown(event) {
           return
         }
 
-        addCellPick(curR, curC, dataRows, currentInner)
+        const groupPicks = isImmediateDraftGroupMode()
+        if (!groupPicks) addCellPick(curR, curC, dataRows, currentInner)
 
         let newR = curR
         let newC = curC
@@ -4149,12 +4176,23 @@ function onKeyDown(event) {
         currentRowEl = dataRows[rowIndex]
         currentCellEl = currentRowEl ? cellAtGridIndex(currentRowEl, colIndex) : null
 
-        addCellPick(newR, newC, dataRows, currentInner)
-        if (selectedList.length > 0 && pickedTableEl) {
-          applyPickedMarks(pickedTableEl)
-        } else {
-          applyPickedMarks(currentTargetEl)
+        if (groupPicks) {
+          // 群組選取：起點與新位置一起經草稿佇列加入（與滑鼠框選同一條路，超量整批拒絕並說明）
+          const picks = [[curR, curC], [newR, newC]]
+            .filter(([r, c]) => targetAtGrid(dataRows[r], c, currentInner) !== null)
+            .map(([r, c]) => makeCellPick(r, c, currentTargetEl, dataRows, currentInner))
+          if (picks.length > 0) addDraftPickBatch(currentTargetEl, picks)
+          // 鍵盤加進去的最後一格也是「最後一個已選格」：之後 Shift＋點從這裡拉
+          const lastPick = picks[picks.length - 1]
+          if (lastPick?.cell && draftPickEntries.has(draftPickKey(currentTargetEl, lastPick))) {
+            draftRangeAnchor = { table: currentTargetEl, groupKey: pickGroupKey, cell: lastPick.cell }
+          }
+          markCells(currentCellEl, dataRows, currentRowEl, pickMode, colIndex, currentInner)
+          updatePanel(panelEl, currentTargetEl)
+          return
         }
+        addCellPick(newR, newC, dataRows, currentInner)
+        refreshMarks()
         markCells(currentCellEl, dataRows, currentRowEl, pickMode, colIndex, currentInner)
         updatePanel(panelEl, currentTargetEl)
       }
@@ -4231,26 +4269,14 @@ function onKeyDown(event) {
         handleTableMouseMove(lastHover)
       }
     }
-  } else if (event.key === 'Tab') {
-    if (currentTargetEl && isTableMode(currentTargetEl)) {
-      event.preventDefault()
-      const modes = ['cell', 'col', 'colEach', 'row']
-      const availableModes = isMultiPickPurpose() ? modes : ['cell']
-      if (availableModes.length > 1) {
-        const curIdx = availableModes.indexOf(pickMode)
-        const nextIdx = (curIdx + 1) % availableModes.length
-        pickMode = availableModes[nextIdx]
-        cellIndex = pickMode === 'row' ? rowIndex : colIndex
-        updateToolbar()
-        markCells(currentCellEl, currentDataRows, currentRowEl, pickMode, colIndex, currentInner)
-        if (selectedList.length > 0 && pickedTableEl) {
-          applyPickedMarks(pickedTableEl)
-        } else {
-          applyPickedMarks(currentTargetEl)
-        }
-        updatePanel(panelEl, currentTargetEl)
-      }
-    }
+  } else if (/^[1-4]$/.test(event.key) && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    // 數字鍵 1～4 等同點工具列的第 N 段（停用的段一樣會說明原因、整欄／整列意圖一樣會記住）。
+    // Tab 不再拿來切模式：它要留給瀏覽器移動焦點，鍵盤使用者才走得到「完成／取消」（AF-24）
+    const def = TOOLS_DEF[Number(event.key) - 1]
+    const btn = def && toolbarEl ? toolbarEl.querySelector(`[data-af-tool="${def.key}"]`) : null
+    if (!btn) return
+    event.preventDefault()
+    btn.click()
   }
 }
 
@@ -4402,11 +4428,7 @@ function onClick(event) {
       updateToolbar()
       if (currentTargetEl && isTableMode(currentTargetEl)) {
         markCells(currentCellEl, currentDataRows, currentRowEl, pickMode, colIndex, currentInner)
-        if (selectedList.length > 0 && pickedTableEl) {
-          applyPickedMarks(pickedTableEl)
-        } else {
-          applyPickedMarks(currentTargetEl)
-        }
+        refreshMarks()
       }
       if (mode === 'col' && isSingleRowNestedTable(currentTargetEl)) {
         if (!toolbarNotice && !(currentPurpose === 'task' && isUpgradeableTable(currentTargetEl))) {
@@ -4553,18 +4575,25 @@ function onClick(event) {
             draftRangeAnchor.table === currentTargetEl) {
           const a = draftRangeAnchor.cell
           const rows = resolveDataRows(currentTargetEl)
-          const picks = []
-          for (let r = Math.min(a.row.index, cell.row.index); r <= Math.max(a.row.index, cell.row.index); r++) {
-            for (let c = Math.min(a.col.index, cell.col.index); c <= Math.max(a.col.index, cell.col.index); c++) {
-              if (targetAtGrid(rows[r], c, a.inner) !== null) picks.push(makeCellPick(r, c, currentTargetEl, rows, a.inner))
-            }
-          }
+          const picks = rangePicks(currentTargetEl, rows, a.row.index, cell.row.index, a.col.index, cell.col.index, a.inner)
           addDraftPickBatch(currentTargetEl, picks)
         } else {
           const picks = draftGesturePicks(currentTargetEl, candidate)
           if (picks.length > 1) addDraftPickBatch(currentTargetEl, picks)
           else toggleDraftPick(currentTargetEl, candidate, event.detail === 2)
-          if (cell) draftRangeAnchor = { table: currentTargetEl, groupKey: pickGroupKey, cell }
+          // Shift 範圍的起點是「最後一個已選格」（SPEC §2）：加選就換成這一格；
+          // 取消的正好是起點時，退回這張表裡仍選著的最後一格（都沒有就清掉）
+          if (cell && draftPickEntries.has(draftPickKey(currentTargetEl, candidate))) {
+            draftRangeAnchor = { table: currentTargetEl, groupKey: pickGroupKey, cell }
+          } else if (cell && draftRangeAnchor?.table === currentTargetEl &&
+              draftRangeAnchor.cell?.row?.index === cell.row?.index && draftRangeAnchor.cell?.col?.index === cell.col?.index) {
+            // 草稿同步回來的項目沒有頁面元素，改用表格定位比對
+            let tableLocator = null
+            try { tableLocator = JSON.stringify(describe(currentTargetEl)) } catch {}
+            const still = [...draftPickEntries.values()].filter(e => e.pick?.cell && (e.target === currentTargetEl ||
+              (tableLocator && JSON.stringify(e.source?.locator ?? null) === tableLocator))).pop()
+            draftRangeAnchor = still ? { table: currentTargetEl, groupKey: pickGroupKey, cell: still.pick.cell } : null
+          }
         }
         return
       }
@@ -4633,11 +4662,7 @@ function onClick(event) {
       const candidate = candidateAt(event.target)
       if (candidate) {
         if (!addPick(candidate)) {
-          if (selectedList.length > 0 && pickedTableEl) {
-            applyPickedMarks(pickedTableEl)
-          } else {
-            applyPickedMarks(currentTargetEl)
-          }
+          refreshMarks()
           updatePanel(panelEl, currentTargetEl)
           return
         }
@@ -4748,11 +4773,7 @@ function onClick(event) {
         toolbarNotice = promotedColNotice(n)
       }
 
-      if (selectedList.length > 0 && pickedTableEl) {
-        applyPickedMarks(pickedTableEl)
-      } else {
-        applyPickedMarks(currentTargetEl)
-      }
+      refreshMarks()
       updatePanel(panelEl, currentTargetEl)
       return
     }
@@ -4967,6 +4988,17 @@ function replaceSelection(candidate) {
   undoSnapshot = previous
 }
 
+// 矩形範圍內（rA~rB、cA~cB 不分大小）每個有內容的格產生一個 cell pick
+function rangePicks(table, rows, rA, rB, cA, cB, inner) {
+  const picks = []
+  for (let r = Math.min(rA, rB); r <= Math.max(rA, rB); r++) {
+    for (let c = Math.min(cA, cB); c <= Math.max(cA, cB); c++) {
+      if (targetAtGrid(rows[r], c, inner) !== null) picks.push(makeCellPick(r, c, table, rows, inner))
+    }
+  }
+  return picks
+}
+
 // 從起始列欄到結束列欄的矩形範圍加選（Shift 點與拖曳框選共用）
 function addCellRange(tableEl, minR, maxR, minC, maxC, inner) {
   const dataRows = resolveDataRows(tableEl)
@@ -5086,12 +5118,8 @@ function onMouseUp(event) {
       const endInfo = resolveCell(event.target, currentTargetEl)
       const endR = endInfo ? endInfo.rIdx : dragStart.rIdx
       const endC = endInfo ? endInfo.cIdx : dragStart.cIdx
-      const rows = resolveDataRows(currentTargetEl), picks = []
-      for (let r = Math.min(dragStart.rIdx, endR); r <= Math.max(dragStart.rIdx, endR); r++) {
-        for (let c = Math.min(dragStart.cIdx, endC); c <= Math.max(dragStart.cIdx, endC); c++) {
-          if (targetAtGrid(rows[r], c, dragStart.inner) !== null) picks.push(makeCellPick(r, c, currentTargetEl, rows, dragStart.inner))
-        }
-      }
+      const rows = resolveDataRows(currentTargetEl)
+      const picks = rangePicks(currentTargetEl, rows, dragStart.rIdx, endR, dragStart.cIdx, endC, dragStart.inner)
       addDraftPickBatch(currentTargetEl, picks)
       suppressClick = true
       setTimeout(() => { suppressClick = false }, 0)
@@ -5132,11 +5160,7 @@ function onMouseUp(event) {
     setTimeout(() => { suppressClick = false }, 0)
     lastDragEndAt = Date.now()
     clearPendingConfirms()
-    if (selectedList.length > 0 && pickedTableEl) {
-      applyPickedMarks(pickedTableEl)
-    } else {
-      applyPickedMarks(currentTargetEl)
-    }
+    refreshMarks()
     updatePanel(panelEl, currentTargetEl)
   }
   dragStart = null
@@ -5341,7 +5365,13 @@ export function enterPickMode(opts) {
     const btn = document.createElement('button')
     btn.type = 'button'
     btn.setAttribute('data-af-tool', def.key)
-    btn.textContent = def.label
+    // 數字是鍵盤快捷鍵提示（1～4 對應這四段）；螢幕閱讀器改讀 aria-keyshortcuts
+    const keyHint = document.createElement('span')
+    keyHint.setAttribute('aria-hidden', 'true')
+    keyHint.textContent = `${TOOLS_DEF.indexOf(def) + 1} `
+    keyHint.style.opacity = '0.7'
+    btn.append(keyHint, def.label)
+    btn.setAttribute('aria-keyshortcuts', String(TOOLS_DEF.indexOf(def) + 1))
     if (def.title) btn.setAttribute('title', def.title)
     btn.style.padding = '4px 10px'
     btn.style.fontSize = '12px'
@@ -5379,6 +5409,8 @@ export function enterPickMode(opts) {
   panelEl.style.flexDirection = 'column'
   panelBodyEl = document.createElement('div')
   panelBodyEl.setAttribute('data-af-panel-body', '')
+  // 面板說明會隨操作改變（選了幾個值、點不動的原因）：讓螢幕閱讀器讀得到
+  panelBodyEl.setAttribute('aria-live', 'polite')
   panelBodyEl.style.whiteSpace = 'pre-line'
   panelBodyEl.style.flex = '1 1 auto'
   panelBodyEl.style.minHeight = '0'
@@ -5393,11 +5425,7 @@ export function enterPickMode(opts) {
 
   if (opts?.preselect && currentTargetEl && isTableMode(currentTargetEl)) {
     applyPreselect(opts.preselect, currentTargetEl)
-    if (selectedList.length > 0 && pickedTableEl) {
-      applyPickedMarks(pickedTableEl)
-    } else {
-      applyPickedMarks(currentTargetEl)
-    }
+    refreshMarks()
     updatePanel(panelEl, currentTargetEl)
   }
 
@@ -5511,6 +5539,8 @@ export function exitPickMode(opts = {}) {
   pickMode = 'cell'; cellIndex = null; colIndex = null; rowIndex = null; currentCellEl = null; nestedNoticeOn = false
   currentDataRows = []; currentRowEl = null
   selectedList = []
+  draftRangeAnchor = null
+  draftPickDrainPaused = false
   draftPickEntries = new Map()
   draftPickGeneration++
   // Do not discard an in-flight PICKED ACK when leaving a group.  The queued

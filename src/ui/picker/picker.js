@@ -1,15 +1,16 @@
-import { saveTask, getTask, getTasks, saveTasks, getSettings, saveSettings, getPanelCtx, setPanelCtx, mergePanelCtx, subscribe, deleteLastValues
+import { saveTask, getTask, getTasks, saveTasks, getSettings, saveSettings, getPanelCtx, setPanelCtx, mergePanelCtx, subscribe, deleteLastValues, updateTasks, TASK_CHANGED_ERROR
 } from '../../shared/storage.js'
-import { applySavedTheme } from '../theme-apply.js'
+import { applySavedTheme, watchTheme } from '../theme-apply.js'
 import { DEFAULT_HOVER_HOLD_MS, DEFAULT_WAIT_TIMEOUT_MS } from '../../shared/preaction.js'
 import { MSG, MAX_BATCH_TASKS } from '../../shared/messages.js'
 import { getLayout, addCard, pruneSeries } from '../../shared/layout-store.js'
 import { seriesIdOf } from '../../shared/series-index.js'
-import { describeSchedule, describeTarget, describeDashboard, numericHeaderAxis, POS_TEXT, withInnerLabel, skipNote, TERMS } from '../../shared/describe.js'
+import { describeSchedule, describeTarget, describeDashboard, numericHeaderAxis, POS_TEXT, POS_NAME, posSuffix, anchorOnly, defaultFieldName, withInnerLabel, skipNote, unitOfAxis, TERMS } from '../../shared/describe.js'
 import { icon } from '../icons.js'
 import { nextIntervalRun } from '../../shared/schedule-math.js'
-import { isAnchorText, putInner, skipOf, putSkip, excludeOf, putExclude } from '../../shared/table.js'
+import { putInner, skipOf, putSkip, excludeOf, putExclude } from '../../shared/table.js'
 import { reconcileFields } from '../../shared/field-match.js'
+import { LOCAL_TASK_FIELDS } from '../../shared/task-source.js'
 import { download } from '../../shared/export.js'
 import { statusTextOf } from '../../shared/record-status.js'
 import { createSaveGuard, setFieldError } from '../save-guard.js'
@@ -439,7 +440,6 @@ export function getFormData() {
 // 表格每天在最前或最後新增一筆時，「第幾筆」比會變動的標題可靠。
 // 位置是任務層級的設定，寫進規格時每個值的同一軸各帶一份。
 const POS_VALUES = ['first', 'last', 'last-1']
-const POS_LABELS = { first: '第一', last: '最後一', 'last-1': '倒數第二' }
 
 function posValueOf(id) {
   const v = document.getElementById(id)?.value || ''
@@ -805,7 +805,8 @@ export function buildSchedule(values) {
 // 表單管不到、但任務執行時要用的欄位：編輯既有任務時原樣帶過去。
 // 少了這一份清單，停用中的任務一改就復活、按過「改用前景抓取」的設定也會默默消失。
 // 與 tasks.js 的 duplicateTask（複製時要丟掉哪些）是同一份口徑的兩面。
-const RUNTIME_FIELDS = ['enabled', 'foreground', 'suggestForeground', 'notFoundStreak', 'precheckLeadMinutes']
+// 清單只有 shared/task-source.js 一份（匯入與複製任務也用它）
+const RUNTIME_FIELDS = LOCAL_TASK_FIELDS
 
 export function buildTask(values, locator, existing, frame) {
   const id = existing?.id || crypto.randomUUID()
@@ -936,8 +937,9 @@ function fillSchedule(schedule) {
   // 每一欄都要寫（沒有的鍵寫成「沒有」），不能只寫有的：同一份面板文件從編輯 A 切到整批改排程不會重載，
   // 只寫有的會把 A 的時段或星期殘留下來，再一次套用到所有被選的任務（AF-19 終檢）
   document.getElementById('schedule-type').value = schedule.type || 'daily'
-  if (Array.isArray(schedule.times)) document.getElementById('times').value = schedule.times.join(', ')
-  if (schedule.everyMinutes !== undefined) document.getElementById('every-minutes').value = schedule.everyMinutes
+  const times = Array.isArray(schedule.times) && schedule.times.length > 0 ? schedule.times : BUILTIN_DEFAULTS.times
+  document.getElementById('times').value = times.join(', ')
+  document.getElementById('every-minutes').value = schedule.everyMinutes ?? BUILTIN_DEFAULTS.everyMinutes
   // 星期缺省或空陣列：一律回到唯一一份預設 BUILTIN_DEFAULTS.weekdays（每天；interval 的缺值本來就是每天）。
   // 重點是「確定地寫」：留著不動會沿用上一個任務的勾選
   const wds = Array.isArray(schedule.weekdays) && schedule.weekdays.length > 0
@@ -975,6 +977,7 @@ export function render(ctx) {
   // （與 AF-7 的 pickedTableEl、AF-9 的 undoSnapshot 同型的狀態殘留）
   setDiagAvailable(null)
   resetTestDetail()
+  resetTestNote()
   const previewEl = document.getElementById('preview')
   if (previewEl) {
     // 比較要正規化成字串：preview 是文字、previewValue 是數字，直接比永遠不相等，
@@ -1016,6 +1019,14 @@ export function render(ctx) {
       urlEl.textContent = t.url
     }
     if (t.mode !== undefined) document.getElementById('mode').value = t.mode
+    // 每一欄都確定地寫（同一份面板文件會 render 第二個任務）：沒有的值回預設，上一個任務的舊策略選項拿掉
+    {
+      const sel = document.getElementById('strategy')
+      if (sel) {
+        for (const o of [...sel.options]) if (o.dataset.legacy === 'true') o.remove()
+        sel.value = 'auto'
+      }
+    }
     if (t.spec?.strategy) {
       const sel = document.getElementById('strategy')
       const legacy = !['auto', 'regex'].includes(t.spec.strategy)
@@ -1024,6 +1035,7 @@ export function render(ctx) {
         const opt = document.createElement('option')
         opt.value = t.spec.strategy
         opt.textContent = `${t.spec.strategy}（舊策略，保留）`
+        opt.dataset.legacy = 'true'
         sel.appendChild(opt)
       }
       if (sel) sel.value = t.spec.strategy
@@ -1037,7 +1049,7 @@ export function render(ctx) {
         ? `這個任務用的抓取策略是「${t.spec.strategy}」，下拉已不再提供，但設定會原樣保留;改選其他策略就會換掉。`
         : ''
     }
-    if (t.spec?.regex !== undefined) document.getElementById('regex').value = t.spec.regex
+    document.getElementById('regex').value = t.spec?.regex ?? ''
     fillSchedule(t.schedule)
     if (t.spec?.block) {
       if (t.spec.block.cell) {
@@ -1045,9 +1057,9 @@ export function render(ctx) {
       } else {
         currentBlock = { ...t.spec.block }
       }
-      const aggEl = document.getElementById('block-aggregate')
-      if (aggEl && t.spec.block.aggregate) aggEl.value = t.spec.block.aggregate
     }
+    const aggEl = document.getElementById('block-aggregate')
+    if (aggEl) aggEl.value = t.spec?.block?.aggregate || BUILTIN_DEFAULTS.aggregate
     const skipSource = t.spec?.block?.skip
       || t.spec?.fields?.find(f => f.block?.skip)?.block?.skip
     const { head, tail, blank } = skipOf(skipSource)
@@ -1848,37 +1860,13 @@ function singleCellName(cell) {
   const rowH = rowPos ? '' : anchorOnly(cell?.row?.header)
   const base = withInnerLabel(colH || rowH, cell?.inner)
   if (!base) return ''
-  const suffix = [
-    rowPos ? `${POS_LABELS[rowPos]}列` : '',
-    colPos ? `${POS_LABELS[colPos]}欄` : ''
-  ].filter(Boolean).join('、')
+  const suffix = posSuffix({ rowPos, colPos })
   return suffix ? `${base}（${suffix}）` : base
 }
 
-// 多值任務裡每個值的預設名稱；用位置定位的那一軸不放會變動的標題
-// 能當定位錨點的標題才能拿來命名；純數值退回下一層
-function anchorOnly(header) {
-  const text = typeof header === 'string' ? header.trim() : ''
-  return isAnchorText(text) ? text : ''
-}
-
+// 多值任務裡每個值的預設名稱：與 background 重選同一份（shared/describe.js），位置定位取表單目前的值
 function defaultPickName(pick, index) {
-  if (pick?.cell) {
-    const rowPos = posValueOf('row-pos')
-    const colPos = posValueOf('col-pos')
-    // 純數值的標題不進名稱（判準與定位同一份）——這是命名鏈的第四個消費端
-    const rowH = rowPos ? '' : anchorOnly(pick.cell.row?.header)
-    const colH = colPos ? '' : anchorOnly(pick.cell.col?.header)
-    const suffix = [
-      rowPos ? `${POS_LABELS[rowPos]}列` : '',
-      colPos ? `${POS_LABELS[colPos]}欄` : ''
-    ].filter(Boolean).join('、')
-    let base = withInnerLabel([rowH, colH].filter(Boolean).join(' · '), pick.cell.inner)
-    if (!base) base = suffix ? '值' : `值 ${index + 1}`
-    return suffix ? `${base}（${suffix}）` : base
-  }
-  if (pick?.block) return withInnerLabel(anchorOnly(pick.block.headerText), pick.block.inner) || `值 ${index + 1}`
-  return `值 ${index + 1}`
+  return defaultFieldName(pick, index + 1, { rowPos: posValueOf('row-pos'), colPos: posValueOf('col-pos') })
 }
 
 // 卡片型別對應的預設尺寸
@@ -1949,8 +1937,8 @@ function positionSummaryText() {
   const colPos = posValueOf('col-pos')
   if (!rowPos && !colPos) return posSuggestion
   const parts = []
-  if (rowPos) parts.push(`${POS_LABELS[rowPos]}列`)
-  if (colPos) parts.push(`${POS_LABELS[colPos]}欄`)
+  if (rowPos) parts.push(`${POS_NAME[rowPos]}列`)
+  if (colPos) parts.push(`${POS_NAME[colPos]}欄`)
   return `每次抓取取${parts.join('的')}，不看標題`
 }
 
@@ -2449,7 +2437,7 @@ function fieldWhereText(spec) {
     let text = h ? `${h} ${axis}` : axis
     const k = excludeOf(spec.block).length
     if (k > 0) {
-      const unit = spec.block.axis === 'row' ? '格' : '列'
+      const unit = unitOfAxis(spec.block.axis)
       text += `（排除 ${k} ${unit}）`
     }
     return text
@@ -3104,8 +3092,12 @@ function bindPreActionMessageListener() {
     // the response channel for ordinary task picks. An async listener implicitly
     // returns a Promise<undefined> for unrelated messages, which can win the
     // content script's sendMessage ACK race before the background persists PICKED.
-    chrome.runtime.onMessage.addListener((msg) => {
+    chrome.runtime.onMessage.addListener((msg, sender) => {
       if (msg?.type !== MSG.PICKED || msg.purpose !== 'preaction') return false
+      // 只收這個面板所屬分頁的選取（另一個視窗的面板同時在選前置動作時不得互相寫到）
+      const expectedTab = currentCtx?.tabId ?? panelTabId
+      const fromTab = msg.sourceTabId ?? sender?.tab?.id
+      if (Number.isInteger(expectedTab) && Number.isInteger(fromTab) && fromTab !== expectedTab) return false
       void (async () => {
         // 那一列可能已經被刪掉、或整份清單被重畫過（編輯既有任務時會 replaceChildren）：
         // 寫進孤兒節點的話，使用者會看到「選好了卻沒反應」
@@ -3245,10 +3237,36 @@ function showLoginSettingsAction(note, url) {
  * @param {Object} ctx 目前 render 的 ctx
  * @returns {Promise<Object>} 存好的 task
  */
-async function saveTaskFromForm(values, ctx, { taskId, preparedTask } = {}) {
+export async function saveTaskFromForm(values, ctx, { taskId, preparedTask } = {}) {
   const task = preparedTask || taskFromForm(values, ctx, taskId)
+  const editing = Boolean(ctx?.task?.id) && ctx.task.id === task.id
+  // 已在 storage 的任務走 updateTasks：鎖內拿最新副本，表單管不到的欄位以「儲存當下」為準
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const [saved] = await updateTasks([task.id], latest => withLatestUnmanaged(task, latest))
+      if (saved) return saved
+      break
+    } catch (error) {
+      // 讀到與寫入之間被別人改過：重讀一次；第二次仍衝突就交給呼叫端顯示
+      if (attempt === 1 || error?.code !== TASK_CHANGED_ERROR) throw error
+    }
+  }
+  if (editing) throw new Error('這個任務已被刪除，修改沒有儲存；請關閉面板後重新建立')
   await saveTask(task)
   return task
+}
+
+// 表單管不到、由別處維護的欄位（popup 啟停、fetcher 的 notFoundStreak、Report 排序、修復封存）：
+// 面板開著期間它們可能被改，存檔一律取 storage 內的最新值；最新值沒有的鍵也不得從開面板時的快照長回來
+const UNMANAGED_FIELDS = [...RUNTIME_FIELDS, 'order', 'archivedFields']
+
+function withLatestUnmanaged(task, latest) {
+  const next = { ...task }
+  for (const k of UNMANAGED_FIELDS) {
+    if (latest[k] !== undefined) next[k] = structuredClone(latest[k])
+    else if (k !== 'enabled') delete next[k] // enabled 缺省本來就視為啟用
+  }
+  return next
 }
 
 /**
@@ -3879,6 +3897,14 @@ const USE_TEXT = {
 // 明細表歸零：藏起、收合、清空。三個入口共用——測試開始、換目標重畫、畫表之前。
 // 換目標那一處不能漏：上一個目標的整欄明細留在畫面上、旁邊卻是新目標的預覽，
 // 與 AF-7 pickedTableEl、AF-9 undoSnapshot 同型的跨目標殘留
+// 試抓的說明句也屬於上一個目標：換目標（render）與重新試抓時一起清（AF-24，原 BACKLOG）
+function resetTestNote() {
+  const note = document.getElementById('test-note')
+  if (!note) return
+  note.textContent = ''
+  delete note.dataset.state
+}
+
 function resetTestDetail() {
   const detailEl = document.getElementById('test-detail')
   if (!detailEl) return null
@@ -4019,11 +4045,7 @@ export async function handleTestNow() {
     previewEl.textContent = ''
   }
   showErrorText('')
-  const noteAtStart = document.getElementById('test-note')
-  if (noteAtStart) {
-    noteAtStart.textContent = ''
-    delete noteAtStart.dataset.state
-  }
+  resetTestNote()
   resetTestDetail()
   setTestPreActionHint(false)
   // 這一次的結果還沒出來，上一次的診斷先收起來
@@ -4733,8 +4755,23 @@ export function setPickDraftContext(draft, { render = true } = {}) {
   return pickDraftState
 }
 
-export async function consumeGroupNameResult(message) {
+// 頁面上的 Ctrl/⌘＋Enter（background 核對後轉來、帶 tabId）：等同按面板的「完成選取」，守門與按鈕相同
+export function consumeDraftFinishRequest(message, sender) {
+  const draft = pickDraftState
+  if (!draft || !message || message.type !== MSG.PICK_DRAFT_FINISH_REQUEST) return false
+  // 只接受 background 核對過後轉來的那一份；content 直接廣播的（sender 帶網頁分頁）一律不理
+  if (sender?.tab) return false
+  if (!Number.isInteger(message.tabId) || message.tabId !== draft.tabId || message.sessionId !== draft.sessionId) return false
+  const finishButton = document.getElementById('group-finish')
+  if (!finishButton || finishButton.hidden || finishButton.disabled) return false
+  finishButton.click()
+  return true
+}
+
+export async function consumeGroupNameResult(message, sender) {
   if (!message || message.type !== PICK_GROUP_NAME_RESULT) return false
+  // 只接受 background 核對過後轉來的那一份；content 直接廣播的（sender 帶網頁分頁）一律不理
+  if (sender?.tab) return false
   const draft = pickDraftState
   const group = activePickGroup()
   const request = pickDraftNameRequest
@@ -4744,6 +4781,12 @@ export async function consumeGroupNameResult(message) {
       JSON.stringify(message.documentGeneration) !== JSON.stringify(draft.documentGeneration) ||
       JSON.stringify(message.routeIdentity) !== JSON.stringify(draft.routeIdentity)) return false
   if (message.tabId !== undefined && message.tabId !== draft.tabId) return false
+  if (message.cancelled === true) {
+    pickDraftNameRequest = null
+    pickDraftNameRequestPending = false
+    setGroupDraftStatus('已取消從頁面取名，原名稱保留。')
+    return false
+  }
   const text = typeof message.text === 'string' ? message.text : (typeof message.name === 'string' ? message.name : message.preview)
   if (typeof text !== 'string' || text.trim() === '') {
     pickDraftNameRequest = null
@@ -5299,6 +5342,7 @@ export async function initFromQuery(search) {
 
 if (typeof document !== 'undefined' && document.getElementById('save') && globalThis.chrome?.runtime?.id) {
   applySavedTheme()
+  watchTheme()
   document.getElementById('save')?.addEventListener('click', () => handleSave())
   document.getElementById('cancel')?.addEventListener('click', () => {
     // 面板沒有 window.close()：請 background 關它，順便把草稿清掉
@@ -5419,8 +5463,10 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
     }
     window.addEventListener('pagehide', onPageHide, { once: true })
     document.addEventListener('af:pick-group-name-result', event => { consumeGroupNameResult(event.detail) })
-    chrome.runtime.onMessage?.addListener((message) => {
-      if (message?.type === PICK_GROUP_NAME_RESULT) return consumeGroupNameResult(message)
+    chrome.runtime.onMessage?.addListener((message, sender) => {
+      // 這個監聽只觀察，不得回傳 Promise：async 回傳值會被當成 sendMessage 的回覆，搶先 background 的 ACK
+      if (message?.type === PICK_GROUP_NAME_RESULT) { void consumeGroupNameResult(message, sender); return undefined }
+      if (message?.type === MSG.PICK_DRAFT_FINISH_REQUEST) { consumeDraftFinishRequest(message, sender); return undefined }
       return undefined
     })
     document.addEventListener('input', scheduleDraftSave, true)

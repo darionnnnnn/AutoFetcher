@@ -790,3 +790,57 @@ test('AF-21：整欄聚合抓到 600 字的 raw → 紀錄截成 500 字並標 r
   assert.ok(detail, '點一下要展開明細')
   assert.ok(detail.textContent.includes('（已截斷）'), '截斷過的 raw 要說出來')
 })
+
+test('AF-24：頁面上的 Ctrl/⌘＋Enter 從選取模式一路傳到面板按下「完成選取」（content → background 核對 → 面板）', async () => {
+  resetChromeMock()
+  const c = installChromeMock()
+  c.__setScriptResponder(() => [{ frameId: 0, result: 'https://a.test/prices' }])
+  c.__setTabResponder((_tabId, message) => message.type === 'PICK_DRAIN' ? { ok: true } : undefined)
+  const st = await import('../src/shared/storage.js?t=' + Math.random())
+  await st.init()
+  const bg = await import('../src/background/main.js?t=' + Math.random())
+  const ext = { url: 'chrome-extension://autofetcher/ui/picker/picker.html' }
+  const begin = await bg.handleMessage({ type: 'PICK_DRAFT_BEGIN', sessionId: 'chain-s', tabId: 31, documentGeneration: 'doc-1',
+    routeIdentity: { path: '/prices' }, groups: [{ key: 'g1', name: '甲', values: [] }], activeGroupKey: 'g1' }, ext)
+  assert.equal(begin.ok, true)
+  await bg.handleMessage({ type: 'ENTER_PICK', tabId: 31, frameId: 0, purpose: 'task', sessionId: 'chain-s',
+    groupKey: 'g1', activeGroupKey: 'g1', batch: true, pickStage: 'selecting' }, ext)
+
+  // 1. 發訊端：真的選取模式，在頁面上按 Ctrl+Enter
+  const page = new JSDOM('<!doctype html><body><table id="t"><tbody><tr><td>1</td></tr></tbody></table></body>', { url: 'https://a.test/prices' })
+  globalThis.window = page.window
+  globalThis.document = page.window.document
+  globalThis.location = page.window.location
+  const fromPage = []
+  c.__setRuntimeResponder(async m => { fromPage.push(structuredClone(m)); return { ok: true } })
+  const pm = await import('../src/content/picker-mode.js?t=' + Math.random())
+  pm.enterPickMode({ purpose: 'task', sessionId: 'chain-s', groupKey: 'g1', pickStage: 'selecting',
+    documentGeneration: 'doc-1', routeIdentity: { path: '/prices' }, draftValues: [] })
+  document.dispatchEvent(new page.window.KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true }))
+  await new Promise(r => setTimeout(r, 0))
+  pm.exitPickMode()
+  const request = fromPage.find(m => m.type === 'PICK_DRAFT_FINISH_REQUEST')
+  assert.ok(request, '選取模式要送出完成請求')
+  c.__setRuntimeResponder(() => undefined)
+
+  // 2. background：以 content 的身分收到，核對後轉發（帶 tabId）
+  const res = await bg.handleMessage(request, { tab: { id: 31, url: 'https://a.test/prices' }, frameId: 0, url: 'https://a.test/prices' })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  const relayed = c.__calls.filter(x => x.api === 'runtime.sendMessage' && x.args[0]?.type === 'PICK_DRAFT_FINISH_REQUEST' && x.args[0].tabId === 31).map(x => x.args[0])
+  assert.equal(relayed.length, 1)
+
+  // 3. 收訊端：面板收到轉發的那一份就按「完成選取」
+  const panel = new JSDOM(readFileSync(new URL('../src/ui/picker/picker.html', import.meta.url), 'utf8'))
+  globalThis.window = panel.window
+  globalThis.document = panel.window.document
+  globalThis.Event = panel.window.Event
+  const pk = await import('../src/ui/picker/picker.js?t=' + Math.random())
+  pk.setPickDraftContext({ ...begin.draft, groups: [{ key: 'g1', name: '甲', values: [{ key: 'v1' }] }] }, { render: false })
+  const btn = panel.window.document.getElementById('group-finish')
+  btn.hidden = false
+  btn.disabled = false
+  let clicked = 0
+  btn.click = () => { clicked++ }
+  assert.equal(pk.consumeDraftFinishRequest(relayed[0], {}), true)
+  assert.equal(clicked, 1)
+})

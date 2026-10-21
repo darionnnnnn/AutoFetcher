@@ -257,12 +257,12 @@ test('Esc 取消整個選取', async () => {
 
 // AF-7 推翻舊規則：已選清單本來就可以混放儲存格與欄列聚合（多值任務的 spec.fields 就是這樣），
 // 切換模式沒有理由清空；只有滑鼠移到「另一張表格」才清（那條測試另外有）。
-test('Tab 切換模式時保留已選', async () => {
+test('數字鍵切換模式時保留已選', async () => {
   const { pm, doc } = await setup()
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.getElementById('rate') })
   clickCell(doc, 'c0-3', { shiftKey: true })
   assert.equal(pm.selectedCount(), 1)
-  key(doc, 'Tab')
+  key(doc, '2')
   assert.equal(pm.selectedCount(), 1, '換模式不該把辛苦選好的值丟掉')
 })
 

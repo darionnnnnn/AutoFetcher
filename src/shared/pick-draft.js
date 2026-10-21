@@ -18,12 +18,7 @@ export const MAX_PICK_DRAFT_GROUPS = 20
 export const MAX_PICK_DRAFT_VALUES = MAX_MULTI_FIELDS
 export const MAX_DRAFT_STRING_LENGTH = MAX_MULTI_STRING_LENGTH
 export const MAX_PICK_DRAFT_BYTES = MAX_MULTI_TASK_BYTES
-export const MAX_PICK_DRAFT_DEPTH = 8
-
-// 相容的別名，讓消費端不必複製這些界限。
-export const MAX_GROUPS = MAX_PICK_DRAFT_GROUPS
-export const MAX_VALUES_PER_GROUP = MAX_PICK_DRAFT_VALUES
-export const MAX_DRAFT_BYTES = MAX_PICK_DRAFT_BYTES
+const MAX_PICK_DRAFT_DEPTH = 8
 
 // 保存階段的狀態會跨面板重載保留；舊值 saving/saved/failed 仍相容，
 // 新批次流程另外使用能表達結果不明的 inflight/uncertain。
@@ -47,7 +42,7 @@ const VALUE_KEYS = new Set([
   'key', 'name', 'source', 'spec', 'mode', 'preview', 'previewValue', 'locator', 'frame'
 ])
 
-export class PickDraftValidationError extends Error {
+class PickDraftValidationError extends Error {
   constructor(message) {
     super(`選取草稿格式錯誤：${message}`)
     this.name = 'PickDraftValidationError'
@@ -217,11 +212,6 @@ export function normalizePickDraft(input) {
   return result
 }
 
-export function validatePickDraft(input) {
-  normalizePickDraft(input)
-  return true
-}
-
 export function serializePickDraft(input) {
   const normalized = normalizePickDraft(input)
   const encoded = JSON.stringify(normalized)
@@ -256,7 +246,7 @@ export function samePickDraftIdentity(a, b) {
   }
 }
 
-export function isCurrentPickDraft(draft, identity = {}) {
+function isCurrentPickDraft(draft, identity = {}) {
   let value
   try { value = normalizePickDraft(draft) } catch { return false }
   if (identity.tabId !== undefined && value.tabId !== identity.tabId) return false
@@ -413,6 +403,3 @@ export async function withPickDraftLock(tabId, callback) {
   })
 }
 
-export const putPickDraft = savePickDraft
-export const readPickDraft = getPickDraft
-export const removePickDraft = clearPickDraft

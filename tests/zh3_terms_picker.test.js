@@ -93,11 +93,22 @@ const task = (over = {}) => ({
 // 保留的只剩白名單外或「只換通知／錯誤文字」檔案裡的程式註解（歷史說明，不是使用者看得到的字）。
 const OLD_TERMS = /聚合方式|合成方式|立即測試|先試抓看看/g
 const KEPT = {
-  'background/fetcher.js': 6, // 註解：失敗時保留立即測試軌跡的說明，其餘為既有診斷包與 raw 截斷層
-  'background/frames.js': 1, // 註解：立即測試核對分頁網址走 sameOriginPath
-  'background/main.js': 1, // 註解：重選時聚合方式沿用
-  'shared/aggregate.js': 2, // 註解：純函式的參數說明（檔案不在本段白名單）
-  'ui/save-guard.js': 1 // JSDoc：純文字那一條（檔案不在本段白名單）
+  // AF-24：最後幾處註解也改成現行詞彙，保留清單歸零
+}
+
+
+// 按下卡片的「複製 TSV」，從剪貼簿替身讀出實際複製的內容（AF-24 起 TSV 不再掛在 dataset 上）
+function copiedTsv(render) {
+  let copied = ''
+  const prev = globalThis.navigator
+  globalThis.navigator = { clipboard: { writeText: async (t) => { copied = t } } }
+  try {
+    const el = render()
+    el.querySelector('[data-action="copy-tsv"]').click()
+    return { el, tsv: copied }
+  } finally {
+    globalThis.navigator = prev
+  }
 }
 
 test('舊詞在 src/ 的出現數＝保留清單（其餘為 0），而且保留處都只在註解裡', () => {
@@ -336,10 +347,10 @@ test('儀表板表格卡：時間欄顯示 MM/DD HH:mm、TSV 維持原格式；�
 
   const base = { tasksById: { t1: { name: '電費' } }, health: {}, nextRuns: {}, missed: [], range: { from: '2026-09-01', to: '2026-09-30' }, today: '2026-09-19' }
   const records = [{ taskId: 't1', slot: '2026-09-19T15:00', value: 5, raw: '5', status: 'ok' }]
-  const recent = CR.renderCard({ id: 'c1', type: 'table', x: 0, y: 0, w: 6, h: 3, source: [{ taskId: 't1' }], options: { mode: 'recent' } }, { ...base, records })
+  const { el: recent, tsv: recentTsv } = copiedTsv(() => CR.renderCard({ id: 'c1', type: 'table', x: 0, y: 0, w: 6, h: 3, source: [{ taskId: 't1' }], options: { mode: 'recent' } }, { ...base, records }))
   const tds = [...recent.querySelectorAll('tbody tr td')]
   assert.equal(tds[0].textContent, '09/19 15:00')
-  assert.match(recent.dataset.tsv, /2026-09-19T15:00/, '複製 TSV 維持原格式')
+  assert.match(recentTsv, /2026-09-19T15:00/, '複製 TSV 維持原格式')
   const ths = [...recent.querySelectorAll('thead th')]
   assert.deepEqual(ths.map(t => t.classList.contains('num')), [false, false, true, false], '只有「值」是數值欄')
   assert.deepEqual(tds.map(t => t.classList.contains('num')), [false, false, true, false], '表頭與內容同一欄同一種對齊')
