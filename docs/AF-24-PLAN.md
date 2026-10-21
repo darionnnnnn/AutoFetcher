@@ -436,4 +436,7 @@
 
 **無法以測試觀察、記錄在案**：D6 的「exit 補清 `draftRangeAnchor`」——每次 `enterPickMode` 也會重設它，exit 後沒有任何讀取路徑看得到差異，只能讀碼確認（`picker-mode.js` exit 尾段）。
 
-**待辦**：無。規劃條目全部實作或已在設計修正中說明不做與理由；剩下的後續工作只在 BACKLOG（附觸發條件）。全量 3427 綠。
+**待辦**：無。規劃條目全部實作或已在設計修正中說明不做與理由；剩下的後續工作只在 BACKLOG（附觸發條件）。
+
+**最終驗證（cf4a30b）**：全量 3427 綠；煙霧第一次在 `af23_c3_c4_c6_browser` 的一個 8 秒等待逾時（整套在第一個失敗就停）。用 Chrome for Testing 單獨重跑該套兩次皆 PASS，再完整重跑 15 套全部 PASS（exit 0），判定為時序偶發。
+排查時踩到：單獨執行煙霧腳本要帶 `BROWSER_PATH`（`tests/smoke/browser-path.mjs` 的 `findBrowser()`），否則預設用一般 Chrome，它封鎖 `--load-extension`，結果全部無效。
