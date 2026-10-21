@@ -642,13 +642,6 @@ function draftGesturePicks(target, candidate) {
   if (pickMode === 'colEach' && candidate.cell) {
     return resolveColEachCells(target, candidate.cell.col.index, candidate.cell.inner, currentHoverEl || currentCellEl)?.picks || []
   }
-  if (pickMode === 'rowEach' && candidate.cell) {
-    const rows = resolveDataRows(target), row = rows[candidate.cell.row.index]
-    return getRowCells(row).filter(cell => !isHeaderCell(cell)).map(cell => {
-      const c = gridIndexOf(row, cell)
-      return c >= 0 ? makeCellPick(candidate.cell.row.index, c, target, rows) : null
-    }).filter(Boolean)
-  }
   return [candidate]
 }
 // 各表最後一次 hover 的列欄（送出時非目前這張表的組要用它組 blockInfo，與非批次送出同一口徑）
@@ -1468,6 +1461,15 @@ function clearPickedMarks(doc) {
 // 目前這組以外的組（批次模式）
 function otherBatchGroups() {
   return batchGroupsView().filter(g => g.picks !== selectedList)
+}
+
+// 已選清單非空時標在已選屬於的那張表，否則標在目前目標
+function refreshMarks() {
+  if (selectedList.length > 0 && pickedTableEl) {
+    applyPickedMarks(pickedTableEl)
+  } else {
+    applyPickedMarks(currentTargetEl)
+  }
 }
 
 // 重新在表格上貼回已選標記（批次模式時每一組都畫）。
@@ -2474,11 +2476,7 @@ function handleTableMouseMove(target) {
     } else {
       markCells(null, dataRows, dataRows[head.index], 'row', null, null)
     }
-    if (selectedList.length > 0 && pickedTableEl) {
-      applyPickedMarks(pickedTableEl)
-    } else {
-      applyPickedMarks(currentTargetEl)
-    }
+    refreshMarks()
     const updated = syncNestedNotice()
     if (!updated && prevCell !== currentCellEl) {
       if (panelEl) updatePanel(panelEl, currentTargetEl)
@@ -2496,11 +2494,7 @@ function handleTableMouseMove(target) {
     rowIndex = null; colIndex = null; cellIndex = null; currentRowEl = null
     rememberBatchHover()
     clearMarkedCells(document)
-    if (selectedList.length > 0 && pickedTableEl) {
-      applyPickedMarks(pickedTableEl)
-    } else {
-      applyPickedMarks(currentTargetEl)
-    }
+    refreshMarks()
     const updated = syncNestedNotice()
     if (!updated && prevCell !== currentCellEl) {
       if (panelEl) updatePanel(panelEl, currentTargetEl)
@@ -2528,11 +2522,7 @@ function handleTableMouseMove(target) {
         const fullInner = innerPathOf(oCell, subEl)
         clearMarkedCells(document)
         markCells(null, oInfo.dataRows, null, 'col', C, fullInner)
-        if (selectedList.length > 0 && pickedTableEl) {
-          applyPickedMarks(pickedTableEl)
-        } else {
-          applyPickedMarks(currentTargetEl)
-        }
+        refreshMarks()
         const updated = syncNestedNotice()
         if (!updated && prevCell !== currentCellEl) {
           if (panelEl) updatePanel(panelEl, currentTargetEl)
@@ -2542,11 +2532,7 @@ function handleTableMouseMove(target) {
     }
   }
   markCells(currentCellEl, info.dataRows, info.row, pickMode, colIndex, currentInner)
-  if (selectedList.length > 0 && pickedTableEl) {
-    applyPickedMarks(pickedTableEl)
-  } else {
-    applyPickedMarks(currentTargetEl)
-  }
+  refreshMarks()
   const updated = syncNestedNotice()
   if (!updated && prevCell !== currentCellEl) {
     if (panelEl) updatePanel(panelEl, currentTargetEl)
@@ -4129,11 +4115,7 @@ function onKeyDown(event) {
     selectAllNotice = scanned > selectedList.length ? { scanned, taken: selectedList.length } : null
     undoSnapshot = previous
     clearPendingConfirms()
-    if (selectedList.length > 0 && pickedTableEl) {
-      applyPickedMarks(pickedTableEl)
-    } else {
-      applyPickedMarks(currentTargetEl)
-    }
+    refreshMarks()
     updatePanel(panelEl, currentTargetEl)
   } else if ((event.ctrlKey || event.metaKey) && (event.key === 'z' || event.key === 'Z')) {
     // 群組選取不維護復原快照（值在背景草稿裡）：與 Backspace 同一個說明出口
@@ -4204,11 +4186,7 @@ function onKeyDown(event) {
           return
         }
         addCellPick(newR, newC, dataRows, currentInner)
-        if (selectedList.length > 0 && pickedTableEl) {
-          applyPickedMarks(pickedTableEl)
-        } else {
-          applyPickedMarks(currentTargetEl)
-        }
+        refreshMarks()
         markCells(currentCellEl, dataRows, currentRowEl, pickMode, colIndex, currentInner)
         updatePanel(panelEl, currentTargetEl)
       }
@@ -4444,11 +4422,7 @@ function onClick(event) {
       updateToolbar()
       if (currentTargetEl && isTableMode(currentTargetEl)) {
         markCells(currentCellEl, currentDataRows, currentRowEl, pickMode, colIndex, currentInner)
-        if (selectedList.length > 0 && pickedTableEl) {
-          applyPickedMarks(pickedTableEl)
-        } else {
-          applyPickedMarks(currentTargetEl)
-        }
+        refreshMarks()
       }
       if (mode === 'col' && isSingleRowNestedTable(currentTargetEl)) {
         if (!toolbarNotice && !(currentPurpose === 'task' && isUpgradeableTable(currentTargetEl))) {
@@ -4595,12 +4569,7 @@ function onClick(event) {
             draftRangeAnchor.table === currentTargetEl) {
           const a = draftRangeAnchor.cell
           const rows = resolveDataRows(currentTargetEl)
-          const picks = []
-          for (let r = Math.min(a.row.index, cell.row.index); r <= Math.max(a.row.index, cell.row.index); r++) {
-            for (let c = Math.min(a.col.index, cell.col.index); c <= Math.max(a.col.index, cell.col.index); c++) {
-              if (targetAtGrid(rows[r], c, a.inner) !== null) picks.push(makeCellPick(r, c, currentTargetEl, rows, a.inner))
-            }
-          }
+          const picks = rangePicks(currentTargetEl, rows, a.row.index, cell.row.index, a.col.index, cell.col.index, a.inner)
           addDraftPickBatch(currentTargetEl, picks)
         } else {
           const picks = draftGesturePicks(currentTargetEl, candidate)
@@ -4687,11 +4656,7 @@ function onClick(event) {
       const candidate = candidateAt(event.target)
       if (candidate) {
         if (!addPick(candidate)) {
-          if (selectedList.length > 0 && pickedTableEl) {
-            applyPickedMarks(pickedTableEl)
-          } else {
-            applyPickedMarks(currentTargetEl)
-          }
+          refreshMarks()
           updatePanel(panelEl, currentTargetEl)
           return
         }
@@ -4802,11 +4767,7 @@ function onClick(event) {
         toolbarNotice = promotedColNotice(n)
       }
 
-      if (selectedList.length > 0 && pickedTableEl) {
-        applyPickedMarks(pickedTableEl)
-      } else {
-        applyPickedMarks(currentTargetEl)
-      }
+      refreshMarks()
       updatePanel(panelEl, currentTargetEl)
       return
     }
@@ -5021,6 +4982,17 @@ function replaceSelection(candidate) {
   undoSnapshot = previous
 }
 
+// 矩形範圍內（rA~rB、cA~cB 不分大小）每個有內容的格產生一個 cell pick
+function rangePicks(table, rows, rA, rB, cA, cB, inner) {
+  const picks = []
+  for (let r = Math.min(rA, rB); r <= Math.max(rA, rB); r++) {
+    for (let c = Math.min(cA, cB); c <= Math.max(cA, cB); c++) {
+      if (targetAtGrid(rows[r], c, inner) !== null) picks.push(makeCellPick(r, c, table, rows, inner))
+    }
+  }
+  return picks
+}
+
 // 從起始列欄到結束列欄的矩形範圍加選（Shift 點與拖曳框選共用）
 function addCellRange(tableEl, minR, maxR, minC, maxC, inner) {
   const dataRows = resolveDataRows(tableEl)
@@ -5140,12 +5112,8 @@ function onMouseUp(event) {
       const endInfo = resolveCell(event.target, currentTargetEl)
       const endR = endInfo ? endInfo.rIdx : dragStart.rIdx
       const endC = endInfo ? endInfo.cIdx : dragStart.cIdx
-      const rows = resolveDataRows(currentTargetEl), picks = []
-      for (let r = Math.min(dragStart.rIdx, endR); r <= Math.max(dragStart.rIdx, endR); r++) {
-        for (let c = Math.min(dragStart.cIdx, endC); c <= Math.max(dragStart.cIdx, endC); c++) {
-          if (targetAtGrid(rows[r], c, dragStart.inner) !== null) picks.push(makeCellPick(r, c, currentTargetEl, rows, dragStart.inner))
-        }
-      }
+      const rows = resolveDataRows(currentTargetEl)
+      const picks = rangePicks(currentTargetEl, rows, dragStart.rIdx, endR, dragStart.cIdx, endC, dragStart.inner)
       addDraftPickBatch(currentTargetEl, picks)
       suppressClick = true
       setTimeout(() => { suppressClick = false }, 0)
@@ -5186,11 +5154,7 @@ function onMouseUp(event) {
     setTimeout(() => { suppressClick = false }, 0)
     lastDragEndAt = Date.now()
     clearPendingConfirms()
-    if (selectedList.length > 0 && pickedTableEl) {
-      applyPickedMarks(pickedTableEl)
-    } else {
-      applyPickedMarks(currentTargetEl)
-    }
+    refreshMarks()
     updatePanel(panelEl, currentTargetEl)
   }
   dragStart = null
@@ -5455,11 +5419,7 @@ export function enterPickMode(opts) {
 
   if (opts?.preselect && currentTargetEl && isTableMode(currentTargetEl)) {
     applyPreselect(opts.preselect, currentTargetEl)
-    if (selectedList.length > 0 && pickedTableEl) {
-      applyPickedMarks(pickedTableEl)
-    } else {
-      applyPickedMarks(currentTargetEl)
-    }
+    refreshMarks()
     updatePanel(panelEl, currentTargetEl)
   }
 
@@ -5573,6 +5533,8 @@ export function exitPickMode(opts = {}) {
   pickMode = 'cell'; cellIndex = null; colIndex = null; rowIndex = null; currentCellEl = null; nestedNoticeOn = false
   currentDataRows = []; currentRowEl = null
   selectedList = []
+  draftRangeAnchor = null
+  draftPickDrainPaused = false
   draftPickEntries = new Map()
   draftPickGeneration++
   // Do not discard an in-flight PICKED ACK when leaving a group.  The queued

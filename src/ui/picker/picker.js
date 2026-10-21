@@ -5,7 +5,7 @@ import { DEFAULT_HOVER_HOLD_MS, DEFAULT_WAIT_TIMEOUT_MS } from '../../shared/pre
 import { MSG, MAX_BATCH_TASKS } from '../../shared/messages.js'
 import { getLayout, addCard, pruneSeries } from '../../shared/layout-store.js'
 import { seriesIdOf } from '../../shared/series-index.js'
-import { describeSchedule, describeTarget, describeDashboard, numericHeaderAxis, POS_TEXT, withInnerLabel, skipNote, TERMS } from '../../shared/describe.js'
+import { describeSchedule, describeTarget, describeDashboard, numericHeaderAxis, POS_TEXT, withInnerLabel, skipNote, unitOfAxis, TERMS } from '../../shared/describe.js'
 import { icon } from '../icons.js'
 import { nextIntervalRun } from '../../shared/schedule-math.js'
 import { isAnchorText, putInner, skipOf, putSkip, excludeOf, putExclude } from '../../shared/table.js'
@@ -2459,7 +2459,7 @@ function fieldWhereText(spec) {
     let text = h ? `${h} ${axis}` : axis
     const k = excludeOf(spec.block).length
     if (k > 0) {
-      const unit = spec.block.axis === 'row' ? '格' : '列'
+      const unit = unitOfAxis(spec.block.axis)
       text += `（排除 ${k} ${unit}）`
     }
     return text

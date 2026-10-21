@@ -5,7 +5,7 @@ import {
   skipOf, excludeOf
 } from './table.js'
 import { aggregateCells } from './aggregate.js'
-import { innerLabel } from './describe.js'
+import { innerLabel, unitOfAxis } from './describe.js'
 
 const STRATEGY_ORDER = ['auto', 'regex', 'attr', 'child', 'label']
 
@@ -527,7 +527,7 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
 
   // 略過開頭／結尾後沒有剩
   if (head + tail >= strippedList.length) {
-    const unit = isRow ? '格' : '列'
+    const unit = unitOfAxis(isRow ? 'row' : 'col')
     const subject = isRow ? '這一列' : '這一欄'
     const message = blankCount > 0
       ? `略過開頭 ${head} ${unit}、結尾 ${tail} ${unit}後沒有剩下的格子（${subject}去掉頭尾 ${blankCount} ${unit}空白後只有 ${strippedList.length} ${unit}）`
@@ -584,7 +584,7 @@ function extractBlockFromTable(table, blockSpec, specOpts = {}, dataRows) {
       ok: false,
       error: 'not_found',
       // excluded 含 skip 移掉的：只寫「排除」會比使用者設的排除清單還大
-      message: `略過與排除共 ${excluded} ${isRow ? '格' : '列'}後沒有剩下的格子`,
+      message: `略過與排除共 ${excluded} ${unitOfAxis(isRow ? 'row' : 'col')}後沒有剩下的格子`,
       items: buildItems()
     }
   }

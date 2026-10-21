@@ -269,6 +269,11 @@ function anchorNote(cell, block, rowPos, colPos) {
   return ''
 }
 
+// 沿著某個軸聚合時，被計數的單位：整列聚合數的是「格」、整欄聚合數的是「列」（略過／排除的白話共用）
+export function unitOfAxis(axis) {
+  return axis === 'row' ? '格' : '列'
+}
+
 // 產生略過與排除設定的白話字串，讀值一律經 table.js 的 skipOf／excludeOf
 function exclusionNote(block, unit, crossPos, withExclude) {
   if (crossPos) return ''
@@ -303,7 +308,7 @@ export function exclusionOfTarget(target) {
   const crossPos = t.block.axis === 'row' ? t.colPos : t.rowPos
   if (typeof t.fieldCount === 'number' && t.fieldCount >= 2) return exclusionNote(t.block, '筆', crossPos, false)
   if (t.cell) return ''
-  return exclusionNote(t.block, t.block.axis === 'row' ? '格' : '列', crossPos, true)
+  return exclusionNote(t.block, unitOfAxis(t.block.axis), crossPos, true)
 }
 
 /**
