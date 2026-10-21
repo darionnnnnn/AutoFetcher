@@ -10,7 +10,7 @@
 import { log as diagLog } from './diag.js'
 
 /** 面板的兩種畫面，各對應一個擴充功能頁 */
-export const PANEL_PATHS = {
+const PANEL_PATHS = {
   picker: 'ui/picker/picker.html',
   site: 'ui/site/site.html'
 }

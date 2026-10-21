@@ -1589,11 +1589,6 @@ export async function getSessionValue(key) {
   return res?.[key]
 }
 
-export async function setSessionValue(key, value) {
-  if (typeof key !== 'string' || key === '') throw new TypeError('session key 必須是非空字串')
-  return writeKey(key, value, 'session')
-}
-
 export async function updateSessionValue(key, shape, mutator) {
   if (typeof key !== 'string' || key === '') throw new TypeError('session key 必須是非空字串')
   if (typeof mutator !== 'function') throw new TypeError('session mutator 必須是函式')

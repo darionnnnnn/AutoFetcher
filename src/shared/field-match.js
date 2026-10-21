@@ -61,7 +61,7 @@ export function pickSourceOf(value) {
  * 個文件／目標；沒有 identity 時完整比較 locator、frame 與文件描述。
  * frameId/tabId 不在永久契約內，也不能讓重選因執行期 id 改變而重生 key。
  */
-export function sourceIdentityOf(value) {
+function sourceIdentityOf(value) {
   const source = pickSourceOf(value)
   if (!source) return null
   const explicit = source.identity ?? source.documentIdentity ?? source.documentGeneration ?? source.sourceId
@@ -78,7 +78,7 @@ export function sourceIdentityOf(value) {
   return out
 }
 
-export function sameSource(a, b) {
+function sameSource(a, b) {
   const left = sourceIdentityOf(a)
   const right = sourceIdentityOf(b)
   // 兩邊都沒有來源是舊單值／舊 block 規格的相容情況；只有一邊有來源

@@ -184,7 +184,7 @@ function fieldSourceOf(field) {
  * @param {unknown} mode
  * @returns {string}
  */
-export function describeFieldMode(mode) {
+function describeFieldMode(mode) {
   return TERMS.modes[mode === 'text' ? 'text' : mode === 'block' ? 'block' : 'number']
 }
 
@@ -193,7 +193,7 @@ export function describeFieldMode(mode) {
  * @param {Object} source
  * @returns {string}
  */
-export function describeFieldSource(source) {
+function describeFieldSource(source) {
   const frame = source?.frame
   const frameUrl = (frame && typeof frame === 'object' && frame.url) || source?.frameUrl
   if (typeof frameUrl === 'string' && frameUrl.trim() !== '') {
