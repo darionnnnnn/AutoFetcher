@@ -55,18 +55,19 @@ function toEach(doc, win, cell) {
 test('B2-1 工具列四段，鍵名與標籤', async () => {
   const { doc, pm } = await boot(PAGE)
   assert.deepEqual(tools(doc).map(t => t.getAttribute('data-af-tool')), ['cell', 'col', 'colEach', 'row'])
-  assert.deepEqual(tools(doc).map(t => t.textContent.trim()), ['單格', '整欄→一個值', '整欄→每格', '整列→一個值'])
+  // AF-24：按鈕前綴是快捷鍵數字（1～4）
+  assert.deepEqual(tools(doc).map(t => t.textContent.trim()), ['1 單格', '2 整欄→一個值', '3 整欄→每格', '4 整列→一個值'])
   for (const t of tools(doc)) assert.ok(t.getAttribute('title'), `${t.textContent} 要有 title 說明`)
   assert.equal(doc.querySelector('[data-af-toolbar]').style.flexWrap, 'wrap', '窄視窗換行，不得超出畫面')
   pm.exitPickMode()
 })
 
-test('B2-2 Tab 在四段之間循環', async () => {
+test('B2-2 數字鍵 1～4 對應四段（AF-24 取代 Tab 循環）', async () => {
   const { doc, pm, win } = await boot(PAGE)
   move(win, doc.getElementById('a1'))
   const active = () => doc.querySelector('[data-af-tool][data-af-active]')?.getAttribute('data-af-tool')
   const seen = [active()]
-  for (let i = 0; i < 4; i++) { key(doc, win, 'Tab'); seen.push(active()) }
+  for (const k of ['2', '3', '4', '1']) { key(doc, win, k); seen.push(active()) }
   assert.deepEqual(seen, ['cell', 'col', 'colEach', 'row', 'cell'])
   pm.exitPickMode()
 })
@@ -94,9 +95,9 @@ test('B2-4 再點同一欄任一格：整組移除', async () => {
 test('B2-5 已有其中 1 格時點：補齊、不重複', async () => {
   const { doc, pm, win } = await boot(PAGE)
   pick(win, doc.getElementById('a1'))
-  key(doc, win, 'Tab'); key(doc, win, 'Tab')
-  assert.equal(tool(doc, 'colEach').hasAttribute('data-af-active'), true, '前置：用 Tab 切模式（不升級）')
-  pick(win, doc.getElementById('c1'))
+  // AF-24：數字鍵等同點工具列，已選那格會直接換成整欄每格——補齊同欄、不重複 a1
+  key(doc, win, '3')
+  assert.equal(tool(doc, 'colEach').hasAttribute('data-af-active'), true, '前置：切到整欄→每格')
   assert.deepEqual(keys(pm).sort(), ['0,1', '1,1', '2,1'])
   pm.exitPickMode()
 })

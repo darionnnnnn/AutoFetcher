@@ -71,15 +71,15 @@ test('Shift＋→ 移到下一格：待選框與 pick 都是同一個子單位�
   pm.exitPickMode()
 })
 
-test('Ctrl+A 之後子單位狀態要清：接著 Tab 切整欄，框的是整格不是格內元素', async () => {
+test('Ctrl+A 之後子單位狀態要清：接著用數字鍵切整欄，框的是整格不是格內元素', async () => {
   const { doc, pm, win } = await boot(COMPOSITE2)
   pm.enterPickMode({ purpose: 'task', initialTarget: doc.body })
   move(win, doc.getElementById('s00'))
   key(doc, win, 'a', { ctrlKey: true })
   assert.equal(pm.selectedCount(), 4)
-  key(doc, win, 'Tab')
+  key(doc, win, '2')
   const marked = Array.from(doc.querySelectorAll('[data-af-cell]'))
-  assert.ok(marked.length > 0, '前置：Tab 切整欄要有待選框')
+  assert.ok(marked.length > 0, '前置：切整欄要有待選框')
   assert.ok(marked.every(m => m.tagName === 'TD'), `全選的是整格，框卻落在 ${marked.map(m => m.tagName).join(',')}`)
   pm.exitPickMode()
 })
