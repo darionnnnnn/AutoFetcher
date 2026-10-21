@@ -180,6 +180,19 @@ function runStateKeyOf(taskId, slot) {
   return `${taskId}@${slot}`
 }
 
+// 這一格的登記還是不是「我」那一份（同一個 worker、同一個進佇列時刻）。
+// 看門狗判定卡住時會拿走登記、寫 interrupted；原本那個 runTask 之後才跑完的話不得再寫一筆
+async function ownsRunState(key, at) {
+  const entry = (await getRunState())?.[key]
+  return Boolean(entry) && entry.boot === BOOT && entry.at === at
+}
+
+// 被接管的執行放棄寫入：不寫紀錄、帳本、health，只留診斷
+async function runTakenOver(task) {
+  try { await diag.log('run_taken_over', `group=${diagnosticLabel(task.name)} stage=write result=skipped`) } catch {}
+  return null
+}
+
 // 寫入（或覆寫）自己那一項
 async function putRunState(key, entry) {
   await updateRunState((cur) => ({ ...cur, [key]: entry }))
@@ -362,6 +375,7 @@ const NO_RETRY_STATUSES = new Set(['login_failed', 'parse_error', 'invalid_multi
  */
 async function finishFailure(run, status, error, opts = {}) {
   const { task, slot, attempt, isManual, isMulti } = run
+  if (run.ownsRun && !(await run.ownsRun())) return runTakenOver(task)
   const retryable = opts.retryable ?? !NO_RETRY_STATUSES.has(status)
   if (retryable && !isManual && attempt < MAX_ATTEMPTS) {
     await scheduleRetry(task.id, attempt, opts.offline === true, slot)
@@ -1055,6 +1069,9 @@ export async function runTask(task, opts = {}) {
   // 排隊中／執行中登記在 session.runState（手動與試抓不登記）：worker 被回收時留下痕跡，下一個 worker 才復原得了
   const runKey = tracked ? runStateKeyOf(task.id, slot) : null
   if (runKey) await putRunState(runKey, { state: 'queued', at: startedMs, boot: BOOT, attempt, reason })
+  // 寫入前核對登記仍屬於這次執行（SPEC §4.1：被看門狗接管後不得再寫）
+  const ownsRun = runKey ? () => ownsRunState(runKey, startedMs) : null
+  failRun.ownsRun = ownsRun
   try {
     return await enqueueForOrigin(origin, async (queueCtx) => {
       // 前置動作的逐步軌跡：試抓要說得出「hover 有做、是 click 沒點到」，
@@ -1590,6 +1607,7 @@ export async function runTask(task, opts = {}) {
             // 批次寫入：排程同一 task/slot 只補缺少的 field；手動抓取保留
             // 每次獨立紀錄。若 storage 在寫入後回錯，helper 會先核對已耐久資料，
             // 避免外層 catch 再追加一整批重複結果。
+            if (ownsRun && !(await ownsRun())) return runTakenOver(task)
             const committedResult = await appendMultiRecordsOnce(
               date, records, task.id, slot, commitId, !isManual,
               isMulti ? executionFingerprint : undefined
@@ -1670,6 +1688,7 @@ export async function runTask(task, opts = {}) {
             record.partial = true
           }
 
+          if (ownsRun && !(await ownsRun())) return runTakenOver(task)
           return await writeRecord(record, { parentId: task.id, skipLedger: isManual, executionId })
         }
 
