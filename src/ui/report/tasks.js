@@ -5,6 +5,7 @@ import { MSG } from '../../shared/messages.js'
 import { buildExport, download } from '../../shared/export.js'
 import { confirmDialog, dismissDialog, isDialogOpen } from '../modal.js'
 import { icon } from '../icons.js'
+import { makeSortable } from './sortable.js'
 import { isGap, gapTextOf, describeSchedule, describeTarget, describeFields, targetOfTask, exclusionOfTarget, EMPTY_GUIDE, TERMS, describeTaskIdentities } from '../../shared/describe.js'
 
 // Resolve this extension page's tab while the report is loading, not inside a
@@ -857,54 +858,13 @@ function createTaskRow(t) {
     actionsEl, toggleLabel
   ].filter(Boolean))
 
-  // 拖曳排序事件綁定
-  let isDragging = false
-  row.addEventListener('pointerdown', (e) => {
-    if (['INPUT', 'BUTTON', 'A', 'SELECT'].includes(e.target.tagName)) return
-    isDragging = true
-    if (typeof row.setPointerCapture === 'function') {
-      try {
-        row.setPointerCapture(e.pointerId)
-      } catch {}
-    }
+  // 拖曳排序（共用 sortable：超過門檻才算拖、取消不寫回、順序沒變不寫入）
+  makeSortable(row, {
+    container: () => document.getElementById('task-list'),
+    items: (box) => [...box.querySelectorAll('[data-task-id]')],
+    ignore: (e) => ['INPUT', 'BUTTON', 'A', 'SELECT'].includes(e.target.tagName),
+    onCommit: (order) => applyOrder(order.map((el) => el.dataset.taskId))
   })
-
-  row.addEventListener('pointermove', (e) => {
-    if (!isDragging) return
-    const clientY = e.clientY
-    const container = document.getElementById('task-list')
-    if (!container) return
-    const siblings = [...container.querySelectorAll('[data-task-id]')].filter((el) => el !== row)
-    for (const sib of siblings) {
-      const rect = sib.getBoundingClientRect()
-      const mid = rect.top + rect.height / 2
-      if (clientY < mid) {
-        container.insertBefore(row, sib)
-        return
-      }
-    }
-    if (siblings.length > 0) {
-      container.appendChild(row)
-    }
-  })
-
-  const handlePointerEnd = async (e) => {
-    if (!isDragging) return
-    isDragging = false
-    if (typeof row.releasePointerCapture === 'function') {
-      try {
-        row.releasePointerCapture(e.pointerId)
-      } catch {}
-    }
-    const container = document.getElementById('task-list')
-    if (container) {
-      const ids = [...container.querySelectorAll('[data-task-id]')].map((el) => el.dataset.taskId)
-      await applyOrder(ids)
-    }
-  }
-
-  row.addEventListener('pointerup', handlePointerEnd)
-  row.addEventListener('pointercancel', handlePointerEnd)
 
   return row
 }

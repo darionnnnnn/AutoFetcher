@@ -1,7 +1,8 @@
 // AutoFetcher 趨勢浮層模組（點擊欄標或數值卡顯示序列走勢與快速操作）
 
 import { buildSeries } from './series.js';
-import { lineChart } from './charts.js';
+import { lineChart, getChartColor } from './charts.js';
+import { MAX_CHART_SERIES } from './drop-rules.js';
 import { getLayout, addCard } from '../../shared/layout-store.js';
 import { buildHash } from './logic.js';
 import { parentIdOf } from '../../shared/series-index.js';
@@ -165,7 +166,7 @@ export function openTrendPopover(seriesId, ctx, anchorEl) {
         dot.style.width = '8px';
         dot.style.height = '8px';
         dot.style.borderRadius = '50%';
-        dot.style.backgroundColor = `var(--chart-${(idx % 8) + 1})`;
+        dot.style.backgroundColor = getChartColor(idx);
         item.appendChild(dot);
 
         const label = doc.createElement('span');
@@ -178,7 +179,7 @@ export function openTrendPopover(seriesId, ctx, anchorEl) {
     }
 
     if (capped) {
-      noteEl.textContent = '已達上限 8 條，僅顯示前 8 條';
+      noteEl.textContent = `已達上限 ${MAX_CHART_SERIES} 條，僅顯示前 ${MAX_CHART_SERIES} 條`;
       noteEl.style.fontSize = '0.75rem';
       noteEl.style.color = 'var(--text-muted)';
     } else {
@@ -258,8 +259,8 @@ export function openTrendPopover(seriesId, ctx, anchorEl) {
     compareBtn.addEventListener('click', () => {
       let combined = [seriesId, ...matchingSeriesIds];
       let capped = false;
-      if (combined.length > 8) {
-        combined = combined.slice(0, 8);
+      if (combined.length > MAX_CHART_SERIES) {
+        combined = combined.slice(0, MAX_CHART_SERIES);
         capped = true;
       }
       currentSeriesIds = combined;

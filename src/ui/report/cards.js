@@ -4,7 +4,7 @@ import { buildSeries, resolvePeriod, latest, pivot, effectiveTimeOf, withDelta, 
 
 // 樞紐表未指定列數上限時的預設(避免長時間區間渲染上千列)
 const DEFAULT_PIVOT_ROWS = 50;
-import { lineChart, barChart, gauge, sparkline } from './charts.js';
+import { lineChart, barChart, gauge, sparkline, getChartColor } from './charts.js';
 import { isSuccess, isRed, isWarn, statusTextOf } from '../../shared/record-status.js';
 import { parentIdOf } from '../../shared/series-index.js';
 import { isGap, gapTextOf } from '../../shared/describe.js';
@@ -372,7 +372,7 @@ function renderChartCard(card, ctx, { bodyEl, actionsEl }) {
 
       const dotEl = document.createElement('span');
       dotEl.className = 'chart-legend-dot';
-      dotEl.style.backgroundColor = `var(--chart-${(idx % 8) + 1})`;
+      dotEl.style.backgroundColor = getChartColor(idx);
       itemEl.appendChild(dotEl);
 
       const labelEl = document.createElement('span');
@@ -599,9 +599,6 @@ function renderTableCard(card, ctx, { cardEl, bodyEl, actionsEl, configBtn }) {
 
   const fullData = [tsvHeaders, ...tsvRows];
   const tsvContent = buildTsv(fullData);
-  if (cardEl) {
-    cardEl.dataset.tsv = tsvContent;
-  }
 
   // 複製 TSV 按鈕
   const copyBtn = document.createElement('button');

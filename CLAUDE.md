@@ -40,7 +40,7 @@ src/
 │   │   layout.js 格線數學 / series.js 資料序列與聚合(含樞紐表容差合併)/ logic.js 範圍篩選與 hash
 │   │   templates.js 儀表板範本 / drop-rules.js 拖曳投放規則 / charts.js SVG 圖表(只碰 document 建元素)
 │   └── DOM 層:report.js 路由與歷史頁 / dashboard.js 儀表板與拖曳 / cards.js 卡片
-│       dnd.js 共用拖曳協定(唯一入口)/ drawer.js 卡片設定抽屜 / tasks.js 任務頁 / settings.js 設定頁
+│       dnd.js 共用拖曳協定(投放目標)/ sortable.js 清單就地排序 / drawer.js 卡片設定抽屜 / tasks.js 任務頁 / settings.js 設定頁
 │       trend-popover.js 趨勢浮層(點欄標或數值卡開啟)
 └── shared/              ← storage(唯一寫入口)、lock(跨環境鎖)、messages(訊息型別)、selector(四層定位)
                            series-index(序列 id 的唯一入口:組合/拆解/名稱)
@@ -300,7 +300,8 @@ docs/                    ← SPEC.md 現況規格、BACKLOG.md、archive/(歷史
 - 不要用絕對 XPath 當唯一選擇器(頁面小改就失效;SPEC §3 要求多重選擇器 + 文字錨定)。
 - **不要用 HTML5 drag-and-drop**:拖曳一律 Pointer Events,且只讀 `clientX`/`clientY`/`pointerId`,
   `setPointerCapture` 要先檢查存在(jsdom 25 沒有 `PointerEvent` 也沒有這個方法)。
-- **新的拖曳一律走 `ui/report/dnd.js`**,不要再各自內嵌 pointer 監聽(既有三處尚未搬過去,見 BACKLOG);
+- **新的拖曳一律走共用協定,不要再各自內嵌 pointer 監聽**:「拖到某個目標上放開」走 `ui/report/dnd.js`;
+  「同一個清單裡就地換順序」走 `ui/report/sortable.js`(AF-24;門檻、同一根手指、取消即還原且不寫回、順序沒變不寫入)。卡片移動縮放與頁籤兩處尚未搬,見 BACKLOG;
   **不要用 `document.elementFromPoint`**(jsdom 沒有,測不動)。命中與拒收往下找的規則見 SPEC §8.2。
   唯一例外是 `content/picker-mode.js` 的代理層讓路(只有真實命中測試答得出「底下是誰」),
   必須帶存在判斷,測試用替身注入。

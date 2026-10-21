@@ -13,7 +13,7 @@ import { applyTemplate } from './templates.js'
 import { MSG } from '../../shared/messages.js'
 import { createDragSource, registerDropTarget, resetDnd, isPointInside, isDragBusy, setDragIdleListener } from './dnd.js'
 import { closeTrendPopover, isTrendPopoverOpen, setTrendPopoverCloseListener } from './trend-popover.js'
-import { applyDrop, applyDropMany, cardTypeForTask } from './drop-rules.js'
+import { applyDrop, applyDropMany, cardTypeForTask, exceedsSeriesLimit, MAX_CHART_SERIES } from './drop-rules.js'
 import { buildSeriesIndex, parentIdOf } from '../../shared/series-index.js'
 import { icon, setIcon } from '../icons.js'
 
@@ -424,7 +424,7 @@ function setupEvents(grid) {
         undoStack.length = 0
         redoStack.length = 0
         historyRevision += 1
-        renderDashboard(currentDashId).catch(() => {})
+        renderDashboard(currentDashId).catch(showDashboardLoadError)
       }
       updateEditingUI()
     })
@@ -453,6 +453,8 @@ function setupEvents(grid) {
   const addBtn = document.getElementById('dashboard-add')
   if (addBtn && !addBtn._dashboardAddAttached) {
     addBtn._dashboardAddAttached = true
+    // 圖示一律走 icons.js，不用「+」字元（不同字型長得不一樣）
+    setIcon(addBtn, 'plus', { label: '新增儀表板' })
     addBtn.addEventListener('click', async () => {
       const layout = await getLayout()
       const newDash = await addDashboard(`儀表板 ${layout.dashboards.length + 1}`)
@@ -846,7 +848,7 @@ function registerCardDropTarget(cardEl, card, ctx) {
         const idsToAdd = Array.isArray(payload.seriesIds)
           ? numericDropIds(payload.seriesIds).filter(id => !existingIds.has(id))
           : (numericDropIds([payload.taskId]).filter(id => !existingIds.has(id)))
-        if (idsToAdd.length > 0 && (card.source || []).length + idsToAdd.length > 8) {
+        if (exceedsSeriesLimit(card.source, idsToAdd)) {
           return true
         }
       }
@@ -913,8 +915,8 @@ function registerCardDropTarget(cardEl, card, ctx) {
           const idsToAdd = Array.isArray(payload.seriesIds)
             ? numericDropIds(payload.seriesIds).filter(id => !existingIds.has(id))
             : numericDropIds([payload.taskId]).filter(id => !existingIds.has(id))
-          if (idsToAdd.length > 0 && (latest.source || []).length + idsToAdd.length > 8) {
-            return { rejected: true, reason: '圖表最多支援 8 個資料數列' }
+          if (exceedsSeriesLimit(latest.source, idsToAdd)) {
+            return { rejected: true, reason: `圖表最多支援 ${MAX_CHART_SERIES} 個資料數列` }
           }
         }
         const currentOpts = { ...opts }
@@ -1103,11 +1105,44 @@ function registerGridDropTarget(grid) {
 }
 
 /**
+ * 儀表板讀取失敗：不靜默，在儀表板上方說明原因並給「重試」（與歷史頁同一種橫幅）
+ */
+export function showDashboardLoadError(err) {
+  const panel = document.getElementById('panel-dashboard')
+  if (!panel) return
+  let banner = document.getElementById('dashboard-load-error')
+  if (!banner) {
+    banner = document.createElement('div')
+    banner.id = 'dashboard-load-error'
+    banner.className = 'banner is-bad'
+    banner.setAttribute('role', 'alert')
+    panel.insertBefore(banner, panel.firstChild)
+  }
+  banner.hidden = false
+  banner.textContent = `儀表板載入失敗：${err?.message || err || '未知原因'} `
+  const retry = document.createElement('button')
+  retry.type = 'button'
+  retry.textContent = '重試'
+  retry.onclick = () => { renderDashboard(currentDashId).catch(showDashboardLoadError) }
+  banner.appendChild(retry)
+}
+
+function clearDashboardLoadError() {
+  const banner = document.getElementById('dashboard-load-error')
+  if (banner) banner.remove()
+}
+
+/**
  * 渲染儀表板
  */
+// 每次完整繪製取一個序號；await 回來不是最新的就放棄（快速切頁籤時，晚到的 A 不得畫進 B、也不得改 currentDashId）
+let dashboardRenderGeneration = 0
+
 export async function renderDashboard(dashId) {
+  const generation = ++dashboardRenderGeneration
   pendingRefresh = null
   const layout = await getLayout()
+  if (generation !== dashboardRenderGeneration) return
   let dash = null
   if (dashId) {
     dash = layout.dashboards.find(d => d.id === dashId)
@@ -1139,17 +1174,39 @@ export async function renderDashboard(dashId) {
   const tabsContainer = document.getElementById('dashboard-tabs')
   if (tabsContainer) {
     tabsContainer.textContent = ''
+    // 鍵盤可達（AF-24）：頁籤是 tablist；目前那個 tabindex=0，←／→ 切換、Enter／空白鍵進入
+    tabsContainer.setAttribute('role', 'tablist')
+    tabsContainer.setAttribute('aria-label', '儀表板')
+    const dashIds = layout.dashboards.map(x => x.id)
     for (const d of layout.dashboards) {
       const tabEl = document.createElement('div')
       tabEl.className = 'dash-tab'
       tabEl.dataset.dashId = d.id
+      tabEl.setAttribute('role', 'tab')
+      tabEl.setAttribute('aria-selected', d.id === dash.id ? 'true' : 'false')
+      tabEl.tabIndex = d.id === dash.id ? 0 : -1
       if (d.id === dash.id) {
         tabEl.classList.add('active')
       }
+      tabEl.addEventListener('keydown', async (e) => {
+        if (e.target !== tabEl) return // 名稱輸入框與按鈕自己處理按鍵
+        const i = dashIds.indexOf(d.id)
+        let nextId = null
+        if (e.key === 'ArrowRight') nextId = dashIds[(i + 1) % dashIds.length]
+        else if (e.key === 'ArrowLeft') nextId = dashIds[(i - 1 + dashIds.length) % dashIds.length]
+        else if (e.key === 'Enter' || e.key === ' ') nextId = d.id
+        if (!nextId) return
+        e.preventDefault()
+        focusActiveTabAfterRender = true
+        await setLastDashboard(nextId)
+        if (nextId !== currentDashId) await renderDashboard(nextId)
+        else focusActiveTab()
+      })
 
       const input = document.createElement('input')
       input.type = 'text'
       input.value = d.name || ''
+      input.setAttribute('aria-label', '儀表板名稱')
       input.addEventListener('change', async (e) => {
         await renameDashboard(d.id, e.target.value)
       })
@@ -1290,7 +1347,7 @@ export async function renderDashboard(dashId) {
         }
         // 拖到一半被取消：頁籤 DOM 可能已被搬動過，整份重畫回到存起來的順序
         if (dragInfo.moved) {
-          renderDashboard(currentDashId).catch(() => {})
+          renderDashboard(currentDashId).catch(showDashboardLoadError)
           return
         }
         flushDashboardRefresh()
@@ -1307,6 +1364,7 @@ export async function renderDashboard(dashId) {
   }
 
   const ctx = await buildDashboardContext(dash)
+  if (generation !== dashboardRenderGeneration) return
   const cards = Array.isArray(dash.cards) ? dash.cards : []
 
   const emptyEl = document.getElementById('dashboard-empty')
@@ -1320,6 +1378,8 @@ export async function renderDashboard(dashId) {
   resetDnd()
 
   await renderPalette()
+  if (generation !== dashboardRenderGeneration) return
+  clearDashboardLoadError()
 
   grid.textContent = ''
 
@@ -1336,6 +1396,14 @@ export async function renderDashboard(dashId) {
 
   // 放在卡片都掛上之後:它會逐個把手設顯示/隱藏,放前面只會打在即將丟棄的舊 DOM 上
   updateEditingUI()
+  if (focusActiveTabAfterRender) focusActiveTab()
+}
+
+// 用鍵盤切頁籤時，重畫之後焦點要回到新的目前頁籤（頁籤整排重建，舊元素已不在）
+let focusActiveTabAfterRender = false
+function focusActiveTab() {
+  focusActiveTabAfterRender = false
+  document.querySelector('#dashboard-tabs [role="tab"][aria-selected="true"]')?.focus?.()
 }
 
 /**
@@ -1438,7 +1506,7 @@ export function flushDashboardRefresh() {
   if (!pendingRefresh || isDashboardBusy()) return
   const full = pendingRefresh === 'full'
   pendingRefresh = null
-  refreshDashboard({ full }).catch(() => {})
+  refreshDashboard({ full }).catch(showDashboardLoadError)
 }
 
 /**

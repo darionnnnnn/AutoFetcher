@@ -7,6 +7,11 @@ import { isMultiTask } from '../../shared/task-source.js';
 // 折線圖與長條圖的調色盤上限
 export const MAX_CHART_SERIES = 8;
 
+// 加入 idsToAdd 之後會不會超過折線／長條圖的序列上限（儀表板投放的兩條路共用）
+export function exceedsSeriesLimit(source, idsToAdd) {
+  return idsToAdd.length > 0 && (source || []).length + idsToAdd.length > MAX_CHART_SERIES;
+}
+
 const TEXT_CHART_REASON = '文字值不能加入數字圖表';
 
 // 拖曳端傳入同一份 buildSeriesIndex 結果即可依子序列判斷型別。

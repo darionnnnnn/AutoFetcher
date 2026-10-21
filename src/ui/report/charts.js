@@ -43,9 +43,9 @@ function createEmptyChartSvg(width, height) {
 }
 
 /**
- * 依序列索引取得 CSS 變數圖表色彩（1~8 循環）
+ * 依序列索引取得 CSS 變數圖表色彩（theme.css 的 --chart-1~8 循環；圖例與圖表共用這一份）
  */
-function getChartColor(index) {
+export function getChartColor(index) {
   return `var(--chart-${(index % 8) + 1})`;
 }
 
