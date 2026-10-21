@@ -1542,6 +1542,11 @@ export async function setLastSeenAt(ms) {
   await writeKey('lastSeenAt', ms)
 }
 
+// 只往前推、不往回拉（鎖內比較）：啟動與看門狗同時算錯過清單時，比較慢的那個不得把它拉回去
+export async function advanceLastSeenAt(ms) {
+  await mutateKey('lastSeenAt', (cur) => typeof cur === 'number' && cur >= ms ? undefined : ms)
+}
+
 // 上次記下的時區；沒有回 undefined
 export async function getLastTimezone() {
   const res = await chrome.storage.local.get('lastTimezone')
