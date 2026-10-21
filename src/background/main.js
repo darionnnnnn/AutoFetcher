@@ -1657,10 +1657,25 @@ export async function handleMessage(msg, sender, runOpts = {}) {
           groupKey: msg.groupKey,
           documentGeneration: draft.documentGeneration,
           routeIdentity: draft.routeIdentity,
-          text: typeof msg.text === 'string' ? msg.text : ''
+          text: typeof msg.text === 'string' ? msg.text : '',
+          ...(msg.cancelled === true ? { cancelled: true } : {})
         })
       } catch {}
       groupNamePickRequests.delete(tabId)
+      return { ok: true }
+    }
+
+    // 頁面上的 Ctrl/⌘＋Enter：只核對是不是這個分頁目前的選取階段，再轉給面板（面板按下自己的「完成選取」）
+    if (msg.type === MSG.PICK_DRAFT_FINISH_REQUEST) {
+      const tabId = sender?.tab?.id
+      const active = Number.isInteger(tabId) ? frameStateOf(tabId) : null
+      if (!Number.isInteger(tabId) || !active || typeof msg.sessionId !== 'string' ||
+          active.sessionId !== msg.sessionId || active.frameId !== (sender?.frameId ?? 0)) {
+        return { ok: false, error: 'stale_frame', message: '完成請求來自已失效的選取階段' }
+      }
+      try {
+        await chrome.runtime.sendMessage({ type: MSG.PICK_DRAFT_FINISH_REQUEST, tabId, sessionId: msg.sessionId, groupKey: msg.groupKey })
+      } catch {}
       return { ok: true }
     }
 

@@ -554,6 +554,23 @@ function queueDraftPick(target, pick, remove = false) {
   return run
 }
 
+function showGroupRemoveNotice() {
+  toolbarNotice = '群組選取中：要取消某一格就再點它一次，或在面板的清單上移除'
+  if (panelEl) updatePanel(panelEl, currentTargetEl)
+}
+
+// 頁面上按 Ctrl/⌘＋Enter：請面板執行「完成選取」（面板是唯一的完成入口，這裡只送請求）
+function requestDraftFinish() {
+  try {
+    const pending = chrome.runtime.sendMessage({
+      type: MSG.PICK_DRAFT_FINISH_REQUEST,
+      sessionId: pickSessionId,
+      groupKey: pickGroupKey
+    })
+    if (pending?.catch) pending.catch(() => {})
+  } catch {}
+}
+
 function toggleDraftPick(target, pick, suppressRemove = false) {
   const key = draftPickKey(target, pick)
   const remove = draftPickEntries.has(key)
@@ -4006,13 +4023,29 @@ function onKeyDown(event) {
   }
   cancelConfirmPending = null
   if (event.key === 'Backspace' || event.key === 'Delete') {
+    // 群組選取的值存在背景草稿裡（重新整理後也還在、不一定有頁面元素），不能只改本地清單：
+    // 鍵盤移除改成說明出口，不靜默（AF-24）
+    if (isImmediateDraftGroupMode()) {
+      if (draftPickEntries.size > 0) {
+        event.preventDefault()
+        showGroupRemoveNotice()
+      }
+      return
+    }
     // 沒有東西可移除就放給頁面：選取模式可能開在有輸入框的頁面上（例如站台登入設定）
     if (selectedList.length > 0) {
       event.preventDefault()
       removeLastPick()
     }
   } else if (event.key === 'Enter') {
-    if (isDraftGroupMode()) return
+    if (isDraftGroupMode()) {
+      // 群組選取：普通 Enter 交給焦點控制項；Ctrl/⌘＋Enter 等同面板的「完成選取」
+      if ((event.ctrlKey || event.metaKey) && !event.repeat) {
+        event.preventDefault()
+        requestDraftFinish()
+      }
+      return
+    }
     // 焦點在面板的按鈕上時，Enter 是「按那顆按鈕」，不是「送出」——
     // 焦點停在「取消」上卻送出，是鍵盤使用者最容易踩到的陷阱
     // 「完成／取消」與位置移位鈕要讓 Enter 交給按鈕（前兩顆會結束流程，移位鈕要切換位置）；
@@ -4101,6 +4134,14 @@ function onKeyDown(event) {
     }
     updatePanel(panelEl, currentTargetEl)
   } else if ((event.ctrlKey || event.metaKey) && (event.key === 'z' || event.key === 'Z')) {
+    // 群組選取不維護復原快照（值在背景草稿裡）：與 Backspace 同一個說明出口
+    if (isImmediateDraftGroupMode()) {
+      if (draftPickEntries.size > 0) {
+        event.preventDefault()
+        showGroupRemoveNotice()
+      }
+      return
+    }
     // Ctrl／⌘＋Z：**先還原上一次取代**（那是最容易誤觸、損失最大的動作），
     // 沒有可還原的取代才退回「移除最後一項」；兩者都沒有就把按鍵放給頁面
     if (undoSnapshot) {
@@ -4134,7 +4175,8 @@ function onKeyDown(event) {
           return
         }
 
-        addCellPick(curR, curC, dataRows, currentInner)
+        const groupPicks = isImmediateDraftGroupMode()
+        if (!groupPicks) addCellPick(curR, curC, dataRows, currentInner)
 
         let newR = curR
         let newC = curC
@@ -4149,6 +4191,16 @@ function onKeyDown(event) {
         currentRowEl = dataRows[rowIndex]
         currentCellEl = currentRowEl ? cellAtGridIndex(currentRowEl, colIndex) : null
 
+        if (groupPicks) {
+          // 群組選取：起點與新位置一起經草稿佇列加入（與滑鼠框選同一條路，超量整批拒絕並說明）
+          const picks = [[curR, curC], [newR, newC]]
+            .filter(([r, c]) => targetAtGrid(dataRows[r], c, currentInner) !== null)
+            .map(([r, c]) => makeCellPick(r, c, currentTargetEl, dataRows, currentInner))
+          if (picks.length > 0) addDraftPickBatch(currentTargetEl, picks)
+          markCells(currentCellEl, dataRows, currentRowEl, pickMode, colIndex, currentInner)
+          updatePanel(panelEl, currentTargetEl)
+          return
+        }
         addCellPick(newR, newC, dataRows, currentInner)
         if (selectedList.length > 0 && pickedTableEl) {
           applyPickedMarks(pickedTableEl)
@@ -4564,7 +4616,19 @@ function onClick(event) {
           const picks = draftGesturePicks(currentTargetEl, candidate)
           if (picks.length > 1) addDraftPickBatch(currentTargetEl, picks)
           else toggleDraftPick(currentTargetEl, candidate, event.detail === 2)
-          if (cell) draftRangeAnchor = { table: currentTargetEl, groupKey: pickGroupKey, cell }
+          // Shift 範圍的起點是「最後一個已選格」（SPEC §2）：加選就換成這一格；
+          // 取消的正好是起點時，退回這張表裡仍選著的最後一格（都沒有就清掉）
+          if (cell && draftPickEntries.has(draftPickKey(currentTargetEl, candidate))) {
+            draftRangeAnchor = { table: currentTargetEl, groupKey: pickGroupKey, cell }
+          } else if (cell && draftRangeAnchor?.table === currentTargetEl &&
+              draftRangeAnchor.cell?.row?.index === cell.row?.index && draftRangeAnchor.cell?.col?.index === cell.col?.index) {
+            // 草稿同步回來的項目沒有頁面元素，改用表格定位比對
+            let tableLocator = null
+            try { tableLocator = JSON.stringify(describe(currentTargetEl)) } catch {}
+            const still = [...draftPickEntries.values()].filter(e => e.pick?.cell && (e.target === currentTargetEl ||
+              (tableLocator && JSON.stringify(e.source?.locator ?? null) === tableLocator))).pop()
+            draftRangeAnchor = still ? { table: currentTargetEl, groupKey: pickGroupKey, cell: still.pick.cell } : null
+          }
         }
         return
       }

@@ -149,6 +149,18 @@ function beginGroupNamePick(msg) {
     event.preventDefault()
     event.stopPropagation()
     endGroupNamePick()
+    // 告訴面板這次取名取消了，面板才會離開「等待取名」（不帶文字，原名稱保留）
+    const pending = chrome.runtime.sendMessage({
+      type: MSG.PICK_GROUP_NAME_RESULT,
+      requestId: msg.requestId,
+      sessionId: msg.sessionId,
+      groupKey: msg.groupKey,
+      documentGeneration: msg.documentGeneration,
+      routeIdentity: msg.routeIdentity,
+      text: '',
+      cancelled: true
+    })
+    if (pending?.catch) pending.catch(() => {})
   }
   groupNamePickState = { onClick, onKeyDown, onMouseOver, onMouseMove, onMouseOut, onRouteChange, onPageHide, preview }
   document.addEventListener('click', onClick, true)
@@ -650,6 +662,8 @@ function route(msg, sendResponse) {
   }
 
   if (msg.type === MSG.ENTER_PICK) {
+    // 取名與選值互斥（雙向）：取名到一半就收到選值，先拆掉取名的 capture 監聽，否則點一下會同時加值又回填名稱
+    endGroupNamePick()
     // 重選是在新分頁開的，沒有「上次右鍵的元素」；先用任務自己的 locator 找回目標
     let target = lastTarget
     if (msg.locator) {

@@ -4773,6 +4773,17 @@ export function setPickDraftContext(draft, { render = true } = {}) {
   return pickDraftState
 }
 
+// 頁面上的 Ctrl/⌘＋Enter（background 核對後轉來、帶 tabId）：等同按面板的「完成選取」，守門與按鈕相同
+export function consumeDraftFinishRequest(message) {
+  const draft = pickDraftState
+  if (!draft || !message || message.type !== MSG.PICK_DRAFT_FINISH_REQUEST) return false
+  if (!Number.isInteger(message.tabId) || message.tabId !== draft.tabId || message.sessionId !== draft.sessionId) return false
+  const finishButton = document.getElementById('group-finish')
+  if (!finishButton || finishButton.hidden || finishButton.disabled) return false
+  finishButton.click()
+  return true
+}
+
 export async function consumeGroupNameResult(message) {
   if (!message || message.type !== PICK_GROUP_NAME_RESULT) return false
   const draft = pickDraftState
@@ -4784,6 +4795,12 @@ export async function consumeGroupNameResult(message) {
       JSON.stringify(message.documentGeneration) !== JSON.stringify(draft.documentGeneration) ||
       JSON.stringify(message.routeIdentity) !== JSON.stringify(draft.routeIdentity)) return false
   if (message.tabId !== undefined && message.tabId !== draft.tabId) return false
+  if (message.cancelled === true) {
+    pickDraftNameRequest = null
+    pickDraftNameRequestPending = false
+    setGroupDraftStatus('已取消從頁面取名，原名稱保留。')
+    return false
+  }
   const text = typeof message.text === 'string' ? message.text : (typeof message.name === 'string' ? message.name : message.preview)
   if (typeof text !== 'string' || text.trim() === '') {
     pickDraftNameRequest = null
@@ -5461,6 +5478,7 @@ if (typeof document !== 'undefined' && document.getElementById('save') && global
     document.addEventListener('af:pick-group-name-result', event => { consumeGroupNameResult(event.detail) })
     chrome.runtime.onMessage?.addListener((message) => {
       if (message?.type === PICK_GROUP_NAME_RESULT) return consumeGroupNameResult(message)
+      if (message?.type === MSG.PICK_DRAFT_FINISH_REQUEST) { consumeDraftFinishRequest(message); return undefined }
       return undefined
     })
     document.addEventListener('input', scheduleDraftSave, true)
