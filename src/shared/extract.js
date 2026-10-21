@@ -83,8 +83,11 @@ export function parseNumber(text) {
   let str = text.trim()
   if (!str) return null
 
-  // 全形數字 ０-９ 轉半形
+  // 全形數字 ０-９ 轉半形；全形逗號／小數點、Unicode 減號（U+2212）與全形負號一併正規化
   str = str.replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    .replace(/[−－]/g, '-')
+    .replace(/，/g, ',')
+    .replace(/．/g, '.')
 
   // 會計負數判斷：整串被小括號包覆（繁中財務頁面常用全形括號，一併認）
   let isAccountingNegative = false
@@ -106,11 +109,12 @@ export function parseNumber(text) {
     return null
   }
 
-  // 抓取第一個數值片段
-  const match = str.match(/-?\d+(?:\.\d+)?/)
+  // 抓取第一個數值片段：負號與數字之間最多一個空白；允許前導小數點（.5）；
+  // 指數只在 e/E 後緊接（可選正負號與）至少一位數字時成立（1e、2024e、12 e3 都不算指數）
+  const match = str.match(/-?\s?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?/)
   if (!match) return null
 
-  let num = Number(match[0])
+  let num = Number(match[0].replace(/\s/g, ''))
   if (Number.isNaN(num)) return null
 
   if (isAccountingNegative) {

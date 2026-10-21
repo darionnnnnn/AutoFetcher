@@ -490,11 +490,17 @@ function migrateSitesToV2(sites, encrypted) {
 
 // 初始化儲存空間（冪等：已存在值不得覆蓋；順便做一次性的 schema 遷移）
 // 逐鍵依序取鎖：settings → sites → runs:<date>／runs → schemaVersion（版本號最後寫，遷移中斷時重跑還會再遷移一次）
+// 缺 schemaVersion 一律視為 1（init 與 getSchemaVersion 共用這一份）：每一步遷移都冪等，
+// 新安裝走一遍是空操作；以前 init 把缺省當現行版本，缺版本號的舊資料會跳過密碼加密
+function schemaVersionOf(value) {
+  return typeof value === 'number' ? value : 1
+}
+
 export async function init() {
   await mutateKey('settings', (cur) => cur === undefined ? { ...DEFAULT_SETTINGS } : undefined)
 
   const current = await chrome.storage.local.get(['schemaVersion', 'sites'])
-  const version = typeof current.schemaVersion === 'number' ? current.schemaVersion : SCHEMA_VERSION
+  const version = schemaVersionOf(current.schemaVersion)
   if (version < 2 && current.sites && typeof current.sites === 'object') {
     const encrypted = new Map()
     for (const site of Object.values(current.sites)) {
@@ -506,10 +512,7 @@ export async function init() {
 
   await migrateRunsToV3()
 
-  await mutateKey('schemaVersion', (cur) => {
-    const v = typeof cur === 'number' ? cur : SCHEMA_VERSION
-    return cur === undefined || v < SCHEMA_VERSION ? SCHEMA_VERSION : undefined
-  })
+  await mutateKey('schemaVersion', (cur) => schemaVersionOf(cur) < SCHEMA_VERSION ? SCHEMA_VERSION : undefined)
   await replayExecutionInvalidations()
 }
 
@@ -545,7 +548,7 @@ async function migrateRunsToV3() {
 // 取得架構版本號
 export async function getSchemaVersion() {
   const res = await chrome.storage.local.get('schemaVersion')
-  return typeof res.schemaVersion === 'number' ? res.schemaVersion : 1
+  return schemaVersionOf(res.schemaVersion)
 }
 
 // 取得全域設定

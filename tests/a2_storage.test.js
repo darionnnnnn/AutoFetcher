@@ -147,7 +147,7 @@ test('saveSettings 是合併不是覆寫', async () => {
   assert.equal(st.notifications, false)
 })
 
-test('schemaVersion 缺少時 init 補成現行版本且保留既有資料', async () => {
+test('schemaVersion 缺少時視為 1、init 遷移後補成現行版本且保留既有資料', async () => {
   resetChromeMock()
   const c = installChromeMock()
   await c.storage.local.set({ tasks: [task()] })
