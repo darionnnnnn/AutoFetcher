@@ -352,7 +352,18 @@
 | C3 | Claude | 7e68470 | 接管後只剩一筆 interrupted；突變紅 | — |
 | C4–C5 | Claude | （同作業 C 收尾 commit） | 啟動韌性兩條、單一來源四條；突變紅 | P16 不成立（見設計修正）；popup 改走 `GET_NEXT_RUNS` |
 
+| C 收尾 | Claude | cfbbdae | 全量 3376 綠；煙霧 14 套 PASS（Edge 本機未裝而略過） | 第一次煙霧用了 macOS 沒有的 `timeout` 指令，根本沒跑；改直接執行 |
+| D-a | Claude | ffd56c0 | 群組鍵盤 5 條、互斥與轉發鏈 6 條；三處突變皆紅 | 起點測試第一版因起點被清成 null 而「碰巧」通過，改點 (1,1) 讓正確與錯誤結果可區分 |
+| D-b/D-c | Claude | 5c9b0b2、030b349 | 數字鍵與 aria 5 條 | 5c9b0b2 把「跑全量」與 commit 串在一行，grep 成功就 commit，帶著 4 條失敗推上去；030b349 補改 y3/v5，之後測試與 commit 分兩步 |
+| D-d | sonnet medium 子代理 | ea5f292 | Claude 重跑全量 3394 綠；`rangePicks` 突變紅 | refreshMarks 實為 11 處；`exitedDraftIdentity` 不清（它是給 exit 後遲到的 PICKED 核對用的，P22 此部分不成立） |
+
 ### 設計修正（實作中）
+
+- **D1**：規劃寫「群組模式 Backspace／Ctrl+Z 移除最後一筆草稿值」。實作時發現草稿同步回來的值沒有頁面元素（`target: null`），鍵盤無法可靠地指出要移除哪個元素；改成「有值時攔下並說明取消出口（再點一次或在面板移除）、沒有值放給頁面」，不靜默。Shift＋方向鍵照規劃經草稿佇列加入。Shift 起點：取消的正好是起點時，退回這張表仍選著的最後一格。
+- **D2**：頁面端 Ctrl/⌘＋Enter 不在 content 端重做完成流程，改送 `PICK_DRAFT_FINISH_REQUEST`（進 `CONTENT_ALLOWED`），background 核對選取階段後轉給面板，面板按自己的「完成選取」——完成仍只有面板一個入口。
+- **D3**：取名取消沿用既有的 `PICK_GROUP_NAME_RESULT`，加 `cancelled: true`，不新增訊息型別。
+- **D4**：數字鍵等同點工具列按鈕（沿用停用說明與意圖記憶），所以已選一格時按 `3` 會像點按鈕一樣把它換成整欄每格；舊的 Tab 切模式不轉換已選值，那條路已不存在（`y3` B2-5 改驗新語意）。
+- **D6**：不做 `rerender()`（只是替 `updatePanel(panelEl, currentTargetEl)` 換名字、不減重複）與全面 `resetState()`（風險高於收益）；只補 exit 漏清的變數。
 
 - **C1**：規劃寫「`lastSeenAt` 與合併清單在同一把鎖內」，但 CLAUDE.md 規定一把鎖只寫一個鍵、不得巢狀。改為兩件事各自冪等：gap 合併只加「比已記錄最後一格還新」的格子；`lastSeenAt` 改用鎖內只增不減的 `advanceLastSeenAt`。效果相同、不違反鎖規則。
 - **C2**：通知不另分「離線全域一則」與「其他走 notifyFailure」，一律走既有的 `notifySiteFailure`（同任務同狀態 24 小時一次、同站台 5 分鐘合併），少一套規則。登入失敗不在這裡通知（站台連續失敗停用時 login.js 已通知一次）。`invalid_multi` 也列為不重試。框架找不到（frame not found）維持不重試，但改經同一入口、會通知。

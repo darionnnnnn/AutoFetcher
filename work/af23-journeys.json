@@ -8,7 +8,7 @@
       "clicks": 7,
       "formEdits": 1,
       "screenTransitions": 2,
-      "elapsedMs": 7108.92,
+      "elapsedMs": 7097.42,
       "value": 42,
       "status": "PASS"
     },
@@ -17,7 +17,7 @@
       "flow": "partial-drift-reject-cancel-repair-preview-drag",
       "clicks": 13,
       "screenTransitions": 2,
-      "elapsedMs": 13814.52,
+      "elapsedMs": 13796.36,
       "historyPreserved": true,
       "previewValue": 123,
       "status": "PASS"
@@ -28,7 +28,7 @@
       "clicks": 7,
       "formEdits": 1,
       "screenTransitions": 2,
-      "elapsedMs": 6778.43,
+      "elapsedMs": 6761.81,
       "value": 42,
       "status": "PASS"
     },
@@ -37,7 +37,7 @@
       "flow": "partial-drift-reject-cancel-repair-preview-drag",
       "clicks": 13,
       "screenTransitions": 2,
-      "elapsedMs": 13762.98,
+      "elapsedMs": 13800.42,
       "historyPreserved": true,
       "previewValue": 123,
       "status": "PASS"

@@ -19,7 +19,7 @@
       "recordsBeforeImport": 1000,
       "recordsAfterImport": 1001,
       "recordsAfterDelete": 1000,
-      "elapsedMs": 669.89,
+      "elapsedMs": 667.49,
       "requiredClicks": 8,
       "reportSettingsHistoryTrips": 4,
       "filteredBefore": {
@@ -42,72 +42,72 @@
           "action": "open settings",
           "kind": "click",
           "selector": "#tab-settings",
-          "elapsedMs": 26.81
+          "elapsedMs": 28.69
         },
         {
           "action": "round 1 import history",
           "kind": "file-control",
           "selector": "#records-import-file",
-          "elapsedMs": 26.54,
+          "elapsedMs": 27.39,
           "marker": "AF23_ROUTE_IMPORT_ROUND_1"
         },
         {
           "action": "open history",
           "kind": "click",
           "selector": "#tab-history",
-          "elapsedMs": 95.77
+          "elapsedMs": 84.07
         },
         {
           "action": "filter history for AF23_ROUTE_IMPORT_ROUND_1",
           "kind": "form-change",
           "selector": "#filter-keyword",
-          "elapsedMs": 10.1
+          "elapsedMs": 10.48
         },
         {
           "action": "round 1 browser back to unfiltered history",
           "kind": "history-back",
-          "elapsedMs": 57.02
+          "elapsedMs": 56.19
         },
         {
           "action": "round 1 browser forward restores filter",
           "kind": "history-forward",
-          "elapsedMs": 9.78
+          "elapsedMs": 9.36
         },
         {
           "action": "open settings",
           "kind": "click",
           "selector": "#tab-settings",
-          "elapsedMs": 13.48
+          "elapsedMs": 16.21
         },
         {
           "action": "round 1 after import export",
           "kind": "click",
           "selector": "#export-run",
-          "elapsedMs": 41.56
+          "elapsedMs": 42.21
         },
         {
           "action": "open history",
           "kind": "click",
           "selector": "#tab-history",
-          "elapsedMs": 15.63
+          "elapsedMs": 13.41
         },
         {
           "action": "round 1 delete imported record through detail dialog",
           "kind": "click-confirm",
           "selector": "[data-action=\"delete-record\"] → dialog confirm",
-          "elapsedMs": 62.71
+          "elapsedMs": 64.67
         },
         {
           "action": "open settings",
           "kind": "click",
           "selector": "#tab-settings",
-          "elapsedMs": 18.85
+          "elapsedMs": 18.26
         },
         {
           "action": "round 1 after delete export",
           "kind": "click",
           "selector": "#export-run",
-          "elapsedMs": 42.74
+          "elapsedMs": 43.69
         }
       ]
     },
@@ -117,7 +117,7 @@
       "recordsBeforeImport": 1000,
       "recordsAfterImport": 1001,
       "recordsAfterDelete": 1000,
-      "elapsedMs": 699.13,
+      "elapsedMs": 666.92,
       "requiredClicks": 8,
       "reportSettingsHistoryTrips": 4,
       "filteredBefore": {
@@ -140,72 +140,72 @@
           "action": "open settings",
           "kind": "click",
           "selector": "#tab-settings",
-          "elapsedMs": 27.64
+          "elapsedMs": 26.62
         },
         {
           "action": "round 2 import history",
           "kind": "file-control",
           "selector": "#records-import-file",
-          "elapsedMs": 27.41,
+          "elapsedMs": 27.99,
           "marker": "AF23_ROUTE_IMPORT_ROUND_2"
         },
         {
           "action": "open history",
           "kind": "click",
           "selector": "#tab-history",
-          "elapsedMs": 100.15
+          "elapsedMs": 87.45
         },
         {
           "action": "filter history for AF23_ROUTE_IMPORT_ROUND_2",
           "kind": "form-change",
           "selector": "#filter-keyword",
-          "elapsedMs": 9.29
+          "elapsedMs": 11.45
         },
         {
           "action": "round 2 browser back to unfiltered history",
           "kind": "history-back",
-          "elapsedMs": 58.17
+          "elapsedMs": 57.05
         },
         {
           "action": "round 2 browser forward restores filter",
           "kind": "history-forward",
-          "elapsedMs": 11.79
+          "elapsedMs": 10.91
         },
         {
           "action": "open settings",
           "kind": "click",
           "selector": "#tab-settings",
-          "elapsedMs": 24.74
+          "elapsedMs": 24.12
         },
         {
           "action": "round 2 after import export",
           "kind": "click",
           "selector": "#export-run",
-          "elapsedMs": 52.34
+          "elapsedMs": 39.02
         },
         {
           "action": "open history",
           "kind": "click",
           "selector": "#tab-history",
-          "elapsedMs": 14.87
+          "elapsedMs": 13.74
         },
         {
           "action": "round 2 delete imported record through detail dialog",
           "kind": "click-confirm",
           "selector": "[data-action=\"delete-record\"] → dialog confirm",
-          "elapsedMs": 62.99
+          "elapsedMs": 63.08
         },
         {
           "action": "open settings",
           "kind": "click",
           "selector": "#tab-settings",
-          "elapsedMs": 18.03
+          "elapsedMs": 19.12
         },
         {
           "action": "round 2 after delete export",
           "kind": "click",
           "selector": "#export-run",
-          "elapsedMs": 43.88
+          "elapsedMs": 43.56
         }
       ]
     }
