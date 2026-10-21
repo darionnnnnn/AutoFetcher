@@ -357,7 +357,18 @@
 | D-b/D-c | Claude | 5c9b0b2、030b349 | 數字鍵與 aria 5 條 | 5c9b0b2 把「跑全量」與 commit 串在一行，grep 成功就 commit，帶著 4 條失敗推上去；030b349 補改 y3/v5，之後測試與 commit 分兩步 |
 | D-d | sonnet medium 子代理 | ea5f292 | Claude 重跑全量 3394 綠；`rangePicks` 突變紅 | refreshMarks 實為 11 處；`exitedDraftIdentity` 不清（它是給 exit 後遲到的 PICKED 核對用的，P22 此部分不成立） |
 
+| D 收尾 | Claude | 03faa13 | 煙霧 14 套 PASS；新增 `af24_keyboard_pick` 真實瀏覽器只用鍵盤完成選取（Tab 7 下到「完成」），把 Tab 攔截加回去時紅 | 斷言第一版讀錯巢狀層（`ctx.ctx`），實際流程是通的 |
+| E | Claude | 38160d7 | 全量 3407 綠；序號守門、sortable 取消、月曆取消三處突變皆紅 | 全量抓到 D 收尾時登記新煙霧腳本漏改 `af23_a_runner` 的清單守門，補上 |
+| F | Claude | ff3e5a6 | 全量 3416 綠；popup 燈號重算突變紅 | 教學頁守門 `y5` 抓到「全部暫停 / 恢復」改名後沒同步，補上 |
+| G | sonnet medium 子代理（路由表）＋ Claude（死碼） | 53161ce | 新舊 main.js 去縮排逐行比對只差分派結構；全量 3416 綠；煙霧 15 套 PASS | 見設計修正 G |
+
 ### 設計修正（實作中）
+
+- **E2**：不把三處拖曳搬進 `dnd.js`。它是「來源→投放目標」協定（幽靈元素、命中判定、儀表板重畫時全域 `resetDnd` 會清掉所有目標），清單就地排序與月曆拉範圍都不是投放；硬套會過度設計，還可能被儀表板重畫清掉任務頁的目標。改為新增 `ui/report/sortable.js`（任務列、欄位設定兩處共用，順便拿掉欄位設定的 `elementFromPoint`），月曆就地修收尾。作業 A 寫進 BACKLOG 的「已搬進 dnd.js」一行已更正。
+- **E5**：頁籤只做鍵盤可達（tablist、←／→、焦點跟隨），名稱輸入框維持常駐、不改成改名鈕（改動面大、牽動多條既有測試，收益只是外觀一致）。稽核 P31 對月曆的部分不成立：月曆日期格內本來就是可聚焦的按鈕，教學頁的說法是對的。
+- **E4**：`dataset.tsv` 拿掉後，三條測試改成真的按「複製 TSV」、從剪貼簿替身讀出內容，比讀 DOM 屬性更貼近使用者行為。
+- **F7**：不新增 `shared/field-name.js`，命名函式收進既有的 `describe.js`（它本來就是白話描述的唯一來源、已有 `withInnerLabel`，且已在 content 載入閉包內，不牽動 manifest）。
+- **G**：依架構重新評估後只做路由表與死碼。欄位修復區塊依賴 main.js 的 `frameDescriptorOf`、`CONTENT_MESSAGE_TIMEOUT_MS`，它的 session 表又被後段的面板關閉流程直接操作；群組草稿協調同樣與 frame 狀態表交纏——搬成獨立檔要把模組狀態跨檔匯出，耦合沒有減少。Picker `form.js` 不搬：那幾個函式本來就已 export、已有單獨測試。稽核說 `pick-draft.js` 有約 10 個沒人用的 export，查證後多數被 `pick-protocol.js` 與測試使用；實際刪除 8 項、拿掉 export 12 項。
 
 - **D1**：規劃寫「群組模式 Backspace／Ctrl+Z 移除最後一筆草稿值」。實作時發現草稿同步回來的值沒有頁面元素（`target: null`），鍵盤無法可靠地指出要移除哪個元素；改成「有值時攔下並說明取消出口（再點一次或在面板移除）、沒有值放給頁面」，不靜默。Shift＋方向鍵照規劃經草稿佇列加入。Shift 起點：取消的正好是起點時，退回這張表仍選著的最後一格。
 - **D2**：頁面端 Ctrl/⌘＋Enter 不在 content 端重做完成流程，改送 `PICK_DRAFT_FINISH_REQUEST`（進 `CONTENT_ALLOWED`），background 核對選取階段後轉給面板，面板按自己的「完成選取」——完成仍只有面板一個入口。

@@ -128,3 +128,5 @@
 | 登入頁判定改用「密碼欄存在」 | 目前一律以登入頁網址前綴判定(AF-24 從 SPEC §6 刪掉未實作的「密碼欄存在」);登入頁網址會變動(帶 token、轉址)的站台回報自動登入不觸發時 |
 | `shared/storage.js` 拆模組(紀錄／任務／帳本／遷移) | AF-24 評估不拆:`za1` 以檔名白名單守 `chrome.storage.`,鎖內只呼叫 `*Unlocked` 的紀律在同檔內才看得到。檔案超過 2500 行、或同一輪要同時改兩個以上子領域時 |
 | `content/picker-mode.js` 拆模組 | AF-24 評估不拆(只做檔內收斂與單一 `resetState`):content 端 import 閉包綁 manifest `web_accessible_resources`、五個測試用 `readFileSync` 讀原始碼、模組狀態耦合深。下一次要新增一種選取模式或用途時 |
+| `background/main.js` 的欄位修復、群組草稿協調搬成獨立模組 | AF-24 評估不搬:兩者依賴 main.js 的 frame 描述與 frame 狀態表、session 表又被面板關閉流程直接操作,搬出要跨檔匯出模組狀態。先把 frame 狀態收成一個模組(例如併進 `background/frames.js`)之後再搬;或 main.js 再超過 3000 行時 |
+| Picker 的表單純函式(`buildSpec`／`buildSchedule`／`buildTask`)搬到 `ui/picker/form.js` | AF-24 評估不搬:已 export、已有單獨測試,搬了只換位置。picker.js 要拆其他段落(批次、群組)時一起做 |
